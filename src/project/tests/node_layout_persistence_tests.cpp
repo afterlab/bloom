@@ -177,7 +177,7 @@ void blurNodeReopen() {
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.alpha-association", "bloom.colorize", "bloom.vignette"}) {
+          "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -254,6 +254,23 @@ void blurNodeReopen() {
                 : parameter.schemaKey == "bloom.vignette.center"
                     ? document::ParameterValue{document::Vec2d{-120.5, 64.25}}
                 : parameter.schemaKey.starts_with("bloom.vignette.")
+                    ? document::ParameterValue{0.25}
+                // #507 Lens Flare: 3D, an inverted luma matte, moved values and a moved light.
+                : parameter.schemaKey == "bloom.lens-flare.lightMode"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.lens-flare.occlusionChannel"
+                    ? document::ParameterValue{std::int64_t{9}}
+                : parameter.schemaKey == "bloom.lens-flare.lightPosition"
+                    ? document::ParameterValue{document::Vec2d{-300.5, 120.25}}
+                : parameter.schemaKey == "bloom.lens-flare.irisBlades"
+                    ? document::ParameterValue{std::int64_t{5}}
+                : parameter.schemaKey == "bloom.lens-flare.cameraZoom"
+                    ? document::ParameterValue{500.0}
+                : parameter.valueKind == document::ParameterValueKind::Color4d &&
+                        parameter.schemaKey.starts_with("bloom.lens-flare.")
+                    ? document::ParameterValue{core::Color4d{1.5, 0.25, 0.5, 1.0}}
+                : parameter.valueKind == document::ParameterValueKind::Float64 &&
+                        parameter.schemaKey.starts_with("bloom.lens-flare.")
                     ? document::ParameterValue{0.25}
                 // #541: a five-stop gradient with a hard edge and an HDR, signed stop.
                 : parameter.valueKind == document::ParameterValueKind::Gradient

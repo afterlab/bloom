@@ -257,7 +257,7 @@ void everyNodeCategoryIsNamed() {
             "bloom.matte-dilate", "bloom.vignette"},
            "filters");
     pinned({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow",
-            "bloom.light-wrap", "bloom.alpha-association"},
+            "bloom.light-wrap", "bloom.alpha-association", "bloom.lens-flare"},
            "compositing");
 }
 

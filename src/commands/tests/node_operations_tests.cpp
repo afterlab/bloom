@@ -922,6 +922,29 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{1.5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *center,
                                ConstantValueSource{bloom::document::Vec2d{2e6, 0.0}});
+
+    // #507 Lens Flare: closed counts and choices, a share and the light edit within their domains
+    // and refuse outside them.
+    const auto flare = addRecipe("bloom.lens-flare");
+    const auto ghosts = flare.outputId<ParameterId>("parameter.ghostCount");
+    const auto chromatic = flare.outputId<ParameterId>("parameter.chromatic");
+    const auto light = flare.outputId<ParameterId>("parameter.lightPosition");
+    const auto lightMode = flare.outputId<ParameterId>("parameter.lightMode");
+    if (!ghosts || !chromatic || !light || !lightMode)
+        throw std::logic_error("Lens Flare exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *ghosts, ConstantValueSource{std::int64_t{16}});
+    (void)exercise<SetParameterSource>(test, fixture, *chromatic, ConstantValueSource{0.5});
+    (void)exercise<SetParameterSource>(
+        test, fixture, *light, ConstantValueSource{bloom::document::Vec2d{-240.0, 135.5}});
+    (void)exercise<SetParameterSource>(test, fixture, *lightMode, ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *ghosts,
+                               ConstantValueSource{std::int64_t{17}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *chromatic,
+                               ConstantValueSource{1.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *light,
+                               ConstantValueSource{bloom::document::Vec2d{2e6, 0.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lightMode,
+                               ConstantValueSource{std::int64_t{2}});
 }
 
 void testAddAndLayout(TestContext& test) {

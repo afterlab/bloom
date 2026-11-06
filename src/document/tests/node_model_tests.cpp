@@ -280,7 +280,8 @@ int main() {
           "bloom.matte-dilate", "bloom.luma-key", "bloom.levels", "bloom.curves",
           "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.video-source",
+          "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
+          "bloom.video-source",
           "bloom.image-preview"})
         expect(completeRegistry.find(type, std::string_view(type) == "bloom.curves" ||
                                                    std::string_view(type) == "bloom.glow"

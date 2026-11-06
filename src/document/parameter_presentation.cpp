@@ -1,6 +1,7 @@
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
+#include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -487,6 +488,27 @@ std::optional<ParameterPresentation> depthPresentation(const std::string_view sc
                   spec->decimals, spec->unit);
 }
 
+// #507 Lens Flare: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> lensFlarePresentation(const std::string_view schemaKey) {
+    const auto* spec = lensFlareParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    switch (spec->kind) {
+    case LensFlareParameterKind::Choice:
+        return choice();
+    case LensFlareParameterKind::Integer:
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                     spec->unit);
+    case LensFlareParameterKind::Color:
+        return number(spec->minimum, spec->maximum, 0.0, 1.0, 0.01, 3);
+    case LensFlareParameterKind::Scalar:
+    case LensFlareParameterKind::Vector2:
+        break;
+    }
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -496,6 +518,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *field;
     if (auto depth = depthPresentation(schemaKey))
         return *depth;
+    if (auto flare = lensFlarePresentation(schemaKey))
+        return *flare;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

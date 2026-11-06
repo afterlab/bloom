@@ -9,6 +9,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/project.hpp>
 
@@ -325,6 +326,11 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #505: the Vignette card's point pad and its five slider rows, each a value over a slider.
     if (node->typeId == document::kVignetteNodeType)
         thumbnail = kPadMaxHeight + kSmall + 5.0 * (kControl + kSmall) + kPadding;
+    // #507: the Lens Flare card's preset button, pad, dial and element picker, its three always
+    // shown slider rows and the first part's six.
+    if (node->typeId == document::kLensFlareNodeType)
+        thumbnail = kPadMaxHeight + kDialSide + 2.0 * kControl + 9.0 * (kControl + kSmall) +
+                    4.0 * kSmall + kPadding;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

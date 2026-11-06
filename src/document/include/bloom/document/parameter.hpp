@@ -7,6 +7,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
+#include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
@@ -372,7 +373,8 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kVector2ValueParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
            schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
-           isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey);
+           isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
+           isLensFlareVec2SchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -405,7 +407,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
-           isDepthScalarAnimatableSchemaKey(schemaKey) || schemaKey == kLayerMaskFeatherSchemaKey ||
+           isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
+           schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
@@ -448,7 +451,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kGradientEndColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey ||
            schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
-           isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey);
+           isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||
+           isLensFlareColorSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -509,6 +513,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #483 Z Defocus and Depth Fog (depth_effect_parameters.hpp).
     if (depthParameterSpec(schemaKey) != nullptr)
         return isDepthScalarWithinDomain(schemaKey, value);
+    // #507 Lens Flare (lens_flare_nodes.hpp).
+    if (lensFlareParameterSpec(schemaKey) != nullptr)
+        return isLensFlareScalarWithinDomain(schemaKey, value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

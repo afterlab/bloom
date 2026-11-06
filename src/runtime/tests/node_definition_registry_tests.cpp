@@ -153,8 +153,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
     // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette; #525 adds the
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
-    // Fog.
-    expectations.expect(registry.definitions().size() == 176,
+    // Fog; #507 adds Lens Flare.
+    expectations.expect(registry.definitions().size() == 177,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -334,7 +334,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             vignette->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#505: Vignette has its constant choices and an animatable socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
-                    "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
+                    "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);
     // #503 Alpha Association: an Image in and out, a constant mode (Unmult by default) and white
     // switch with no socket, and an animatable background colour with a Color socket.

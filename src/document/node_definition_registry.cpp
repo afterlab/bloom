@@ -4,6 +4,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
+#include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -565,6 +566,9 @@ template <typename Definition>
         // #483 Z Defocus and Depth Fog: the exact generated shapes.
         if (isDepthEffectNodeType(definition.key.typeId))
             return definition == depthEffectDefinition(definition.key.typeId);
+        // #507 Lens Flare: the exact generated shape.
+        if (definition.key.typeId == kLensFlareNodeType)
+            return definition == lensFlareDefinition();
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1645,6 +1649,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         vignetteDefinition(),
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),
+        lensFlareDefinition(),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
         recipeDefinition(kDropShadowNodeType),
