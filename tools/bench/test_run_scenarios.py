@@ -429,6 +429,23 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.film-grain")
         self.assertNotIn("animation", effect[1], "every frame draws new grain")
 
+    def test_motion_blur_scenarios_exercise_every_route(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenarios = [spec.SCENARIOS["motion-blur-2k"], spec.SCENARIOS["motion-blur-flow-2k"]]
+        layers = [layer for scenario in scenarios for layer in scenario["layers"]]
+        kinds = {effect[0] for layer in layers for effect in layer["effects"]}
+        self.assertLessEqual({"bloom.transform-2d", "bloom.directional-blur", "bloom.motion-blur",
+                              "bloom.echo", "bloom.vector-motion-blur",
+                              "bloom.optical-flow-motion-blur"}, kinds)
+        passes = {name for layer in layers for name in (layer.get("passes") or {})}
+        wired = [name for layer in layers for effect in layer["effects"]
+                 if len(effect) > 2 for name in effect[2].get("inputs", {}).values()]
+        self.assertEqual(sorted(wired), sorted(passes), "every pass feeds one extra input")
+        self.assertEqual(suite.scenario_formats(scenarios[0]),
+                         ["exr_multilayer", "png16", "png16_mist", "png8"])
+        self.assertNotIn("export-cpu-parity", scenarios[0]["knownFailures"],
+                         "only the solver's parity is a known parity failure")
+
 
 if __name__ == "__main__":
     unittest.main()

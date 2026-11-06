@@ -125,7 +125,8 @@ def footage_assets():
 NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
                 "depth": "src/runtime/tests/bloom_runtime_gpu_depth_node_bench",
                 "lens-flare": "src/runtime/tests/bloom_runtime_gpu_lens_flare_node_bench",
-                "film-grain": "src/runtime/tests/bloom_runtime_gpu_film_grain_node_bench"}
+                "film-grain": "src/runtime/tests/bloom_runtime_gpu_film_grain_node_bench",
+                "motion": "src/runtime/tests/bloom_runtime_gpu_motion_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
@@ -179,6 +180,63 @@ NODE_COST_BUDGETS = {
     "film-grain-size-32": {"reference": 1.25, "comparable": 1.25},
     "film-grain-held": {"reference": 1.25, "comparable": 1.25},
     "film-grain-transparent": {"reference": 1.25, "comparable": 1.25},
+    # #484, every motion-blur node, held about 25% over the 2026-11-06 run on the preview route
+    # (benchmarks.md, "Motion blur"). A heavy mode is relaxed for what it computes, not for how it
+    # waits: its breakdown there separates the two.
+    # Directional, Spin and Zoom: one pass of up to 64 taps, against two separable Gaussian passes.
+    "directional-8": {"reference": 2.0, "comparable": 1.25},
+    "directional-32": {"reference": 2.75, "comparable": 1.75},
+    "directional-128": {"reference": 3.25, "comparable": 1.0},
+    "directional-32-draft": {"reference": 2.75, "comparable": 1.75},
+    "directional-32-standard": {"reference": 2.75, "comparable": 1.75},
+    "directional-32-high": {"reference": 3.25, "comparable": 2.25},
+    "spin-10": {"reference": 3.25, "comparable": 2.25},
+    "spin-45": {"reference": 4.5, "comparable": 3.0},
+    "zoom-10": {"reference": 3.25, "comparable": 2.25},
+    "zoom-50": {"reference": 4.0, "comparable": 2.75},
+    # One resample per sample, against one resample.
+    "transform-blur-draft": {"reference": 2.0, "comparable": 2.25},
+    "transform-blur-standard": {"reference": 2.0, "comparable": 2.25},
+    "transform-blur-high": {"reference": 2.5, "comparable": 3.0},
+    "transform-blur-final": {"reference": 1.75, "comparable": 2.0},
+    # The upstream once per sample and an accumulator atlas of two moves, a blend and a pass per
+    # sample: 64 samples at High, a real cost the card states.
+    "motion-blur-draft": {"reference": 5.25, "comparable": 3.75},
+    "motion-blur-standard": {"reference": 13.0, "comparable": 8.5},
+    "motion-blur-high": {"reference": 34, "comparable": 24},
+    "motion-blur-final": {"reference": 34, "comparable": 36},
+    # As Motion Blur, per echo.
+    "echo-4": {"reference": 5.25, "comparable": 5.75},
+    "echo-16": {"reference": 8.25, "comparable": 9.75},
+    "frame-blend-4": {"reference": 7.0, "comparable": 7.0},
+    # Tiles, NeighborMax and a 16-sample gather, against one Directional pass.
+    "vector-gather-8": {"reference": 5.25, "comparable": 3.5},
+    "vector-gather-32": {"reference": 5.75, "comparable": 3.0},
+    "vector-gather-128": {"reference": 3.75, "comparable": 1.75},
+    "vector-gather-limit-32": {"reference": 3.75, "comparable": 2.0},
+    "vector-gather-limit-128": {"reference": 3.75, "comparable": 2.0},
+    "vector-gather-limit-512": {"reference": 4.0, "comparable": 2.0},
+    # Real compute, the fence holds the frame: a soft splat per shutter sample, done as a gather because
+    # the portable pipeline has no atomics, against the 16-sample gather.
+    "vector-splat-8": {"reference": 39, "comparable": 13.0},
+    "vector-splat-32": {"reference": 39, "comparable": 13.0},
+    "vector-splat-128": {"reference": 39, "comparable": 17.0},
+    # Two splats and an outside-in fill, against one splat.
+    "vector-layered-32": {"reference": 82, "comparable": 2.75},
+    # Real compute, the fence holds the frame: hundreds of passes of a solver, and nothing existing
+    # solves anything, so the yardstick is the widest Gaussian. Final solves at full resolution.
+    "optical-flow-dis-draft": {"reference": 7.5, "comparable": 2.25},
+    "optical-flow-dis-standard": {"reference": 12.5, "comparable": 3.75},
+    "optical-flow-dis-final": {"reference": 32, "comparable": 8.0},
+    "optical-flow-tvl1-draft": {"reference": 6.5, "comparable": 2.0},
+    "optical-flow-tvl1-standard": {"reference": 14.75, "comparable": 4.0},
+    "optical-flow-tvl1-high": {"reference": 32, "comparable": 9.25},
+    "optical-flow-tvl1-final": {"reference": 120, "comparable": 31},
+    # Real compute: four solves, their consistency and the splat, against the splat of known vectors.
+    "flow-blur-draft": {"reference": 66, "comparable": 2.25},
+    "flow-blur-standard": {"reference": 150, "comparable": 5.0},
+    "flow-blur-high": {"reference": 305, "comparable": 10.0},
+    "flow-blur-matte-standard": {"reference": 320, "comparable": 5.0},
 }
 # Cases a known limitation keeps from running: none (#549 put the 2160p Cryptomatte cases back on
 # the GPU route).

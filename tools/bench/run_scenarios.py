@@ -433,6 +433,12 @@ class Builder:
                               port="depth")
                 if "depthChannel" in options:
                     self.set_values(node, node_type, {"depthChannel": options["depthChannel"]})
+            for input_port, name in (options.get("inputs") or {}).items():
+                # #484: an extra image input (vectors, a matte), a pass of the shot.
+                input_node, input_output = self.passes[name]
+                self.transact("bloom.node.connect", composition=self.composition,
+                              sourceNode=input_node, sourcePort=input_output, targetNode=node,
+                              port=input_port)
             self.set_keys(node, options.get("keys") or {})
             if options.get("mask"):
                 # #383: the effect's mask input, limited to a named Mask of the shot.

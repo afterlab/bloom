@@ -320,3 +320,63 @@ SCENARIOS["depth-effects-2k"] = {
     ],
     "knownFailures": {"gpu-busy-during-fill": DEPTH_FILL_BUSY},
 }
+
+MOTION_FILL_BUSY = ("#386: the motion blur shot fills its 24 frames in 1.3 s with the GPU 35% busy "
+                    "(2026-11-06), a few samples, and decodes three sequences on the host a frame.")
+# #484: every motion-blur route but the solver at work on a shot: a moving plate through Transform
+# 2D's shutter and a Directional Blur; a Motion Blur over a moving Transform 2D (sub-frames re-render
+# what is upstream of it) with an Echo; a CG layer blurred by Vector Motion Blur reading a vector image
+# (the bench render has no vector pass, so the Raw mist pass scaled to 48 pixels stands in: a real
+# per-pixel vector field, and the cost does not depend on where it came from).
+MOTION_VECTORS = "CG vectors"
+SCENARIOS["motion-blur-2k"] = {
+    "description": "Moving plates through Transform 2D's shutter, Motion Blur sub-frames and Echo, "
+                   "under a CG layer blurred by Vector Motion Blur from a per-pixel vector image.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate shutter", "media": "png16",
+         "effects": [
+             ["bloom.transform-2d", {"motionBlur": True, "quality": "High"},
+              {"keys": {"translate": [[0, [-96.0, 0.0]], [23, [96.0, 24.0]]]}}],
+             ["bloom.directional-blur", {"angle": 15.0, "length": 16.0, "quality": "High"}]]},
+        {"name": "Plate subframes", "media": "png8", "blend": "screen",
+         "transform": {"opacity": 0.5},
+         "effects": [
+             ["bloom.transform-2d", {},
+              {"keys": {"translate": [[0, [96.0, 0.0]], [23, [-96.0, -24.0]]]}}],
+             ["bloom.motion-blur", {"quality": "Draft"}],
+             ["bloom.echo", {"echoes": 3, "decay": 0.5, "operator": "Maximum"}]]},
+        {"name": "CG vectors layer", "media": "exr_multilayer", "blend": "screen",
+         "transform": {"opacity": 0.5},
+         "passes": {MOTION_VECTORS: {"media": "png16_mist", "colorSpace": "Raw"}},
+         "effects": [
+             ["bloom.vector-motion-blur", {"convention": "Custom", "vectorScale": 48.0,
+                                           "algorithm": "Gather", "quality": "Standard"},
+              {"inputs": {"vectors": MOTION_VECTORS}}]]},
+    ],
+    "knownFailures": {"gpu-busy-during-fill": MOTION_FILL_BUSY},
+}
+
+# #484: the optical-flow solver on footage, with a matte, on its own so the parity gate stays
+# meaningful for the rest. Its export parity is a known failure: footage reaches the solver through a
+# GPU colour conversion that is within 2e-6 of the CPU reference but not bit-identical, and an
+# iterative solver amplifies that to about 1e-2 at moving edges, alpha too through the matte's layers. Parity on bit-identical input is
+# exact (gpu_scene_effect_native, motion-blur.md "Parity").
+MOTION_MATTE = "Plate matte"
+MOTION_FLOW_PARITY = ("the flow solver amplifies the upstream's within-tolerance colour differences "
+                      "(motion-blur.md, Parity); exact on bit-identical input")
+SCENARIOS["motion-blur-flow-2k"] = {
+    "description": "A PNG16 plate through Optical Flow Motion Blur with a matte (two layers, eight "
+                   "solves), at Draft.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate flow", "media": "png16",
+         "passes": {MOTION_MATTE: {"media": "png16_mist", "colorSpace": "Raw"}},
+         "effects": [
+             ["bloom.optical-flow-motion-blur", {"quality": "Draft"},
+              {"inputs": {"matte": MOTION_MATTE}}]]},
+    ],
+    "knownFailures": {"export-cpu-parity": MOTION_FLOW_PARITY},
+}
