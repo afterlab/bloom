@@ -6,6 +6,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -573,6 +574,9 @@ template <typename Definition>
         // #486 Film Grain: the exact generated shape.
         if (definition.key.typeId == kFilmGrainNodeType)
             return definition == filmGrainDefinition();
+        // #484 the motion-blur nodes: the exact generated shapes.
+        if (isMotionBlurNodeType(definition.key.typeId))
+            return definition == motionBlurDefinition(definition.key.typeId);
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -585,7 +589,10 @@ template <typename Definition>
         if (definition.key.typeId == "bloom.transform-2d") {
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
                    hasLeadingImageInput(definition, "input") &&
-                   definition.parameters.size() == 6 &&
+                   definition.parameters.size() ==
+                       6 + bloom::document::transformMotionBlurParameterDefinitions().size() &&
+                   std::equal(definition.parameters.begin() + 6, definition.parameters.end(),
+                              bloom::document::transformMotionBlurParameterDefinitions().begin()) &&
                    hasParameter(definition, 0, "translate", "bloom.transform-2d.translate",
                                 ParameterValueKind::Vec2d, true) &&
                    hasParameter(definition, 1, "pivot", "bloom.transform-2d.pivot",
@@ -1221,9 +1228,11 @@ template <typename Definition>
 // #336 standalone Transform 2D. The four transform values are animatable and each has an operand
 // socket; extent and filter are inline selectors with no socket (they choose the output window
 // and resampler at compile time).
+// #484: then its optional motion blur (transformMotionBlurParameterDefinitions), constants with no
+// socket.
 [[nodiscard]] NodeDefinition transform2DDefinition() {
     using bloom::document::Vec2d;
-    return {{"bloom.transform-2d", 1},
+    NodeDefinition definition{{"bloom.transform-2d", 1},
             NodeLoweringKind::ImageEffect,
             {{"input", SocketValueKind::Image},
              {"translate", SocketValueKind::Vector2, false},
@@ -1245,6 +1254,9 @@ template <typename Definition>
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Transform};
+    for (auto& parameter : bloom::document::transformMotionBlurParameterDefinitions())
+        definition.parameters.push_back(std::move(parameter));
+    return definition;
 }
 
 [[nodiscard]] NodeDefinition cstDefinition() {
@@ -1655,6 +1667,14 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),
         lensFlareDefinition(),
+        motionBlurDefinition(kMotionBlurNodeType),
+        motionBlurDefinition(kVectorMotionBlurNodeType),
+        motionBlurDefinition(kOpticalFlowNodeType),
+        motionBlurDefinition(kOpticalFlowMotionBlurNodeType),
+        motionBlurDefinition(kEchoNodeType),
+        motionBlurDefinition(kDirectionalBlurNodeType),
+        motionBlurDefinition(kSpinBlurNodeType),
+        motionBlurDefinition(kZoomBlurNodeType),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
         recipeDefinition(kDropShadowNodeType),

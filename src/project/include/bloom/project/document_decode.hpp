@@ -476,6 +476,10 @@ void migrateLegacyCurvesNodes(DecodedDocumentEnvelope& envelope);
 // with, so the picture is unchanged. Open path only, like the migrations above.
 void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope);
 
+// #484: opening a project binds Transform 2D's optional motion blur parameters a node saved before
+// them lacks, at their defaults (motion blur off), so the picture is unchanged. Open path only.
+void migrateLegacyTransformMotionBlur(DecodedDocumentEnvelope& envelope);
+
 // #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
 // older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
 inline constexpr std::uint32_t kGradientColorPairsMinor = 39;

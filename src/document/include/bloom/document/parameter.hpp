@@ -9,6 +9,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
@@ -375,7 +376,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
            schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
-           isLensFlareVec2SchemaKey(schemaKey);
+           isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -410,6 +411,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
            isFilmGrainScalarSchemaKey(schemaKey) ||
+           isMotionScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -521,6 +523,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #486 Film Grain (film_grain_nodes.hpp).
     if (filmGrainParameterSpec(schemaKey) != nullptr)
         return isFilmGrainScalarWithinDomain(schemaKey, value);
+    // #484 the motion-blur nodes (motion_blur_parameters.hpp).
+    if (motionParameterSpec(schemaKey) != nullptr)
+        return isMotionScalarWithinDomain(schemaKey, value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

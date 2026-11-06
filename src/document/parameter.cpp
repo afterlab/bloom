@@ -4,6 +4,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/shape.hpp>
@@ -400,6 +401,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #486 Film Grain: every parameter within its document domain.
     if (filmGrainParameterSpec(schemaKey) != nullptr)
         return isFilmGrainParameterValueValid(schemaKey, constant.value);
+    // #484 the motion-blur nodes and Transform 2D's motion blur.
+    if (motionParameterSpec(schemaKey) != nullptr)
+        return isMotionParameterValueValid(schemaKey, constant.value);
     // #505 Vignette: finite scalars within their domains, a finite centre offset within +-1e6
     // pixels and the closed shape and mode.
     if (isVignetteScalarSchemaKey(schemaKey)) {
@@ -577,6 +581,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isDepthConstantSchemaKey(schemaKey) ||
          bloom::document::isLensFlareConstantSchemaKey(schemaKey) ||
          bloom::document::isFilmGrainConstantSchemaKey(schemaKey) ||
+         bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;

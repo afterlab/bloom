@@ -11,6 +11,7 @@
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/project.hpp>
 
@@ -338,6 +339,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // slider.
     if (node->typeId == document::kFilmGrainNodeType)
         thumbnail = kFilmGrainGraphHeight + kSmall + 8.0 * (kControl + kSmall) + kPadding;
+    // #484: the Spin and Zoom Blur cards' centre pad.
+    if (node->typeId == document::kSpinBlurNodeType || node->typeId == document::kZoomBlurNodeType)
+        thumbnail = kPadMaxHeight + kSmall + kPadding;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

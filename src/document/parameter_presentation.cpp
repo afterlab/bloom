@@ -3,6 +3,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -462,7 +463,7 @@ std::optional<ParameterPresentation> fieldPresentation(const std::string_view sc
 
 // #483 Z Defocus and Depth Fog: one presentation per parameter, from the depth table itself.
 std::optional<ParameterPresentation> depthPresentation(const std::string_view schemaKey) {
-    const auto* spec = depthParameterSpec(schemaKey);
+    const auto* spec = effectParameterSpec(schemaKey);
     if (spec == nullptr)
         return std::nullopt;
     switch (spec->kind) {

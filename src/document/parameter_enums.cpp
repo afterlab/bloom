@@ -7,6 +7,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -169,7 +170,7 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return options;
     }
     // #483 Z Defocus and Depth Fog: every Choice, its labels in stored-value order.
-    if (const auto* depth = depthParameterSpec(schemaKey);
+    if (const auto* depth = effectParameterSpec(schemaKey);
         depth != nullptr && depth->kind == DepthParameterKind::Choice) {
         Options options;
         for (std::size_t index = 0; index < depth->choices.size(); ++index)
