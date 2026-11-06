@@ -98,6 +98,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
   Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of
   Directional, Spin and Zoom Blur.
+- [Sharpen](user-guide/sharpen.md) — the unsharp mask: amount, radius and threshold, and what it does
+  to HDR highlights and alpha edges.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

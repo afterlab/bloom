@@ -419,6 +419,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `film-grain-2k` | 1920×1080 | 24 | A PNG16 plate under strong Film Grain (#486) of 1.5 pixels, 5% with more in the blue, drawn anew for every frame with no key, so each frame is new |
 | `motion-blur-2k` | 1920×1080 | 24 | Moving plates through Transform 2D's shutter and Directional Blur at High, Motion Blur at Draft and Echo, under a CG layer blurred by Vector Motion Blur (#484) from a per-pixel vector image (the bench media's mist pass stands in: it has no vector pass) |
 | `motion-blur-flow-2k` | 1920×1080 | 24 | A PNG16 plate through Optical Flow Motion Blur with a matte (#484): two layers and eight solves, at Draft |
+| `sharpen-2k` | 1920×1080 | 24 | A PNG16 plate under Sharpen (#486) with a radius of 8 pixels, its amount keyed from 50% to 200% so every frame is new |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -471,6 +472,13 @@ CPU parity gate (largest difference 1.13e-06, alpha exact). It lists one check, 
 (#386): the 24 frames fill in 0.2 to 0.3 s, too short to judge (0 to 4%); a run with `--frames 240`
 filled at 106 fps with the GPU 28% busy, since the grain is one pass a frame and the rest of the frame
 is host decode.
+
+`sharpen-2k` (2026-11-06, two runs) shows its first frame in 1.8 to 2.1 s, fills at 80 to 81 fps and
+exports its 4 frames on the GPU with no CPU fallback at 0.26 s a frame, within its export CPU parity
+gate (largest difference 1.67e-06, alpha exact). It lists one check, the fill's GPU busy (#405): the
+24 frames fill in 0.3 s, too short to judge (1 to 6%); a run with `--frames 240` filled at 79 fps with
+the GPU 21% busy (peak 100%) and 11 CPU cores busy, since Sharpen is a blur and one pass a frame and
+the rest of the frame is host decode.
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -891,6 +899,36 @@ Echo, Frame Blend and gather rows at Length 8 and 32 read up to 6 ms over their 
 
 The first use of a kernel pass on an empty driver cache compiles its program: 0.18 s (path) to 2.6 s (DIS).
 The cold column leaves that out, and the scenarios' first frames include it.
+
+### Sharpen (#486)
+
+`bloom_runtime_gpu_sharpen_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_sharpen_node_bench_smoke`). Each case sharpens a frame-sized source, compared with
+a Grade (one fixed pass) and a Gaussian Blur of the same radius (the blur Sharpen runs first). Measured
+on 2026-11-06 (RTX 4090, 9 reruns, ms/frame):
+
+| Case | 1080p | vs Grade | vs blur | 2160p | vs Grade | vs blur |
+|---|---|---|---|---|---|---|
+| Grade (reference) | 2.23 |  |  | 13.54 |  |  |
+| Gaussian Blur, radius 1 | 2.15 | 0.96x |  | 15.68 | 1.16x |  |
+| Sharpen, radius 1 | 3.25 | 1.46x | 1.51x | 15.75 | 1.16x | 1.00x |
+| Gaussian Blur, radius 3 | 3.04 | 1.36x |  | 14.70 | 1.09x |  |
+| Sharpen, radius 3 (default) | 2.20 | 0.99x | 0.73x | 16.95 | 1.25x | 1.15x |
+| Gaussian Blur, radius 8 | 3.04 | 1.37x |  | 15.63 | 1.15x |  |
+| Sharpen, radius 8 | 3.22 | 1.44x | 1.06x | 16.85 | 1.24x | 1.08x |
+| Gaussian Blur, radius 32 | 4.08 | 1.83x |  | 15.71 | 1.16x |  |
+| Sharpen, radius 32 | 4.12 | 1.85x | 1.01x | 17.85 | 1.32x | 1.14x |
+| Gaussian Blur, radius 128 | 5.13 | 2.30x |  | 19.92 | 1.47x |  |
+| Sharpen, radius 128 | 5.34 | 2.40x | 1.04x | 18.88 | 1.40x | 0.95x |
+| Threshold 0.05, radius 3 | 3.11 | 1.40x | 1.03x | 11.51 | 0.85x | 0.78x |
+| Transparent input, radius 3 | 3.14 | 1.41x | 1.03x | 17.72 | 1.31x | 1.21x |
+
+Cold runs took 3.1 to 5.3 ms at 1080p and 8.7 to 19.1 ms at 2160p, and warm runs under 0.01 ms with no
+dispatch. Sharpen runs 8 dispatches where the blur runs 7, so it costs its blur plus one pass, and
+radius moves its cost only through the blur. The times on this machine move in steps of about 1 ms,
+so a single case can read a step high or low against its neighbours (radius 1 and radius 3 at 1080p in
+this run); read the columns together. `NODE_COST_BUDGETS` holds each case about 25% over the worst of
+three runs on that day.
 
 ## Platform notes
 

@@ -1449,6 +1449,63 @@ frame with new grain (held: zero dispatches and the same pixels), and a changed 
 parity. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
 full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) holds its cost.
 
+## Sharpen
+
+`bloom.sharpen`, schema 1, under Filters (issue #486), has one Image in, `input`, one Image out, `image`,
+and the optional effect mask every filter takes. Every value has a socket and can be keyed or driven:
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `amount` | 1 | 0 to 10 | How much of the detail is added back |
+| `radius` | 3 | 0 to 256 | The blur's radius in full-resolution pixels, as Gaussian Blur's: sigma radius / 3 |
+| `threshold` | 0 | 0 to 1000 | Detail in linear light left alone, in each channel of the straight colour |
+
+**The chain.** The node lowers to two operations, in `compositing_recipes.cpp`: the input's Gaussian blur
+with the frame edge clamped (the ordinary separable blur, so its cache, budget and retirement are the
+blur's), then `SharpenKernel` over the input and that blur.
+
+**The pixel.** With the premultiplied input `rgb` and `a` and its blur `B` at the same pixel, in binary32:
+
+```text
+detail = rgb - (a / B.a) * B.rgb
+cored  = detail - a * threshold    where detail >  a * threshold
+       = detail + a * threshold    where detail < -a * threshold
+       = 0                         otherwise
+rgb'   = max(rgb + amount * cored, min(rgb, 0))
+a'     = a
+```
+
+Comparing colour with each image's own alpha taken out means a flat colour stays that colour through an
+alpha ramp or a hard alpha edge, where blurring premultiplied pixels would otherwise read as detail. The
+sum is in proportion to alpha, so the image stays premultiplied, alpha 0 stays transparent black and no
+division by the input's alpha happens. There is no clamp above: a highlight's overshoot keeps its range,
+and with no threshold the operation is linear in the exposure. Below, an undershoot stops at black so
+that a dark halo cannot put negative light into what follows; a channel already negative keeps its own
+value as the floor. The threshold is soft, so a value of detail just past it changes the result by just
+a little. A subnormal result is zero on every device. The node is the identity at amount 0 or radius 0,
+which aliases the input.
+
+**On the GPU.** One resident dispatch of `ImageCombineV1`'s Unsharp mode (mode 12) over the input and the
+blur, the amount in its factor and the threshold in its push constants: no atlas and no readback. It
+performs the operations above with `fma` and the correctly rounded division (`roundedDivide`, the same
+definition as `ocioGpuPreciseDivisionGlsl`), so the difference of nearly equal values matches the CPU
+reference's. An amount or threshold is a new key for this pass and what follows it: the blur stays
+cached. A radius is a new blur too. Only a non-finite blur pixel sets the shader's status flag: a blur's faint
+tails make subnormal pixels ordinary there, and they change nothing.
+
+**Evidence.** `src/runtime/tests/sharpen_tests.cpp` holds the pixel to an independent double-precision
+reading over HDR, signed and partial-alpha values, a flat colour flat through its alpha edges, a step
+edge's halo against an independent Gaussian, the threshold, exposure invariance, the data window, a
+region of interest equal to the whole frame's pixels, identity, the domains, the pixel budget and
+cancellation. `gpu_image_combine_native_tests.cpp` holds the Unsharp mode to the CPU pixel over HDR,
+signed and partial-alpha pixels and refuses a bad amount or threshold before dispatch. The native harness
+(`runSharpens`) holds six cases (the default, strong, wide, a threshold, a half-resolution proxy and a
+region of interest) to the CPU oracle within 2e-6 on RGB with exact alpha, warm RAM reuse with zero
+dispatches, a changed amount or threshold keeping the blur, and a changed radius running the blur's two
+passes again, each with parity.
+`effect.SharpenKernel` and `node.bloom.sharpen` prepare through the production builder at full frame and
+ROI. [Benchmarks](../development/benchmarks.md#sharpen-486) holds its cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,
