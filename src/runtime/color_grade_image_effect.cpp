@@ -5,6 +5,7 @@
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "sharpen_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
@@ -942,6 +943,11 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return filmGrainProgramText();
     case ColorGradeKind::Motion:
         return {}; // One program per pass: the caller asks with the pass (motionProgramText).
+    case ColorGradeKind::Sharpen: {
+        // ImageCombineV1's Unsharp mode; buildColorGradeProgram refuses this kind.
+        static const std::string none;
+        return none;
+    }
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -1099,6 +1105,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareFilmGrainGrade(*grain, values);
     if (isMotionKernel(kernel))
         return prepareMotionGrade(kernel, values);
+    if (const auto* sharpen = std::get_if<SharpenKernel>(&kernel))
+        return prepareSharpenGrade(*sharpen, values);
     return std::nullopt;
 }
 
@@ -1130,8 +1138,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
         grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
         grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
-        grade.kind == ColorGradeKind::FilmGrain ||
-        grade.kind == ColorGradeKind::Motion)
+        grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::Motion ||
+        grade.kind == ColorGradeKind::Sharpen)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1342,6 +1350,8 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.resourcePrefix = "bloom_motion_";
         program.semanticsId = "bloom.render.motion-blur.v1";
         break;
+    case ColorGradeKind::Sharpen:
+        break; // Refused above.
     }
     program.shaderText = kind == ColorGradeKind::Motion
                              ? motionProgramText(static_cast<int>(data[0]))

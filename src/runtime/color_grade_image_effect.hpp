@@ -48,7 +48,10 @@ enum class ColorGradeKind : std::uint8_t {
     FilmGrain,
     // #484: every motion kernel (motion_blur_image_effect.hpp): the pass table of one pass of the
     // motion kernel, planned where it is applied.
-    Motion
+    Motion,
+    // #486: Sharpen (sharpen_image_effect.hpp), whose program is ImageCombineV1's Unsharp mode, not a
+    // grade program of its own.
+    Sharpen
 };
 
 // The packed table, always a whole number of vec4s:

@@ -167,6 +167,9 @@ BLOOM_GPU_REQUIRED_EFFECT(VectorBlurKernel,
                           "outside-in and temporal fill, forward-backward consistency (#484)");
 BLOOM_GPU_REQUIRED_EFFECT(OpticalFlowKernel,
                           "dense optical flow (DIS, TV-L1) and cut detection (#484)");
+BLOOM_GPU_REQUIRED_EFFECT(SharpenKernel,
+                          "Sharpen: an unsharp mask over the input and its blur with an amount and "
+                          "a threshold, colour compared straight and alpha kept (#486)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

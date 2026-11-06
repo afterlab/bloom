@@ -7,6 +7,7 @@
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
 #include "motion_blur_image_effect.hpp"
+#include "sharpen_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -573,6 +574,10 @@ enum class ScalarDomain : std::uint8_t {
                 } else if (std::holds_alternative<LensFlareKernel>(effect.kernel)) {
                     // #507: a lens flare reads at most its one occlusion matte.
                     validKernel = validKernel && effect.fieldImages.size() <= 1 &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
+                } else if (std::holds_alternative<SharpenKernel>(effect.kernel)) {
+                    // #486: a Sharpen reads its one blur.
+                    validKernel = validKernel && effect.fieldImages.size() == 1 &&
                                   std::ranges::all_of(effect.fieldImages, earlier);
                 } else {
                     validKernel =
@@ -3551,7 +3556,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                           .value()]
                                                     .get();
                                 auto result =
-                                    gradeKind == detail::ColorGradeKind::FilmGrain
+                                    gradeKind == detail::ColorGradeKind::Sharpen
+                                        ? detail::applySharpen(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              slots[effect.fieldImages[0].value()].get(),
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::FilmGrain
                                         ? detail::applyFilmGrain(
                                               *preparedEffect->colorGrade, *slots[index],
                                               resolved.horizontalScale, resolved.verticalScale,

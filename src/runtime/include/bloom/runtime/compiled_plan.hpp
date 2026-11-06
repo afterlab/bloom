@@ -830,6 +830,16 @@ struct OpticalFlowKernel final {
     friend bool operator==(const OpticalFlowKernel&, const OpticalFlowKernel&) = default;
 };
 
+// #486 Sharpen (docs/architecture/image-filters.md, "Sharpen"): an unsharp mask over the input and its
+// blur, CompiledImageEffect::fieldImages' one image. The radius is the blur's, read here only so that
+// no radius is an identity; its parameter's identity belongs to the blur.
+struct SharpenKernel final {
+    CompiledScalarParameter amount;
+    CompiledScalarParameter threshold;
+    CompiledScalarParameter radius;
+    friend bool operator==(const SharpenKernel&, const SharpenKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -839,7 +849,7 @@ using ImageEffectKernel =
                  AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
-                 MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel>;
+                 MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1006,6 +1016,12 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         }
         return true;
     }
+    if (const auto* sharpen = std::get_if<SharpenKernel>(&kernel)) {
+        visit(sharpen->amount);
+        visit(sharpen->threshold);
+        visit(sharpen->radius);
+        return true;
+    }
     return isMotionKernel(kernel);
 }
 
@@ -1022,7 +1038,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<DepthMapKernel>(kernel) ||
            std::holds_alternative<DefocusKernel>(kernel) ||
            std::holds_alternative<LensFlareKernel>(kernel) ||
-           std::holds_alternative<FilmGrainKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<FilmGrainKernel>(kernel) ||
+           std::holds_alternative<SharpenKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
@@ -1042,7 +1059,7 @@ struct CompiledImageEffect final {
     // #525: a FieldRasterKernel's image slots, in slot order (an Image Field's image, a mask Shape
     // Distance's distance image), each sampled by its own data window; #483 a DefocusKernel's
     // (DefocusKernel::slotImages); #507 a LensFlareKernel's occlusion matte; #484 a VectorBlurKernel's
-    // and an OpticalFlowKernel's (their slotImages).
+    // and an OpticalFlowKernel's (their slotImages); #486 a SharpenKernel's blur.
     std::vector<OperationIndex> fieldImages{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };

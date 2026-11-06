@@ -13,6 +13,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -1957,6 +1958,7 @@ int main() {
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);
         testMotionBlurLowering(expectations);
+        testSharpenLowering(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);
         testFieldSampleDrivesAValue(expectations);

@@ -39,6 +39,26 @@ recipeOptionalInput(const document::NodeId nodeId, const std::string_view port,
            typeId == document::kLightWrapNodeType;
 }
 
+// #486 Sharpen: its input's blur and the unsharp mask over the two.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerSharpen(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    const auto amount = compiledScalarParameter(findParameterBinding(node, "amount"));
+    const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
+    const auto threshold = compiledScalarParameter(findParameterBinding(node, "threshold"));
+    if (!amount || !radius || !threshold) {
+        addTopologyFailure(node.id, "Sharpen parameters could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    return runtime::detail::appendSharpen(emitter, *input, {*amount, *radius, *threshold});
+}
+
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {

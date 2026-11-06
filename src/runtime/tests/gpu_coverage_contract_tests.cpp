@@ -38,6 +38,7 @@
 #include "lens_flare_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
+#include "sharpen_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "grade_curves_test_support.hpp"
 #include "merge_entry_test_support.hpp"
@@ -2102,6 +2103,45 @@ displayProofRunner(const bool customView) {
         addMotion("node.bloom.spin-blur", {spin}, 500000, "production Spin");
         addMotion("node.bloom.zoom-blur", {zoom, jittered}, 500200, "production Zoom");
     }
+    // #486 Sharpen: the blur and the unsharp dispatch through the production chain, full frame and ROI.
+    const auto runSharpen = [](const std::vector<bloom::sharpen_test::SharpenValues>& variants,
+                               std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& values : variants) {
+            const auto plan = bloom::sharpen_test::sharpenPlan(values, idBase);
+            idBase += 200;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 9, 7);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    add(
+        "effect.SharpenKernel", GpuCoverageFixtureCriterion::Prepared, "src/runtime sharpen tests",
+        [runSharpen] {
+            return runSharpen({{}, {3.0, 12.0, 0.0}, {2.0, 3.0, 0.25}}, 488000,
+                              "production Sharpen: the default, a strong wide one and a threshold, "
+                              "over HDR and partial alpha, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.sharpen", GpuCoverageFixtureCriterion::Prepared, "src/runtime sharpen tests",
+        [runSharpen] {
+            return runSharpen({{}, {2.0, 3.0, 0.25}}, 489000,
+                              "production Sharpen node: the default and a threshold, full frame and "
+                              "ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {

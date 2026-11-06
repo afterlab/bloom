@@ -17,6 +17,7 @@
 #include "lens_flare_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
+#include "sharpen_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
 #include "grade_curves_test_support.hpp"
@@ -2474,6 +2475,119 @@ void runMotionBlur(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #486 Sharpen against the CPU oracle: the default, a strong and a wide one, a threshold, the blur's
+// half-resolution proxy with its blur's fractional radius and a region of interest; warm RAM reuse with
+// zero dispatches; a changed amount or threshold keeping the blur and a changed radius running its two
+// passes again, each with parity.
+void runSharpens(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::sharpen_test::SharpenValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        SharpenValues values;
+        const char* name;
+        bool proxy = false;
+        bool roi = false;
+    };
+    const std::vector<Case> cases{{{}, "default"},
+                                  {{3.5, 2.0, 0.0}, "strong and narrow"},
+                                  {{1.5, 24.0, 0.0}, "wide"},
+                                  {{2.0, 4.0, 0.25}, "a threshold"},
+                                  {{1.5, 5.0, 0.05}, "a proxy", true},
+                                  {{1.5, 6.0, 0.05}, "a region of interest", false, true}};
+    std::uint64_t id = 49800;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("sharpen native (") + item.name + "): ";
+        const auto plan = bloom::sharpen_test::sharpenPlan(item.values, id);
+        id += 200;
+        auto request = requestFor(*plan);
+        if (item.proxy) {
+            const auto extent = bloom::render::ImageExtent::create(32, 24);
+            request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        }
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(11, 7, 23, 19);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare: " +
+                                prepared.diagnostic.message);
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.dispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches == coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        // A changed amount or threshold re-runs the mask and what follows it over the retained blur.
+        std::uint64_t maskDispatches = 0;
+        for (const auto& [changedValues, what] :
+             {std::pair{SharpenValues{item.values.amount + 0.5, item.values.radius,
+                                      item.values.threshold},
+                        "amount"},
+              std::pair{SharpenValues{item.values.amount, item.values.radius,
+                                      item.values.threshold + 0.125},
+                        "threshold"}}) {
+            const auto changedPlan = bloom::sharpen_test::sharpenPlan(changedValues, id - 200);
+            const auto changed = builder.build(changedPlan, request);
+            const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+            expectations.expect(changed && changedOracle.frame(),
+                                name + "a changed " + what + " prepares");
+            if (!changed || !changedOracle.frame())
+                continue;
+            const auto before = executor.executor->counters();
+            const auto again = runScene(*executor.executor, changed.scene);
+            maskDispatches = executor.executor->counters().dispatches - before.dispatches;
+            expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    parity(again.pixels,
+                                           changedOracle.frame()->processImage().pixels(), detail,
+                                           AlphaGate::Exact) &&
+                                    maskDispatches > 0,
+                                name + "a changed " + what + " re-runs with CPU parity: " + detail);
+        }
+        // A changed radius also re-runs the blur's two passes: those are all that a changed amount
+        // kept.
+        const auto widerPlan = bloom::sharpen_test::sharpenPlan(
+            {item.values.amount, item.values.radius + 2.0, item.values.threshold}, id - 200);
+        const auto wider = builder.build(widerPlan, request);
+        const auto widerOracle = evaluator.evaluate(widerPlan, oracleRequest, {});
+        expectations.expect(wider && widerOracle.frame(), name + "a changed radius prepares");
+        if (!wider || !widerOracle.frame())
+            continue;
+        const auto beforeWider = executor.executor->counters();
+        const auto rerun = runScene(*executor.executor, wider.scene);
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, widerOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches ==
+                                    beforeWider.dispatches + maskDispatches + 2,
+                            name + "a changed radius re-runs the blur with CPU parity: " + detail);
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runBatchedChains(expectations, device, cache);
@@ -2495,6 +2609,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runLensFlares(expectations, device, cache);
     runFilmGrains(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
+    runSharpens(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

@@ -453,6 +453,17 @@ OperationIndex appendLightWrap(RecipeEmitter& emitter, const OperationIndex inpu
                           {input, core::BlendMode::Normal}});
 }
 
+OperationIndex appendSharpen(RecipeEmitter& emitter, const OperationIndex input,
+                             const SharpenOperands& operands) {
+    const auto blurred =
+        emitter.effect(input, SeparableBlurKernel{SeparableBlurKind::Gaussian, operands.radius,
+                                                  BlurEdgeMode::Clamp, BlurChannels::Rgba});
+    const auto sharpened = emitter.effect(
+        input, SharpenKernel{operands.amount, operands.threshold, emitter.reuse(operands.radius)});
+    emitter.setImages(sharpened, {blurred});
+    return sharpened;
+}
+
 RecipeEmitter::ValueSink definitionValueSink(CompiledCompositionPlanDefinition& definition) {
     return [&definition](CompiledValueKernel kernel, const std::uint8_t outputCount) {
         const auto first = ValueOutputIndex::fromRaw(definition.valueOutputCount);

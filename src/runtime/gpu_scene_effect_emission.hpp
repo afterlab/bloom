@@ -27,6 +27,7 @@
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
 #include "motion_blur_image_effect.hpp"
+#include "sharpen_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -200,6 +201,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_depth_emission.ipp"
 #include "gpu_scene_lens_flare_emission.ipp"
 #include "gpu_scene_motion_emission.ipp"
+#include "gpu_scene_sharpen_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -345,6 +347,24 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         }
         return emitDepthMapCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
                                    emit, charge, chargeCoverage, result);
+    }
+    // #486 Sharpen: one two-input dispatch over the input and its blur.
+    if (std::holds_alternative<SharpenKernel>(effect.kernel)) {
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Sharpen values are out of domain");
+        // No amount or no radius aliases the input, as on the CPU reference.
+        if (grade->identity) {
+            result.identity = true;
+            return std::nullopt;
+        }
+        return emitSharpenCommand(effect, *grade, operationIndex, ctx, cancellation, emit, charge,
+                                  chargeCoverage, result);
     }
     // #507 Lens Flare: its probes and its stack over the input padded to the frame.
     if (std::holds_alternative<LensFlareKernel>(effect.kernel)) {

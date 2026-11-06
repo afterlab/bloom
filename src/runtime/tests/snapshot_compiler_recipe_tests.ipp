@@ -866,3 +866,55 @@ void testFilmGrainLowering(Expectations& expectations) {
                             "a muted Film Grain passes its Image through");
     }
 }
+
+// #486 Sharpen lowers to the Gaussian blur of its input, frame edge clamped, and one kernel over the
+// input and that blur, each value's identity on the operation it drives. A muted node passes its Image
+// through.
+void testSharpenLowering(Expectations& expectations) {
+    using namespace document;
+    auto fixture = recipeFixture(kSharpenNodeType,
+                                 {{"amount", 2.5}, {"radius", 7.5}, {"threshold", 0.125}});
+    const auto node = fixture.node;
+    const auto params = fixture.parameters;
+    const auto result = compileRecipe(std::move(fixture.project));
+    expectations.expect(result.plan != nullptr, "Sharpen compiles");
+    if (!result.plan)
+        return;
+    const auto ops = recipeOperations(*result.plan, node);
+    require(ops.size() == 2, "Sharpen lowers to a blur and its mask");
+    const auto* blur = recipeKernel<runtime::SeparableBlurKernel>(*result.plan, ops[0]);
+    const auto* sharpen = recipeKernel<runtime::SharpenKernel>(*result.plan, ops[1]);
+    require(blur != nullptr && sharpen != nullptr, "Sharpen's operations are its kernels");
+    expectations.expect(blur->kind == runtime::SeparableBlurKind::Gaussian &&
+                            blur->edge == runtime::BlurEdgeMode::Clamp &&
+                            blur->channels == runtime::BlurChannels::Rgba &&
+                            blur->radius.id == params.at("radius") &&
+                            std::get<double>(blur->radius.source) == 7.5,
+                        "the blur is a clamped Gaussian owning the radius");
+    expectations.expect(sharpen->amount.id == params.at("amount") &&
+                            std::get<double>(sharpen->amount.source) == 2.5 &&
+                            sharpen->threshold.id == params.at("threshold") &&
+                            std::get<double>(sharpen->threshold.source) == 0.125 &&
+                            std::get<double>(sharpen->radius.source) == 7.5 &&
+                            sharpen->radius.id != params.at("radius"),
+                        "the mask owns its amount and threshold and reuses the radius");
+    const auto& effect =
+        std::get<runtime::CompiledImageEffect>(result.plan->operations()[ops[1]]);
+    const auto& blurEffect =
+        std::get<runtime::CompiledImageEffect>(result.plan->operations()[ops[0]]);
+    expectations.expect(effect.fieldImages.size() == 1 && effect.fieldImages[0].value() == ops[0] &&
+                            effect.input == blurEffect.input,
+                        "the mask reads the input and its blur");
+    for (const auto index : ops)
+        expectations.expect(!result.plan->operationTimeDependent(runtime::OperationIndex::fromRaw(index)),
+                            "a constant Sharpen does not vary with time");
+    {
+        auto muted = recipeFixture(kSharpenNodeType);
+        muted.project.findComposition(kCompositionId)->nodeLayout()[muted.node].muted = true;
+        const auto mutedNode = muted.node;
+        const auto compiled = compileRecipe(std::move(muted.project));
+        expectations.expect(compiled.plan != nullptr &&
+                                recipeOperations(*compiled.plan, mutedNode).empty(),
+                            "a muted Sharpen passes its Image through");
+    }
+}

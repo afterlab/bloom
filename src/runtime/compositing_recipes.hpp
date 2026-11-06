@@ -135,6 +135,13 @@ struct LightWrapOperands final {
     bool wrapOnly = false;
 };
 
+// #486 Sharpen, which unlike the recipes above has one pixel kernel of its own over the blur.
+struct SharpenOperands final {
+    CompiledScalarParameter amount;
+    CompiledScalarParameter radius;
+    CompiledScalarParameter threshold;
+};
+
 // Each returns the operation that publishes the node's image.
 [[nodiscard]] OperationIndex appendDropShadow(RecipeEmitter& emitter, OperationIndex input,
                                               const DropShadowOperands& operands);
@@ -148,6 +155,11 @@ struct LightWrapOperands final {
 [[nodiscard]] OperationIndex appendLightWrap(RecipeEmitter& emitter, OperationIndex input,
                                              OperationIndex background,
                                              const LightWrapOperands& operands);
+
+// The input's Gaussian blur with the frame edge clamped, so the edge of the image is not an edge of
+// the picture, then the unsharp mask over the two.
+[[nodiscard]] OperationIndex appendSharpen(RecipeEmitter& emitter, OperationIndex input,
+                                           const SharpenOperands& operands);
 
 // A plan's value operations and output count, for callers (tests, fixtures) that build a plan
 // definition directly: the sink appends to `definition`.
