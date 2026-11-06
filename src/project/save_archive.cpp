@@ -502,6 +502,7 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
             migrateLegacyGradientColorPairs(envelope);
             migrateLegacyGlowNodes(envelope);
             migrateLegacyTransformMotionBlur(envelope);
+            migrateLegacyFilmGrainMonochrome(envelope);
         }
         auto reconstructed = reconstructDocument(
             std::move(envelope),

@@ -256,11 +256,13 @@ void blurNodeReopen() {
                     ? document::ParameterValue{document::Vec2d{-120.5, 64.25}}
                 : parameter.schemaKey.starts_with("bloom.vignette.")
                     ? document::ParameterValue{0.25}
-                // #486 Film Grain: held, its own seed and moved values.
+                // #486 Film Grain: held, its own seed, Monochrome on and moved values.
                 : parameter.schemaKey == "bloom.film-grain.animation"
                     ? document::ParameterValue{std::int64_t{1}}
                 : parameter.schemaKey == "bloom.film-grain.seed"
                     ? document::ParameterValue{std::int64_t{1234}}
+                : parameter.schemaKey == "bloom.film-grain.monochrome"
+                    ? document::ParameterValue{true}
                 : parameter.valueKind == document::ParameterValueKind::Float64 &&
                         parameter.schemaKey.starts_with("bloom.film-grain.")
                     ? document::ParameterValue{0.625}

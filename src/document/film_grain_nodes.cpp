@@ -26,6 +26,8 @@ bool isFilmGrainParameterValueValid(const std::string_view schemaKey,
         const auto* v = std::get_if<double>(&value);
         return v != nullptr && within(*v);
     }
+    if (spec->kind == FilmGrainParameterKind::Boolean)
+        return std::holds_alternative<bool>(value);
     const auto* v = std::get_if<std::int64_t>(&value);
     return v != nullptr && within(static_cast<double>(*v));
 }
@@ -40,6 +42,14 @@ NodeDefinition filmGrainDefinition() {
                               NodeCardinality::Many,
                               NodeCategory::Filters};
     for (const auto& parameter : filmGrainParameters()) {
+        // Optional, so a node saved before it still validates and renders with it off.
+        if (parameter.kind == FilmGrainParameterKind::Boolean) {
+            definition.parameters.push_back({std::string(parameter.role),
+                                             filmGrainSchemaKey(parameter.role),
+                                             ParameterValueKind::Boolean, false, false,
+                                             ParameterValue{parameter.value != 0.0}});
+            continue;
+        }
         const bool scalar = parameter.kind == FilmGrainParameterKind::Scalar;
         definition.parameters.push_back(
             {std::string(parameter.role), filmGrainSchemaKey(parameter.role),

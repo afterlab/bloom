@@ -13,12 +13,15 @@
 //              grows with the luma, so it stays the same share of an HDR highlight.
 //   animation  Every Frame draws new grain for each frame; Held keeps one pattern. Constant.
 //   seed       which grain. The same seed and frame always give the same grain. Constant.
+//   monochrome off gives each channel its own grain; on, every channel takes the red channel's
+//              pattern, each still scaled by its own amount. Constant and optional: a node saved
+//              before it opens with it off (migrateLegacyFilmGrainMonochrome).
 //
 // The colour never clips: grain is added, in proportion to alpha so the image stays premultiplied,
 // and alpha is kept. docs/architecture/image-filters.md, "Film Grain", is the specification.
 //
 // Schema keys are "bloom.film-grain.<role>". Every Scalar is animatable, drivable and has a socket
-// of its own; the Choice and the Integer are constants with no socket.
+// of its own; the Choice, the Integer and the Boolean are constants with no socket.
 
 #include <array>
 #include <cstddef>
@@ -38,7 +41,7 @@ inline constexpr std::int64_t kFilmGrainHeld = 1;
 inline constexpr double kFilmGrainMidGrey = 0.18;
 inline constexpr double kFilmGrainWhite = 1.0;
 
-enum class FilmGrainParameterKind : std::uint8_t { Choice, Integer, Scalar };
+enum class FilmGrainParameterKind : std::uint8_t { Choice, Integer, Scalar, Boolean };
 
 struct FilmGrainParameterSpec final {
     std::string_view role;
@@ -84,6 +87,7 @@ inline constexpr std::array kParameters{
                            2.0, 1.0, 0, "%", 100.0},
     FilmGrainParameterSpec{"animation", Kind::Choice, 0.0, 0.0, 1.0, kAnimations, "Grain changes"},
     FilmGrainParameterSpec{"seed", Kind::Integer, 1.0, 0.0, 2147483647.0, {}, "Seed"},
+    FilmGrainParameterSpec{"monochrome", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Monochrome"},
 };
 
 } // namespace film_grain_parameters
@@ -109,7 +113,7 @@ filmGrainParameterSpec(const std::string_view schemaKey) noexcept {
     const auto* spec = filmGrainParameterSpec(key);
     return spec != nullptr && spec->kind == FilmGrainParameterKind::Scalar;
 }
-// A constant choice (Choice, Integer): no socket and no animation.
+// A constant (Choice, Integer, Boolean): no socket and no animation.
 [[nodiscard]] constexpr bool isFilmGrainConstantSchemaKey(const std::string_view key) noexcept {
     const auto* spec = filmGrainParameterSpec(key);
     return spec != nullptr && spec->kind != FilmGrainParameterKind::Scalar;

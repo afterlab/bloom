@@ -6,6 +6,7 @@
 #include <bloom/project/document_decode.hpp>
 
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -65,6 +66,12 @@ void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope) {
 // #484: Transform 2D's motion blur parameters, off by default, so the picture is unchanged.
 void migrateLegacyTransformMotionBlur(DecodedDocumentEnvelope& envelope) {
     bindOptionalParameters(envelope, document::kTransform2DNodeType, 1);
+}
+
+// #486: Film Grain's Monochrome, off by default, so the picture is unchanged.
+void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope) {
+    bindOptionalParameters(envelope, document::kFilmGrainNodeType,
+                           document::kFilmGrainNodeSchemaVersion);
 }
 
 } // namespace bloom::project

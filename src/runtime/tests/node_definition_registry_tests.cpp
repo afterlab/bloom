@@ -341,7 +341,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     const auto grainUnmasked = withoutMask(registry.find("bloom.film-grain", 1));
     expectations.expect(
         grainUnmasked && grainUnmasked->inputs.size() == 9 &&
-            grainUnmasked->parameters.size() == 10 &&
+            grainUnmasked->parameters.size() == 11 &&
             grainUnmasked->inputs[0].valueKind == runtime::SocketValueKind::Image &&
             grainUnmasked->inputs[1].name == "intensity" &&
             grainUnmasked->parameters[0].defaultValue == document::ParameterValue{0.02} &&
@@ -349,6 +349,11 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             !grainUnmasked->parameters[8].supportsAnimation &&
             grainUnmasked->parameters[9].role == "seed" &&
             grainUnmasked->parameters[9].defaultValue == document::ParameterValue{std::int64_t{1}} &&
+            grainUnmasked->parameters[10].role == "monochrome" &&
+            grainUnmasked->parameters[10].valueKind == document::ParameterValueKind::Boolean &&
+            !grainUnmasked->parameters[10].required &&
+            !grainUnmasked->parameters[10].supportsAnimation &&
+            grainUnmasked->parameters[10].defaultValue == document::ParameterValue{false} &&
             grainUnmasked->outputs.size() == 1 &&
             grainUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Film Grain has its constants and an animatable socket per value");

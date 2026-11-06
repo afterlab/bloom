@@ -480,6 +480,10 @@ void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope);
 // them lacks, at their defaults (motion blur off), so the picture is unchanged. Open path only.
 void migrateLegacyTransformMotionBlur(DecodedDocumentEnvelope& envelope);
 
+// #486: opening a project binds Film Grain's optional Monochrome on a node saved before it, off, so
+// the picture is unchanged. Open path only.
+void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope);
+
 // #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
 // older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
 inline constexpr std::uint32_t kGradientColorPairsMinor = 39;

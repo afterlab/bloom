@@ -522,6 +522,8 @@ std::optional<ParameterPresentation> filmGrainPresentation(const std::string_vie
         return choice();
     case FilmGrainParameterKind::Integer:
         return whole(spec->minimum, spec->maximum, spec->minimum, 9999.0, spec->unit);
+    case FilmGrainParameterKind::Boolean:
+        return std::nullopt; // Presented as every Boolean is.
     case FilmGrainParameterKind::Scalar:
         break;
     }
