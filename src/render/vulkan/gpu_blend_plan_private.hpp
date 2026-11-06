@@ -81,11 +81,11 @@ planBlend(const ImageWindow& sourceWindow, const ImageWindow& destinationWindow,
     }
     if (imageCombine &&
         (static_cast<std::uint8_t>(imageCombine->kind) >
-             static_cast<std::uint8_t>(GpuImageCombineKind::SetChannel) ||
+             static_cast<std::uint8_t>(GpuImageCombineKind::Unsharp) ||
          static_cast<std::uint8_t>(imageCombine->channel) >
              static_cast<std::uint8_t>(ImageCoverageChannel::Luma) ||
          !std::isfinite(imageCombine->factor) || imageCombine->factor < 0.0F ||
-         imageCombine->factor > 1.0F)) {
+         (imageCombine->kind != GpuImageCombineKind::Unsharp && imageCombine->factor > 1.0F))) {
         return blendDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                                "the image combine kind, channel or factor is invalid");
     }
@@ -97,6 +97,14 @@ planBlend(const ImageWindow& sourceWindow, const ImageWindow& destinationWindow,
              : imageCombine->slot != 0 || imageCombine->premultiply)) {
         return blendDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                                "the image combine slot does not match its mode");
+    }
+    // #486: only Unsharp reads a threshold.
+    if (imageCombine &&
+        (imageCombine->kind == GpuImageCombineKind::Unsharp
+             ? !std::isfinite(imageCombine->threshold) || imageCombine->threshold < 0.0F
+             : imageCombine->threshold != 0.0F)) {
+        return blendDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
+                               "the image combine threshold does not match its mode");
     }
     const bool maskPresent =
         imageCombine && imageCombine->mask == GpuImageCombineParameters::Mask::Present;
@@ -175,7 +183,8 @@ planBlend(const ImageWindow& sourceWindow, const ImageWindow& destinationWindow,
             maskHeight,
             maskOffsetX,
             maskOffsetY,
-            static_cast<std::uint32_t>(imageCombine->mask)};
+            static_cast<std::uint32_t>(imageCombine->mask),
+            imageCombine->threshold};
     }
     out.destWidth = destWidth;
     out.destHeight = destHeight;

@@ -558,6 +558,11 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
             if (imageCombine->premultiply)
                 key.append("|premultiply");
         }
+        // #486 Unsharp's threshold, appended only for that kind.
+        if (imageCombine->kind == render::GpuImageCombineKind::Unsharp) {
+            key.append("|threshold=");
+            gpu_scene_key_detail::appendSemanticFloatBits(key, imageCombine->threshold);
+        }
         // ADR 0028: Image Mix's mask, appended only when used.
         if (imageCombine->mask != render::GpuImageCombineParameters::Mask::None) {
             key.append("|mask=");

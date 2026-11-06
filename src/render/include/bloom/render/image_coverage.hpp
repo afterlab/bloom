@@ -125,6 +125,43 @@ matteSelectionFromStoredValue(const std::int64_t value) noexcept {
     return Rgba32f::fromPremultiplied(components[0], components[1], components[2], components[3]);
 }
 
+// #486 Sharpen, one channel of the unsharp mask: the premultiplied `value` plus `amount` times its
+// difference from `scale` times `blurred`, the difference first moved `threshold` towards zero. The
+// result stays at or above min(value, 0), so sharpening never takes a colour below black, and a
+// subnormal result is zero on every device. The device program performs the same binary32 operations.
+[[nodiscard]] inline float unsharpImageChannel(const float value, const float blurred,
+                                               const float scale, const float amount,
+                                               const float threshold) noexcept {
+    const float detail = std::fma(-scale, blurred, value);
+    float cored = 0.0F;
+    if (detail > threshold)
+        cored = detail - threshold;
+    else if (detail < -threshold)
+        cored = detail + threshold;
+    const float sharpened = std::fma(amount, cored, value);
+    const float result = std::max(sharpened, std::min(value, 0.0F));
+    return std::fpclassify(result) == FP_SUBNORMAL ? 0.0F : result;
+}
+
+// #486 Sharpen: `base` sharpened against `blurred`, its blur at the same pixel (transparent outside
+// the blur's data window). Colour is compared straight, each image's own alpha taken out, so a flat
+// colour stays flat through an alpha edge and only real detail is added, in proportion to alpha:
+//   rgb' = rgb + amount * thresholded(rgb - a * blurred.rgb / blurred.a), threshold scaled by a.
+// Alpha never changes, and a transparent pixel stays transparent. A non-finite result fails.
+[[nodiscard]] inline ImageResult<Rgba32f> unsharpImagePixel(const Rgba32f base, const Rgba32f blurred,
+                                                            const float amount,
+                                                            const float threshold) noexcept {
+    const float alpha = base.alpha();
+    if (alpha <= 0.0F || blurred.alpha() <= 0.0F)
+        return ImageResult<Rgba32f>::success(base);
+    const float scale = alpha / blurred.alpha();
+    const float scaled = alpha * threshold;
+    return Rgba32f::fromPremultiplied(
+        unsharpImageChannel(base.red(), blurred.red(), scale, amount, scaled),
+        unsharpImageChannel(base.green(), blurred.green(), scale, amount, scaled),
+        unsharpImageChannel(base.blue(), blurred.blue(), scale, amount, scaled), alpha);
+}
+
 // All operations use exact composition-space integer pixel centres. A matte tap outside its
 // data window is transparent black and thus has zero coverage. The caller performs the window
 // lookup; this helper never guesses alignment from array indices or resamples a matte.

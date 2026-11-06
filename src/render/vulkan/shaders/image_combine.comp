@@ -16,8 +16,8 @@ layout(push_constant) uniform BloomImageCombinePush {
     uint sourceHeight;
     int sourceOffsetX;
     int sourceOffsetY;
-    uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha, 11=Set Channel
-    float factor;           // finite unit factor, validated by host
+    uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha, 11=Set Channel, 12=Unsharp
+    float factor;           // finite unit factor, validated by host; Unsharp: the finite amount >= 0
     uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=premultiplied luma; bit 3: invert;
                             // Set Channel: bits 4-5 the written slot (R, G, B, A), bit 6 premultiply
     uint maskWidth;
@@ -25,6 +25,7 @@ layout(push_constant) uniform BloomImageCombinePush {
     int maskOffsetX;
     int maskOffsetY;
     uint maskMode;          // 0=no mask, 1=mask image, 2=absent mask (zero coverage)
+    float threshold;        // Unsharp only: the finite threshold >= 0, validated by host
 } bloom_push;
 
 bool subnormal(float value) {
@@ -103,6 +104,51 @@ float storedChannel(vec4 second) {
     return luma(second.rgb);
 }
 
+// #486 Unsharp divides correctly rounded on every device, as ocioGpuPreciseDivisionGlsl does: some
+// devices do not round `a / b` to nearest-even, and the detail below is the difference of nearly equal
+// values, so an error here would be scaled by the amount.
+float nextUp(float x) {
+    uint u = floatBitsToUint(x);
+    if (x == 0.0) return uintBitsToFloat(1u);
+    return x > 0.0 ? uintBitsToFloat(u + 1u) : uintBitsToFloat(u - 1u);
+}
+float nextDown(float x) {
+    uint u = floatBitsToUint(x);
+    if (x == 0.0) return uintBitsToFloat(0x80000001u);
+    return x > 0.0 ? uintBitsToFloat(u - 1u) : uintBitsToFloat(u + 1u);
+}
+float roundedDivide(float a, float b) {
+    precise float q = a / b;
+    precise float r = fma(-b, q, a);
+    q = q + r / b;
+    r = fma(-b, q, a);
+    q = q + r / b;
+    r = fma(-b, q, a);
+    if (r != 0.0) {
+        float up = nextUp(q);
+        float down = nextDown(q);
+        bool away = (r > 0.0) == (b > 0.0);
+        precise float gap = away ? abs(up - q) : abs(q - down);
+        precise float midpoint = abs(b) * 0.5 * gap;
+        if (abs(r) > midpoint) {
+            q = away ? up : down;
+        } else if (abs(r) == midpoint && (floatBitsToUint(q) & 1u) != 0u) {
+            q = away ? up : down;
+        }
+    }
+    return q;
+}
+// The same binary32 operations as render::unsharpImageChannel.
+float unsharpChannel(float value, float blurred, float scale, float threshold) {
+    precise float detail = fma(-scale, blurred, value);
+    precise float cored = 0.0;
+    if (detail > threshold) cored = detail - threshold;
+    else if (detail < -threshold) cored = detail + threshold;
+    precise float sharpened = fma(bloom_push.factor, cored, value);
+    float result = max(sharpened, min(value, 0.0));
+    return subnormal(result) ? 0.0 : result;
+}
+
 // Shift alpha by 24 bits so half the least subnormal is a normal Float32.
 // A nonzero subnormal CPU alpha cannot be reproduced on flush-to-zero devices;
 // reject that numerical case through the existing status/CPU fallback boundary.
@@ -122,7 +168,9 @@ void main() {
     vec4 a = imageLoad(bloom_backdrop, destination);
     vec4 b = inside ? imageLoad(bloom_source, sourceLocal) : vec4(0.0);
     uint errors = pixelErrors(a);
-    if (inside) errors |= pixelErrors(b);
+    // #486 Unsharp reads a blur's faint tails, where a subnormal is ordinary, and only as a difference
+    // far below any value it changes: there, only a non-finite second image is an error.
+    if (inside) errors |= bloom_push.mode == 12u ? pixelErrors(b) & 1u : pixelErrors(b);
     if (errors != 0u) {
         atomicOr(bloom_error.flags[0], errors);
         imageStore(bloom_output, destination, a);
@@ -190,6 +238,17 @@ void main() {
             atomicOr(bloom_error.flags[0], 4u);
             imageStore(bloom_output, destination, a);
             return;
+        }
+    } else if (bloom_push.mode == 12u) {
+        // #486 Sharpen: the base plus the amount times its colour's difference from the second
+        // image's (its blur) colour at this pixel, in proportion to its alpha, which is kept.
+        result = a;
+        if (a.a > 0.0 && b.a > 0.0) {
+            float scale = roundedDivide(a.a, b.a);
+            precise float threshold = a.a * bloom_push.threshold;
+            result.r = unsharpChannel(a.r, b.r, scale, threshold);
+            result.g = unsharpChannel(a.g, b.g, scale, threshold);
+            result.b = unsharpChannel(a.b, b.b, scale, threshold);
         }
     } else {
         atomicOr(bloom_error.flags[0], 2u);

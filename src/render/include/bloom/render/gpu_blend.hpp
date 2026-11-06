@@ -66,7 +66,9 @@ struct GpuBlendDiagnostic final {
 // durable core::BlendMode value; an unknown stored integer cannot reach this type.
 // SetChannel (#479 Combine Channels) replaces one component of the base with the stored value of
 // the second image's selected channel (render::storedImageChannel, render::setImageChannel).
-enum class GpuImageCombineKind : std::uint8_t { Mix, SetAlpha, MultiplyAlpha, SetChannel };
+// Unsharp (#486 Sharpen) adds the base's detail against its blur, the second image
+// (render::unsharpImagePixel): `factor` is then the amount, any finite value >= 0.
+enum class GpuImageCombineKind : std::uint8_t { Mix, SetAlpha, MultiplyAlpha, SetChannel, Unsharp };
 
 struct GpuImageCombineParameters final {
     GpuImageCombineKind kind = GpuImageCombineKind::Mix;
@@ -86,6 +88,8 @@ struct GpuImageCombineParameters final {
     // red, green and blue are then multiplied by the alpha. Zero and false for every other kind.
     std::uint8_t slot = 0;
     bool premultiply = false;
+    // Unsharp only: the detail left alone, in linear light. Zero for every other kind.
+    float threshold = 0.0F;
 };
 
 struct GpuBlendParameters final {

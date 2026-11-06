@@ -16,6 +16,13 @@ using namespace bloom::render::composite_proof;
 
 [[nodiscard]] Rgba32f oracle(const Rgba32f base, const Rgba32f second,
                             const GpuImageCombineParameters mode) {
+    if (mode.kind == GpuImageCombineKind::Unsharp) {
+        // #486 Sharpen: the production CPU reference's own pixel.
+        const auto result = unsharpImagePixel(base, second, mode.factor, mode.threshold);
+        if (!result)
+            throw std::logic_error("invalid Unsharp oracle");
+        return *result.value();
+    }
     if (mode.kind == GpuImageCombineKind::SetChannel) {
         // #479 Combine Channels: the production CPU reference's own channel read and write.
         const auto result = setImageChannel(base, storedImageChannel(second, mode.channel),
@@ -45,6 +52,13 @@ using namespace bloom::render::composite_proof;
                  static_cast<float>(static_cast<double>(base.green()) * baseWeight + static_cast<double>(second.green()) * secondWeight),
                  static_cast<float>(static_cast<double>(base.blue()) * baseWeight + static_cast<double>(second.blue()) * secondWeight),
                  static_cast<float>(static_cast<double>(base.alpha()) * baseWeight + static_cast<double>(second.alpha()) * secondWeight));
+}
+[[nodiscard]] GpuImageCombineParameters unsharp(const float amount, const float threshold,
+                                                const bool absent) {
+    GpuImageCombineParameters mode{GpuImageCombineKind::Unsharp, amount, ImageCoverageChannel::Alpha,
+                                   false, absent};
+    mode.threshold = threshold;
+    return mode;
 }
 [[nodiscard]] GpuImageCombineParameters setChannel(const ImageCoverageChannel channel,
                                                    const std::uint8_t slot, const bool premultiply,
@@ -138,7 +152,11 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
         setChannel(ImageCoverageChannel::Luma, 1, false, false),
         setChannel(ImageCoverageChannel::Blue, 2, false, true),
         setChannel(ImageCoverageChannel::Red, 3, false, false),
-        setChannel(ImageCoverageChannel::Alpha, 3, true, false)};
+        setChannel(ImageCoverageChannel::Alpha, 3, true, false),
+        // #486 Unsharp: an amount above 1 over HDR, signed and partial-alpha pixels, a threshold,
+        // and no blur at all.
+        unsharp(0.5F, 0.0F, false), unsharp(3.0F, 0.0F, false), unsharp(2.0F, 0.25F, false),
+        unsharp(1.0F, 0.0F, true)};
     // #479: Set Channel writes one of four components and reads its channel uninverted; a slot
     // or a selector outside that is refused before dispatch, and no other kind takes a slot.
     {
@@ -151,11 +169,20 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
         GpuImageCombineParameters mixPremultiplied{GpuImageCombineKind::Mix, 0.5F,
                                                    ImageCoverageChannel::Alpha};
         mixPremultiplied.premultiply = true;
+        GpuImageCombineParameters mixWithThreshold{GpuImageCombineKind::Mix, 0.5F,
+                                                   ImageCoverageChannel::Alpha};
+        mixWithThreshold.threshold = 0.25F;
+        const GpuImageCombineParameters mixAboveOne{GpuImageCombineKind::Mix, 1.5F,
+                                                    ImageCoverageChannel::Alpha};
         for (const auto& [invalid, what] :
              {std::pair{slotFour, "a Set Channel slot past alpha"},
               std::pair{inverted, "an inverted Set Channel selector"},
               std::pair{mixWithSlot, "a slot on another combine kind"},
-              std::pair{mixPremultiplied, "premultiply on another combine kind"}}) {
+              std::pair{mixPremultiplied, "premultiply on another combine kind"},
+              std::pair{unsharp(1.0F, -0.5F, false), "a negative Unsharp threshold"},
+              std::pair{unsharp(-1.0F, 0.0F, false), "a negative Unsharp amount"},
+              std::pair{mixWithThreshold, "a threshold on another combine kind"},
+              std::pair{mixAboveOne, "a factor above 1 on another combine kind"}}) {
             const auto refused = blend.blend->beginBlend(
                 GpuBlendParameters{second, base, core::BlendMode::Normal, invalid}, kBudget);
             expectations.expect(refused.code == GpuBlendDiagnosticCode::InvalidArgument &&
@@ -170,6 +197,9 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
             (mode.matteAbsent ? "-absent" : "") +
             (mode.kind == GpuImageCombineKind::SetChannel
                  ? "-slot" + std::to_string(mode.slot) + (mode.premultiply ? "-premultiply" : "")
+             : mode.kind == GpuImageCombineKind::Unsharp
+                 ? "-amount" + std::to_string(mode.factor) + "-threshold" +
+                       std::to_string(mode.threshold)
                  : std::string{});
         // An absent matte binds the base image in the matte slot; no matte texel is read.
         const auto begin = blend.blend->beginBlend(

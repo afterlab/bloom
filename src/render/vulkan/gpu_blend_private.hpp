@@ -36,7 +36,7 @@ namespace bloom::render {
 // BlendV1 bindings: source + backdrop + output storage images, then the error-flag storage buffer.
 inline constexpr std::uint32_t kBlendBindingCount = 4;
 inline constexpr std::uint32_t kBlendPushBytes = 28;
-inline constexpr std::uint32_t kImageCombinePushBytes = 56;
+inline constexpr std::uint32_t kImageCombinePushBytes = 60;
 // ImageCombineV1 adds Image Mix's mask storage image at binding 4 (ADR 0028).
 inline constexpr std::uint32_t kImageCombineBindingCount = 5;
 
@@ -60,6 +60,7 @@ struct ImageCombinePush final {
     std::int32_t maskOffsetX;
     std::int32_t maskOffsetY;
     std::uint32_t maskMode;
+    float threshold;
 };
 static_assert(sizeof(ImageCombinePush) == kImageCombinePushBytes);
 inline constexpr std::uint32_t kImageCombineInvertBit = 8U;

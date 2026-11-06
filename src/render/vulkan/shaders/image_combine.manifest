@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "32209baa2606dcfbafdf13d5cb9b3d745572d5b4449420a237ceff95238a13fe",
-    "spirvSha256": "facf831c40c281aa8841764cc0e6541fd18ae601e45f16805edc71a69472deca",
+    "sha256": "f507ccff0e80abe1d45a1f05a20674f49f3d61088390c96c743b079ecd81b064",
+    "spirvSha256": "67bba8f658381c3333fffd52a9ca8b9e423d9875b2a35b28e1ddb1465c5e6c2c",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -21,14 +21,14 @@
     {"set": 0, "binding": 4, "kind": "storage-image", "access": "readonly", "format": "rgba32f", "role": "image-mix-mask"}
   ],
   "pushConstant": {
-    "byteCount": 56,
-    "fields": ["destWidth", "destHeight", "sourceWidth", "sourceHeight", "sourceOffsetX", "sourceOffsetY", "mode", "factor", "channel", "maskWidth", "maskHeight", "maskOffsetX", "maskOffsetY", "maskMode"]
+    "byteCount": 60,
+    "fields": ["destWidth", "destHeight", "sourceWidth", "sourceHeight", "sourceOffsetX", "sourceOffsetY", "mode", "factor", "channel", "maskWidth", "maskHeight", "maskOffsetX", "maskOffsetY", "maskMode", "threshold"]
   },
   "contracts": {
     "alignment": "Second input sampled at the base image's global integer pixel coordinate; outside its data window is transparent black",
     "alpha": "finite premultiplied RGBA32F; matte R, G and B channel extraction uses straight scene-linear colour, Luma uses premultiplied scene-linear Rec. 709 luma, and zero alpha gives zero coverage",
-    "nonFinitePolicy": "input non-finite/subnormal or non-finite result sets a status flag; never publish a flagged image",
-    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha; 11 Set Channel (the base with one slot set to the second image's stored channel, alpha limited to [0, 1], optional RGB premultiply)",
+    "nonFinitePolicy": "input non-finite/subnormal or non-finite result sets a status flag (Unsharp: only a non-finite second image); never publish a flagged image",
+    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha; 11 Set Channel (the base with one slot set to the second image's stored channel, alpha limited to [0, 1], optional RGB premultiply); 12 Unsharp (the base plus factor times the thresholded difference of its colour from the second image's colour at that pixel, alpha kept, floored at min(value, 0))",
     "channel": "bits 0-2 select A, R, G, B or premultiplied scene-linear luma; bit 3 inverts the unit coverage; Set Channel reads the stored channel unclamped and carries its slot (R, G, B, A) in bits 4-5 and premultiply in bit 6",
     "absentMatte": "an empty source extent makes every tap transparent black (zero coverage)",
     "mask": "Image Mix only: maskMode 1 scales the factor by the mask alpha at the base pixel's global coordinate (zero outside its data window); 2 is an absent mask (zero); 0 ignores binding 4"
