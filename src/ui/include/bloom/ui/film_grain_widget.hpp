@@ -9,7 +9,7 @@
 // - Intensity, Size, the red, green and blue amounts and the three responses, each a grading slider
 //   row.
 //
-// The animation and the seed are the node's own rows. Every control follows the shared grading rules
+// The animation, the seed and Monochrome are the node's own rows. Every control follows the shared grading rules
 // (grading_controls.hpp): relative drags, Ctrl a tenth and Shift ten times the speed, a double-click
 // resets, one gesture is one undo step, and every value keeps its keyframe diamond and its socket
 // beside its row.

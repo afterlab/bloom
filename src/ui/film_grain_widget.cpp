@@ -136,6 +136,11 @@ QImage FilmGrainResponseGraph::preview(const int width, const int height) const 
             if (const auto* stored = std::get_if<std::int64_t>(&*live))
                 seed = *stored;
     const auto stream = core::film_grain::stream(seed, 0);
+    bool monochrome = false;
+    if (const auto id = nodeRoleParameter(session_, node_, "monochrome"))
+        if (const auto live = session_.liveValue(*id))
+            if (const auto* stored = std::get_if<bool>(&*live))
+                monochrome = *stored;
     QImage image(w, h, QImage::Format_RGB32);
     for (int y = 0; y < h; ++y) {
         auto* line = reinterpret_cast<QRgb*>(image.scanLine(y));
@@ -150,7 +155,7 @@ QImage FilmGrainResponseGraph::preview(const int width, const int height) const 
             std::array<int, 3> rgb{};
             for (std::size_t c = 0; c < 3; ++c) {
                 const double value =
-                    luma + response * amounts[c] * static_cast<double>(grain[c]);
+                    luma + response * amounts[c] * static_cast<double>(grain[monochrome ? 0 : c]);
                 rgb[c] = static_cast<int>(std::lround(
                     255.0 * std::pow(std::clamp(value, 0.0, 1.0), 1.0 / kDisplayGamma)));
             }
@@ -359,7 +364,7 @@ GradingValueRow* FilmGrainCardWidget::valueRow(const std::string_view role) cons
 }
 
 bool FilmGrainCardWidget::showsRole(const std::string_view role) const {
-    // The animation and the seed are the node's own rows; every value is here.
+    // The animation, the seed and Monochrome are the node's own rows; every value is here.
     return !document::isFilmGrainScalarSchemaKey(document::filmGrainSchemaKey(role));
 }
 

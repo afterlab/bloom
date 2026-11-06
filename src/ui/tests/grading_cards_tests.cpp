@@ -654,6 +654,7 @@ void filmGrainCard() {
         ++failures;
     capture(fixture, QStringLiteral("film-grain"));
     expect(card->showsRole("animation") && card->showsRole("seed") &&
+               card->showsRole("monochrome") && !card->socketY("monochrome").has_value() &&
                !card->showsRole("intensity") && !card->showsRole("shadows") &&
                card->socketY("intensity").has_value() && card->socketY("highlights").has_value() &&
                !card->socketY("seed").has_value(),
@@ -716,6 +717,47 @@ void filmGrainCard() {
     expect(fixture.stack.size() == sliderCommands + 1 && size && *size > 1.0,
            "dragging the size slider is one command");
     capture(fixture, QStringLiteral("film-grain-large"));
+
+    // Monochrome is the node's own switch, off for a new node. Turned on, it is one command, the
+    // graph's grain goes neutral and nothing leaves the card; undo restores it.
+    {
+        const auto monochrome = [&] {
+            const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "monochrome");
+            const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+            const auto* value = live ? std::get_if<bool>(&*live) : nullptr;
+            return value ? std::optional(*value) : std::nullopt;
+        };
+        const auto neutral = [](const QImage& image) {
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (const auto rgb = image.pixel(x, y);
+                        qRed(rgb) != qGreen(rgb) || qGreen(rgb) != qBlue(rgb))
+                        return false;
+            return true;
+        };
+        auto* toggle = qobject_cast<ui::kit::KSwitch*>(fixture.editor->graphScene()->nodeFieldForTest(
+            fixture.node, QStringLiteral("nodeOperandToggle")));
+        expect(toggle != nullptr && monochrome() == false && !toggle->isChecked(),
+               "Monochrome is a switch on the card, off for a new node");
+        expect(!neutral(graph.preview(256, 256)), "with Monochrome off the graph's grain has colour");
+        capture(fixture, QStringLiteral("film-grain-monochrome-off"));
+        if (toggle != nullptr) {
+            const auto toggleCommands = fixture.stack.size();
+            toggle->setChecked(true);
+            QApplication::processEvents();
+            expect(fixture.stack.size() == toggleCommands + 1 && monochrome() == true,
+                   "turning Monochrome on is one command");
+            expect(neutral(graph.preview(256, 256)), "with Monochrome on the graph's grain is neutral");
+            if (!paintsInsideCard(*fixture.item) || !cardContentFits(*fixture.item, "film-grain-mono")) {
+                std::cerr << "film-grain with Monochrome on leaves its card or cuts a label\n";
+                ++failures;
+            }
+            capture(fixture, QStringLiteral("film-grain-monochrome-on"));
+            const bool undone = fixture.session.undo();
+            QApplication::processEvents();
+            expect(undone && monochrome() == false, "undo turns Monochrome off");
+        }
+    }
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
