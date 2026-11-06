@@ -89,6 +89,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Depth effects](user-guide/depth-effects.md) — Z Defocus and Depth Fog from any depth or mist
   pass: the depth channel and encoding, reading a pass as data, fog before defocus, the lens modes
   and bokeh, picking the focus in the Viewer and rack focus.
+- [Lens Flare](user-guide/lens-flare.md) — the element stack, presets, placing the light in 2D, from
+  a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

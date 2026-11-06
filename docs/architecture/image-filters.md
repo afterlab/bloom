@@ -1276,6 +1276,100 @@ one command (a key at the playhead when the point is animated); Shift-click keep
 rack focus; Escape cancels. While a Z Defocus that focuses from a point is selected, the Viewer
 draws its focus point and the 5 x 5 area it samples.
 
+## Lens Flare
+
+`bloom.lens-flare`, schema 1 (#507), a Compositing node, adds an element stack of light to an image:
+an Image on `input`, an optional matte on `occlusion` (a Mask, or an Image read through the channel
+selector) and an Image on `image`. It lowers to one `LensFlareKernel` (Required in the GPU coverage
+contract), a grade kind whose table gains the image's geometry where it is applied. Its parameter
+vocabulary is one table (`lens_flare_nodes.hpp`); the layout, presets and definition are shared with
+the card's picture (`lens_flare_definition.hpp`). Each Scalar, Vector 2 and Colour is animatable and
+drivable with its own socket; each Choice and count is a constant, because it chooses the program's
+loops.
+
+**Geometry.** Lengths are in full-resolution frame heights from the display window's centre, x right
+and y down, with x scaled by the pixel aspect, so a flare keeps its shape at any proxy scale and
+pixel aspect. The light is `L = position * s / H` with `H` the full-resolution frame height and
+`s = 1`, or in the 3D mode `s = zoom / (zoom + distance)`; at `zoom + distance <= 0` the light is
+behind the camera and the node is the identity. A tracked or projected light drives `lightPosition`
+(and the distance and zoom) through its sockets: Bloom has no 3D camera or tracker node of its own
+yet. The light's position, colour, size and rotation have roles of their own (`lightPosition`,
+`lightColor`, `flareSize`, `flareRotation`), never `position`, `color`, `size` or `rotation`, which
+the node card, Properties and the Viewer read as a layer's transform and a source's colour.
+
+**Output.** The output window is the input's data window joined with its display window, so the light
+reaches the whole frame from a smaller input. With `F` the stack's premultiplied light (each channel
+at least 0) times the level below and `m = max(F.r, F.g, F.b)`:
+
+```text
+rgb' = rgb + F
+a'   = a + (1 - a) * min(m, 1)
+```
+
+so an opaque image stays opaque and a transparent one takes the light's coverage. A sum with
+`m < 2^-30` adds nothing, which keeps the tails exact where a device flushes subnormals. The node is
+the identity at intensity 0, with no element on, or behind the camera.
+
+**The stack.** With `d` a pixel's offset from the light and `c` its offset from the frame's centre,
+`colour = color * intensity * amount` for each element (the anamorphic streak's own colour), and
+`bump(t) = max(1 - t, 0)^2`. `split = 0.2 * chromatic` moves a channel's radius by `1 + split`
+(red), `1` (green) or `1 - split` (blue):
+
+| Element | Light per channel | Sizes |
+|---|---|---|
+| Glow | `0.625 bump(\|d\|^2 / (R/3)^2)^4 + 0.375 max(1 - \|d\|^2 / R^2, 0)^3` | `R = 3 size glowSize` |
+| Streaks | sum over the lines of `max(1 - (\|d.v\| / l + \|d x v\| / w), 0)^3`, a needle narrowing to its tip | `l = size streakLength (0.7 to 1)`, `w = size streakWidth` |
+| Ring | `bump(t^2)`, `t = (\|d\|^2 - r^2) / (2 r w)` | `r = size ringSize` times the split |
+| Hoop | as the ring around `c`, times `s^2`, `s = clamp(0.5 + 0.5 (c.n) / r, 0, 1)` | `n` is the unit vector away from the light, fading to 0 within a quarter frame height of the centre |
+| Anamorphic | `bump(\|d.v\| / l + \|d x v\| / w)` | `v` is the rotation |
+| Ghosts | `clamp((1 - t) / 0.2, 0, 1) (0.5625 + 0.4375 t^2)`, `t = \|q\|^2 / r^2` | `q` the offset from the disc's centre |
+| Iris | `clamp((1 - t) / 0.12, 0, 1) (0.625 + 0.375 t)`, `t = max_i(q.n_i) / r` | `n_i` the polygon's edge normals |
+
+A ghost or iris sits at `L * a` on the axis through the light (`a = 1`) and the frame's centre
+(`a = 0`), `a = spread (0.85 - 2.2 u)`, with radius `size * elementSize * (0.5 + v)` and a tint towards
+one of four coating colours, `u`, `v` and the tint from a fixed sequence keyed by the pattern (`seed`)
+and the disc's index, so the arrangement is part of the document (`lensFlareLayout`). The tables hold
+8 streak lines, 16 ghosts, 12 irises and 12 blades. A shape outside its own reach skips its
+arithmetic.
+
+The ring and hoop are drawn from the squared distance: `(|d|^2 - r^2) / (2 r w)` is
+`(|d| - r) / w` to first order, and the ring's width is small next to its radius. That, and polynomial
+shapes that reach exactly 0, leaves additions, multiplications, abs, min and max as the only
+operations, each exact on every device (the program marks them `precise`), so the CPU reference and
+the GPU agree bit for bit with exact alpha.
+
+**The level.** Two readings of the disc of `sampleRadius` pixels around the light (32 samples on a
+sunflower spiral, whole-pixel offsets, the first at the light's own pixel; a sample outside its image
+is transparent):
+
+```text
+gain    = 1 + sourceBrightness * (clamp(mean(luma) / sourceWhite, 0, 1) - 1)
+covered = clamp(mean(coverage), 0, 1), or 1 - that when the selector inverts
+visible = 1 - occlusionAmount * covered
+level   = gain * visible
+```
+
+`luma` is Rec. 709 luma of the input's premultiplied colour. `coverage` is the premultiplied channel
+the selector names, each sample clamped to 0 to 1; a Mask is lowered to its alpha, keeping the invert.
+A level of 0 returns the input. Without a matte connected there is no occlusion.
+
+**On the GPU.** The stack is one fixed resident program over the input padded to the output window.
+Each reading is a second fixed program over the disc's window cut from its image (an exact move),
+leaving the mean in that window's first pixel, so the disc is read once however large the frame; the
+pixel is moved to a column beside the frame (the atlas), blended in, and the stack reads it there. A
+disc outside its image reads the same 0 as a constant in the program data, without a pass. Without
+readings there is no atlas: at most one exact pad and the program.
+
+**Evidence.** `src/runtime/tests/lens_flare_tests.cpp` holds the glow, ring and ghost to independent
+formulas, each promise above, the readings (white, share, each matte state, the disc's fade over an
+edge), the projection, the domains, the fixed programs, the presets, the pixel budget and
+cancellation. The native harness (`runLensFlares`) holds eight flares, every path of the program, to
+the CPU oracle with exact alpha, warm RAM reuse with zero dispatches, and a changed value re-running
+with parity. `effect.LensFlareKernel` and `node.bloom.lens-flare` prepare through the production
+builder at full frame and ROI; the reading images take full support on the CPU, so a region of
+interest draws the whole frame's pixels. A value change is new program data and a new cache identity.
+[Benchmarks](../development/benchmarks.md#lens-flare-507) holds its cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,

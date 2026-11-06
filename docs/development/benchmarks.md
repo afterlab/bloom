@@ -415,6 +415,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `noise-glow-2k` | 1920×1080 | 24 | A PNG16 plate under a full-frame procedural Noise (Spline, Dynamic Twist, 8 octaves, its evolution keyed so every frame is new) screened on top through a Physical Glow (160) (#525; the issue's Noise-driven Displace waits for Displace, #348) |
 | `cryptomatte-mattes-2k` | 1920×1080 | 24 | A PNG16 plate under the beauty pass shaped by its own Cryptomatte (#383): the pillars and cards minus the veil (a Mask Combine Subtract of two selections) as a matte layer mask and as the mask input of a warm Grade (then Curves), and the cards as the node track matte of an EXR float highlights pass through a 32 px blur and a Physical Glow (128) |
 | `depth-effects-2k` | 1920×1080 | 24 | Depth effects from both depth encodings (#483): a PNG16 plate through Depth Fog (exponential) and a physical-lens Z Defocus (85 mm, f/2, focus racking 8 to 24 m) from its derived 16-bit PNG mist pass read as data, under the beauty pass (multilayer EXR) through Depth Fog and Z Defocus (polygon bokeh, highlight boost) from its own float `ViewLayer.Depth.Z` channel; fog before defocus in both |
+| `lens-flare-2k` | 1920×1080 | 24 | A PNG16 plate under a Lens Flare (#507) with every element on at its largest counts (8 streak lines, 16 ghosts, 12 irises of 12 blades, the anamorphic streak), its intensity keyed so every frame is new and its brightness read from the plate through the probes' atlas |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -441,7 +442,14 @@ and passes its export CPU parity check. It lists one check: the fill's GPU busy 
 a frame). `claims-within-factor` failed in five of the two shots' six runs before (fill host claims
 2.94 to 3.48 times peak use) and in none after (1.53 to 1.90): a phase with a channel read claims what the read holds
 from its sources' extents instead of the frame's preflight peak, so the depth shot's marker for
-that check is removed.
+that check is removed. `lens-flare-2k` (2026-11-06, two runs on a quiet machine) shows its first
+frame in 1.6 to 1.9 s, fills at 69 fps, plays cold at 23.6 fps, scrubs in 0.13 s, and exports its 4
+frames on the GPU with no CPU fallback at 0.28 to 0.31 s a frame, within its export CPU parity gate
+(largest difference 1.13e-06, alpha exact). With other builds and tests running on the machine (load
+average 16) the same build filled at 22 to 30 fps and one run missed `export-rate` at 0.73 s a frame.
+It lists one check, the fill's GPU busy (#386): the 24 frames fill in 0.35 s, too short to judge (13
+to 15%); a run with `--frames 240` filled at 88 fps with the GPU 48% busy (peak 85%), since the flare
+is one pass a frame and the rest of the frame is host decode.
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -674,6 +682,39 @@ reference is cheap relative to the frame (5 ms), so the High and Maximum qualiti
 Draft (121 samples) is the setting for interactive work on large frames.
 A rerun after #549 (7 reruns) stayed within every budget: Z Defocus at 3.6 to 8.8 Gaussian blurs
 of the same size and 6.1 to 13.8 Grades, Depth Fog at 0.8 to 1.2 Luma Keys.
+
+### Lens Flare (#507)
+
+`bloom_runtime_gpu_lens_flare_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_lens_flare_node_bench_smoke`). Each case draws a flare over a frame-sized source,
+compared with a Grade (one fixed pass) and a Glow (the closest light effect). Measured on 2026-11-06
+(RTX 4090, 5 reruns, ms/frame):
+
+| Case | 1080p | vs Grade | vs Glow | 2160p | vs Grade | vs Glow |
+|---|---|---|---|---|---|---|
+| Grade (reference) | 2.22 |  |  | 12.66 |  |  |
+| Vignette | 2.10 | 0.95x |  | 14.56 | 1.15x |  |
+| Glow (comparable) | 14.64 | 6.59x |  | 65.23 | 5.15x |  |
+| Lens Flare, default | 2.21 | 1.00x | 0.15x | 13.61 | 1.07x | 0.21x |
+| Glow element only | 3.16 | 1.42x | 0.22x | 11.52 | 0.91x | 0.18x |
+| Streaks only | 2.10 | 0.95x | 0.14x | 12.45 | 0.98x | 0.19x |
+| Ghosts only | 3.12 | 1.40x | 0.21x | 13.55 | 1.07x | 0.21x |
+| Ring only | 3.06 | 1.38x | 0.21x | 13.63 | 1.08x | 0.21x |
+| Irises only | 3.11 | 1.40x | 0.21x | 12.54 | 0.99x | 0.19x |
+| Hoop only | 2.10 | 0.95x | 0.14x | 13.66 | 1.08x | 0.21x |
+| Anamorphic only | 2.08 | 0.93x | 0.14x | 12.54 | 0.99x | 0.19x |
+| Every element, largest counts | 2.10 | 0.94x | 0.14x | 12.60 | 0.99x | 0.19x |
+| The same at size 4 | 2.11 | 0.95x | 0.14x | 12.52 | 0.99x | 0.19x |
+| Brightness from source | 4.10 | 1.85x | 0.28x | 19.19 | 1.52x | 0.29x |
+| Occlusion matte | 3.15 | 1.42x | 0.21x | 20.00 | 1.58x | 0.31x |
+
+Cold runs took 1.8 to 5.5 ms at 1080p and 6.1 to 10.9 ms at 2160p, and warm runs under 0.01 ms with
+no dispatch. The flare is one pass of a fixed program, so its counts and sizes do not separate from
+each other at this bench's resolution (the cases differ in steps of about 1 ms, in no order by count),
+and it costs about a Grade and about a fifth of a Glow. A reading of the source or a matte adds 1 to
+2 ms at 1080p and 6 to 7 ms at 2160p: the disc itself is a small window, and the rest is the frame's
+pass into the atlas that carries the reading to the flare. `NODE_COST_BUDGETS` holds each case about
+25% over this run.
 
 ## Platform notes
 

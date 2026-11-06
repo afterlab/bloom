@@ -663,7 +663,9 @@ Cartesian, Degrees To Radians and Radians To Degrees); a low/high pair is its tw
 meaningful (Luma Key, Map Range's from and to, Clamp, In Range, Random, Wrap, Smoothstep); and a
 position is a point on a `KPointPad` over its frame, the exact X/Y rows staying below it (a Linear or
 Radial Gradient's start and end, joined by a line, on the node's own width and height; Transform
-2D's pivot and offset on the composition frame). A gradient value is a `GradientParameterRow`
+2D's pivot and offset on the composition frame; #507 Lens Flare's light, over a picture of where its
+elements land, with an Element picker that shows one part of its stack at a time). A gradient value
+is a `GradientParameterRow`
 (`bloom/ui/gradient_parameter_row.hpp`): its name, the `KGradientEditor` and the gradient's
 diamond, then a Stop row with the selected stop's colour chip and its position in percent -- a
 Linear or Radial Gradient's Colors above its pad, Glow's Tint gradient above its angle dial, and
