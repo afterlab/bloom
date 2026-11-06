@@ -2,6 +2,8 @@
 
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -43,34 +45,43 @@ std::optional<std::string_view> ChannelSetController::inputPort(const std::strin
     // #483: a depth effect's channel picker lists its channel-set depth input.
     if (document::isDepthEffectNodeType(typeId))
         return document::kDepthEffectDepthPort;
+    // #484: Vector Motion Blur's vector picker; its depth picker names its port.
+    if (typeId == document::kVectorMotionBlurNodeType)
+        return document::kMotionVectorsPort;
     return std::nullopt;
 }
 
 void ChannelSetController::request(const document::NodeId node) {
+    const auto* composition = session_.composition();
+    const auto* record = composition != nullptr ? composition->graph().findNode(node) : nullptr;
+    if (const auto port = record != nullptr ? inputPort(record->typeId) : std::nullopt)
+        request(node, *port);
+}
+
+void ChannelSetController::request(const document::NodeId node, const std::string_view named) {
     const auto revision = session_.snapshot().revision();
-    if (const auto known = listings_.find(node);
+    const Key key{node, std::string(named)};
+    if (const auto known = listings_.find(key);
         known != listings_.end() && known->second.revision == revision)
         return;
-    if (const auto pending = tasks_.find(node); pending != tasks_.end()) {
+    if (const auto pending = tasks_.find(key); pending != tasks_.end()) {
         if (pending->second.revision == revision)
             return;
         pending->second.handle.cancel();
         tasks_.erase(pending);
     }
     const auto* composition = session_.composition();
-    const auto* record = composition != nullptr ? composition->graph().findNode(node) : nullptr;
-    const auto port = record != nullptr ? inputPort(record->typeId) : std::nullopt;
-    if (!port)
+    if (composition == nullptr || composition->graph().findNode(node) == nullptr)
         return;
     const auto edges = composition->graph().edges();
     const auto edge = std::ranges::find_if(edges, [&](const document::EdgeRecord& candidate) {
         const auto* input = std::get_if<document::NodeInputRef>(&candidate.destination);
-        return input != nullptr && input->nodeId == node && input->port == *port;
+        return input != nullptr && input->nodeId == node && input->port == named;
     });
     if (edge == edges.end()) {
         runtime::ChannelInspectionListing empty;
         empty.diagnostic = "Connect a channel set";
-        listings_.insert_or_assign(node, Listing{revision, std::move(empty)});
+        listings_.insert_or_assign(key, Listing{revision, std::move(empty)});
         return;
     }
     if (!provider_ || bridge_.isShuttingDown())
@@ -96,19 +107,35 @@ void ChannelSetController::request(const document::NodeId node) {
                 std::make_shared<const runtime::ChannelInspectionListing>(std::move(listing)));
         });
     if (submission.accepted()) {
-        tasks_.emplace(node, Pending{revision, std::move(submission.handle)});
+        tasks_.emplace(key, Pending{revision, std::move(submission.handle)});
         bridge_.wake();
     }
 }
 
 const runtime::ChannelInspectionListing*
 ChannelSetController::listing(const document::NodeId node) const {
-    const auto found = listings_.find(node);
+    const auto* composition = session_.composition();
+    const auto* record = composition != nullptr ? composition->graph().findNode(node) : nullptr;
+    const auto port = record != nullptr ? inputPort(record->typeId) : std::nullopt;
+    return port ? listing(node, *port) : nullptr;
+}
+
+const runtime::ChannelInspectionListing*
+ChannelSetController::listing(const document::NodeId node, const std::string_view port) const {
+    const auto found = listings_.find(Key{node, std::string(port)});
     return found != listings_.end() ? &found->second.value : nullptr;
 }
 
 bool ChannelSetController::listingCurrent(const document::NodeId node) const {
-    const auto found = listings_.find(node);
+    const auto* composition = session_.composition();
+    const auto* record = composition != nullptr ? composition->graph().findNode(node) : nullptr;
+    const auto port = record != nullptr ? inputPort(record->typeId) : std::nullopt;
+    return port && listingCurrent(node, *port);
+}
+
+bool ChannelSetController::listingCurrent(const document::NodeId node,
+                                          const std::string_view port) const {
+    const auto found = listings_.find(Key{node, std::string(port)});
     return found != listings_.end() && found->second.revision == session_.snapshot().revision();
 }
 

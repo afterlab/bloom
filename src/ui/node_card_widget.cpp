@@ -5,6 +5,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
@@ -14,6 +15,7 @@
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/levels_graph.hpp>
+#include <bloom/ui/motion_blur_widget.hpp>
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/scalar_slider_widget.hpp>
 #include <bloom/ui/vignette_widget.hpp>
@@ -26,6 +28,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            typeId == document::kColorizeNodeType || typeId == document::kVignetteNodeType ||
            document::isDepthEffectNodeType(typeId) || typeId == document::kLensFlareNodeType ||
            typeId == document::kFilmGrainNodeType ||
+           document::isMotionBlurNodeType(typeId) ||
            isScalarSliderNodeType(typeId) ||
            hasNodeControlsWidget(typeId);
 }
@@ -51,6 +54,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new FilmGrainCardWidget(session, node, card, parent);
     if (document::isDepthEffectNodeType(typeId))
         return new DepthEffectCardWidget(session, node, card, parent);
+    if (document::isMotionBlurNodeType(typeId))
+        return new MotionBlurCardWidget(session, node, typeId, card, parent);
     if (isScalarSliderNodeType(typeId))
         return new ScalarSliderCardWidget(session, node, typeId, card, parent);
     // #541: Properties draws a layer's rotation in its own Transform section (with the same dial),

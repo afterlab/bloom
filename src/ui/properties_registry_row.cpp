@@ -161,7 +161,7 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     if (auto field = fieldParameterLabel(schemaKey))
         return *field;
     // #483 Z Defocus and Depth Fog: the depth table's own labels.
-    if (const auto* depth = document::depthParameterSpec(schemaKey); depth != nullptr)
+    if (const auto* depth = document::effectParameterSpec(schemaKey); depth != nullptr)
         return QCoreApplication::translate("PropertiesRow",
                                            std::string(depth->label).c_str());
     // #507 Lens Flare: its table's own labels.

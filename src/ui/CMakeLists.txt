@@ -577,6 +577,7 @@ target_sources(
         depth_effect_widget.cpp
         lens_flare_widget.cpp
         film_grain_widget.cpp
+        motion_blur_widget.cpp
         vignette_widget.cpp
         gradient_parameter_row.cpp
         hue_saturation_widget.cpp
@@ -688,6 +689,7 @@ target_sources(
         viewer_editor_channel.cpp
         viewer_editor_cryptomatte.cpp
         viewer_editor_focus.cpp
+        viewer_editor_motion.cpp
         viewer_editor_analysis.cpp
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp
@@ -775,6 +777,7 @@ target_sources(
             include/bloom/ui/depth_effect_widget.hpp
             include/bloom/ui/lens_flare_widget.hpp
             include/bloom/ui/film_grain_widget.hpp
+            include/bloom/ui/motion_blur_widget.hpp
             include/bloom/ui/vignette_widget.hpp
             include/bloom/ui/gradient_parameter_row.hpp
             include/bloom/ui/node_controls_widget.hpp

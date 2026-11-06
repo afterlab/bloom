@@ -2271,8 +2271,10 @@ class NodeItem final : public QGraphicsObject {
         const qreal previewHeight =
             imagePreview_ ? std::min(previewWidth * previewAspect_, previewWidth * 2.0) : 0.0;
         const int widgetWidth = static_cast<int>(std::floor(width - (kCardPadding + kCardPadding)));
-        const qreal widgetHeight =
-            cardWidget_ != nullptr ? cardWidget_->heightAt(widgetWidth) + kCardPadding : 0.0;
+        // A widget with nothing to draw for the node's current values (#484's Echo and Optical Flow
+        // only choose rows) takes no room and stays hidden.
+        const int cardWidgetHeight = cardWidget_ != nullptr ? cardWidget_->heightAt(widgetWidth) : 0;
+        const qreal widgetHeight = cardWidgetHeight > 0 ? cardWidgetHeight + kCardPadding : 0.0;
         const qreal height =
             layout_.collapsed
                 ? std::max({kCardHeaderHeight, collapsedExtent(true), collapsedExtent(false)})
@@ -2293,9 +2295,9 @@ class NodeItem final : public QGraphicsObject {
         qreal y = parameterRowsTop_;
         if (cardWidget_ != nullptr) {
             auto* proxy = cardWidget_->graphicsProxyWidget();
-            cardWidget_->resize(widgetWidth, cardWidget_->heightAt(widgetWidth));
+            cardWidget_->resize(widgetWidth, cardWidgetHeight);
             positionProxy(cardWidget_, kCardPadding, y);
-            proxy->setVisible(!layout_.collapsed);
+            proxy->setVisible(!layout_.collapsed && cardWidgetHeight > 0);
             proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
             // #501: a parameter whose row the widget draws itself keeps its socket beside it.
             for (const auto& row : valueRows_)

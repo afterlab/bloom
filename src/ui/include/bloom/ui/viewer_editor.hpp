@@ -752,6 +752,25 @@ class ViewerEditor final : public QWidget,
     // coordinates; nullopt when the Viewer inspects another node's output.
     [[nodiscard]] std::optional<QTransform> focusFrameToComposition(document::NodeId node) const;
     [[nodiscard]] QPointF focusFrameCentre() const;
+    // #484 Directional, Spin and Zoom Blur: the selected node's direction, centre and amount as
+    // handles over the frame, each drag one edit of its parameters (viewer_editor_motion.cpp).
+    struct MotionHandleDrag final {
+        document::NodeId node;
+        // 0 the centre, 1 the tip (the direction and length, the spin or the zoom).
+        int handle = 0;
+        // Spin: the pointer's bearing from the centre last move (the amount unwraps past a turn).
+        double bearing = 0.0;
+        double amount = 0.0;
+    };
+    std::optional<MotionHandleDrag> motionDrag_;
+    // The mapping the handles use: the shown frame's geometry, also while a new frame renders.
+    [[nodiscard]] std::optional<ViewerMapping> motionHandleMapping() const;
+    bool motionHandlePress(QMouseEvent* event);
+    bool motionHandleMove(QMouseEvent* event);
+    bool motionHandleRelease(QMouseEvent* event);
+    // Ends a handle drag keeping what it has reached.
+    void finishMotionHandle();
+    void paintMotionHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);

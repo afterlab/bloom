@@ -1593,6 +1593,18 @@ set_tests_properties(bloom.ui.depth-focus-pick PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;integration" TIMEOUT 120)
 
+# #484: the on-Viewer handles of Directional, Spin and Zoom Blur: each drag edits live and is one
+# command, Escape confirms it; Spin's turn unwraps past a revolution.
+add_executable(bloom_motion_blur_viewer_ui_test motion_blur_viewer_ui_tests.cpp)
+target_include_directories(bloom_motion_blur_viewer_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_motion_blur_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands Qt6::Test)
+bloom_enable_warnings(bloom_motion_blur_viewer_ui_test)
+add_test(NAME bloom.ui.motion-blur-viewer COMMAND bloom_motion_blur_viewer_ui_test)
+set_tests_properties(bloom.ui.motion-blur-viewer PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;integration" TIMEOUT 180)
+
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
 add_executable(bloom_channel_pickers_ui_test channel_pickers_ui_tests.cpp)

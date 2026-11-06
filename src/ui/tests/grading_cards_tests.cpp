@@ -30,6 +30,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -40,6 +41,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/depth_effect_widget.hpp>
+#include <bloom/ui/motion_blur_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
@@ -1536,6 +1538,168 @@ void depthEffectCards() {
     }
 }
 
+// #484: every motion-blur card: the shutter angle on a dial, the shutter curve on a curve editor when
+// it is Custom, direction and spin on dials, the centre on a pad, and only what the current values
+// read.
+void motionBlurCards() {
+    const auto setInteger = [](ui::CompositionSession& session, const document::NodeId node,
+                               const char* role, const std::int64_t value) {
+        const auto id = ui::nodeRoleParameter(session, node, role);
+        expect(id && session.setParameterValue(*id, value, QStringLiteral("Set")), role);
+    };
+    const auto check = [](CardFixture& fixture, const char* name) {
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << name << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, name))
+            ++failures;
+        capture(fixture, QString::fromLatin1(name));
+    };
+    for (const auto& [type, name] :
+         std::initializer_list<std::pair<std::string_view, const char*>>{
+             {document::kMotionBlurNodeType, "motion-blur"},
+             {document::kVectorMotionBlurNodeType, "vector-motion-blur"},
+             {document::kOpticalFlowNodeType, "optical-flow"},
+             {document::kOpticalFlowMotionBlurNodeType, "optical-flow-motion-blur"},
+             {document::kEchoNodeType, "echo"},
+             {document::kDirectionalBlurNodeType, "directional-blur"},
+             {document::kSpinBlurNodeType, "spin-blur"},
+             {document::kZoomBlurNodeType, "zoom-blur"}}) {
+        CardFixture fixture(type);
+        auto* card = fixture.item
+                         ? qobject_cast<ui::MotionBlurCardWidget*>(fixture.item->cardWidget())
+                         : nullptr;
+        expect(card != nullptr, "a motion-blur node draws its card widget");
+        if (card != nullptr)
+            check(fixture, name);
+    }
+    {
+        // Motion Blur: the shutter dial edits as one command, the cost follows the quality, the
+        // curve editor and the phase only when they are read.
+        CardFixture fixture(document::kMotionBlurNodeType);
+        auto* card = qobject_cast<ui::MotionBlurCardWidget*>(fixture.item->cardWidget());
+        if (card == nullptr)
+            return;
+        expect(card->shutterDial() != nullptr && card->shutterDial()->isVisibleTo(card),
+               "Motion Blur's shutter is a dial");
+        expect(!card->showsRole("shutterAngle"), "the dial replaces the shutter's number row");
+        expect(!card->phaseDial()->isVisibleTo(card), "a Centred shutter has no phase");
+        expect(!card->curveEditor()->isVisibleTo(card), "a Box shutter has no curve editor");
+        const auto cost = card->costLabel()->text();
+        expect(cost.contains(QStringLiteral("16")), "a Standard Motion Blur costs 16 upstream renders");
+        setInteger(fixture.session, fixture.node, "quality", document::kMotionQualityDraft);
+        QApplication::processEvents();
+        expect(card->costLabel()->text().contains(QStringLiteral("4")),
+               "a Draft Motion Blur costs 4 upstream renders");
+        setInteger(fixture.session, fixture.node, "shutterOffset", document::kShutterOffsetCustom);
+        setInteger(fixture.session, fixture.node, "shutterCurve", document::kShutterCurveCustom);
+        QApplication::processEvents();
+        expect(card->phaseDial()->isVisibleTo(card), "a Custom offset shows its phase on a dial");
+        expect(card->curveEditor()->isVisibleTo(card), "a Custom shutter shows its curve editor");
+        check(fixture, "motion-blur-custom-shutter");
+        expect(!card->showsRole("minSamples"), "only Final reads the adaptive sample range");
+        setInteger(fixture.session, fixture.node, "quality", document::kMotionQualityFinal);
+        QApplication::processEvents();
+        expect(card->showsRole("minSamples") && card->showsRole("maxSamples"),
+               "Final shows the adaptive sample range");
+        setInteger(fixture.session, fixture.node, "footage", document::kFootageHold);
+        QApplication::processEvents();
+        expect(!card->showsRole("vectorLayer"), "held footage reads no vector layer");
+        // The dial itself: a drag is one command.
+        auto* dial = card->shutterDial()->dial();
+        const auto before = stored(fixture.session, fixture.node, "shutterAngle");
+        const auto stack = fixture.stack.size();
+        const QPointF middle = QRectF(dial->rect()).center();
+        mouse(*dial, QEvent::MouseButtonPress, middle + QPointF(0.0, -8.0));
+        mouse(*dial, QEvent::MouseMove, middle + QPointF(8.0, 0.0));
+        mouse(*dial, QEvent::MouseMove, middle + QPointF(0.0, 8.0));
+        mouse(*dial, QEvent::MouseButtonRelease, middle + QPointF(0.0, 8.0));
+        QApplication::processEvents();
+        const auto after = stored(fixture.session, fixture.node, "shutterAngle");
+        expect(before && after && *before != *after, "dragging the dial sets the shutter");
+        expect(fixture.stack.size() == stack + 1, "the dial's drag is one command");
+    }
+    {
+        // Directional: the direction on a dial; no shutter angle (its length is the reach).
+        CardFixture fixture(document::kDirectionalBlurNodeType);
+        auto* card = qobject_cast<ui::MotionBlurCardWidget*>(fixture.item->cardWidget());
+        if (card == nullptr)
+            return;
+        expect(card->directionDial() != nullptr && !card->showsRole("angle") &&
+                   card->showsRole("length"),
+               "Directional's direction is a dial, its length a row");
+        expect(card->shutterDial() == nullptr, "Directional has no shutter dial");
+    }
+    {
+        // Spin and Zoom: the centre on a point pad; Spin's turn on a dial.
+        CardFixture spin(document::kSpinBlurNodeType);
+        auto* card = qobject_cast<ui::MotionBlurCardWidget*>(spin.item->cardWidget());
+        if (card == nullptr)
+            return;
+        expect(card->directionDial() != nullptr && card->centrePad() != nullptr &&
+                   !card->showsRole("amount"),
+               "Spin's turn is a dial and its centre a pad");
+        CardFixture zoom(document::kZoomBlurNodeType);
+        auto* zoomCard = qobject_cast<ui::MotionBlurCardWidget*>(zoom.item->cardWidget());
+        expect(zoomCard != nullptr && zoomCard->centrePad() != nullptr &&
+                   zoomCard->directionDial() == nullptr && zoomCard->showsRole("amount"),
+               "Zoom's centre is a pad, its amount a row");
+    }
+    {
+        // Vector Motion Blur: the convention's own rows appear with it.
+        CardFixture fixture(document::kVectorMotionBlurNodeType);
+        auto* card = qobject_cast<ui::MotionBlurCardWidget*>(fixture.item->cardWidget());
+        if (card == nullptr)
+            return;
+        expect(!card->showsRole("vectorScale") && !card->showsRole("maxDisplace") &&
+                   !card->showsRole("depthChannel"),
+               "a preset convention hides its scale, MaxDisplace and an unconnected depth's rows");
+        setInteger(fixture.session, fixture.node, "convention", document::kVectorConventionRsmb);
+        QApplication::processEvents();
+        expect(card->showsRole("maxDisplace") && !card->showsRole("vectorScale"),
+               "RSMB reads MaxDisplace");
+        setInteger(fixture.session, fixture.node, "convention", document::kVectorConventionCustom);
+        QApplication::processEvents();
+        expect(card->showsRole("vectorScale") && card->showsRole("flipY") &&
+                   card->showsRole("layout") && !card->showsRole("maxDisplace"),
+               "Custom shows the whole decoding");
+        check(fixture, "vector-motion-blur-custom");
+    }
+    {
+        // Echo: Frame Blend reads no decay; a posterized rate only with Posterize Time.
+        CardFixture fixture(document::kEchoNodeType);
+        auto* card = qobject_cast<ui::MotionBlurCardWidget*>(fixture.item->cardWidget());
+        if (card == nullptr)
+            return;
+        expect(card->showsRole("decay") && !card->showsRole("posterizeRate"),
+               "Echo reads its decay, not the rate");
+        setInteger(fixture.session, fixture.node, "mode", document::kEchoModeFrameBlend);
+        QApplication::processEvents();
+        expect(!card->showsRole("decay") && !card->showsRole("operator"),
+               "Frame Blend has no decay or operator");
+    }
+    {
+        // Transform 2D: the shutter's rows, dial and curve only with Motion blur on.
+        CardFixture fixture(document::kTransform2DNodeType);
+        const auto read = [&](const char* role) {
+            return ui::motionRoleRead(fixture.session, fixture.node, document::kTransform2DNodeType,
+                                      role);
+        };
+        expect(!read("shutterAngle") && !read("quality") && !read("jitter"),
+               "Transform 2D hides its shutter until motion blur is on");
+        check(fixture, "transform-2d");
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "motionBlur");
+        expect(id && fixture.session.setParameterValue(*id, true, QStringLiteral("Set")),
+               "Transform 2D's motion blur turns on");
+        QApplication::processEvents();
+        expect(read("shutterAngle") && read("quality") && read("jitter"),
+               "Motion blur on shows the shutter");
+        check(fixture, "transform-2d-motion-blur");
+    }
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
@@ -1550,6 +1714,7 @@ int main(int argc, char** argv) {
     lensFlareCard();
     filmGrainCard();
     depthEffectCards();
+    motionBlurCards();
     nodeControlCards();
     linkedGradientStop();
     gradientBlendModes();

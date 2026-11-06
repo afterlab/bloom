@@ -216,8 +216,13 @@ class NodeControlsCardWidget final : public NodeCardWidget {
 
   private:
     void place();
+    // #484: whether the role is read now (Transform 2D's shutter rows follow its motion blur).
+    [[nodiscard]] bool readsRole(std::string_view role) const;
     CompositionSession& session_;
     document::NodeId node_;
+    // The node type when its rows follow motionRoleRead(), else empty.
+    std::string typeId_;
+    std::vector<bool> reads_;
     PointPadRow* pad_ = nullptr;
     std::vector<GradientParameterRow*> gradients_;
     std::vector<RangeRow*> ranges_;

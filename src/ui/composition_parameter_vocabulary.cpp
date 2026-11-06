@@ -9,6 +9,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/image_preview.hpp>
@@ -299,7 +300,9 @@ bool isShuffleSlotSchema(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.channel-shuffle.red" || schemaKey == "bloom.channel-shuffle.green" ||
            schemaKey == "bloom.channel-shuffle.blue" || schemaKey == "bloom.channel-shuffle.alpha" ||
            schemaKey == document::kChannelPassParameterSchemaKey ||
-           schemaKey == "bloom.z-defocus.depthChannel" || schemaKey == "bloom.depth-fog.depthChannel";
+           schemaKey == "bloom.z-defocus.depthChannel" || schemaKey == "bloom.depth-fog.depthChannel" ||
+           schemaKey == "bloom.vector-motion-blur.depthChannel" ||
+           schemaKey == "bloom.vector-motion-blur.vectorChannels";
 }
 
 namespace {
@@ -338,9 +341,10 @@ bool refreshDepthChannelSelector(kit::KDropdown& selector, const CompositionSess
     const runtime::ChannelInspectionListing* listing = nullptr;
     if (channelSet) {
         auto* controller = session.channelSetController();
-        if (controller != nullptr && !controller->listingCurrent(node.id))
-            controller->request(node.id);
-        listing = controller != nullptr ? controller->listing(node.id) : nullptr;
+        if (controller != nullptr && !controller->listingCurrent(node.id, document::kDepthEffectDepthPort))
+            controller->request(node.id, document::kDepthEffectDepthPort);
+        listing = controller != nullptr ? controller->listing(node.id, document::kDepthEffectDepthPort)
+                                        : nullptr;
         if (listing != nullptr)
             for (const auto& channel : listing->channels)
                 items.push_back({QString::fromStdString(channel), QString::fromStdString(channel)});
@@ -359,6 +363,38 @@ bool refreshDepthChannelSelector(kit::KDropdown& selector, const CompositionSess
                                         "depth.Z, mist). Never a mix of the colour channels"));
     return listed;
 }
+// #484: Vector Motion Blur's vectors: a layer of its channel set; empty finds the convention's or a
+// usual vector layer. An image's vectors are its own channels, so there is nothing to pick.
+bool refreshVectorChannelsSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                   const document::NodeRecord& node) {
+    QList<std::pair<QString, QString>> items{{QObject::tr("Find the vector layer"), QString{}}};
+    const auto* composition = session.composition();
+    const auto source = composition != nullptr
+                            ? document::inspectedInputSource(composition->graph(), node.id,
+                                                             document::kMotionVectorsPort)
+                            : std::nullopt;
+    const bool channelSet = source && source->kind == document::SocketValueKind::ChannelSet;
+    const runtime::ChannelInspectionListing* listing = nullptr;
+    if (channelSet) {
+        auto* controller = session.channelSetController();
+        if (controller != nullptr && !controller->listingCurrent(node.id, document::kMotionVectorsPort))
+            controller->request(node.id, document::kMotionVectorsPort);
+        listing = controller != nullptr ? controller->listing(node.id, document::kMotionVectorsPort)
+                                        : nullptr;
+        if (listing != nullptr)
+            for (const auto& layer : listing->layers)
+                if (!layer.empty())
+                    items.push_back({QString::fromStdString(layer), QString::fromStdString(layer)});
+    }
+    const bool listed =
+        fillProbeSelector(selector, items, boundNodeText(session, node, "vectorChannels"),
+                          !channelSet || listing != nullptr, QObject::tr("Find the vector layer"));
+    if (listing != nullptr && listing->channels.empty() && !listing->diagnostic.empty())
+        selector.setToolTip(QString::fromStdString(listing->diagnostic));
+    else
+        selector.setToolTip(QObject::tr("The channel set's layer the vectors are read from"));
+    return listed;
+}
 } // namespace
 
 bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
@@ -367,6 +403,8 @@ bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSessi
     const auto role = schemaKey.substr(schemaKey.rfind('.') + 1);
     if (role == "depthChannel")
         return refreshDepthChannelSelector(selector, session, node);
+    if (role == "vectorChannels")
+        return refreshVectorChannelsSelector(selector, session, node);
     const std::size_t slot = role == "red" ? 0 : role == "green" ? 1 : role == "blue" ? 2 : 3;
     auto* controller = session.channelSetController();
     if (controller != nullptr && !controller->listingCurrent(node.id))

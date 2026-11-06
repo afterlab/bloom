@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace bloom::ui {
 
@@ -39,16 +40,21 @@ class ChannelSetController final : public QObject {
 
     // The input whose channel set a node's pickers list: Channel Copy's `from`, the `channels`
     // input of a Shuffle, Select Channels or Composition Output, a Z Defocus's or Depth Fog's
-    // `depth`; nullopt for any other node.
+    // `depth`, a Vector Motion Blur's `vectors`; nullopt for any other node.
     [[nodiscard]] static std::optional<std::string_view> inputPort(std::string_view typeId);
 
     // Starts (or keeps) the listing of `node`'s input channel set for the current snapshot. An
     // unconnected input lists nothing at once, with a diagnostic.
     void request(document::NodeId node);
+    // The same for a named input, for a node with more than one (Vector Motion Blur's `depth`).
+    void request(document::NodeId node, std::string_view port);
     // The latest listing (kept while a newer revision is re-read, so an edit does not blank a
     // picker); nullptr until the first one arrives (changed() announces it).
     [[nodiscard]] const runtime::ChannelInspectionListing* listing(document::NodeId node) const;
+    [[nodiscard]] const runtime::ChannelInspectionListing* listing(document::NodeId node,
+                                                                   std::string_view port) const;
     [[nodiscard]] bool listingCurrent(document::NodeId node) const;
+    [[nodiscard]] bool listingCurrent(document::NodeId node, std::string_view port) const;
 
     void cancel();
 
@@ -71,8 +77,9 @@ class ChannelSetController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
     ListingProvider provider_;
-    std::map<document::NodeId, Listing> listings_;
-    std::map<document::NodeId, Pending> tasks_;
+    using Key = std::pair<document::NodeId, std::string>;
+    std::map<Key, Listing> listings_;
+    std::map<Key, Pending> tasks_;
 };
 
 } // namespace bloom::ui

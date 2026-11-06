@@ -1,4 +1,5 @@
 #include <bloom/ui/node_controls_widget.hpp>
+#include <bloom/ui/motion_blur_widget.hpp>
 
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
@@ -424,6 +425,8 @@ struct Controls final {
         QString description;
     };
     std::vector<Curve> curves;
+    // #484: a role is shown only while the node's motion blur reads it (Transform 2D).
+    bool readsMotion = false;
 };
 
 [[nodiscard]] std::optional<Controls> controlsFor(const std::string_view typeId) {
@@ -461,6 +464,17 @@ struct Controls final {
                             true}};
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move");
         controls.angles.push_back(angle("rotation", "bloom.transform-2d.rotation", false, false));
+        // #484: its motion blur's shutter, shown while the motion blur is on.
+        controls.angles.push_back(
+            angle("shutterAngle", "bloom.transform-2d.shutterAngle", false, false));
+        controls.angles.push_back(
+            angle("shutterPhase", "bloom.transform-2d.shutterPhase", false, false));
+        controls.curves.push_back(
+            {"shutterShape", QCoreApplication::translate("NodeControls", "Shutter curve"),
+             QCoreApplication::translate("NodeControls",
+                                         "How much light the shutter lets through from opening "
+                                         "(left) to closing (right)")});
+        controls.readsMotion = true;
     } else if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient") {
         controls.gradients.push_back(
             {"gradient", std::string(document::kColorOperandParameterSchemaKey),
@@ -598,6 +612,8 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
     auto controls = controlsFor(typeId).value_or(Controls{});
+    if (controls.readsMotion)
+        typeId_ = std::string(typeId);
     if (!controls.points.empty()) {
         PointPadRow::Spec spec;
         spec.points = controls.points;
@@ -650,7 +666,13 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
     refresh();
 }
 
+bool NodeControlsCardWidget::readsRole(const std::string_view role) const {
+    return typeId_.empty() || motionRoleRead(session_, node_, typeId_, role);
+}
+
 bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
+    if (!readsRole(role))
+        return false;
     // The pad's points keep their own X/Y rows (the exact numbers, keys and sockets); a range or
     // an angle row or a gradient row is drawn here.
     for (const auto* gradient : gradients_)
@@ -676,7 +698,7 @@ std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) 
         if (const auto at = range->socketY(role))
             return range->y() + *at;
     for (const auto* angle : angles_)
-        if (angle->role() == role)
+        if (angle->role() == role && readsRole(role))
             return angle->y() + angle->socketY();
     return std::nullopt;
 }
@@ -690,9 +712,12 @@ int NodeControlsCardWidget::heightAt(const int width) const {
     for (const auto* range : ranges_)
         height += range->heightHint() + small();
     for (const auto* angle : angles_)
-        height += angle->heightHint() + small();
+        if (readsRole(angle->role()))
+            height += angle->heightHint() + small();
     for (const auto& curve : curves_)
-        height += curve.label->sizeHint().height() + curveHeight(curve.canvas, width) + 2 * small();
+        if (readsRole(curve.role))
+            height +=
+                curve.label->sizeHint().height() + curveHeight(curve.canvas, width) + 2 * small();
     return std::max(0, height - small());
 }
 
@@ -748,11 +773,20 @@ void NodeControlsCardWidget::place() {
         y += range->heightHint() + small();
     }
     for (auto* angle : angles_) {
+        const bool shown = readsRole(angle->role());
+        angle->setVisible(shown);
+        if (!shown)
+            continue;
         angle->setLabelWidth(labels);
         angle->setGeometry(0, y, width(), angle->heightHint());
         y += angle->heightHint() + small();
     }
     for (const auto& curve : curves_) {
+        const bool shown = readsRole(curve.role);
+        curve.label->setVisible(shown);
+        curve.canvas->setVisible(shown);
+        if (!shown)
+            continue;
         const int labelHeight = curve.label->sizeHint().height();
         curve.label->setGeometry(0, y, width(), labelHeight);
         y += labelHeight + small();
@@ -776,6 +810,22 @@ void NodeControlsCardWidget::refresh() {
     for (const auto& curve : curves_) {
         curve.canvas->setEnabled(!locked && curve.canvas->parameter().has_value());
         curve.canvas->update();
+    }
+    // A shutter row appears or goes with the motion blur that reads it.
+    if (!typeId_.empty()) {
+        std::vector<bool> reads;
+        for (const auto* angle : angles_)
+            reads.push_back(readsRole(angle->role()));
+        for (const auto& curve : curves_)
+            reads.push_back(readsRole(curve.role));
+        for (const auto role : {std::string_view{"quality"}, std::string_view{"minSamples"}})
+            reads.push_back(readsRole(role));
+        if (reads != reads_) {
+            reads_ = std::move(reads);
+            place();
+            updateGeometry();
+            emit rowsChanged();
+        }
     }
 }
 

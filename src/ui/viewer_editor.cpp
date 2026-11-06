@@ -1071,6 +1071,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintAnchorEditing(painter);
     paintTextEditing(painter);
     paintFocusPoint(painter, painted.mapping);
+    paintMotionHandles(painter, painted.mapping);
 
     if (coverSnapshotInProgress_)
         coverCaptureDisplay_ = std::move(painted);
@@ -1295,6 +1296,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     const bool reference = isReferenceOnly();
     if (!reference && focusPickPress(event))
         return;
+    if (!reference && motionHandlePress(event))
+        return;
     if (!reference && cryptomattePress(event))
         return;
     if (!reference && textEditPress(event))
@@ -1420,6 +1423,8 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
     refreshProbe(event->position());
     if (roiMove(event))
         return;
+    if (motionHandleMove(event))
+        return;
     if (textEdit_) {
         if (textEdit_->dragging)
             moveTextCaret(event->position(), true);
@@ -1526,6 +1531,8 @@ void ViewerEditor::keyReleaseEvent(QKeyEvent* event) {
 void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
     if (roiRelease(event))
         return;
+    if (motionHandleRelease(event))
+        return;
     if (textEdit_ && event->button() == Qt::LeftButton) {
         textEdit_->dragging = false;
         event->accept();
@@ -1593,6 +1600,11 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     // document edit. A region-of-interest drag keeps the region drawn so far.
     if (session_.focusPickNode() && event->key() == Qt::Key_Escape) {
         session_.cancelFocusPick();
+        event->accept();
+        return;
+    }
+    if (motionDrag_ && event->key() == Qt::Key_Escape) {
+        finishMotionHandle();
         event->accept();
         return;
     }

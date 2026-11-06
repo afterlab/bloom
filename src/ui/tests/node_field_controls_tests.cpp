@@ -63,7 +63,9 @@ bool isOpenText(const std::string_view schemaKey) {
     return schemaKey == document::kTextParameterSchemaKey || schemaKey == "bloom.operand.string" ||
            schemaKey == "bloom.value.string" || schemaKey == "bloom.channel-shuffle.layer" ||
            schemaKey == "bloom.image-to-channel-set.layer" ||
-           schemaKey == "bloom.image-to-channel-set.channels";
+           schemaKey == "bloom.image-to-channel-set.channels" ||
+           // #484: names a layer of every footage leaf upstream, not of one input to list.
+           schemaKey == "bloom.motion-blur.vectorLayer";
 }
 
 // #487: an Integer whose value is one of a closed or discoverable set (an enum, a choice such as a
