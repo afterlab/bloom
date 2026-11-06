@@ -25,6 +25,7 @@
 #include "directional_blur_image_effect.hpp"
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
+#include "film_grain_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -549,9 +550,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* directionalKernel = std::get_if<DirectionalBlurKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     std::optional<PreparedDirectionalBlur> directional;
-    // #505: a vignette's table, whose geometry is the input's: its leg is prepared once the input's
-    // descriptor is known (below).
-    std::optional<PreparedColorGrade> vignette;
+    // #505, #486: a Vignette's or Film Grain's table, whose geometry is the input's: its leg is
+    // prepared once the input's descriptor is known (below).
+    std::optional<PreparedColorGrade> positioned;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
         blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr &&
         selectKernel == nullptr && directionalKernel == nullptr &&
@@ -692,8 +693,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                         "Color grade values are out of domain");
         if (grade->identity)
             return identity();
-        if (grade->kind == ColorGradeKind::Vignette) {
-            vignette = std::move(*grade);
+        if (grade->kind == ColorGradeKind::Vignette || grade->kind == ColorGradeKind::FilmGrain) {
+            positioned = std::move(*grade);
         } else {
             GpuOcioTransformSpec leg;
             leg.kind = GpuOcioTransformKind::ColorGrade;
@@ -897,7 +898,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     for (const auto& leg : legs)
         if (const auto error = prepareLeg(leg))
             return error;
-    if (programs.empty() && !vignette) {
+    if (programs.empty() && !positioned) {
         return identity();
     }
 
@@ -938,20 +939,27 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "The image effect input descriptor is not derivable");
     }
-    // #505: the vignette's table with the input's own display window, data origin and pixel aspect,
-    // exactly as the CPU reference reads them from its input image.
-    if (vignette) {
+    // #505, #486: the table with the input's own windows and pixel aspect, exactly as the CPU
+    // reference reads them from its input image.
+    if (positioned) {
         const auto aspect = descriptor->pixelAspect;
-        auto data = vignetteProgramData(
-            *vignette, descriptor->display, descriptor->data.originX(), descriptor->data.originY(),
-            static_cast<double>(aspect.numerator()) / static_cast<double>(aspect.denominator()),
-            ctx.hScale, ctx.vScale);
+        const double pixelAspect =
+            static_cast<double>(aspect.numerator()) / static_cast<double>(aspect.denominator());
+        auto data = positioned->kind == ColorGradeKind::FilmGrain
+                        ? filmGrainProgramData(*positioned, descriptor->data, pixelAspect,
+                                               ctx.hScale, ctx.vScale)
+                        : vignetteProgramData(*positioned, descriptor->display,
+                                              descriptor->data.originX(),
+                                              descriptor->data.originY(), pixelAspect, ctx.hScale,
+                                              ctx.vScale);
         if (!data)
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                        "Vignette geometry cannot be represented");
+                        positioned->kind == ColorGradeKind::FilmGrain
+                            ? "Film Grain geometry cannot be represented"
+                            : "Vignette geometry cannot be represented");
         GpuOcioTransformSpec leg;
         leg.kind = GpuOcioTransformKind::ColorGrade;
-        leg.gradeKind = static_cast<std::uint8_t>(ColorGradeKind::Vignette);
+        leg.gradeKind = static_cast<std::uint8_t>(positioned->kind);
         leg.gradeData = std::move(*data);
         if (const auto error = prepareLeg(leg))
             return error;

@@ -36,6 +36,7 @@
 #include "gpu_route_proof_io.hpp"
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
+#include "film_grain_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "grade_curves_test_support.hpp"
 #include "merge_entry_test_support.hpp"
@@ -1908,6 +1909,55 @@ displayProofRunner(const bool customView) {
                 return runFlare({FlareValues{}, probed}, 508200,
                                 "production Lens Flare node: the default stack and a flare reading "
                                 "its source and an occlusion matte, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #486 Film Grain: every path of the program, full frame and ROI, on a moved frame.
+    const auto runGrain = [](const std::vector<bloom::film_grain_test::GrainValues>& variants,
+                             std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& values : variants) {
+            const auto plan = bloom::film_grain_test::grainPlan(values, idBase);
+            idBase += 200;
+            auto request = requestFor(*plan);
+            request.time = *bloom::core::RationalTime::create(7, 24);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 9, 7);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    {
+        using bloom::film_grain_test::everyPath;
+        using bloom::film_grain_test::GrainValues;
+        GrainValues held = everyPath();
+        held.animation = bloom::document::kFilmGrainHeld;
+        add(
+            "effect.FilmGrainKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime film grain tests",
+            [runGrain, held] {
+                return runGrain({GrainValues{}, bloom::film_grain_test::everyPath(), held}, 486000,
+                                "production Film Grain: the default, every channel and response "
+                                "distinct at a larger size, and held grain, over HDR and partial "
+                                "alpha, on a moved frame, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.film-grain", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime film grain tests",
+            [runGrain] {
+                return runGrain({GrainValues{}, bloom::film_grain_test::everyPath()}, 487000,
+                                "production Film Grain node: the default and strong distinct "
+                                "channels, on a moved frame, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }

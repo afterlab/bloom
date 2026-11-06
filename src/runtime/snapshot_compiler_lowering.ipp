@@ -1761,6 +1761,30 @@ lowerImageEffect(const document::NodeRecord& node,
         }
         return effect;
     }
+    // #486 Film Grain: the constant animation and seed, and every value.
+    if (node.typeId == document::kFilmGrainNodeType) {
+        runtime::FilmGrainKernel kernel;
+        const auto* animation =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "animation"));
+        const auto* seed = parameterConstant<std::int64_t>(findParameterBinding(node, "seed"));
+        bool lowered = animation != nullptr && seed != nullptr;
+        if (lowered) {
+            kernel.animation = *animation;
+            kernel.seed = *seed;
+        }
+        for (const auto& spec : document::filmGrainParameters()) {
+            if (spec.kind != document::FilmGrainParameterKind::Scalar)
+                continue;
+            const auto value = compiledScalarParameter(findParameterBinding(node, spec.role));
+            lowered = lowered && value.has_value();
+            if (value)
+                kernel.values[document::filmGrainScalarIndex(spec.role)] = *value;
+        }
+        if (lowered)
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        addTopologyFailure(node.id, "Film Grain parameters could not be lowered.");
+        return std::nullopt;
+    }
     // #505 Vignette: the constant shape and mode, the strength the mode reads and every shared
     // value; the other strength keeps the kernel's constant default without an identity, so an
     // unused (even animated) value neither claims nor invalidates anything.

@@ -160,6 +160,7 @@ target_sources(
         vignette_image_effect.cpp
         depth_effect_image_effect.cpp
         lens_flare_image_effect.cpp
+        film_grain_image_effect.cpp
         field_raster.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp

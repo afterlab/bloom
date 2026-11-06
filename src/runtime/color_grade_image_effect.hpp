@@ -43,7 +43,9 @@ enum class ColorGradeKind : std::uint8_t {
     // #507: Lens Flare's stack and its probe of the light's sample disc
     // (lens_flare_image_effect.hpp), their tables and geometry built where they are applied.
     LensFlare,
-    LensFlareProbe
+    LensFlareProbe,
+    // #486: Film Grain (film_grain_image_effect.hpp), its geometry appended where it is applied.
+    FilmGrain
 };
 
 // The packed table, always a whole number of vec4s:

@@ -15,6 +15,7 @@
 #include "compositing_recipe_test_support.hpp"
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
+#include "film_grain_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
 #include "grade_curves_test_support.hpp"
@@ -2198,6 +2199,124 @@ void runLensFlares(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #486 Film Grain against the CPU oracle: the default, every path of the program at a larger and a
+// smaller size, held grain, a full-frame proxy and a region of interest; warm RAM reuse with zero
+// dispatches; the next frame new grain with parity, drawn by the same program; a changed value
+// re-running with parity.
+void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::film_grain_test::everyPath;
+    using bloom::film_grain_test::GrainValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        GrainValues values;
+        const char* name;
+        bool proxy = false;
+        bool roi = false;
+    };
+    std::vector<Case> cases;
+    cases.push_back({GrainValues{}, "default"});
+    cases.push_back({everyPath(), "every path"});
+    {
+        GrainValues fine = everyPath();
+        fine.scalars["size"] = 0.25;
+        cases.push_back({fine, "fine"});
+        GrainValues coarse = everyPath();
+        coarse.scalars["size"] = 16.0;
+        cases.push_back({coarse, "coarse"});
+        GrainValues held = everyPath();
+        held.animation = bloom::document::kFilmGrainHeld;
+        cases.push_back({held, "held"});
+    }
+    cases.push_back({everyPath(), "a proxy", true});
+    cases.push_back({everyPath(), "a region of interest", false, true});
+    std::uint64_t id = 48600;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("film grain native (") + item.name + "): ";
+        const auto plan = bloom::film_grain_test::grainPlan(item.values, id);
+        id += 200;
+        auto request = requestFor(*plan);
+        request.time = *RationalTime::create(5, 24);
+        if (item.proxy) {
+            const auto extent = bloom::render::ImageExtent::create(37, 29);
+            request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        }
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(11, 7, 23, 19);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        // The next frame: new grain on a new dispatch, with parity; held grain the same pixels.
+        auto nextRequest = request;
+        nextRequest.time = *RationalTime::create(6, 24);
+        auto nextOracleRequest = nextRequest;
+        nextOracleRequest.bypassOperationCache = true;
+        const auto next = builder.build(plan, nextRequest);
+        const auto nextOracle = evaluator.evaluate(plan, nextOracleRequest, {});
+        expectations.expect(next && nextOracle.frame(), name + "the next frame prepares");
+        if (!next || !nextOracle.frame())
+            continue;
+        const auto beforeNext = executor.executor->counters();
+        const auto rerun = runScene(*executor.executor, next.scene);
+        const auto nextDispatches = executor.executor->counters().dispatches - beforeNext.dispatches;
+        const bool held = item.values.animation == bloom::document::kFilmGrainHeld;
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, nextOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                (held ? (nextDispatches == 0 && rerun.pixels == cold.pixels)
+                                      : (nextDispatches > 0 && rerun.pixels != cold.pixels)),
+                            name + "the next frame draws its own grain with CPU parity: " + detail);
+        // A changed value re-runs with parity.
+        GrainValues changedValues = item.values;
+        changedValues.scalars["intensity"] = 0.05;
+        const auto changedPlan = bloom::film_grain_test::grainPlan(changedValues, id - 200);
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "a changed value re-runs with CPU parity: " + detail);
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runBatchedChains(expectations, device, cache);
@@ -2217,6 +2336,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runFields(expectations, device, cache);
     runDepthEffects(expectations, device, cache);
     runLensFlares(expectations, device, cache);
+    runFilmGrains(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

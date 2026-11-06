@@ -9,6 +9,7 @@ target_sources(
         scalar_primitives.cpp
         value_primitives.cpp
         field_program.cpp
+        film_grain_noise.cpp
         sha256.cpp
         utf8.cpp
         file_uri.cpp
@@ -21,6 +22,7 @@ target_sources(
             include/bloom/core/artifact_target_key.hpp
             include/bloom/core/blend_mode.hpp
             include/bloom/core/field_program.hpp
+            include/bloom/core/film_grain_noise.hpp
             include/bloom/core/color.hpp
             include/bloom/core/floating_point.hpp
             include/bloom/core/frame_time_mapping.hpp

@@ -813,3 +813,55 @@ void testLensFlareLowering(Expectations& expectations) {
                             "a muted Lens Flare passes its Image through");
     }
 }
+
+// #486 Film Grain lowers to one kernel with its constant animation and seed and every value's
+// identity, and Every Frame varies with time while Held does not. A muted node passes its Image
+// through.
+void testFilmGrainLowering(Expectations& expectations) {
+    using namespace document;
+    const auto grainOf = [](const runtime::CompiledCompositionPlan& plan, const NodeId node)
+        -> std::optional<std::size_t> {
+        for (std::size_t index = 0; index < plan.operations().size(); ++index)
+            if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&plan.operations()[index]);
+                effect != nullptr && effect->sourceNodeId == node &&
+                std::holds_alternative<runtime::FilmGrainKernel>(effect->kernel))
+                return index;
+        return std::nullopt;
+    };
+    for (const auto animation : {kFilmGrainEveryFrame, kFilmGrainHeld}) {
+        auto fixture = recipeFixture(kFilmGrainNodeType, {{"animation", animation},
+                                                          {"seed", std::int64_t{42}},
+                                                          {"size", 3.5},
+                                                          {"highlights", 0.25}});
+        const auto node = fixture.node;
+        const auto params = fixture.parameters;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Film Grain compiles");
+        const auto index = result.plan ? grainOf(*result.plan, node) : std::nullopt;
+        expectations.expect(index.has_value(), "Film Grain lowers to one kernel");
+        if (!index)
+            continue;
+        const auto& effect = std::get<runtime::CompiledImageEffect>(result.plan->operations()[*index]);
+        const auto& kernel = std::get<runtime::FilmGrainKernel>(effect.kernel);
+        const auto& size = kernel.values[filmGrainScalarIndex("size")];
+        const auto& highlights = kernel.values[filmGrainScalarIndex("highlights")];
+        expectations.expect(kernel.animation == animation && kernel.seed == 42 &&
+                                size.id == params.at("size") &&
+                                std::get<double>(size.source) == 3.5 &&
+                                highlights.id == params.at("highlights") &&
+                                std::get<double>(highlights.source) == 0.25,
+                            "Film Grain lowers its constants and each value's identity");
+        expectations.expect(result.plan->operationTimeDependent(
+                                runtime::OperationIndex::fromRaw(*index)) ==
+                                (animation == kFilmGrainEveryFrame),
+                            "only grain drawn for every frame varies with time");
+    }
+    {
+        auto fixture = recipeFixture(kFilmGrainNodeType);
+        fixture.project.findComposition(kCompositionId)->nodeLayout()[fixture.node].muted = true;
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr && !grainOf(*result.plan, node).has_value(),
+                            "a muted Film Grain passes its Image through");
+    }
+}

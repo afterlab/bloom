@@ -118,6 +118,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         // #525: a field that reads the clock (a looping noise, a moving pattern).
                         const auto* field = std::get_if<FieldRasterKernel>(&step.kernel);
                         bool animated = field != nullptr && field->program.usesTime;
+                        // #486: grain drawn anew for every frame.
+                        if (const auto* grain = std::get_if<FilmGrainKernel>(&step.kernel))
+                            animated = animated || grain->animation != document::kFilmGrainHeld;
                         forEachColorGradeOperand(step.kernel, [&](const auto& operand) {
                             using Operand = std::decay_t<decltype(operand)>;
                             if constexpr (std::is_same_v<Operand, CompiledPathParameter>)

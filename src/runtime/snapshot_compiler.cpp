@@ -14,6 +14,7 @@
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>

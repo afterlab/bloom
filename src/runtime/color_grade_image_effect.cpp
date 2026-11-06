@@ -3,6 +3,7 @@
 #include "cpu_composition_resolution.hpp"
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
+#include "film_grain_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
@@ -10,6 +11,7 @@
 
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/grade_curve.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include <bloom/render/gradient_modes_glsl.hpp>
 
@@ -17,6 +19,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -934,6 +937,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return lensFlareProgramText();
     case ColorGradeKind::LensFlareProbe:
         return lensFlareProbeProgramText();
+    case ColorGradeKind::FilmGrain:
+        return filmGrainProgramText();
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -1041,6 +1046,20 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
             return std::nullopt;
         values.push_back(time->toSeconds());
     }
+    // #486: Film Grain then reads the frame it is drawn for, by the same exact arithmetic as a Time
+    // node's frame output, so one instant always names one frame's grain. Held grain reads none.
+    if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel)) {
+        if (grain->animation == document::kFilmGrainHeld) {
+            values.push_back(0.0);
+        } else {
+            if (!time)
+                return std::nullopt;
+            const auto frame = valueGraphFrameIndex(*time, plan.format().frameRate());
+            if (!frame)
+                return std::nullopt;
+            values.push_back(static_cast<double>(*frame));
+        }
+    }
     return values;
 }
 
@@ -1070,6 +1089,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareDefocusGrade(*defocus, values);
     if (const auto* flare = std::get_if<LensFlareKernel>(&kernel))
         return prepareLensFlareGrade(*flare, values);
+    if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel))
+        return prepareFilmGrainGrade(*grain, values);
     return std::nullopt;
 }
 
@@ -1100,7 +1121,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     // every pixel (applyFieldRaster).
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
         grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
-        grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe)
+        grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
+        grade.kind == ColorGradeKind::FilmGrain)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1226,9 +1248,10 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::LensFlare ? validLensFlareProgramData(data)
                         : kind == ColorGradeKind::LensFlareProbe
                             ? validLensFlareProbeData(data)
+                        : kind == ColorGradeKind::FilmGrain ? validFilmGrainProgramData(data)
                             : data.size() == kHueSaturationFloats;
     if (static_cast<std::uint8_t>(kind) >
-            static_cast<std::uint8_t>(ColorGradeKind::LensFlareProbe) ||
+            static_cast<std::uint8_t>(ColorGradeKind::FilmGrain) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1299,6 +1322,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_lens_flare_probe";
         program.resourcePrefix = "bloom_lens_flare_probe_";
         program.semanticsId = "bloom.render.lens-flare-probe.v1";
+        break;
+    case ColorGradeKind::FilmGrain:
+        program.functionName = "bloom_film_grain";
+        program.resourcePrefix = "bloom_film_grain_";
+        program.semanticsId = "bloom.render.film-grain.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

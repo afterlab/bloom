@@ -149,6 +149,9 @@ BLOOM_GPU_REQUIRED_EFFECT(DefocusKernel,
 BLOOM_GPU_REQUIRED_EFFECT(LensFlareKernel,
                           "Lens Flare: glow, streaks, ghosts, ring, iris, hoop and anamorphic "
                           "elements with source brightness and matte occlusion probes (#507)");
+BLOOM_GPU_REQUIRED_EFFECT(FilmGrainKernel,
+                          "Film Grain: seeded per-channel grain with a luma response, a size in "
+                          "full-resolution pixels and a frame's own pattern (#486)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -657,6 +658,17 @@ struct LensFlareKernel final {
     friend bool operator==(const LensFlareKernel&, const LensFlareKernel&) = default;
 };
 
+// #486 Film Grain (docs/architecture/image-filters.md, "Film Grain"): adds seeded grain to the input's
+// colour in proportion to its alpha, each channel's amplitude and a response to the pixel's straight
+// luma. `values` holds the document's Scalars in table order (document::filmGrainScalarIndex). Every
+// Frame draws from the operation clock's frame, so the operation varies with time; Held does not.
+struct FilmGrainKernel final {
+    std::int64_t animation = document::kFilmGrainEveryFrame;
+    std::int64_t seed = 1;
+    std::array<CompiledScalarParameter, document::kFilmGrainScalarCount> values{};
+    friend bool operator==(const FilmGrainKernel&, const FilmGrainKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -664,7 +676,8 @@ using ImageEffectKernel =
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
                  AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
-                 MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel>;
+                 MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
+                 FilmGrainKernel>;
 
 // #525: every operand of a field program, in instruction order and, within one, scalars, vectors,
 // the curve, then the ramp.
@@ -802,6 +815,12 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(value);
         return true;
     }
+    // #486: the Scalars in table order.
+    if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel)) {
+        for (const auto& value : grain->values)
+            visit(value);
+        return true;
+    }
     return false;
 }
 
@@ -817,7 +836,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<FieldRasterKernel>(kernel) ||
            std::holds_alternative<DepthMapKernel>(kernel) ||
            std::holds_alternative<DefocusKernel>(kernel) ||
-           std::holds_alternative<LensFlareKernel>(kernel);
+           std::holds_alternative<LensFlareKernel>(kernel) ||
+           std::holds_alternative<FilmGrainKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

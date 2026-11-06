@@ -453,6 +453,15 @@ bloom_enable_warnings(bloom_runtime_lens_flare_test)
 bloom_enable_strict_floating_point(bloom_runtime_lens_flare_test)
 bloom_add_test(NAME bloom.runtime.lens-flare COMMAND bloom_runtime_lens_flare_test LABELS unit runtime render)
 
+# #486 Film Grain: the noise's statistics and pinned values, the response, the promises, the fixed
+# program, frame and seed identity, the pixel budget and cancellation.
+add_executable(bloom_runtime_film_grain_test film_grain_tests.cpp)
+target_include_directories(bloom_runtime_film_grain_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_film_grain_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_film_grain_test)
+bloom_enable_strict_floating_point(bloom_runtime_film_grain_test)
+bloom_add_test(NAME bloom.runtime.film-grain COMMAND bloom_runtime_film_grain_test LABELS unit runtime render)
+
 add_executable(bloom_runtime_color_grade_image_effect_test color_grade_image_effect_tests.cpp)
 target_include_directories(bloom_runtime_color_grade_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_color_grade_image_effect_test PRIVATE bloom_runtime_evaluator)
@@ -902,6 +911,28 @@ bloom_add_test(
     TIMEOUT 300
 )
 set_tests_properties(bloom.runtime.gpu_lens_flare_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
+# #486 Film Grain GPU cost benchmark (tools/bench/run_bench.py nodes): grain at its sizes against a
+# Grade, a Vignette and a procedural Noise, timed cold, warm and per frame; the CTest is a 64x64
+# smoke run of every case.
+add_executable(bloom_runtime_gpu_film_grain_node_bench
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_film_grain_node_bench.cpp)
+target_link_libraries(bloom_runtime_gpu_film_grain_node_bench
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_render)
+target_include_directories(bloom_runtime_gpu_film_grain_node_bench
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_film_grain_node_bench PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_film_grain_node_bench>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_film_grain_node_bench)
+bloom_enable_warnings(bloom_runtime_gpu_film_grain_node_bench)
+bloom_add_test(
+    NAME bloom.runtime.gpu_film_grain_node_bench_smoke
+    COMMAND bloom_runtime_gpu_film_grain_node_bench --smoke
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_film_grain_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
 # the shared preparer from THIS target's packaged shader tools and must compile at most one shader
