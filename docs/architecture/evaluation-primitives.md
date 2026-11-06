@@ -1533,6 +1533,17 @@ no existing plan evaluates differently.
   outside a channel's window. A non-finite ID or coverage is repaired to 0 and counted. The layers
   do not depend on the selection, so every Cryptomatte of the same type in one scene build reads
   one gather (#549).
+- *One read of the part (#549).* A scene build registers, before any leaf decodes, the channels
+  its channel reads (Cryptomatte ranks, Shuffle and depth channels) take from each source part
+  (content digest and part), and the Image leaves that decode the same part's colour layer. The
+  first decode of the part reads all of them in one pass over its chunks
+  ([media I/O](media-io.md), "Channels beside the colour layer"): the Image leaf's colour decode when
+  it is prepared first, otherwise the first channel read, which then decodes the leaf's colour
+  layer too and shares it with the leaf. Every channel read of the build takes that one set, and the
+  operation cache keeps it as a decoded-media entry keyed by the source sample and the channel set,
+  so a later build of the frame decodes nothing for it; the sequence read-ahead decodes it with each
+  later member's samples. The media statistics count `channelSetsReadWithColour`,
+  `channelSetDecodes` (a channel read decoded on its own) and `channelSetsReused`.
 - *GPU.* Each rank layer is its own frame-sized RGBA32F data upload (R/G the ID bits and coverage
   of rank 2k, B/A those of rank 2k + 1: two ranks in 16 bytes per pixel, the file's own layout),
   so no Cryptomatte upload is larger than one RGBA32F frame of its size: the stacked rank image

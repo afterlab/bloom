@@ -179,6 +179,7 @@ OperationCache::Entry::~Entry() {
     value.image.reset();
     value.sourceRevision.reset();
     value.samples.reset();
+    value.channels.reset();
     value.values.clear();
     if (registered)
         render::detail::releasePackedHostRegistration(retirement);
@@ -414,6 +415,11 @@ void OperationCache::store(std::string content, const document::Revision revisio
         else
             entry->metadataBytes = addCharge(entry->metadataBytes, bytes);
     }
+    if (entry->value.channels)
+        // Keyed by the channel set: entries that publish the same decode share it.
+        entry->storage[3] = {
+            entry->value.channels.get(),
+            addCharge(sizeof(render::ChannelSetImage), entry->value.channels->byteCost())};
     for (const auto& item : entry->value.values)
         if (const auto* string = std::get_if<std::string>(&item))
             entry->metadataBytes = addCharge(entry->metadataBytes, string->capacity());

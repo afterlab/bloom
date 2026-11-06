@@ -353,7 +353,8 @@ void testSequenceDecodeAhead(Expectations& expectations, const Fixture& fixture,
                             .revisionKey = "transport-" + std::to_string(index),
                             .byteBudget = std::size_t{1} << 30,
                             .use = {.composition = 1, .frame = useFrames[index], .tracked = true},
-                            .decode = raw});
+                            .decode = raw,
+                            .channels = {}});
     }
     {
         const SourceWorkingSet::UseScope transport(
@@ -369,4 +370,188 @@ void testSequenceDecodeAhead(Expectations& expectations, const Fixture& fixture,
                             transport.decodesSkipped == 2,
                         "decode ahead: frames the transport passed or jumped away from are not "
                         "decoded");
+}
+
+// #549: a frame that reads an OpenEXR part's colour layer and other channels of it (a Shuffle's
+// depth channel here, a Cryptomatte's ranks in a render) reads the part once. The colour decode
+// reads the channels beside its layer whichever leaf the plan prepares first, a later build of the
+// frame takes them from the operation cache, and the read-ahead decodes them with each later
+// member's samples. The gathered channels are the ones a build without the shared read gathers.
+void writeHalfExrMemberWithDepth(const std::filesystem::path& path, const float shift) {
+    auto pixels = signedHdrPixels();
+    const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(2, 1));
+    Imf::Header header(window, window);
+    header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+    header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
+    std::array<std::vector<Imath::half>, 4> lanes;
+    std::vector<float> depth;
+    Imf::FrameBuffer frameBuffer;
+    constexpr std::array<const char*, 4> kNames{"R", "G", "B", "A"};
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+        header.channels().insert(kNames[lane], Imf::Channel(Imf::HALF));
+        for (const auto& pixel : pixels)
+            lanes[lane].emplace_back(lane == 0   ? pixel.red
+                                     : lane == 1 ? pixel.green
+                                     : lane == 2 ? pixel.blue
+                                                 : pixel.alpha);
+        frameBuffer.insert(kNames[lane],
+                           Imf::Slice(Imf::HALF, reinterpret_cast<char*>(lanes[lane].data()),
+                                      sizeof(Imath::half), 3 * sizeof(Imath::half)));
+    }
+    for (std::size_t index = 0; index < pixels.size(); ++index)
+        depth.push_back(shift + 0.5F * static_cast<float>(index));
+    header.channels().insert("depth.Z", Imf::Channel(Imf::FLOAT));
+    frameBuffer.insert("depth.Z", Imf::Slice(Imf::FLOAT, reinterpret_cast<char*>(depth.data()),
+                                             sizeof(float), 3 * sizeof(float)));
+    Imf::OutputFile file(path.string().c_str(), header);
+    file.setFrameBuffer(frameBuffer);
+    file.writePixels(2);
+}
+
+// The Image and a Shuffle of its depth channel, each on its own layer; `shuffleFirst` puts the
+// Shuffle first in the plan, so it is prepared before the Image.
+[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+imageAndDepthPlan(const document::AssetRecord& asset, const std::uint64_t idBase,
+                  const bool shuffleFirst) {
+    const auto parameter = [](const std::uint64_t raw) {
+        return bloom::document::ParameterId::fromRaw(raw);
+    };
+    const auto node = bloom::document::NodeId::fromRaw(idBase + 1);
+    bloom::runtime::CompiledChannelShuffle shuffle;
+    shuffle.sourceNodeId = bloom::document::NodeId::fromRaw(idBase + 2);
+    shuffle.channels.sources.push_back(
+        bloom::runtime::CompiledChannelSource{node, asset, 0, 0, 0, {}, {}});
+    bloom::runtime::CompiledChannelStep step;
+    step.kind = bloom::runtime::CompiledChannelStepKind::Source;
+    step.nodeId = node;
+    shuffle.channels.steps.push_back(step);
+    shuffle.mapping = {"depth.Z", "depth.Z", "depth.Z", "1"};
+    shuffle.mode = document::kChannelShuffleRawMode;
+    shuffle.associated = false;
+    std::vector<CompiledOperation> operations;
+    std::vector<CompiledMergeInput> inputs;
+    for (std::uint64_t layer = 0; layer < 2; ++layer) {
+        const bool depthLayer = (layer == 0) == shuffleFirst;
+        const auto base = idBase + 10 + layer * 20;
+        const LayerIds ids{parameter(base + 0), parameter(base + 1), parameter(base + 2),
+                           parameter(base + 3), parameter(base + 4), parameter(base + 5)};
+        const auto source = OperationIndex::fromRaw(static_cast<std::uint32_t>(operations.size()));
+        if (depthLayer)
+            operations.emplace_back(shuffle);
+        else
+            operations.emplace_back(
+                bloom::runtime::CompiledImageSource{node, asset, 0, 0, 0, std::string{}, false});
+        const auto output = OperationIndex::fromRaw(static_cast<std::uint32_t>(operations.size()));
+        operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(base + 11),
+                                            bloom::document::LayerId::fromRaw(base + 12), source,
+                                            ids, LayerValues{}));
+        inputs.push_back(CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(base + 13),
+                                            bloom::document::LayerId::fromRaw(base + 12), output});
+    }
+    const auto merge = OperationIndex::fromRaw(static_cast<std::uint32_t>(operations.size()));
+    operations.emplace_back(
+        CompiledMerge{bloom::document::NodeId::fromRaw(idBase + 90), std::move(inputs)});
+    const auto output = OperationIndex::fromRaw(static_cast<std::uint32_t>(operations.size()));
+    operations.emplace_back(
+        CompiledCompositionOutput{bloom::document::NodeId::fromRaw(idBase + 91), merge});
+    return publish(CompiledCompositionPlanDefinition{bloom::document::Revision::fromRaw(7),
+                                                     kProjectId, kCompositionId, format(8, 8),
+                                                     std::move(operations), output});
+}
+
+// The Shuffle's gathered RGBA upload (the Image uploads native samples).
+[[nodiscard]] const GpuSceneUploadCommand* shuffleUpload(const PreparedGpuScene& scene) {
+    for (const auto* upload : commandsOf<GpuSceneUploadCommand>(scene))
+        if (upload->image != nullptr)
+            return upload;
+    return nullptr;
+}
+
+void testChannelReadsShareColourDecode(Expectations& expectations, const Fixture& fixture,
+                                       const GpuSceneOcioContext& ocioContext) {
+    std::vector<document::AssetSequenceMember> members;
+    for (int frame = 0; frame < 4; ++frame) {
+        const auto path = fixture.directory / ("depth_read." + std::to_string(frame) + ".exr");
+        writeHalfExrMemberWithDepth(path, static_cast<float>(frame));
+        members.push_back(sequenceMember(path, frame, static_cast<std::uint64_t>(frame) + 60));
+    }
+    document::AssetRecord asset = fixture.asset;
+    asset.id = bloom::document::AssetId::fromRaw(941);
+    asset.kind = document::AssetKind::Sequence;
+    asset.manifest.pattern = "depth_read.#.exr";
+    asset.manifest.padding = 1;
+    asset.manifest.first = 0;
+    asset.manifest.last = 3;
+    asset.manifest.members = members;
+    CpuCompositionEvaluator reference;
+    reference.setAssetBaseDirectory(fixture.directory);
+    const CpuGpuSceneBuilder referenceBuilder(nullptr, deterministicMediaContext(reference),
+                                              ocioContext);
+    for (const bool shuffleFirst : {false, true}) {
+        const std::string order = shuffleFirst ? "channels first" : "image first";
+        const auto plan = imageAndDepthPlan(asset, shuffleFirst ? 4900 : 4800, shuffleFirst);
+        const auto frameRequest = [&](const int frame) {
+            auto request = acesRequest(*plan, kAcesWorking);
+            request.time = rationalTime(frame, 24);
+            return request;
+        };
+        // The oracle gathers the depth channel on its own; the scenes must upload the same bytes.
+        const auto sameGather = [&](const PreparedGpuScene& scene, const int frame) {
+            const auto oracle = referenceBuilder.build(plan, frameRequest(frame));
+            const auto* upload = shuffleUpload(scene);
+            const auto* oracleUpload = oracle ? shuffleUpload(*oracle.scene) : nullptr;
+            return upload != nullptr && oracleUpload != nullptr &&
+                   std::ranges::equal(upload->image->pixels(), oracleUpload->image->pixels());
+        };
+        CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(fixture.directory);
+        const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+        const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+        const auto first = builder.build(plan, frameRequest(0));
+        expectations.expect(first.hasValue(), "shared channel read, " + order + ": prepares" +
+                                                  (first ? std::string{}
+                                                         : " (" + first.diagnostic.message + ")"));
+        if (!first)
+            continue;
+        const auto& cold = first.scene->mediaStatistics();
+        expectations.expect(cold.channelSetsReadWithColour == 1 && cold.channelSetDecodes == 0,
+                            "shared channel read, " + order +
+                                ": the depth channel is read in the colour layer's decode");
+        expectations.expect(first.scene->mediaStatistics().imageSources == 2 &&
+                                commandsOf<GpuSceneUploadCommand>(*first.scene).size() == 2 &&
+                                sameGather(*first.scene, 0),
+                            "shared channel read, " + order +
+                                ": both leaves upload, the gather equal to its own decode's");
+        const auto again = builder.build(plan, frameRequest(0));
+        expectations.expect(again.hasValue() &&
+                                again.scene->mediaStatistics().channelSetsReused == 1 &&
+                                again.scene->mediaStatistics().channelSetDecodes == 0 &&
+                                again.scene->mediaStatistics().channelSetsReadWithColour == 0,
+                            "shared channel read, " + order +
+                                ": a later build takes the channels from the operation cache");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (context.sequenceReadAhead->statistics().channelsDecoded < 3 &&
+               context.sequenceReadAhead->statistics().failed == 0 &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        expectations.expect(context.sequenceReadAhead->statistics().channelsDecoded == 3 &&
+                                context.sequenceReadAhead->statistics().decoded == 3,
+                            "shared channel read, " + order +
+                                ": the read-ahead decodes each later member's channels");
+        for (int frame = 1; frame < 4; ++frame) {
+            const auto label = "shared channel read, " + order + ", frame " + std::to_string(frame);
+            const auto built = builder.build(plan, frameRequest(frame));
+            expectations.expect(built.hasValue(), label + ": prepares");
+            if (!built)
+                continue;
+            const auto& media = built.scene->mediaStatistics();
+            expectations.expect(media.imageDecodedAhead == 1 && media.channelSetsReused == 1 &&
+                                    media.channelSetDecodes == 0 &&
+                                    media.channelSetsReadWithColour == 0 &&
+                                    media.imageDecodeNanoseconds == 0,
+                                label + ": the samples and channels were decoded ahead");
+            expectations.expect(sameGather(*built.scene, frame),
+                                label + ": the gather equals its own decode's");
+        }
+    }
 }

@@ -26,18 +26,19 @@
 #include "gpu_media_video_scene_preparation_test_support.hpp"
 #include "video_player_reference.hpp"
 
+#include <Imath/half.h>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
-#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/image_sequence_read_ahead.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/source_working_set.hpp>
-#include <Imath/half.h>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <tuple>
 
@@ -105,6 +106,7 @@ int main(const int argc, char** argv) {
         testProxyCancellation(expectations, evaluator, fixture, ocioContext);
         testVideoCancellation(expectations, options.fixtures, ocioContext);
         testSequenceDecodeAhead(expectations, fixture, ocioContext);
+        testChannelReadsShareColourDecode(expectations, fixture, ocioContext);
 
         bloom::render::GpuDeviceCreationOptions createOptions;
         createOptions.loader_path = options.loader_path;

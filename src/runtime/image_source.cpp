@@ -152,6 +152,26 @@ std::string decodedImageSamplesKey(const std::string& decodeKey) {
     return key.bytes();
 }
 
+std::string sourcePartKey(const core::Sha256Digest& digest, const std::string& part) {
+    OperationKey key;
+    key.add(std::string{"source-part-v1"});
+    const auto hex = digest.toLowercaseHex();
+    key.add(std::string(hex.begin(), hex.end()));
+    key.add(part);
+    return key.digest();
+}
+
+std::string decodedImageChannelsKey(const std::string& partKey,
+                                    const std::vector<std::string>& channels) {
+    OperationKey key;
+    key.add(std::string{"decoded-image-channels-v1"});
+    key.add(partKey);
+    key.add(static_cast<std::uint64_t>(channels.size()));
+    for (const auto& channel : channels)
+        key.add(channel);
+    return key.bytes();
+}
+
 std::vector<ImageSourceReadAheadTarget>
 imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::RationalTime time,
                               const document::FrameRate rate, const std::filesystem::path& base,
@@ -643,10 +663,9 @@ media::ImageInterpretation rawImageInterpretation(const ImageSourceSelection& se
 
 } // namespace
 
-media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t budget,
-                     const CancellationToken& cancel,
-                     media::ImageDecodeStatistics* decodeStatistics) {
+media::ImageResult<std::shared_ptr<const render::Rgba32fImage>> decodeRawImageSource(
+    const ImageSourceSelection& selected, const std::size_t budget, const CancellationToken& cancel,
+    media::ImageDecodeStatistics* decodeStatistics, media::ImageChannelsAlongside* alongside) {
     if (decodeStatistics)
         *decodeStatistics = {};
     if (!selected.available)
@@ -657,13 +676,13 @@ decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t bud
         return {{}, "Image selection has no immutable source revision"};
     return media::decodeImage(
         *selected.sourceRevision, rawImageInterpretation(selected), {},
-        [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, decodeStatistics);
+        [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, decodeStatistics,
+        alongside);
 }
 
-media::ImageResult<std::shared_ptr<const render::NativeSampleImage>>
-decodeRawImageSamples(const ImageSourceSelection& selected, const std::size_t budget,
-                      const CancellationToken& cancel,
-                      media::ImageDecodeStatistics* decodeStatistics) {
+media::ImageResult<std::shared_ptr<const render::NativeSampleImage>> decodeRawImageSamples(
+    const ImageSourceSelection& selected, const std::size_t budget, const CancellationToken& cancel,
+    media::ImageDecodeStatistics* decodeStatistics, media::ImageChannelsAlongside* alongside) {
     if (decodeStatistics)
         *decodeStatistics = {};
     if (!selected.available)
@@ -675,7 +694,8 @@ decodeRawImageSamples(const ImageSourceSelection& selected, const std::size_t bu
                 media::ImageDiagnosticCode::NativeSamplesUnavailable};
     return media::decodeImageSamples(
         *selected.sourceRevision, rawImageInterpretation(selected),
-        [&cancel] { return cancel.isCancellationRequested(); }, budget, decodeStatistics);
+        [&cancel] { return cancel.isCancellationRequested(); }, budget, decodeStatistics,
+        alongside);
 }
 
 std::optional<render::ImageWindow>

@@ -100,6 +100,64 @@ void GpuSceneBuildUploads::shareSamples(const std::string& key,
     }
 }
 
+void GpuSceneBuildUploads::wantChannels(const std::string& part,
+                                        const std::vector<std::string>& names) {
+    try {
+        const std::lock_guard lock(mutex_);
+        auto& wanted = wantedChannels_[part];
+        for (const auto& name : names)
+            if (const auto at = std::ranges::lower_bound(wanted, name);
+                at == wanted.end() || *at != name)
+                wanted.insert(at, name);
+    } catch (const std::bad_alloc&) {
+        // Registration is an optimization; each channel read then decodes what it reads.
+    }
+}
+
+std::vector<std::string> GpuSceneBuildUploads::wantedChannels(const std::string& part) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = wantedChannels_.find(part);
+    return found == wantedChannels_.end() ? std::vector<std::string>{} : found->second;
+}
+
+std::shared_ptr<const render::ChannelSetImage>
+GpuSceneBuildUploads::findChannels(const std::string& part) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = channels_.find(part);
+    return found == channels_.end() ? nullptr : found->second;
+}
+
+void GpuSceneBuildUploads::shareChannels(const std::string& part,
+                                         std::shared_ptr<const render::ChannelSetImage> channels) {
+    if (!channels)
+        return;
+    try {
+        const std::lock_guard lock(mutex_);
+        channels_.insert_or_assign(part, std::move(channels));
+    } catch (const std::bad_alloc&) {
+        // Sharing is an optimization inside one build; a later read decodes its own channels.
+    }
+}
+
+void GpuSceneBuildUploads::planColour(
+    const std::string& part, std::shared_ptr<const detail::ImageSourceSelection> selection) {
+    if (!selection)
+        return;
+    try {
+        const std::lock_guard lock(mutex_);
+        colour_.try_emplace(part, std::move(selection));
+    } catch (const std::bad_alloc&) {
+        // Planning is an optimization; the Image leaf then decodes its own colour.
+    }
+}
+
+std::shared_ptr<const detail::ImageSourceSelection>
+GpuSceneBuildUploads::findColour(const std::string& part) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = colour_.find(part);
+    return found == colour_.end() ? nullptr : found->second;
+}
+
 } // namespace bloom::runtime
 
 namespace bloom::runtime::detail {
@@ -249,6 +307,210 @@ foregroundDecode(const GpuSceneMediaContext& context) {
                                      : ImageSequenceReadAhead::ForegroundDecode{};
 }
 
+// #549: a frame's channel reads (Cryptomatte ranks, Shuffle and depth channels) share one decode of
+// each source part. A build registers what its channel reads take from each part before any leaf
+// decodes (registerChannelReads); the part's colour decode reads those channels beside its layer
+// when it runs first, otherwise the first channel read decodes them all, and every later read of
+// the build takes that set. The operation cache keeps it under the source sample and channel set,
+// so a later build of the frame (and the sequence read-ahead, which decodes it with the member's
+// samples) serves it without a decode.
+
+[[nodiscard]] bool channelSetHolds(const render::ChannelSetImage& set,
+                                   const std::vector<std::string>& names) {
+    return std::ranges::all_of(
+        names, [&set](const std::string& name) { return set.find(name).has_value(); });
+}
+
+[[nodiscard]] std::shared_ptr<const render::ChannelSetImage>
+cachedChannels(const GpuSceneMediaContext& context, const std::string& part,
+               const std::vector<std::string>& channels, const bool explicitBypass) {
+    if (explicitBypass || !context.operationCache || channels.empty())
+        return nullptr;
+    auto cached =
+        context.operationCache->find(decodedImageChannelsKey(part, channels), document::Revision{},
+                                     OperationCacheEntryKind::DecodedMedia);
+    return cached ? std::move(cached->channels) : nullptr;
+}
+
+void keepChannels(const GpuSceneMediaContext& context, const EvaluationRequest& request,
+                  const std::string& part, const std::vector<std::string>& channels,
+                  const std::shared_ptr<const render::ChannelSetImage>& set,
+                  const bool explicitBypass, const bool planBypass) {
+    if (context.buildUploads)
+        context.buildUploads->shareChannels(part, set);
+    // An interactive (overridden) plan reads the cache but never fills it, as for decoded images.
+    if (explicitBypass || planBypass || !context.operationCache)
+        return;
+    context.operationCache->store(decodedImageChannelsKey(part, channels), document::Revision{},
+                                  {.image = {},
+                                   .values = {},
+                                   .bounds = {},
+                                   .sourceRevision = {},
+                                   .samples = {},
+                                   .channels = set},
+                                  OperationCacheEntryKind::DecodedMedia, {},
+                                  request.linearPass.get());
+}
+
+// The channels the colour decode of `part` should read beside its layer: the build's registered
+// channels of the part, unless this build or the operation cache already holds them.
+[[nodiscard]] std::vector<std::string> channelsForColourDecode(const GpuSceneMediaContext& context,
+                                                               const std::string& part,
+                                                               const bool explicitBypass) {
+    if (!context.buildUploads || context.buildUploads->findChannels(part))
+        return {};
+    auto wanted = context.buildUploads->wantedChannels(part);
+    if (wanted.empty())
+        return {};
+    if (auto cached = cachedChannels(context, part, wanted, explicitBypass)) {
+        context.buildUploads->shareChannels(part, std::move(cached));
+        return {};
+    }
+    return wanted;
+}
+
+// The channels of `part` decoded with the colour layer its planned Image leaf uploads, the
+// decoded colour shared under the keys that leaf looks for; null when no leaf is planned, its
+// colour is already shared, or the channels could not be read with it.
+[[nodiscard]] std::shared_ptr<const render::ChannelSetImage>
+readColourWithChannels(const GpuSceneMediaContext& context, const std::string& part,
+                       const std::vector<std::string>& channels, const std::size_t budget,
+                       const CancellationToken& cancel, GpuSceneMediaStatistics& statistics) {
+    const auto colour = context.buildUploads ? context.buildUploads->findColour(part) : nullptr;
+    if (!colour)
+        return nullptr;
+    const auto samplesKey = rawDecodeUploadKey("image-samples", colour->decodeKey);
+    if (findSharedSamples(context, samplesKey) ||
+        findSharedUpload(context, rawDecodeUploadKey("image-raw", colour->decodeKey)))
+        return nullptr;
+    // A sequence member the read-ahead decoded: the leaf uploads those samples.
+    if (const auto cached = context.operationCache->find(decodedImageSamplesKey(colour->decodeKey),
+                                                         document::Revision{},
+                                                         OperationCacheEntryKind::DecodedMedia);
+        cached && cached->samples)
+        return nullptr;
+    media::ImageChannelsAlongside alongside;
+    alongside.channels = channels;
+    media::ImageDecodeStatistics decodeStatistics;
+    const auto foreground = foregroundDecode(context);
+    auto samples = decodeRawImageSamples(*colour, budget, cancel, &decodeStatistics, &alongside);
+    addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
+    if (samples.value && *samples.value) {
+        shareSamples(context, samplesKey, *samples.value);
+    } else if (samples.code == media::ImageDiagnosticCode::NativeSamplesUnavailable) {
+        auto image = decodeRawImageSource(*colour, budget, cancel, &decodeStatistics, &alongside);
+        addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
+        if (image.value && *image.value && (*image.value)->descriptor() != nullptr)
+            shareUpload(context, rawDecodeUploadKey("image-raw", colour->decodeKey), *image.value);
+    }
+    if (alongside.decoded)
+        ++statistics.channelSetsReadWithColour;
+    return std::move(alongside.decoded);
+}
+
+// The reader a leaf's gather reads its sources' channels through.
+[[nodiscard]] ChannelSetReader sharedChannelReader(const GpuSceneMediaContext& context,
+                                                   const EvaluationRequest& request,
+                                                   const bool explicitBypass, const bool planBypass,
+                                                   GpuSceneMediaStatistics& statistics) {
+    return [&context, &request, explicitBypass, planBypass, &statistics](
+               const ImageSourceSelection& source, const std::vector<std::string>& names,
+               const std::size_t budget, const CancellationToken& cancel) -> ChannelSetRead {
+        if (!source.sourceRevision)
+            return readSourceChannels(source, names, budget, cancel);
+        const auto part = sourcePartKey(source.digest, source.interpretation.part);
+        if (context.buildUploads)
+            if (auto shared = context.buildUploads->findChannels(part);
+                shared && channelSetHolds(*shared, names)) {
+                ++statistics.channelSetsReused;
+                return {std::move(shared), {}};
+            }
+        // The build's whole read of the part (it covers every registered leaf's names); a read
+        // the build did not register decodes its own names.
+        auto channels = context.buildUploads ? context.buildUploads->wantedChannels(part)
+                                             : std::vector<std::string>{};
+        if (!std::ranges::all_of(names, [&channels](const std::string& name) {
+                return std::ranges::binary_search(channels, name);
+            })) {
+            channels = names;
+            std::ranges::sort(channels);
+            channels.erase(std::unique(channels.begin(), channels.end()), channels.end());
+        }
+        if (auto cached = cachedChannels(context, part, channels, explicitBypass)) {
+            ++statistics.channelSetsReused;
+            if (context.buildUploads)
+                context.buildUploads->shareChannels(part, cached);
+            return {std::move(cached), {}};
+        }
+        // A channel read prepared before the part's Image leaf decodes the leaf's colour layer in
+        // the same read and shares it with the leaf.
+        if (auto colour =
+                readColourWithChannels(context, part, channels, budget, cancel, statistics)) {
+            keepChannels(context, request, part, channels, colour, explicitBypass, planBypass);
+            return {std::move(colour), {}};
+        }
+        ChannelSetRead decoded;
+        {
+            const auto foreground = foregroundDecode(context);
+            decoded = readSourceChannels(source, channels, budget, cancel);
+        }
+        if (decoded.value && *decoded.value) {
+            ++statistics.channelSetDecodes;
+            keepChannels(context, request, part, channels, *decoded.value, explicitBypass,
+                         planBypass);
+        }
+        return decoded;
+    };
+}
+
+// The selection the GPU colour split's Image leaf makes, shared with registerColourRead.
+[[nodiscard]] ImageSourceSelection
+selectImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& request,
+                     const CompiledCompositionPlan& plan, const GpuSceneMediaContext& context,
+                     const bool explicitBypass, const bool planBypass,
+                     const CancellationToken& cancellation) {
+    return selectImageSource(
+        source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
+        request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
+        (explicitBypass || request.requireVerifiedMediaSources)
+            ? MediaSourceRevisionPolicy::Revalidate
+            : request.mediaSourceRevisionPolicy,
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        context.buildUploads ? &context.buildUploads->revisions() : nullptr,
+        explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
+}
+
+// The selections a Shuffle and a Cryptomatte leaf make, shared with registerChannelReads.
+[[nodiscard]] ChannelShuffleSelection
+selectShuffleLeaf(const CompiledChannelShuffle& shuffle, const EvaluationRequest& request,
+                  const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                  const GpuSceneMediaContext& context, const bool explicitBypass,
+                  const bool planBypass, const CancellationToken& cancellation) {
+    return selectChannelShuffle(shuffle, request.time, plan.format().frameRate(),
+                                context.assetBaseDirectory, cancellation, request.colorIntent,
+                                explicitBypass ? nullptr : context.operationCache.get(),
+                                (explicitBypass || request.requireVerifiedMediaSources)
+                                    ? MediaSourceRevisionPolicy::Revalidate
+                                    : request.mediaSourceRevisionPolicy,
+                                byteBudget(request.pixelStorageByteLimit), !planBypass,
+                                request.linearPass.get(), ChannelSourceClock{&plan, &resolved});
+}
+
+[[nodiscard]] CryptomatteSelection
+selectCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationRequest& request,
+                      const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                      const GpuSceneMediaContext& context, const bool explicitBypass,
+                      const bool planBypass, const CancellationToken& cancellation) {
+    return selectCryptomatte(cryptomatte, request.time, plan.format().frameRate(),
+                             context.assetBaseDirectory, cancellation, request.colorIntent,
+                             explicitBypass ? nullptr : context.operationCache.get(),
+                             (explicitBypass || request.requireVerifiedMediaSources)
+                                 ? MediaSourceRevisionPolicy::Revalidate
+                                 : request.mediaSourceRevisionPolicy,
+                             byteBudget(request.pixelStorageByteLimit), !planBypass,
+                             request.linearPass.get(), ChannelSourceClock{&plan, &resolved});
+}
+
 // Composition frames of image-sequence files captured ahead of the frame being prepared: the
 // source working set's read-ahead width (ADR 0037).
 constexpr auto kSequenceReadAheadFrames =
@@ -259,7 +521,8 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                               const CompiledCompositionPlan& plan,
                               const GpuSceneMediaContext& context,
                               const ImageSourceSelection& selection, const bool explicitBypass,
-                              const bool planBypass, const bool decodeSamples) {
+                              const bool planBypass, const bool decodeSamples,
+                              const std::vector<std::string>& channels) {
     // A linear pass does not read ahead into the cache: its frames are used once, and its own
     // frames in flight already overlap decode with evaluation.
     if (request.linearPass || !context.sequenceReadAhead || !context.operationCache ||
@@ -295,7 +558,8 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                             .revisionKey = std::move(target.revisionKey),
                             .byteBudget = byteBudget(request.pixelStorageByteLimit),
                             .use = use,
-                            .decode = decode});
+                            .decode = decode,
+                            .channels = decode ? channels : std::vector<std::string>{}});
     }
     context.sequenceReadAhead->request(context.operationCache, std::move(requests));
 }
@@ -609,7 +873,7 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass,
-                             false);
+                             false, {});
     if (selection.cancelled) {
         MediaUploadOutcome outcome;
         outcome.cancelled = true;
@@ -675,18 +939,17 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         outcome.failure = "Image source context is unavailable";
         return outcome;
     }
-    const auto selection = selectImageSource(
-        source, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
-        request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
-        (explicitBypass || request.requireVerifiedMediaSources)
-            ? MediaSourceRevisionPolicy::Revalidate
-            : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
-        context.buildUploads ? &context.buildUploads->revisions() : nullptr,
-        explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
+    const auto selection = selectImageColorLeaf(source, request, plan, context, explicitBypass,
+                                                planBypass, cancellation);
     recordSourceRevisionWork(selection, statistics);
+    // #549: the channels this build's channel reads take from the selected part; the read-ahead
+    // decodes them with each later member's samples.
+    const auto part = sourcePartKey(selection.digest, selection.interpretation.part);
+    const auto partChannels = context.buildUploads && selection.available
+                                  ? context.buildUploads->wantedChannels(part)
+                                  : std::vector<std::string>{};
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass,
-                             ocioContext.preparer != nullptr);
+                             ocioContext.preparer != nullptr, partChannels);
     if (selection.cancelled) {
         ++statistics.imageSources;
         MediaUploadOutcome outcome;
@@ -755,6 +1018,16 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             outcome.samples = std::move(cached->samples);
             shareSamples(context, samplesKey, outcome.samples);
         }
+    media::ImageChannelsAlongside alongside;
+    const auto keepAlongside = [&] {
+        if (!alongside.decoded)
+            return;
+        ++statistics.channelSetsReadWithColour;
+        keepChannels(context, request, part, alongside.channels, alongside.decoded, explicitBypass,
+                     planBypass);
+        alongside.channels.clear();
+        alongside.decoded.reset();
+    };
     if (outcome.samples == nullptr && !selection.missingFrame) {
         if (pixelBudget == 0) {
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
@@ -762,12 +1035,17 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             return outcome;
         }
         media::ImageDecodeStatistics decodeStatistics;
+        // #549: the build's channel reads of this part, read from the same chunks.
+        if (selection.sourceRevision != nullptr && !partChannels.empty())
+            alongside.channels = channelsForColourDecode(context, part, explicitBypass);
         auto native = [&] {
             // #386: the read-ahead's decodes give this frame's decode the cores.
             const auto foreground = foregroundDecode(context);
             return decodeRawImageSamples(selection, byteBudget(pixelBudget), cancellation,
-                                         &decodeStatistics);
+                                         &decodeStatistics,
+                                         alongside.channels.empty() ? nullptr : &alongside);
         }();
+        keepAlongside();
         addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
         addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
         if (native.cancelled) {
@@ -813,11 +1091,17 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             // RAW decode: no processor, no implicit conversion, no resample. File decode stays
             // host preparation; the OCIO colour pass is the GPU command prepared below.
             media::ImageDecodeStatistics decodeStatistics;
+            // #549: a FLOAT or UINT layer reads the build's channels of the part in its decode.
+            if (selection.sourceRevision != nullptr && !partChannels.empty() &&
+                alongside.channels.empty())
+                alongside.channels = channelsForColourDecode(context, part, explicitBypass);
             auto decoded = [&] {
                 const auto foreground = foregroundDecode(context);
                 return decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
-                                            &decodeStatistics);
+                                            &decodeStatistics,
+                                            alongside.channels.empty() ? nullptr : &alongside);
             }();
+            keepAlongside();
             addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
             addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
             ++statistics.imageConversions;
@@ -910,14 +1194,8 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         outcome.failure = "Channel source context is unavailable";
         return outcome;
     }
-    const auto selection = selectChannelShuffle(
-        shuffle, request.time, plan.format().frameRate(), context.assetBaseDirectory, cancellation,
-        request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
-        (explicitBypass || request.requireVerifiedMediaSources)
-            ? MediaSourceRevisionPolicy::Revalidate
-            : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
-        ChannelSourceClock{&plan, &resolved});
+    const auto selection = selectShuffleLeaf(shuffle, request, plan, resolved, context,
+                                             explicitBypass, planBypass, cancellation);
     for (const auto& source : selection.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -985,8 +1263,9 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
             outcome.failure = "A new raw shuffle backing exceeds the remaining source allowance";
             return outcome;
         }
-        auto gathered =
-            gatherChannelShuffle(selection, false, byteBudget(pixelBudget), cancellation);
+        auto gathered = gatherChannelShuffle(
+            selection, false, byteBudget(pixelBudget), cancellation,
+            sharedChannelReader(context, request, explicitBypass, planBypass, statistics));
         addMediaWork(statistics.imageRepairedPixels, gathered.repairedPixels);
         ++statistics.imageConversions;
         if (gathered.cancelled) {
@@ -1057,14 +1336,8 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
         outcome.failure = "Channel source context is unavailable";
         return outcome;
     }
-    const auto selection = selectCryptomatte(
-        cryptomatte, request.time, plan.format().frameRate(), context.assetBaseDirectory,
-        cancellation, request.colorIntent, explicitBypass ? nullptr : context.operationCache.get(),
-        (explicitBypass || request.requireVerifiedMediaSources)
-            ? MediaSourceRevisionPolicy::Revalidate
-            : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
-        ChannelSourceClock{&plan, &resolved});
+    const auto selection = selectCryptomatteLeaf(cryptomatte, request, plan, resolved, context,
+                                                 explicitBypass, planBypass, cancellation);
     for (const auto& source : selection.channels.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -1090,7 +1363,9 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
             outcome.failure = "A new Cryptomatte backing exceeds the remaining source allowance";
             return outcome;
         }
-        auto gathered = gatherCryptomatte(selection, byteBudget(pixelBudget), cancellation);
+        auto gathered = gatherCryptomatte(
+            selection, byteBudget(pixelBudget), cancellation,
+            sharedChannelReader(context, request, explicitBypass, planBypass, statistics));
         addMediaWork(statistics.imageRepairedPixels, gathered.repairedPixels);
         ++statistics.imageConversions;
         if (gathered.cancelled) {
@@ -1307,6 +1582,58 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         return outcome;
     }
     return outcome;
+}
+
+void registerChannelReads(const CompiledOperation& operation, const EvaluationRequest& request,
+                          const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                          const GpuSceneMediaContext& context, const bool explicitBypass,
+                          const bool planBypass, const CancellationToken& cancellation) {
+    if (!context.buildUploads || !context.operationCache)
+        return;
+    const auto want = [&context](const std::vector<ImageSourceSelection>& sources,
+                                 const auto& channels) {
+        std::vector<std::vector<std::string>> names(sources.size());
+        for (const auto& channel : channels)
+            if (channel.source && *channel.source < sources.size())
+                names[*channel.source].push_back(channel.sourceChannel);
+        for (std::size_t index = 0; index < sources.size(); ++index)
+            if (!names[index].empty() && sources[index].sourceRevision)
+                context.buildUploads->wantChannels(
+                    sourcePartKey(sources[index].digest, sources[index].interpretation.part),
+                    names[index]);
+    };
+    if (const auto* cryptomatte = std::get_if<CompiledCryptomatte>(&operation)) {
+        const auto selection = selectCryptomatteLeaf(*cryptomatte, request, plan, resolved, context,
+                                                     explicitBypass, planBypass, cancellation);
+        if (selection.available)
+            want(selection.channels.sources, selection.rankChannels);
+    } else if (const auto* shuffle = std::get_if<CompiledChannelShuffle>(&operation)) {
+        const auto selection = selectShuffleLeaf(*shuffle, request, plan, resolved, context,
+                                                 explicitBypass, planBypass, cancellation);
+        if (selection.available)
+            want(selection.sources, selection.mapping);
+    }
+}
+
+void registerColourRead(const CompiledImageSource& source, const EvaluationRequest& request,
+                        const CompiledCompositionPlan& plan, const GpuSceneMediaContext& context,
+                        const bool explicitBypass, const bool planBypass,
+                        const CancellationToken& cancellation) {
+    if (!context.buildUploads || !context.operationCache)
+        return;
+    auto selection = selectImageColorLeaf(source, request, plan, context, explicitBypass,
+                                          planBypass, cancellation);
+    if (!selection.available || selection.missingFrame || !selection.sourceRevision)
+        return;
+    const auto part = sourcePartKey(selection.digest, selection.interpretation.part);
+    if (context.buildUploads->wantedChannels(part).empty())
+        return;
+    try {
+        context.buildUploads->planColour(
+            part, std::make_shared<const ImageSourceSelection>(std::move(selection)));
+    } catch (const std::bad_alloc&) {
+        // Planning is an optimization; the Image leaf then decodes its own colour.
+    }
 }
 
 } // namespace bloom::runtime::detail

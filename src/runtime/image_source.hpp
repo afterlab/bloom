@@ -112,6 +112,12 @@ struct ImageSourceReadAheadTarget final {
 // #386: the operation-cache key of an image's decoded native samples (decodeRawImageSamples()),
 // which the sequence read-ahead decodes ahead of the frame that uses them.
 [[nodiscard]] std::string decodedImageSamplesKey(const std::string& decodeKey);
+// #549: the identity of one source part (content digest and part), and the operation-cache key of
+// named channels decoded from it, `channels` in the order they were decoded (sorted for a build's
+// shared read).
+[[nodiscard]] std::string sourcePartKey(const core::Sha256Digest& digest, const std::string& part);
+[[nodiscard]] std::string decodedImageChannelsKey(const std::string& partKey,
+                                                  const std::vector<std::string>& channels);
 // The distinct sequence members the next `frames` composition frames after `time` select (start
 // frame, loop mode and gap hold included), excluding the member `time` itself selects.
 [[nodiscard]] std::vector<ImageSourceReadAheadTarget>
@@ -172,7 +178,8 @@ evaluateImageSource(const ImageSourceSelection& selection,
 [[nodiscard]] media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
                      const CancellationToken& cancel,
-                     media::ImageDecodeStatistics* decodeStatistics = nullptr);
+                     media::ImageDecodeStatistics* decodeStatistics = nullptr,
+                     media::ImageChannelsAlongside* alongside = nullptr);
 
 // #422: the same raw decode in its native sample layout (a PNG or JPEG's 16-bit RGBA, an
 // all-half OpenEXR layer's binary16 RGBA) for SampleConvertV1 to widen on the device;
@@ -181,7 +188,8 @@ decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
 [[nodiscard]] media::ImageResult<std::shared_ptr<const render::NativeSampleImage>>
 decodeRawImageSamples(const ImageSourceSelection& selection, std::size_t budget,
                       const CancellationToken& cancel,
-                      media::ImageDecodeStatistics* decodeStatistics = nullptr);
+                      media::ImageDecodeStatistics* decodeStatistics = nullptr,
+                      media::ImageChannelsAlongside* alongside = nullptr);
 
 // Rebase a decoded image into the evaluator's composition descriptor: its data window keeps its
 // offset inside the source frame (OpenEXR display window), scaled by the shared PointResampleV1

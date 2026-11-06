@@ -72,9 +72,19 @@ bands.
   part's string attributes (Cryptomatte manifests) as metadata and the asset's input color space
   recorded for the Color channels. Values are source values: half widens exactly, uint keeps its
   bit pattern, and nothing is converted, premultiplied, repaired or clamped, so negatives, NaN and
-  ID hashes survive. Admission charges every plane plus one bounded band and the metadata. Stills
+  ID hashes survive. Admission charges every plane and the metadata: OpenEXR writes each plane
+  through its own slice of the data window, so the decode stages no scratch rows. Stills
   expose their decoded R, G, B (and A) as straight Color channels in [0, 1]; formats without an
   immutable revision decoder report `UnsupportedChannelSetFormat`.
+- *Channels beside the colour layer (#549).* OpenEXR compresses every channel of a chunk together,
+  so decoding a part's colour layer and then other channels of it (a Cryptomatte's ranks, a depth
+  channel) inflates every chunk twice. `decodeImageSamples()` and `decodeImage()` take an optional
+  `ImageChannelsAlongside`: its named channels are slices of the same read pass, and its `decoded`
+  set holds exactly what `decodeImageChannels()` returns for those names (values bit for bit, order,
+  windows, metadata). The colour decode itself is unchanged. The set stays empty, and the caller
+  decodes the channels on their own, when the source is not OpenEXR, a name is missing, repeated,
+  subsampled or one of the colour layer's own channels, or the planes do not fit the decode's
+  budget beside the colour image.
 - *Cryptomatte.* A Cryptomatte type is read from a part's channels and string metadata only: the
   `<layer>NN` rank channels keep their Float32 bit patterns through `decodeImageChannels()`, and
   `cryptomatte/<key>/name`, `hash`, `conversion` and `manifest` arrive as metadata, where `<key>` is
@@ -855,7 +865,11 @@ Decode ahead (#386): when the frame that queues the captures is a GPU colour lea
 carries native samples: PNG, JPEG and all-half OpenEXR), the worker that captured a member also
 decodes its native samples, with the raw interpretation and resolved colour layer the frame's own
 upload uses, and stores them in the operation cache as a decoded-media entry under the member's
-decode-only identity. The frame then finds them there and neither reads nor decodes its member
+decode-only identity. When the frame's channel reads take channels from the same part (#549, a
+Cryptomatte's ranks or a depth channel), the request names them and the worker reads them beside
+the samples in the same decode, storing that channel set under the part's channel-set key
+(`channelsDecoded` in its statistics); a member whose colour layer has no native samples has its
+channels decoded ahead on their own. The frame then finds them there and neither reads nor decodes its member
 (`imageDecodedAhead` in its media statistics); the upload identity is unchanged, so the samples
 are exactly the ones its own decode would produce. A frame that claims a member still decoding
 waits for that decode instead of decoding the member a second time. The latest frame that queued

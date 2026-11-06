@@ -45,6 +45,10 @@ class ImageSequenceReadAhead final {
         // interpretation the frame's GPU upload decodes with. `layer` is the requested layer; it is
         // resolved against the member's own part, as selection resolves it.
         std::optional<media::ImageInterpretation> decode;
+        // #549: with `decode`, the channels the frame's channel reads (a Cryptomatte's ranks, a
+        // depth channel) take from the member's part, sorted: decoded in the same read as the
+        // samples and stored under the part's channel-set key.
+        std::vector<std::string> channels;
     };
     struct Statistics final {
         std::uint64_t queued = 0;
@@ -61,6 +65,8 @@ class ImageSequenceReadAhead final {
         // #386: native-sample decodes stored ahead of their frame, and decodes not run because
         // the transport had already passed (or jumped away from) their frame.
         std::uint64_t decoded = 0;
+        // #549: channel sets stored ahead of their frame.
+        std::uint64_t channelsDecoded = 0;
         std::uint64_t decodesSkipped = 0;
         // Decodes not run because frames' own decodes already used the cores.
         std::uint64_t decodesYielded = 0;

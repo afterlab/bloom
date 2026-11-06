@@ -75,8 +75,9 @@ struct ImageSequenceReadAheadState final {
             auto revision = capture(job);
             const bool stored = revision != nullptr;
             bool decoded = false;
+            bool channelsDecoded = false;
             if (stored && job.request.decode && decodeWanted(job.request.use)) {
-                decoded = decode(job, *revision);
+                decoded = decode(job, *revision, channelsDecoded);
                 const std::lock_guard lock(mutex);
                 --aheadDecodes;
             }
@@ -87,6 +88,7 @@ struct ImageSequenceReadAheadState final {
                 capturing.erase(job.request.revisionKey);
                 ++(stored ? statistics.captured : statistics.failed);
                 statistics.decoded += decoded ? 1U : 0U;
+                statistics.channelsDecoded += channelsDecoded ? 1U : 0U;
             }
             captured.notify_all();
         }
@@ -143,8 +145,11 @@ struct ImageSequenceReadAheadState final {
     }
 
     // Decodes the member's native samples into the cache under the key the frame's upload looks
-    // for. Returns true when the samples were stored (or were already cached).
-    [[nodiscard]] bool decode(const Job& job, const media::ImageSourceRevision& revision) const {
+    // for, and (#549) the requested channels of its part in the same read under the key the
+    // frame's channel reads look for. Returns true when the samples were stored (or were already
+    // cached); `channelsStored` says a channel set was stored.
+    [[nodiscard]] bool decode(const Job& job, const media::ImageSourceRevision& revision,
+                              bool& channelsStored) const {
         const auto cache = job.cache.lock();
         if (!cache || stopping.load())
             return false;
@@ -155,23 +160,70 @@ struct ImageSequenceReadAheadState final {
         const auto key = detail::decodedImageSamplesKey(detail::imageDecodeKey(
             job.request.digest, interpretation.storedSamples, interpretation.alphaAssociation,
             interpretation.part, interpretation.layer));
+        const auto& channels = job.request.channels;
+        const auto channelsKey =
+            channels.empty()
+                ? std::string{}
+                : detail::decodedImageChannelsKey(
+                      detail::sourcePartKey(job.request.digest, interpretation.part), channels);
         const SourceWorkingSet::UseScope use(job.request.use);
-        if (cache->find(key, document::Revision{}, OperationCacheEntryKind::DecodedMedia))
+        const bool haveSamples =
+            cache->find(key, document::Revision{}, OperationCacheEntryKind::DecodedMedia)
+                .has_value();
+        const bool wantChannels =
+            !channels.empty() &&
+            !cache->find(channelsKey, document::Revision{}, OperationCacheEntryKind::DecodedMedia);
+        if (haveSamples && !wantChannels)
             return true;
-        // Never evict for a guess: an upper bound of the samples (four 32-bit channels) must fit
-        // the cache's free budget as it stands, and the decode its own budget.
+        // Never evict for a guess: an upper bound of the samples (four 32-bit channels) and the
+        // channel planes must fit the cache's free budget as it stands, and the decode its own.
         const auto& probe = revision.probe();
-        const auto bound = static_cast<std::uint64_t>(probe.width) * probe.height * 16U;
+        const auto pixels = static_cast<std::uint64_t>(probe.width) * probe.height;
+        const auto bound =
+            (haveSamples ? 0U : pixels * 16U) + (wantChannels ? pixels * 4U * channels.size() : 0U);
         if (bound > job.request.byteBudget || cache->retainedBytes() + bound > cache->byteBudget())
-            return false;
-        auto samples = media::decodeImageSamples(
-            revision, interpretation, [this] { return stopping.load(); }, job.request.byteBudget);
-        if (!samples.value || !*samples.value || stopping.load())
-            return false;
-        cache->store(key, document::Revision{},
-                     {.image = {}, .values = {}, .bounds = {}, .samples = *samples.value},
-                     OperationCacheEntryKind::DecodedMedia);
-        return true;
+            return haveSamples;
+        const auto stop = [this] { return stopping.load(); };
+        media::ImageChannelsAlongside alongside;
+        if (wantChannels)
+            alongside.channels = channels;
+        bool samplesStored = haveSamples;
+        if (!haveSamples) {
+            auto samples =
+                media::decodeImageSamples(revision, interpretation, stop, job.request.byteBudget,
+                                          nullptr, wantChannels ? &alongside : nullptr);
+            if (stopping.load())
+                return false;
+            if (samples.value && *samples.value) {
+                cache->store(key, document::Revision{},
+                             {.image = {}, .values = {}, .bounds = {}, .samples = *samples.value},
+                             OperationCacheEntryKind::DecodedMedia);
+                samplesStored = true;
+            }
+        }
+        // A FLOAT or UINT colour layer has no native samples (the frame decodes it to float): its
+        // channels are still read ahead, on their own.
+        if (wantChannels && !alongside.decoded) {
+            media::ImageChannelSelection selection;
+            selection.part = interpretation.part;
+            selection.channels = channels;
+            auto decoded =
+                media::decodeImageChannels(revision, selection, stop, {}, job.request.byteBudget);
+            if (decoded.value)
+                alongside.decoded = std::move(*decoded.value);
+        }
+        if (wantChannels && alongside.decoded && !stopping.load()) {
+            cache->store(channelsKey, document::Revision{},
+                         {.image = {},
+                          .values = {},
+                          .bounds = {},
+                          .sourceRevision = {},
+                          .samples = {},
+                          .channels = alongside.decoded},
+                         OperationCacheEntryKind::DecodedMedia);
+            channelsStored = true;
+        }
+        return samplesStored;
     }
 };
 

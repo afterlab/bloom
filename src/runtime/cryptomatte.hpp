@@ -133,7 +133,8 @@ struct CryptomatteGather final {
 };
 [[nodiscard]] CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection,
                                                   std::size_t budget,
-                                                  const CancellationToken& cancel);
+                                                  const CancellationToken& cancel,
+                                                  const ChannelSetReader& read = {});
 
 // CPU reference: the full-resolution matte (premultiplied white x coverage) from the gather.
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>

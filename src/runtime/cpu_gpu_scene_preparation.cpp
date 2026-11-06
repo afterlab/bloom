@@ -558,6 +558,47 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         return std::nullopt;
     };
 
+    // #549: what the build's channel reads take from each source part, registered before any leaf
+    // decodes, so the first decode of a part (its colour layer's, usually) reads them all.
+    bool registeredChannelReads = false;
+    for (std::size_t index = 0; index < operationCount; ++index) {
+        const auto& operation = plan->operations()[index];
+        if (!reachable[index] || (!std::holds_alternative<CompiledCryptomatte>(operation) &&
+                                  !std::holds_alternative<CompiledChannelShuffle>(operation)))
+            continue;
+        if (cancellation.isCancellationRequested())
+            return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+        const auto operandClock = plan->operationClock(OperationIndex::fromRaw(index));
+        const auto operandTime = detail::timeForClock(frameResolved, request.time, operandClock);
+        if (!operandTime)
+            continue;
+        auto clockRequest = request;
+        clockRequest.time = *operandTime;
+        detail::registerChannelReads(
+            operation, clockRequest, *plan, detail::resolvedForClock(frameResolved, operandClock),
+            media, request.bypassOperationCache, plan->bypassOperationCache(), cancellation);
+        registeredChannelReads = true;
+    }
+    // The Image leaves of the GPU colour split that decode a part a channel read takes channels
+    // from, so a channel read prepared first decodes that colour layer with its channels.
+    for (std::size_t index = 0;
+         registeredChannelReads && ocioContext_.preparer != nullptr && index < operationCount;
+         ++index) {
+        const auto* image = std::get_if<CompiledImageSource>(&plan->operations()[index]);
+        if (!reachable[index] || image == nullptr)
+            continue;
+        if (cancellation.isCancellationRequested())
+            return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+        const auto operandClock = plan->operationClock(OperationIndex::fromRaw(index));
+        const auto operandTime = detail::timeForClock(frameResolved, request.time, operandClock);
+        if (!operandTime)
+            continue;
+        auto clockRequest = request;
+        clockRequest.time = *operandTime;
+        detail::registerColourRead(*image, clockRequest, *plan, media, request.bypassOperationCache,
+                                   plan->bypassOperationCache(), cancellation);
+    }
+
     // Test-only checkpoint (empty in production): a test can pause preparation here, request
     // cancellation, then release it so the per-operation cancellation check below observes a
     // genuinely mid-build request deterministically.

@@ -31,6 +31,19 @@ struct SlotSource final {
 
 } // namespace
 
+ChannelSetRead readSourceChannels(const ImageSourceSelection& source,
+                                  const std::vector<std::string>& names, const std::size_t budget,
+                                  const CancellationToken& cancel) {
+    if (!source.sourceRevision)
+        return {{}, "Channel source has no immutable revision"};
+    media::ImageChannelSelection request;
+    request.part = source.interpretation.part;
+    request.channels = names;
+    return media::decodeImageChannels(
+        *source.sourceRevision, request, [&cancel] { return cancel.isCancellationRequested(); }, {},
+        budget);
+}
+
 ChannelSetSourceSelection
 selectChannelSetSources(const CompiledChannelExpression& expression, const core::RationalTime time,
                         const document::FrameRate rate, const std::filesystem::path& base,
@@ -257,7 +270,8 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
 
 media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 gatherChannelShuffle(const ChannelShuffleSelection& selection, const bool convert,
-                     const std::size_t budget, const CancellationToken& cancel) {
+                     const std::size_t budget, const CancellationToken& cancel,
+                     const ChannelSetReader& read) {
     using Result = media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>;
     if (!selection.available)
         return {{}, selection.warning};
@@ -277,11 +291,8 @@ gatherChannelShuffle(const ChannelShuffleSelection& selection, const bool conver
         const auto& source = selection.sources[index];
         if (!source.sourceRevision)
             return {{}, "Channel source has no immutable revision"};
-        media::ImageChannelSelection request;
-        request.part = source.interpretation.part;
-        request.channels = names[index];
-        auto decoded = media::decodeImageChannels(*source.sourceRevision, request, cancelled, {},
-                                                  remaining);
+        auto decoded = read ? read(source, names[index], remaining, cancel)
+                            : readSourceChannels(source, names[index], remaining, cancel);
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         const auto cost = (*decoded.value)->byteCost();

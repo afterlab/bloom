@@ -134,6 +134,12 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t imageDecodeNanoseconds = 0;
     // #386: image-sequence members whose native samples the read-ahead had already decoded.
     std::uint64_t imageDecodedAhead = 0;
+    // #549: channel reads' source channel sets (a Cryptomatte's ranks, a Shuffle's channels) read
+    // in the same pass as their part's colour layer, decoded on their own, and served from this
+    // build, the operation cache or the sequence read-ahead without a decode.
+    std::uint64_t channelSetsReadWithColour = 0;
+    std::uint64_t channelSetDecodes = 0;
+    std::uint64_t channelSetsReused = 0;
     friend bool operator==(const GpuSceneMediaStatistics&,
                            const GpuSceneMediaStatistics&) = default;
 };

@@ -14,12 +14,27 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace bloom::runtime::detail {
+
+// #549: reads `names` of one selected channel source. readSourceChannels() decodes them on their
+// own (media::decodeImageChannels); the GPU route reads them through its scene build instead,
+// which shares one decode of the part with the part's colour layer, every channel read of the
+// frame and the operation cache. The returned set may hold more channels than `names` (always in
+// the source part's data window); readers look channels up by name.
+using ChannelSetRead = media::ImageResult<std::shared_ptr<const render::ChannelSetImage>>;
+using ChannelSetReader = std::function<ChannelSetRead(
+    const ImageSourceSelection& source, const std::vector<std::string>& names, std::size_t budget,
+    const CancellationToken& cancel)>;
+[[nodiscard]] ChannelSetRead readSourceChannels(const ImageSourceSelection& source,
+                                                const std::vector<std::string>& names,
+                                                std::size_t budget,
+                                                const CancellationToken& cancel);
 
 struct ChannelShuffleSelection final {
     std::vector<ImageSourceSelection> sources;
@@ -84,7 +99,7 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, core::RationalTime t
 // in the source encoding (the GPU raw upload). `repairedPixels` counts the ingest-policy repairs.
 [[nodiscard]] media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 gatherChannelShuffle(const ChannelShuffleSelection& selection, bool convert, std::size_t budget,
-                     const CancellationToken& cancel);
+                     const CancellationToken& cancel, const ChannelSetReader& read = {});
 
 // CPU reference: the converted gather resampled to the request geometry (PointResampleV1).
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>

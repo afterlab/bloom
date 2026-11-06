@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/native_samples.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
@@ -85,6 +86,10 @@ struct OperationCacheValue final {
     // #386: a sequence member's decoded native samples, decoded ahead of the frame that uses them
     // and keyed by the decode-only identity, so a later frame uploads them without decoding.
     std::shared_ptr<const render::NativeSampleImage> samples{};
+    // #549: named channels of a source part (a Cryptomatte's ranks, a depth channel), keyed by the
+    // source sample and the channel set, decoded with the part's colour layer when a frame reads
+    // both.
+    std::shared_ptr<const render::ChannelSetImage> channels{};
 };
 
 // Owned by one linear pass over a range (an export run) and carried by every frame it evaluates
@@ -206,7 +211,7 @@ class OperationCache final {
         OperationCacheValue value;
         // Charged per entry: the entry, its key and its values. Storage is charged once.
         std::size_t metadataBytes = 0;
-        std::array<StorageReference, 3> storage{};
+        std::array<StorageReference, 4> storage{};
         // What this entry would cost alone: metadata plus every storage it references.
         [[nodiscard]] std::size_t standaloneBytes() const noexcept;
         OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;

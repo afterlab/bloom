@@ -72,12 +72,33 @@ class GpuSceneBuildUploads final {
     findCryptomatte(const std::string& key) const;
     void shareCryptomatte(const std::string& key,
                           std::shared_ptr<const detail::CryptomatteGather> gather);
+    // #549: the channels this build's channel reads (Cryptomatte, Shuffle) take from each source
+    // part (detail::sourcePartKey()), registered before any leaf decodes, and the one set decoded
+    // for them all: the part's colour decode reads them beside its layer when it runs first, and
+    // otherwise the first channel read decodes them all at once.
+    void wantChannels(const std::string& part, const std::vector<std::string>& names);
+    // Sorted and distinct; empty when no channel read of the build takes channels from `part`.
+    [[nodiscard]] std::vector<std::string> wantedChannels(const std::string& part) const;
+    [[nodiscard]] std::shared_ptr<const render::ChannelSetImage>
+    findChannels(const std::string& part) const;
+    void shareChannels(const std::string& part,
+                       std::shared_ptr<const render::ChannelSetImage> channels);
+    // #549: the selection of an Image leaf of this build that decodes a part some channel read
+    // takes channels from, so a channel read prepared before that leaf decodes the part's colour
+    // layer and its channels together (the leaf then finds its samples shared).
+    void planColour(const std::string& part,
+                    std::shared_ptr<const detail::ImageSourceSelection> selection);
+    [[nodiscard]] std::shared_ptr<const detail::ImageSourceSelection>
+    findColour(const std::string& part) const;
     // Image source revisions captured by earlier leaves of this build.
     [[nodiscard]] detail::ImageSourceRevisionMemo& revisions() noexcept { return revisions_; }
 
   private:
     detail::ImageSourceRevisionMemo revisions_;
     mutable std::mutex mutex_;
+    std::unordered_map<std::string, std::vector<std::string>> wantedChannels_;
+    std::unordered_map<std::string, std::shared_ptr<const render::ChannelSetImage>> channels_;
+    std::unordered_map<std::string, std::shared_ptr<const detail::ImageSourceSelection>> colour_;
     std::unordered_map<std::string, std::shared_ptr<const render::Rgba32fImage>> images_;
     std::unordered_map<std::string, std::shared_ptr<const render::NativeSampleImage>> samples_;
     std::unordered_map<std::string, std::shared_ptr<const detail::CryptomatteGather>> cryptomattes_;
@@ -210,6 +231,21 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
                        const GpuSceneMediaContext& context, std::uint64_t pixelBudget,
                        bool explicitBypass, bool planBypass, const CancellationToken& cancellation,
                        GpuSceneMediaStatistics& statistics);
+
+// #549: registers with `context.buildUploads` the source channels a reachable Cryptomatte or
+// Shuffle leaf will read (the same selection the leaf makes), so the first decode of each source
+// part in the build reads every channel the build needs from it. Any other operation, a selection
+// that fails (the leaf then reports it) and a build without shared uploads register nothing.
+void registerChannelReads(const CompiledOperation& operation, const EvaluationRequest& request,
+                          const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                          const GpuSceneMediaContext& context, bool explicitBypass, bool planBypass,
+                          const CancellationToken& cancellation);
+// After registerChannelReads: records the selection of a reachable Image leaf of the GPU colour
+// split (prepareImageColorLeaf, the same selection) whose part a channel read takes channels from.
+void registerColourRead(const CompiledImageSource& source, const EvaluationRequest& request,
+                        const CompiledCompositionPlan& plan, const GpuSceneMediaContext& context,
+                        bool explicitBypass, bool planBypass,
+                        const CancellationToken& cancellation);
 
 // The VideoSource twin of prepareImageColorLeaf. The decoded planes cross as native samples
 // (#422): SampleConvertV1 applies the YUV matrix, range and bit-depth expansion on the device, and

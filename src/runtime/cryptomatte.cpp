@@ -387,7 +387,7 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
 }
 
 CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const std::size_t budget,
-                                    const CancellationToken& cancel) {
+                                    const CancellationToken& cancel, const ChannelSetReader& read) {
     CryptomatteGather result;
     if (!selection.available) {
         result.diagnostic = selection.warning;
@@ -405,11 +405,8 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
     for (std::size_t index = 0; index < sources.size(); ++index) {
         if (names[index].empty())
             continue;
-        media::ImageChannelSelection request;
-        request.part = sources[index].interpretation.part;
-        request.channels = names[index];
-        auto decoded = media::decodeImageChannels(*sources[index].sourceRevision, request,
-                                                  cancelled, {}, remaining);
+        auto decoded = read ? read(sources[index], names[index], remaining, cancel)
+                            : readSourceChannels(sources[index], names[index], remaining, cancel);
         if (!decoded.value.has_value()) {
             result.cancelled = decoded.cancelled;
             result.diagnostic = decoded.diagnostic;
