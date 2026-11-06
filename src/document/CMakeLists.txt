@@ -15,6 +15,7 @@ target_sources(
         lens_flare_nodes.cpp
         film_grain_nodes.cpp
         motion_blur_nodes.cpp
+        sharpen_nodes.cpp
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp

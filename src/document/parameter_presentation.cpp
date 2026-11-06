@@ -4,6 +4,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -528,6 +529,15 @@ std::optional<ParameterPresentation> filmGrainPresentation(const std::string_vie
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #486 Sharpen: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> sharpenPresentation(const std::string_view schemaKey) {
+    const auto* spec = sharpenParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    return number(spec->minimum, spec->maximum, spec->minimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit, spec->displayScale);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -541,6 +551,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *flare;
     if (auto grain = filmGrainPresentation(schemaKey))
         return *grain;
+    if (auto sharpen = sharpenPresentation(schemaKey))
+        return *sharpen;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

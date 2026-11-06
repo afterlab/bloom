@@ -7,6 +7,7 @@
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -577,6 +578,9 @@ template <typename Definition>
         // #484 the motion-blur nodes: the exact generated shapes.
         if (isMotionBlurNodeType(definition.key.typeId))
             return definition == motionBlurDefinition(definition.key.typeId);
+        // #486 Sharpen: the exact generated shape.
+        if (definition.key.typeId == kSharpenNodeType)
+            return definition == sharpenDefinition();
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1664,6 +1668,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         colorizeDefinition(),
         vignetteDefinition(),
         filmGrainDefinition(),
+        sharpenDefinition(),
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),
         lensFlareDefinition(),

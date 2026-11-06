@@ -10,6 +10,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
@@ -410,7 +411,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
-           isFilmGrainScalarSchemaKey(schemaKey) ||
+           isFilmGrainScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
@@ -526,6 +527,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #484 the motion-blur nodes (motion_blur_parameters.hpp).
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionScalarWithinDomain(schemaKey, value);
+    // #486 Sharpen (sharpen_nodes.hpp).
+    if (sharpenParameterSpec(schemaKey) != nullptr)
+        return isSharpenScalarWithinDomain(schemaKey, value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

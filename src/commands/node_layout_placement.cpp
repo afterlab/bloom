@@ -12,6 +12,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/project.hpp>
 
@@ -73,6 +74,8 @@ constexpr double kDialSide = 50.0;
 constexpr double kPadMaxHeight = 208.0;
 // #486: FilmGrainResponseGraph's height (film_grain_widget.cpp).
 constexpr double kFilmGrainGraphHeight = 120.0;
+// #486: SharpenProfileGraph's height (sharpen_widget.cpp).
+constexpr double kSharpenGraphHeight = 120.0;
 // A gradient row (gradient_parameter_row.cpp) is the gradient editor (Size::Control bar,
 // Size::IconLarge handle band, Spacing::XXS), then its Stop row, (#546) its Color mode and
 // Interpolation rows and its Values button, each Spacing::XS and Size::Control.
@@ -342,6 +345,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #484: the Spin and Zoom Blur cards' centre pad.
     if (node->typeId == document::kSpinBlurNodeType || node->typeId == document::kZoomBlurNodeType)
         thumbnail = kPadMaxHeight + kSmall + kPadding;
+    // #486: the Sharpen card's edge graph and its three slider rows, each a value over a slider.
+    if (node->typeId == document::kSharpenNodeType)
+        thumbnail = kSharpenGraphHeight + kSmall + 3.0 * (kControl + kSmall) + kPadding;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

@@ -178,7 +178,7 @@ void blurNodeReopen() {
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain"}) {
+          "bloom.film-grain", "bloom.sharpen"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -263,6 +263,9 @@ void blurNodeReopen() {
                     ? document::ParameterValue{std::int64_t{1234}}
                 : parameter.valueKind == document::ParameterValueKind::Float64 &&
                         parameter.schemaKey.starts_with("bloom.film-grain.")
+                    ? document::ParameterValue{0.625}
+                // #486 Sharpen: moved values.
+                : parameter.schemaKey.starts_with("bloom.sharpen.")
                     ? document::ParameterValue{0.625}
                 // #507 Lens Flare: 3D, an inverted luma matte, moved values and a moved light.
                 : parameter.schemaKey == "bloom.lens-flare.lightMode"

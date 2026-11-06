@@ -965,6 +965,23 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{2}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainSeed,
                                ConstantValueSource{std::int64_t{-1}});
+
+    // #486 Sharpen: its values edit within their domains and refuse outside them.
+    const auto sharpen = addRecipe("bloom.sharpen");
+    const auto sharpenAmount = sharpen.outputId<ParameterId>("parameter.amount");
+    const auto sharpenRadius = sharpen.outputId<ParameterId>("parameter.radius");
+    const auto sharpenThreshold = sharpen.outputId<ParameterId>("parameter.threshold");
+    if (!sharpenAmount || !sharpenRadius || !sharpenThreshold)
+        throw std::logic_error("Sharpen exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *sharpenAmount, ConstantValueSource{2.5});
+    (void)exercise<SetParameterSource>(test, fixture, *sharpenRadius, ConstantValueSource{12.0});
+    (void)exercise<SetParameterSource>(test, fixture, *sharpenThreshold, ConstantValueSource{0.04});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *sharpenAmount,
+                               ConstantValueSource{-0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *sharpenRadius,
+                               ConstantValueSource{257.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *sharpenThreshold,
+                               ConstantValueSource{-0.1});
 }
 
 void testAddAndLayout(TestContext& test) {

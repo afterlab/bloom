@@ -153,9 +153,10 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
     // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette; #525 adds the
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
-    // Fog; #507 adds Lens Flare; #486 adds Film Grain; #484 adds Motion Blur, Vector Motion Blur,
-    // Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and Zoom Blur.
-    expectations.expect(registry.definitions().size() == 186,
+    // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
+    // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
+    // Zoom Blur.
+    expectations.expect(registry.definitions().size() == 187,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -303,7 +304,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
-                    "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain"},
+                    "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
+                    "bloom.sharpen"},
                    document::NodeCategory::Filters);
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
@@ -350,6 +352,21 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             grainUnmasked->outputs.size() == 1 &&
             grainUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Film Grain has its constants and an animatable socket per value");
+    // #486 Sharpen: an Image in and out and an animatable socket per value; the effect mask follows.
+    const auto sharpenUnmasked = withoutMask(registry.find("bloom.sharpen", 1));
+    expectations.expect(
+        sharpenUnmasked && sharpenUnmasked->inputs.size() == 4 &&
+            sharpenUnmasked->parameters.size() == 3 &&
+            sharpenUnmasked->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            sharpenUnmasked->inputs[1].name == "amount" &&
+            sharpenUnmasked->inputs[2].name == "radius" &&
+            sharpenUnmasked->inputs[3].name == "threshold" &&
+            sharpenUnmasked->parameters[0].defaultValue == document::ParameterValue{1.0} &&
+            sharpenUnmasked->parameters[1].defaultValue == document::ParameterValue{3.0} &&
+            sharpenUnmasked->parameters[2].defaultValue == document::ParameterValue{0.0} &&
+            sharpenUnmasked->outputs.size() == 1 &&
+            sharpenUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#486: Sharpen has an animatable socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
                     "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);
@@ -1043,7 +1060,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 23>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 24>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
@@ -1051,13 +1068,14 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                                          "bloom.box-blur", "bloom.vignette", "bloom.curves",
                                          "bloom.z-defocus", "bloom.depth-fog", "bloom.film-grain",
                                          "bloom.motion-blur", "bloom.echo", "bloom.directional-blur",
-                                         "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur"},
+                                         "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur",
+                                         "bloom.sharpen"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 23,
+    expectations.expect(shaped && named && masked == 24,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);
