@@ -14,6 +14,7 @@
 
 #include "compositing_recipe_test_support.hpp"
 #include "depth_effect_test_support.hpp"
+#include "lens_flare_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
 #include "grade_curves_test_support.hpp"
@@ -2080,6 +2081,123 @@ void runDepthEffects(Expectations& expectations, GpuDevice& device, GpuSceneCach
     }
 }
 
+// #507 Lens Flare against the CPU oracle: every element, both probes through the atlas, a matte's
+// edge through the light, the probes' constant cases, a small input padded to the frame and a
+// projected light; warm RAM reuse with zero dispatches, and a changed value re-running with parity.
+// The stack's arithmetic is exact, so its pixels and alpha agree exactly.
+void runLensFlares(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::lens_flare_test::everyElement;
+    using bloom::lens_flare_test::FlareValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        FlareValues values;
+        FlareValues changed;
+        const char* name;
+    };
+    std::vector<Case> cases;
+    {
+        FlareValues base;
+        FlareValues baseChanged = base;
+        baseChanged.position = {10.0, 6.0};
+        cases.push_back({base, baseChanged, "default stack"});
+        FlareValues every = everyElement();
+        FlareValues everyChanged = every;
+        everyChanged.scalars["chromatic"] = 0.1;
+        cases.push_back({every, everyChanged, "every element"});
+        FlareValues source;
+        source.scalars = {{"sourceBrightness", 0.75}, {"sourceWhite", 2.0}};
+        FlareValues sourceChanged = source;
+        sourceChanged.position = {4.0, 2.0};
+        cases.push_back({source, sourceChanged, "brightness from source"});
+        FlareValues matte;
+        matte.matteWidth = 20;
+        matte.scalars = {{"sampleRadius", 6.0}, {"occlusionAmount", 0.8}};
+        FlareValues matteChanged = matte;
+        matteChanged.matteWidth = 16;
+        cases.push_back({matte, matteChanged, "a matte's edge through the light"});
+        FlareValues both = everyElement();
+        both.scalars["sourceBrightness"] = 0.5;
+        both.matteWidth = 22;
+        both.integers["occlusionChannel"] = 9;
+        FlareValues bothChanged = both;
+        bothChanged.scalars["occlusionAmount"] = 0.25;
+        cases.push_back({both, bothChanged, "both probes, inverted luma"});
+        FlareValues outside;
+        outside.position = {4000.0, -3000.0};
+        outside.matteWidth = 20;
+        outside.scalars = {{"sourceBrightness", 0.5}};
+        FlareValues outsideChanged = outside;
+        outsideChanged.scalars["intensity"] = 0.5;
+        cases.push_back({outside, outsideChanged, "a light outside every image"});
+        FlareValues small = everyElement();
+        small.smallInput = true;
+        FlareValues smallChanged = small;
+        smallChanged.scalars["flareSize"] = 0.5;
+        cases.push_back({small, smallChanged, "a small input padded to the frame"});
+        FlareValues projected;
+        projected.integers = {{"lightMode", bloom::document::kLensFlareLight3D}};
+        projected.scalars = {{"lightDistance", 300.0}, {"cameraZoom", 700.0}};
+        FlareValues projectedChanged = projected;
+        projectedChanged.scalars["lightDistance"] = 100.0;
+        cases.push_back({projected, projectedChanged, "a projected 3D light"});
+    }
+    std::uint64_t id = 50700;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("lens flare native (") + item.name + "): ";
+        const auto plan = bloom::lens_flare_test::flarePlan(item.values, id);
+        const auto changedPlan = bloom::lens_flare_test::flarePlan(item.changed, id);
+        id += 200;
+        const auto request = requestFor(*plan);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, changed.scene);
+        const auto rerunDispatches =
+            executor.executor->counters().dispatches - coldCounters.dispatches;
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                rerunDispatches > 0,
+                            name + "a changed value re-runs with CPU parity: " + detail);
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runBatchedChains(expectations, device, cache);
@@ -2098,6 +2216,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runRecipes(expectations, device, cache);
     runFields(expectations, device, cache);
     runDepthEffects(expectations, device, cache);
+    runLensFlares(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

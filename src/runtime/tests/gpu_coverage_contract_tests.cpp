@@ -35,6 +35,7 @@
 #include "gpu_coverage_working_space_support.hpp"
 #include "gpu_route_proof_io.hpp"
 #include "depth_effect_test_support.hpp"
+#include "lens_flare_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "grade_curves_test_support.hpp"
 #include "merge_entry_test_support.hpp"
@@ -1853,6 +1854,62 @@ displayProofRunner(const bool customView) {
         addDepth("node.bloom.depth-fog", {fog, fogImage}, 484600,
                  "production Depth Fog node: a colour fog and a fog image with empty depth "
                  "filled, full frame and ROI");
+    }
+    // #507 Lens Flare: every element, the probes through the atlas and a small input padded to the
+    // frame, full frame and ROI.
+    const auto runFlare = [](const std::vector<bloom::lens_flare_test::FlareValues>& variants,
+                             std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& values : variants) {
+            const auto plan = bloom::lens_flare_test::flarePlan(values, idBase);
+            idBase += 200;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 9, 7);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    {
+        using bloom::lens_flare_test::everyElement;
+        using bloom::lens_flare_test::FlareValues;
+        FlareValues probed = everyElement();
+        probed.scalars["sourceBrightness"] = 0.5;
+        probed.matteWidth = 10;
+        FlareValues padded;
+        padded.smallInput = true;
+        FlareValues projected;
+        projected.integers = {{"lightMode", bloom::document::kLensFlareLight3D}};
+        projected.scalars = {{"lightDistance", 200.0}, {"cameraZoom", 800.0}};
+        add(
+            "effect.LensFlareKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime lens flare tests",
+            [runFlare, probed, padded, projected] {
+                return runFlare({FlareValues{}, everyElement(), probed, padded, projected}, 507000,
+                                "production Lens Flare: the default stack, every element at its "
+                                "largest counts, the source and occlusion probes through the atlas, "
+                                "a small input padded to the frame and a projected 3D light, full "
+                                "frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.lens-flare", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime lens flare tests",
+            [runFlare, probed] {
+                return runFlare({FlareValues{}, probed}, 508200,
+                                "production Lens Flare node: the default stack and a flare reading "
+                                "its source and an occlusion matte, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
     }
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {

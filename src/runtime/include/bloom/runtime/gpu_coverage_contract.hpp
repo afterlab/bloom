@@ -146,6 +146,9 @@ BLOOM_GPU_REQUIRED_EFFECT(DepthMapKernel,
 BLOOM_GPU_REQUIRED_EFFECT(DefocusKernel,
                           "Z Defocus scatter-as-gather lens blur with bokeh shape or image, "
                           "highlight boost and chromatic bokeh (#483)");
+BLOOM_GPU_REQUIRED_EFFECT(LensFlareKernel,
+                          "Lens Flare: glow, streaks, ghosts, ring, iris, hoop and anamorphic "
+                          "elements with source brightness and matte occlusion probes (#507)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

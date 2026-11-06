@@ -444,6 +444,15 @@ bloom_enable_warnings(bloom_runtime_depth_effect_test)
 bloom_enable_strict_floating_point(bloom_runtime_depth_effect_test)
 bloom_add_test(NAME bloom.runtime.depth-effect COMMAND bloom_runtime_depth_effect_test LABELS unit runtime render)
 
+# #507 Lens Flare: its elements against their formulas, the light's readings, the promises, the
+# fixed programs, the presets, the pixel budget and cancellation.
+add_executable(bloom_runtime_lens_flare_test lens_flare_tests.cpp)
+target_include_directories(bloom_runtime_lens_flare_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_lens_flare_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_lens_flare_test)
+bloom_enable_strict_floating_point(bloom_runtime_lens_flare_test)
+bloom_add_test(NAME bloom.runtime.lens-flare COMMAND bloom_runtime_lens_flare_test LABELS unit runtime render)
+
 add_executable(bloom_runtime_color_grade_image_effect_test color_grade_image_effect_tests.cpp)
 target_include_directories(bloom_runtime_color_grade_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_color_grade_image_effect_test PRIVATE bloom_runtime_evaluator)
@@ -871,6 +880,28 @@ bloom_add_test(
     TIMEOUT 300
 )
 set_tests_properties(bloom.runtime.gpu_depth_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
+# #507 Lens Flare GPU cost benchmark (tools/bench/run_bench.py nodes): the element stack against a
+# Grade, a Vignette and a Glow, timed cold, warm and per frame; the CTest is a 64x64 smoke run of
+# every case.
+add_executable(bloom_runtime_gpu_lens_flare_node_bench
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_lens_flare_node_bench.cpp)
+target_link_libraries(bloom_runtime_gpu_lens_flare_node_bench
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_render)
+target_include_directories(bloom_runtime_gpu_lens_flare_node_bench
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_lens_flare_node_bench PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_lens_flare_node_bench>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_lens_flare_node_bench)
+bloom_enable_warnings(bloom_runtime_gpu_lens_flare_node_bench)
+bloom_add_test(
+    NAME bloom.runtime.gpu_lens_flare_node_bench_smoke
+    COMMAND bloom_runtime_gpu_lens_flare_node_bench --smoke
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_lens_flare_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
 # the shared preparer from THIS target's packaged shader tools and must compile at most one shader

@@ -24,6 +24,7 @@
 #include "color_grade_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
 #include "depth_effect_image_effect.hpp"
+#include "lens_flare_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -195,6 +196,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_transform_2d_emission.ipp"
 #include "gpu_scene_field_emission.ipp"
 #include "gpu_scene_depth_emission.ipp"
+#include "gpu_scene_lens_flare_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -338,6 +340,24 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         }
         return emitDepthMapCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
                                    emit, charge, chargeCoverage, result);
+    }
+    // #507 Lens Flare: its probes and its stack over the input padded to the frame.
+    if (std::holds_alternative<LensFlareKernel>(effect.kernel)) {
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Lens Flare values are out of domain");
+        // No light anywhere aliases the input, as on the CPU reference.
+        if (grade->identity) {
+            result.identity = true;
+            return std::nullopt;
+        }
+        return emitLensFlareCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
+                                    emit, charge, chargeCoverage, result);
     }
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);

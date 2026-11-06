@@ -1708,6 +1708,59 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Colorize parameters could not be lowered.");
         return std::nullopt;
     }
+    // #507 Lens Flare: the constant counts and choices, every value, and the occlusion matte as the
+    // one image the kernel reads beside its input. A Mask is read as its coverage; only the
+    // selector's invert half applies to one.
+    if (node.typeId == document::kLensFlareNodeType) {
+        runtime::LensFlareKernel kernel;
+        bool lowered = true;
+        const auto integer = [&](const std::string_view role, std::int64_t& target) {
+            const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+            lowered = lowered && value != nullptr;
+            if (value != nullptr)
+                target = *value;
+        };
+        integer("lightMode", kernel.lightMode);
+        integer("streakCount", kernel.streakCount);
+        integer("ghostCount", kernel.ghostCount);
+        integer("seed", kernel.seed);
+        integer("irisCount", kernel.irisCount);
+        integer("irisBlades", kernel.irisBlades);
+        integer("occlusionChannel", kernel.occlusionChannel);
+        for (const auto& spec : document::lensFlareParameters()) {
+            if (spec.kind != document::LensFlareParameterKind::Scalar)
+                continue;
+            const auto value = compiledScalarParameter(findParameterBinding(node, spec.role));
+            lowered = lowered && value.has_value();
+            if (value)
+                kernel.values[document::lensFlareScalarIndex(spec.role)] = *value;
+        }
+        const auto position = compiledVec2Parameter(findParameterBinding(node, "lightPosition"));
+        const auto color = compiledColorParameter(findParameterBinding(node, "lightColor"));
+        const auto anamorphic = compiledColorParameter(findParameterBinding(node, "anamorphicColor"));
+        lowered = lowered && position && color && anamorphic;
+        if (!lowered) {
+            addTopologyFailure(node.id, "Lens Flare parameters could not be lowered.");
+            return std::nullopt;
+        }
+        kernel.position = *position;
+        kernel.color = *color;
+        kernel.anamorphicColor = *anamorphic;
+        runtime::CompiledImageEffect effect{node.id, *input, std::move(kernel)};
+        if (const auto* edge = fixedInputEdge(node.id, document::kLensFlareOcclusionPort)) {
+            const auto matte =
+                matteInputOperation(node.id, document::kLensFlareOcclusionPort, indices);
+            if (!matte)
+                return std::nullopt;
+            auto& flare = std::get<runtime::LensFlareKernel>(effect.kernel);
+            if (composition_->graph().outputKind(edge->source, registry_) ==
+                    runtime::SocketValueKind::Mask &&
+                flare.occlusionChannel >= 0 && flare.occlusionChannel < 10)
+                flare.occlusionChannel = flare.occlusionChannel >= 5 ? 5 : 0;
+            effect.fieldImages.push_back(*matte);
+        }
+        return effect;
+    }
     // #505 Vignette: the constant shape and mode, the strength the mode reads and every shared
     // value; the other strength keeps the kernel's constant default without an identity, so an
     // unused (even animated) value neither claims nor invalidates anything.

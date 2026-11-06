@@ -2,6 +2,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "depth_effect_image_effect.hpp"
+#include "lens_flare_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
@@ -929,6 +930,10 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return depthMapProgramText();
     case ColorGradeKind::Defocus:
         return defocusProgramText();
+    case ColorGradeKind::LensFlare:
+        return lensFlareProgramText();
+    case ColorGradeKind::LensFlareProbe:
+        return lensFlareProbeProgramText();
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -1063,6 +1068,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareDepthMapGrade(*depth, values);
     if (const auto* defocus = std::get_if<DefocusKernel>(&kernel))
         return prepareDefocusGrade(*defocus, values);
+    if (const auto* flare = std::get_if<LensFlareKernel>(&kernel))
+        return prepareLensFlareGrade(*flare, values);
     return std::nullopt;
 }
 
@@ -1092,7 +1099,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     // #505: a vignette depends on where the pixel is (vignettePixel); #525 a field raster replaces
     // every pixel (applyFieldRaster).
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
-        grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus)
+        grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
+        grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1215,8 +1223,12 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                             ? validFieldProgramData(data)
                         : kind == ColorGradeKind::DepthMap ? validDepthMapProgramData(data)
                         : kind == ColorGradeKind::Defocus  ? validDefocusProgramData(data)
+                        : kind == ColorGradeKind::LensFlare ? validLensFlareProgramData(data)
+                        : kind == ColorGradeKind::LensFlareProbe
+                            ? validLensFlareProbeData(data)
                             : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Defocus) ||
+    if (static_cast<std::uint8_t>(kind) >
+            static_cast<std::uint8_t>(ColorGradeKind::LensFlareProbe) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1277,6 +1289,16 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_defocus";
         program.resourcePrefix = "bloom_defocus_";
         program.semanticsId = "bloom.render.z-defocus.v1";
+        break;
+    case ColorGradeKind::LensFlare:
+        program.functionName = "bloom_lens_flare";
+        program.resourcePrefix = "bloom_lens_flare_";
+        program.semanticsId = "bloom.render.lens-flare.v1";
+        break;
+    case ColorGradeKind::LensFlareProbe:
+        program.functionName = "bloom_lens_flare_probe";
+        program.resourcePrefix = "bloom_lens_flare_probe_";
+        program.semanticsId = "bloom.render.lens-flare-probe.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

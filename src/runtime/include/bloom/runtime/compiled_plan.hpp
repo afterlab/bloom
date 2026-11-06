@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -634,6 +635,28 @@ struct DefocusKernel final {
     friend bool operator==(const DefocusKernel&, const DefocusKernel&) = default;
 };
 
+// #507 Lens Flare (docs/architecture/image-filters.md, "Lens Flare"): adds an analytic element stack
+// (glow, streaks, ghosts, a ring, iris ghosts, a hoop and an anamorphic streak) to the input, over
+// the input's data window joined with its display window. `values` holds the document's Scalars in
+// table order (document::lensFlareScalarIndex). The input's brightness at the light and the
+// occlusion matte (CompiledImageEffect::fieldImages, at most one image) are probed once a frame over
+// the light's sample disc. `occlusionChannel` is the matte selector's stored value; a Mask's is
+// lowered to its coverage, keeping the selector's invert.
+struct LensFlareKernel final {
+    std::int64_t lightMode = 0;
+    std::int64_t streakCount = 3;
+    std::int64_t ghostCount = 6;
+    std::int64_t seed = 1;
+    std::int64_t irisCount = 4;
+    std::int64_t irisBlades = 6;
+    std::int64_t occlusionChannel = 0;
+    CompiledVec2Parameter position{{}, document::Vec2d{}};
+    CompiledColorParameter color{{}, core::Color4d{1.0, 1.0, 1.0, 1.0}};
+    CompiledColorParameter anamorphicColor{{}, core::Color4d{1.0, 1.0, 1.0, 1.0}};
+    std::array<CompiledScalarParameter, document::kLensFlareScalarCount> values{};
+    friend bool operator==(const LensFlareKernel&, const LensFlareKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -641,7 +664,7 @@ using ImageEffectKernel =
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
                  AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
-                 MaskDistanceKernel, DepthMapKernel, DefocusKernel>;
+                 MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel>;
 
 // #525: every operand of a field program, in instruction order and, within one, scalars, vectors,
 // the curve, then the ramp.
@@ -770,6 +793,15 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(defocus->chromatic);
         return true;
     }
+    // #507: the position, the two colours, then the Scalars in table order.
+    if (const auto* flare = std::get_if<LensFlareKernel>(&kernel)) {
+        visit(flare->position);
+        visit(flare->color);
+        visit(flare->anamorphicColor);
+        for (const auto& value : flare->values)
+            visit(value);
+        return true;
+    }
     return false;
 }
 
@@ -784,7 +816,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<VignetteKernel>(kernel) ||
            std::holds_alternative<FieldRasterKernel>(kernel) ||
            std::holds_alternative<DepthMapKernel>(kernel) ||
-           std::holds_alternative<DefocusKernel>(kernel);
+           std::holds_alternative<DefocusKernel>(kernel) ||
+           std::holds_alternative<LensFlareKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
@@ -803,7 +836,7 @@ struct CompiledImageEffect final {
     bool trackMatte = false;
     // #525: a FieldRasterKernel's image slots, in slot order (an Image Field's image, a mask Shape
     // Distance's distance image), each sampled by its own data window; #483 a DefocusKernel's
-    // (DefocusKernel::slotImages).
+    // (DefocusKernel::slotImages); #507 a LensFlareKernel's occlusion matte.
     std::vector<OperationIndex> fieldImages{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };

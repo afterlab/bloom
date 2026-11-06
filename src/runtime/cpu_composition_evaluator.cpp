@@ -4,6 +4,7 @@
 #include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
 #include "depth_effect_image_effect.hpp"
+#include "lens_flare_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -543,6 +544,10 @@ enum class ScalarDomain : std::uint8_t {
                         named += slot >= 0 ? 1 : 0;
                     }
                     validKernel = validKernel && named == effect.fieldImages.size() &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
+                } else if (std::holds_alternative<LensFlareKernel>(effect.kernel)) {
+                    // #507: a lens flare reads at most its one occlusion matte.
+                    validKernel = validKernel && effect.fieldImages.size() <= 1 &&
                                   std::ranges::all_of(effect.fieldImages, earlier);
                 } else {
                     validKernel =
@@ -2242,10 +2247,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
                                std::holds_alternative<DirectionalBlurKernel>(effect->kernel) ||
                                std::holds_alternative<DepthMapKernel>(effect->kernel) ||
-                               std::holds_alternative<DefocusKernel>(effect->kernel))) {
+                               std::holds_alternative<DefocusKernel>(effect->kernel) ||
+                               std::holds_alternative<LensFlareKernel>(effect->kernel))) {
                     fullSupport[effect->input.value()] = true;
                     // #483: the defocus gather reads its depth map, tile maximum, prefiltered
-                    // colour and bokeh image around every pixel.
+                    // colour and bokeh image around every pixel; #507 a lens flare reads the input
+                    // and its occlusion matte at the light, wherever the ROI is.
                     for (const auto image : effect->fieldImages)
                         fullSupport[image.value()] = true;
                 }
@@ -3438,7 +3445,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                           .value()]
                                                     .get();
                                 auto result =
-                                    gradeKind == detail::ColorGradeKind::DepthMap
+                                    gradeKind == detail::ColorGradeKind::LensFlare
+                                        ? detail::applyLensFlare(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              effect.fieldImages.empty()
+                                                  ? nullptr
+                                                  : slots[effect.fieldImages[0].value()].get(),
+                                              !effect.fieldImages.empty(), resolved.horizontalScale,
+                                              resolved.verticalScale, effectPixelBudget,
+                                              cancellation, operationIndex, progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::DepthMap
                                         ? detail::applyDepthMap(
                                               *preparedEffect->colorGrade, *slots[index],
                                               resolved.horizontalScale, effectPixelBudget,

@@ -159,6 +159,7 @@ target_sources(
         color_grade_image_effect.cpp
         vignette_image_effect.cpp
         depth_effect_image_effect.cpp
+        lens_flare_image_effect.cpp
         field_raster.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp

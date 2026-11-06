@@ -718,3 +718,98 @@ void testDepthEffectLowering(Expectations& expectations) {
                             "Depth Fog without a depth passes its input through");
     }
 }
+
+// #507 Lens Flare lowers to one kernel with its constant counts and choices and every value's
+// identity; a connected occlusion input is its one image, an Image keeping the channel selector and
+// a Mask read as its coverage with only the selector's invert; unconnected there is no image. A
+// muted node passes its Image through.
+void testLensFlareLowering(Expectations& expectations) {
+    using namespace document;
+    const auto flareOf = [](const runtime::CompiledCompositionPlan& plan, const NodeId node)
+        -> const runtime::CompiledImageEffect* {
+        for (const auto& operation : plan.operations())
+            if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+                effect != nullptr && effect->sourceNodeId == node &&
+                std::holds_alternative<runtime::LensFlareKernel>(effect->kernel))
+                return effect;
+        return nullptr;
+    };
+    {
+        auto fixture = recipeFixture(kLensFlareNodeType,
+                                     {{"ghostCount", std::int64_t{9}},
+                                      {"streakCount", std::int64_t{5}},
+                                      {"seed", std::int64_t{42}},
+                                      {"irisCount", std::int64_t{2}},
+                                      {"irisBlades", std::int64_t{8}},
+                                      {"lightMode", kLensFlareLight3D},
+                                      {"glowAmount", 0.75},
+                                      {"lightPosition", Vec2d{-40.0, 12.5}}});
+        const auto node = fixture.node;
+        const auto params = fixture.parameters;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Lens Flare compiles");
+        const auto* effect = result.plan ? flareOf(*result.plan, node) : nullptr;
+        expectations.expect(effect != nullptr, "Lens Flare lowers to one kernel");
+        if (effect != nullptr) {
+            const auto& kernel = std::get<runtime::LensFlareKernel>(effect->kernel);
+            const auto& glow = kernel.values[lensFlareScalarIndex("glowAmount")];
+            expectations.expect(
+                kernel.ghostCount == 9 && kernel.streakCount == 5 && kernel.seed == 42 &&
+                    kernel.irisCount == 2 && kernel.irisBlades == 8 &&
+                    kernel.lightMode == kLensFlareLight3D && effect->fieldImages.empty() &&
+                    glow.id == params.at("glowAmount") && std::get<double>(glow.source) == 0.75 &&
+                    kernel.position.id == params.at("lightPosition") &&
+                    std::get<Vec2d>(kernel.position.source) == Vec2d{-40.0, 12.5} &&
+                    kernel.color.id == params.at("lightColor") &&
+                    kernel.anamorphicColor.id == params.at("anamorphicColor"),
+                "Lens Flare lowers its counts, its choices and each value's identity");
+        }
+    }
+    {
+        auto fixture = recipeFixture(kLensFlareNodeType, {{"occlusionChannel", std::int64_t{7}}},
+                                     {std::string(kLensFlareOcclusionPort)});
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        const auto* effect = result.plan ? flareOf(*result.plan, node) : nullptr;
+        expectations.expect(
+            effect != nullptr && effect->fieldImages.size() == 1 &&
+                std::get<runtime::LensFlareKernel>(effect->kernel).occlusionChannel == 7,
+            "an Image on the occlusion input keeps the channel selector");
+    }
+    for (const auto [stored, lowered] : {std::pair<std::int64_t, std::int64_t>{7, 5}, {2, 0}}) {
+        auto fixture = recipeFixture(kLensFlareNodeType, {{"occlusionChannel", stored}});
+        auto* composition = fixture.project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto maskNode = NodeId::fromRaw(1395);
+        const auto* maskDefinition = builtInNodeDefinitions().find(kMaskNodeType, 1);
+        std::vector<ParameterBinding> maskBindings;
+        std::uint64_t next = 1500;
+        for (const auto& parameter : maskDefinition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{parameter.defaultValue}}),
+                    "Mask parameter is valid");
+            maskBindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({maskNode, std::string(kMaskNodeType), std::move(maskBindings), 1}),
+                "Mask node is accepted");
+        require(graph.addEdge({EdgeId::fromRaw(1395), {maskNode, "mask"},
+                               NodeInputRef{fixture.node, std::string(kLensFlareOcclusionPort)}}),
+                "the Mask feeds the occlusion input");
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        const auto* effect = result.plan ? flareOf(*result.plan, node) : nullptr;
+        expectations.expect(
+            effect != nullptr && effect->fieldImages.size() == 1 &&
+                std::get<runtime::LensFlareKernel>(effect->kernel).occlusionChannel == lowered,
+            "a Mask on the occlusion input is read as its coverage, keeping only the invert");
+    }
+    {
+        auto fixture = recipeFixture(kLensFlareNodeType);
+        fixture.project.findComposition(kCompositionId)->nodeLayout()[fixture.node].muted = true;
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr && flareOf(*result.plan, node) == nullptr,
+                            "a muted Lens Flare passes its Image through");
+    }
+}

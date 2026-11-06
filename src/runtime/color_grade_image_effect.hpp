@@ -39,7 +39,11 @@ enum class ColorGradeKind : std::uint8_t {
     // #483: a depth map and Z Defocus's gather (depth_effect_image_effect.hpp), each with its
     // geometry appended where it is applied.
     DepthMap,
-    Defocus
+    Defocus,
+    // #507: Lens Flare's stack and its probe of the light's sample disc
+    // (lens_flare_image_effect.hpp), their tables and geometry built where they are applied.
+    LensFlare,
+    LensFlareProbe
 };
 
 // The packed table, always a whole number of vec4s:
