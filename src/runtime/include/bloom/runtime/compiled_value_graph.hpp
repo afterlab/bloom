@@ -322,6 +322,11 @@ struct CompiledValueShake final {
     CompiledValueOperand amplitudeX;
     CompiledValueOperand amplitudeY;
     CompiledValueOperand roll;
+    // Animatable: the settings' frequency, roughness and smoothing are replaced by these at the
+    // frame (the motion at a frame is the noise at that frame's own frequency).
+    CompiledValueOperand frequency;
+    CompiledValueOperand roughness;
+    CompiledValueOperand smoothing;
     bool overscan = true;
     double width = 0.0;
     double height = 0.0;
@@ -359,6 +364,9 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 visit(step.amplitudeX);
                 visit(step.amplitudeY);
                 visit(step.roll);
+                visit(step.frequency);
+                visit(step.roughness);
+                visit(step.smoothing);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {

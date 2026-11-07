@@ -437,9 +437,11 @@ them per frame (and per shutter row) exactly as it resolves a driven Transform 2
 GPU routes receive the same numbers.
 
 Parameters (schema keys `bloom.camera-shake.<role>`): `mode` (0 Handheld, 1 Impact, 2 Gate weave),
-`amplitudeX` and `amplitudeY` (pixels, >= 0, default 10), `rollAmount` (degrees, >= 0, default 0.5)
-are animatable with operand sockets; `frequency` (Hz, default 2), `octaves` (1 to 4, default 2),
-`roughness` (0 to 1, default 0.35), `smoothing` (0 to 1, default 0), `seed` (integer 0 to 999999, default 1 in the
+`amplitudeX` and `amplitudeY` (pixels, >= 0, default 10), `rollAmount` (degrees, >= 0, default 0.5),
+`frequency` (Hz, default 2), `roughness` (0 to 1, default 0.35) and `smoothing` (0 to 1, default 0)
+are animatable with operand sockets (the shake operation reads each at the frame, so a keyed
+frequency is the motion's noise at that frame's own frequency: a changing frequency re-times the
+noise rather than integrating a phase); `octaves` (1 to 4, default 2), `seed` (integer 0 to 999999, default 1 in the
 definition; AddNode stores a seed hashed from the new node's id modulo 1000000, so two new nodes in a
 project differ and the seed is an ordinary saved constant. The project's own id is a constant (1) in
 today's files, so it is not mixed in: the first shake of two projects can share a seed, and Randomise

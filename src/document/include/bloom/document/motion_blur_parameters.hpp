@@ -315,18 +315,18 @@ inline constexpr std::array kTransformMotionBlurParameters{
     boolean("jitter", "Jitter samples"),
 };
 
-// #512 Camera Shake. The amplitudes and the roll are animatable and have sockets; the style,
-// frequency, octaves, roughness, smoothing, seed, loop and overscan choose the arithmetic and are
-// constants. The motion blur follows Transform 2D's: off by default, the same shutter.
+// #512 Camera Shake. The amplitudes, the roll, the frequency, the roughness and the smoothing are
+// animatable and have sockets; the style, octaves, seed, loop and overscan choose the arithmetic
+// and are constants. The motion blur follows Transform 2D's: off by default, the same shutter.
 inline constexpr std::array kCameraShakeParameters{
     choice("mode", kShakeModes, kShakeModeHandheld, "Style"),
     scalar("amplitudeX", 10.0, 0.0, 4096.0, "Amplitude X", 0.0, 100.0, 0.5, 1, "px"),
     scalar("amplitudeY", 10.0, 0.0, 4096.0, "Amplitude Y", 0.0, 100.0, 0.5, 1, "px"),
     scalar("rollAmount", 0.5, 0.0, 90.0, "Roll amount", 0.0, 5.0, 0.05, 2, "\xc2\xb0"),
-    constantScalar("frequency", 2.0, 0.05, 30.0, "Frequency", 0.1, 10.0, 0.05, 2, "Hz"),
+    scalar("frequency", 2.0, 0.05, 30.0, "Frequency", 0.1, 10.0, 0.05, 2, "Hz"),
     integer("octaves", 2, 1, 4, "Octaves"),
-    constantScalar("roughness", 0.35, 0.0, 1.0, "Roughness", 0.0, 1.0, 0.01, 2),
-    constantScalar("smoothing", 0.0, 0.0, 1.0, "Smoothing", 0.0, 1.0, 0.01, 2),
+    scalar("roughness", 0.35, 0.0, 1.0, "Roughness", 0.0, 1.0, 0.01, 2),
+    scalar("smoothing", 0.0, 0.0, 1.0, "Smoothing", 0.0, 1.0, 0.01, 2),
     integer("seed", 1, 0, 999999, "Seed"),
     boolean("loop", "Loop"),
     constantScalar("loopLength", 4.0, 0.1, 600.0, "Loop length", 0.5, 30.0, 0.1, 1, "s"),

@@ -1083,9 +1083,14 @@ void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,
     const auto* amplitudeX = asScalar(operandOf(kernel.amplitudeX));
     const auto* amplitudeY = asScalar(operandOf(kernel.amplitudeY));
     const auto* roll = asScalar(operandOf(kernel.roll));
-    if (amplitudeX == nullptr || amplitudeY == nullptr || roll == nullptr) {
+    const auto* frequency = asScalar(operandOf(kernel.frequency));
+    const auto* roughness = asScalar(operandOf(kernel.roughness));
+    const auto* smoothing = asScalar(operandOf(kernel.smoothing));
+    if (amplitudeX == nullptr || amplitudeY == nullptr || roll == nullptr || frequency == nullptr ||
+        roughness == nullptr || smoothing == nullptr) {
         fail(operation, kernel.amplitudeX.id, "Camera Shake operand has the wrong kind",
-             "The amplitudes and the roll must reach the kernel as Scalars.");
+             "The amplitudes, the roll, the frequency, the roughness and the smoothing must "
+             "reach the kernel as Scalars.");
         write(operation, 0, document::Vec2d{});
         write(operation, 1, 0.0);
         write(operation, 2, document::Vec2d{1.0, 1.0});
@@ -1093,7 +1098,13 @@ void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,
     }
     const double frameRate = static_cast<double>(rate_.numerator()) /
                              static_cast<double>(rate_.denominator());
-    const auto sample = core::camera_shake::evaluate(kernel.settings, time_.toSeconds(), frameRate);
+    // A driven frequency may leave its domain; the shake needs a positive one, the other two are
+    // clamped by the motion itself.
+    auto settings = kernel.settings;
+    settings.frequency = std::isfinite(*frequency) ? std::clamp(*frequency, 0.05, 30.0) : 1.0;
+    settings.roughness = *roughness;
+    settings.smoothing = *smoothing;
+    const auto sample = core::camera_shake::evaluate(settings, time_.toSeconds(), frameRate);
     const double scale =
         kernel.overscan ? core::camera_shake::fillScale(*amplitudeX, *amplitudeY, *roll,
                                                         kernel.width, kernel.height)

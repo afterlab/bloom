@@ -324,12 +324,9 @@ lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     const auto* seed = parameterConstant<std::int64_t>(runtime::detail::findParameterBinding(node, "seed"));
     const auto* octaves =
         parameterConstant<std::int64_t>(runtime::detail::findParameterBinding(node, "octaves"));
-    const auto* frequency =
-        parameterConstant<double>(runtime::detail::findParameterBinding(node, "frequency"));
-    const auto* roughness =
-        parameterConstant<double>(runtime::detail::findParameterBinding(node, "roughness"));
-    const auto* smoothing =
-        parameterConstant<double>(runtime::detail::findParameterBinding(node, "smoothing"));
+    const auto frequency = valueOperand(node, definition, "frequency");
+    const auto roughness = valueOperand(node, definition, "roughness");
+    const auto smoothing = valueOperand(node, definition, "smoothing");
     const auto* loop = parameterConstant<bool>(runtime::detail::findParameterBinding(node, "loop"));
     const auto* loopLength =
         parameterConstant<double>(runtime::detail::findParameterBinding(node, "loopLength"));
@@ -337,17 +334,20 @@ lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         parameterConstant<bool>(runtime::detail::findParameterBinding(node, "overscan"));
     if (!amplitudeX || !amplitudeY || !roll || !mode || *mode < document::kShakeModeHandheld ||
         *mode > document::kShakeModeGateWeave || !seed || *seed < 0 || !octaves || *octaves < 1 ||
-        *octaves > 4 || !frequency || !(*frequency > 0.0) || !roughness || !smoothing || !loop ||
+        *octaves > 4 || !frequency || !roughness || !smoothing || !loop ||
         !loopLength || !(*loopLength > 0.0) || !overscan)
         return std::nullopt;
     runtime::CompiledValueShake shake;
     shake.settings = {static_cast<core::camera_shake::Mode>(*mode),
                       *seed,
-                      *frequency,
+                      2.0,
                       *loop ? *loopLength : 0.0,
                       static_cast<int>(*octaves),
-                      *roughness,
-                      *smoothing};
+                      0.35,
+                      0.0};
+    shake.frequency = *frequency;
+    shake.roughness = *roughness;
+    shake.smoothing = *smoothing;
     shake.amplitudeX = *amplitudeX;
     shake.amplitudeY = *amplitudeY;
     shake.roll = *roll;

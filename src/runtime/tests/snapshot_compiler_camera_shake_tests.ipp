@@ -111,6 +111,32 @@ void testCameraShake(Expectations& expectations) {
         }
     }
 
+    // The frequency, the roughness and the smoothing are operands, animatable and driven like the
+    // amplitudes: their values at the frame are the motion's.
+    {
+        auto fixture = recipeFixture(kCameraShakeNodeType, {{"seed", std::int64_t{9}},
+                                                            {"frequency", 5.0},
+                                                            {"roughness", 0.8},
+                                                            {"smoothing", 0.4}});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        const auto first = result.plan ? shakeOutput(*result.plan, node) : std::nullopt;
+        expectations.expect(first.has_value(), "Camera Shake with moved motion operands compiles");
+        for (const std::int64_t t : {0, 2, 5}) {
+            if (!first)
+                break;
+            const auto evaluated = evaluateAt(result, core::RationalTime::fromInteger(t), true);
+            const auto unit = core::camera_shake::evaluate(
+                {core::camera_shake::Mode::Handheld, 9, 5.0, 0.0, 2, 0.8, 0.4},
+                static_cast<double>(t), 24.0);
+            const auto* offset =
+                evaluated.frame() ? std::get_if<Vec2d>(&evaluated.frame()->valueOutputs()[*first])
+                                  : nullptr;
+            expectations.expect(offset != nullptr && *offset == Vec2d{10.0 * unit.x, 10.0 * unit.y},
+                                "the shake follows its frequency, roughness and smoothing");
+        }
+    }
+
     // The values it publishes are the transform it applies: the same picture as a Transform 2D
     // holding those values.
     {
