@@ -85,6 +85,20 @@ QString valueText(const runtime::CompiledValue& value) {
         },
         value);
 }
+// What Properties and the card show for an output: Camera Shake's offset and roll as its own fields
+// show them (two decimals, with their units); everything else keeps the exact text.
+QString readoutText(const document::NodeRecord& node, const std::string_view port,
+                    const runtime::CompiledValue& value) {
+    if (node.typeId == document::kCameraShakeNodeType) {
+        if (const auto* offset = std::get_if<document::Vec2d>(&value))
+            return QObject::tr("X %1 px, Y %2 px")
+                .arg(offset->x, 0, 'f', 2)
+                .arg(offset->y, 0, 'f', 2);
+        if (const auto* roll = std::get_if<double>(&value); roll != nullptr && port == "roll")
+            return QObject::tr("%1\u00b0").arg(*roll, 0, 'f', 2);
+    }
+    return valueText(value);
+}
 } // namespace
 struct DrivenValueResolver::ProbeCache final {
     std::mutex mutex;
@@ -231,7 +245,7 @@ void DrivenValueResolver::start() {
                         const auto index = operation.firstOutput.value() + *slot;
                         if (index < evaluatedOutputs.size())
                             values->outputs[{node->id, output.name}] =
-                                valueText(evaluatedOutputs[index]);
+                                readoutText(*node, output.name, evaluatedOutputs[index]);
                     }
                 }
                 for (auto id : parameters) {
