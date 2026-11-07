@@ -95,13 +95,24 @@ bool motionRoleRead(const CompositionSession& session, const document::NodeId no
     // The shutter's own rows, on every node that has them.
     if (role == "shutterPhase"sv)
         return liveInteger(session, node, "shutterOffset") == document::kShutterOffsetCustom &&
-               (typeId != document::kTransform2DNodeType || liveBool(session, node, "motionBlur"));
+               ((typeId != document::kTransform2DNodeType && typeId != document::kCameraShakeNodeType) || liveBool(session, node, "motionBlur"));
     if (role == "shutterShape"sv)
         return liveInteger(session, node, "shutterCurve") == document::kShutterCurveCustom &&
-               (typeId != document::kTransform2DNodeType || liveBool(session, node, "motionBlur"));
+               ((typeId != document::kTransform2DNodeType && typeId != document::kCameraShakeNodeType) || liveBool(session, node, "motionBlur"));
     if (role == "minSamples"sv || role == "maxSamples"sv)
         return quality == document::kMotionQualityFinal &&
-               (typeId != document::kTransform2DNodeType || liveBool(session, node, "motionBlur"));
+               ((typeId != document::kTransform2DNodeType && typeId != document::kCameraShakeNodeType) || liveBool(session, node, "motionBlur"));
+    if (typeId == document::kCameraShakeNodeType) {
+        if (role == "shutterAngle"sv || role == "shutterOffset"sv || role == "shutterCurve"sv ||
+            role == "quality"sv || role == "jitter"sv)
+            return liveBool(session, node, "motionBlur");
+        if (role == "loopLength"sv)
+            return liveBool(session, node, "loop");
+        // Impact rings from its own hits; the octaves shape the other two styles' noise.
+        if (role == "octaves"sv || role == "roughness"sv)
+            return liveInteger(session, node, "mode") != document::kShakeModeImpact;
+        return true;
+    }
     if (typeId == document::kTransform2DNodeType) {
         if (role == "shutterAngle"sv || role == "shutterOffset"sv || role == "shutterCurve"sv ||
             role == "quality"sv || role == "jitter"sv)

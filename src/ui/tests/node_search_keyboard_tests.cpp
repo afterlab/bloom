@@ -607,7 +607,9 @@ void testSearchKeyboardAndMenus() {
                  {"Cryptomatte", "Image to Mask", "Luma Key", "Mask", "Mask Combine", "Matte Blur",
                   "Matte Dilate", "Matte Erode"},
                  "Keying & Mattes holds the keys and mattes");
-        hasGroup("Transform", {"Crop", "Fit", "Flip", "Pad", "Resize", "Rotate 90", "Transform 2D"},
+        hasGroup("Transform",
+                 {"Camera Shake", "Crop", "Fit", "Flip", "Pad", "Resize", "Rotate 90",
+                  "Transform 2D"},
                  "Transform holds the geometric operations");
         hasGroup("Blur & Sharpen",
                  {"Box Blur", "Directional Blur", "Gaussian Blur", "Motion Blur", "Optical Flow",

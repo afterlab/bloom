@@ -5,6 +5,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 
@@ -129,6 +130,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
         return QStringLiteral("film grain noise add finishing stock analogue analog regrain");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
+    // #512.
+    if (typeId == document::kCameraShakeNodeType)
+        return QStringLiteral("camera shake handheld jitter wobble earthquake impact explosion "
+                              "gate weave film gate bump shaky");
     // #505.
     if (typeId == document::kVignetteNodeType)
         return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "

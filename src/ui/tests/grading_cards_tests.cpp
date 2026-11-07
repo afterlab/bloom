@@ -31,6 +31,7 @@
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
@@ -758,6 +759,81 @@ void filmGrainCard() {
             expect(undone && monochrome() == false, "undo turns Monochrome off");
         }
     }
+}
+
+// #512: the Camera Shake card draws the roll amount as a dial and the shutter only with its motion
+// blur on, hides the loop length until Loop is on and the octaves under Impact, and its Randomise
+// seed button is one command that gives the node a new seed. A new node already has a seed of its
+// own, not the definition's.
+void cameraShakeCard() {
+    CardFixture fixture(document::kCameraShakeNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Camera Shake draws its controls card");
+    if (card == nullptr)
+        return;
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "camera shake paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "camera-shake"))
+        ++failures;
+    capture(fixture, QStringLiteral("camera-shake"));
+    const auto seedOf = [&]() -> std::optional<std::int64_t> {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "seed");
+        const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+        const auto* value = live ? std::get_if<std::int64_t>(&*live) : nullptr;
+        return value ? std::optional(*value) : std::nullopt;
+    };
+    const auto first = seedOf();
+    expect(first && *first != 1, "a new Camera Shake has a seed of its own");
+    bool dial = false;
+    for (const auto* angle : card->angleRows())
+        dial = dial || angle->role() == "rollAmount";
+    expect(dial, "the roll amount is a dial");
+    expect(card->showsRole("amplitudeX") && card->showsRole("amplitudeY") && card->showsRole("seed") &&
+               card->showsRole("overscan") && card->showsRole("octaves") &&
+               !card->showsRole("loopLength") && !card->showsRole("quality") &&
+               !card->showsRole("rollAmount"),
+           "the card shows the amounts and hides the loop length and shutter until they are read");
+    expect(card->socketY("rollAmount").has_value(), "the roll dial carries its socket");
+
+    // Randomise seed.
+    auto* randomise = card->findChild<ui::kit::KButton*>(QStringLiteral("randomiseSeed"));
+    expect(randomise != nullptr && randomise->isEnabled(), "the card has a Randomise seed button");
+    if (randomise != nullptr) {
+        const auto commands = fixture.stack.size();
+        randomise->click();
+        QApplication::processEvents();
+        const auto second = seedOf();
+        expect(fixture.stack.size() == commands + 1 && second && first && *second != *first &&
+                   *second >= 0,
+               "Randomise seed is one command that sets a new seed");
+        expect(fixture.session.undo() && seedOf() == first, "undo restores the seed");
+    }
+
+    // Loop reveals the loop length; the motion blur reveals the shutter.
+    const auto set = [&](const std::string& role, const document::ParameterValue& value) {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
+        expect(id && fixture.session.setParameterValue(*id, value, QStringLiteral("Set")),
+               "a value is set");
+        QApplication::processEvents();
+    };
+    set("loop", true);
+    expect(card->showsRole("loopLength"), "Loop shows the loop length");
+    set("motionBlur", true);
+    expect(card->showsRole("quality") && card->showsRole("shutterOffset"),
+           "Motion blur shows the shutter's rows");
+    bool shutterDial = false;
+    for (const auto* angle : card->angleRows())
+        shutterDial = shutterDial || angle->role() == "shutterAngle";
+    expect(shutterDial, "the shutter angle is a dial");
+    capture(fixture, QStringLiteral("camera-shake-motion-blur"));
+    set("mode", std::int64_t{1});
+    expect(!card->showsRole("octaves") && !card->showsRole("roughness"),
+           "Impact hides the octaves and roughness");
+    capture(fixture, QStringLiteral("camera-shake-impact"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -1858,6 +1934,7 @@ int main(int argc, char** argv) {
     lensFlareCard();
     filmGrainCard();
     sharpenCard();
+    cameraShakeCard();
     depthEffectCards();
     motionBlurCards();
     nodeControlCards();

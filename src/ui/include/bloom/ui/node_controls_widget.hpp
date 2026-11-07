@@ -45,6 +45,7 @@ class GradientParameterRow;
 class GradingValueRow;
 namespace kit {
 class KAngleDial;
+class KButton;
 class KLabel;
 class KPointPad;
 class KRangeSelector;
@@ -228,6 +229,8 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     std::vector<RangeRow*> ranges_;
     std::vector<AngleDialRow*> angles_;
     std::vector<CurveControl> curves_;
+    // #512: sets the node's `seed` to a new random value (Camera Shake).
+    kit::KButton* randomise_ = nullptr;
 };
 
 } // namespace bloom::ui
