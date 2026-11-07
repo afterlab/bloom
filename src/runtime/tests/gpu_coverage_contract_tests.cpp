@@ -442,6 +442,12 @@ displayProofRunner(const bool customView) {
                        transform2D(151000, {-0.75, 1.5}, {0.5, 2.0}, -90.0,
                                    bloom::runtime::Transform2DExtent::Display),
                        151000, "src/runtime Transform 2D production affine preparation");
+    // #512 Camera Shake lowers to this same Transform 2D (the shake's translation, roll and
+    // overscan scale arrive as resolved values): a small rolled, overscanned, sub-pixel move.
+    addImageEffectPlan("node.bloom.camera-shake",
+                       transform2D(158000, {3.25, -1.75}, {1.03, 1.03}, 0.75,
+                                   bloom::runtime::Transform2DExtent::Input),
+                       158000, "src/runtime Transform 2D production affine preparation");
     add(
         "effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); }, {},

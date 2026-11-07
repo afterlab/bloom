@@ -1946,6 +1946,30 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Transform 2D parameters could not be lowered.");
         return std::nullopt;
     }
+    // #512 Camera Shake: Transform 2D (the same kernel, resampler and motion blur) driven by the
+    // node's shake value operation, which the value pass compiled (lowerShakeKernel) so that its
+    // offset and roll outputs can drive other parameters.
+    if (node.typeId == document::kCameraShakeNodeType) {
+        const auto offset = valueOutputs_.find(
+            ValueOutputKey{node.id, std::string(document::kCameraShakeOffsetPort)});
+        if (offset == valueOutputs_.end()) {
+            addTopologyFailure(node.id, "Camera Shake parameters could not be lowered.");
+            return std::nullopt;
+        }
+        const auto output = [&](const std::size_t slot) {
+            return runtime::ValueOutputIndex::fromRaw(offset->second.value() + slot);
+        };
+        runtime::Transform2DKernel transform{
+            runtime::CompiledVec2Parameter{{}, output(0)},
+            runtime::CompiledVec2Parameter{{}, document::Vec2d{}},
+            runtime::CompiledVec2Parameter{{}, output(2)},
+            runtime::CompiledScalarParameter{{}, output(1)},
+            runtime::Transform2DExtent::Input,
+            runtime::kResampleFilterBilinear};
+        if (auto blurred = transformMotionBlurKernel(node, transform))
+            return runtime::CompiledImageEffect{node.id, *input, std::move(*blurred)};
+        return runtime::CompiledImageEffect{node.id, *input, std::move(transform)};
+    }
     if (node.typeId == "bloom.resize" || node.typeId == "bloom.fit") {
         const auto* width = parameterConstant<std::int64_t>(findParameterBinding(node, "width"));
         const auto* height = parameterConstant<std::int64_t>(findParameterBinding(node, "height"));

@@ -313,6 +313,50 @@ selector(const document::NodeRecord& node, const std::string_view role, Mapper&&
     return stored == nullptr ? std::nullopt : std::optional(*stored);
 }
 
+// #512 Camera Shake's shake operation: an image node that also publishes values, so it is compiled
+// with the value graph. Its three outputs are the offset, the roll and the scale.
+[[nodiscard]] std::optional<runtime::CompiledValueKernel>
+lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition& definition) {
+    const auto amplitudeX = valueOperand(node, definition, "amplitudeX");
+    const auto amplitudeY = valueOperand(node, definition, "amplitudeY");
+    const auto roll = valueOperand(node, definition, "rollAmount");
+    const auto* mode = parameterConstant<std::int64_t>(runtime::detail::findParameterBinding(node, "mode"));
+    const auto* seed = parameterConstant<std::int64_t>(runtime::detail::findParameterBinding(node, "seed"));
+    const auto* octaves =
+        parameterConstant<std::int64_t>(runtime::detail::findParameterBinding(node, "octaves"));
+    const auto* frequency =
+        parameterConstant<double>(runtime::detail::findParameterBinding(node, "frequency"));
+    const auto* roughness =
+        parameterConstant<double>(runtime::detail::findParameterBinding(node, "roughness"));
+    const auto* smoothing =
+        parameterConstant<double>(runtime::detail::findParameterBinding(node, "smoothing"));
+    const auto* loop = parameterConstant<bool>(runtime::detail::findParameterBinding(node, "loop"));
+    const auto* loopLength =
+        parameterConstant<double>(runtime::detail::findParameterBinding(node, "loopLength"));
+    const auto* overscan =
+        parameterConstant<bool>(runtime::detail::findParameterBinding(node, "overscan"));
+    if (!amplitudeX || !amplitudeY || !roll || !mode || *mode < document::kShakeModeHandheld ||
+        *mode > document::kShakeModeGateWeave || !seed || *seed < 0 || !octaves || *octaves < 1 ||
+        *octaves > 4 || !frequency || !(*frequency > 0.0) || !roughness || !smoothing || !loop ||
+        !loopLength || !(*loopLength > 0.0) || !overscan)
+        return std::nullopt;
+    runtime::CompiledValueShake shake;
+    shake.settings = {static_cast<core::camera_shake::Mode>(*mode),
+                      *seed,
+                      *frequency,
+                      *loop ? *loopLength : 0.0,
+                      static_cast<int>(*octaves),
+                      *roughness,
+                      *smoothing};
+    shake.amplitudeX = *amplitudeX;
+    shake.amplitudeY = *amplitudeY;
+    shake.roll = *roll;
+    shake.overscan = *overscan;
+    shake.width = static_cast<double>(composition_->format().width());
+    shake.height = static_cast<double>(composition_->format().height());
+    return runtime::CompiledValueKernel{std::move(shake)};
+}
+
 [[nodiscard]] std::optional<runtime::CompiledValueKernel>
 lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition& definition) {
     using namespace document;
@@ -626,15 +670,17 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         }
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
-        if (node == nullptr || definition == definitions_.end() || !isValueNode(nodeId)) {
+        const bool shake = node != nullptr && node->typeId == document::kCameraShakeNodeType;
+        if (node == nullptr || definition == definitions_.end() || (!isValueNode(nodeId) && !shake)) {
             continue;
         }
-        auto kernel = lowerValueKernel(*node, *definition->second);
+        auto kernel = shake ? lowerShakeKernel(*node, *definition->second)
+                            : lowerValueKernel(*node, *definition->second);
         if (!kernel.has_value()) {
             addTopologyFailure(nodeId, "A reachable value node could not be lowered.");
             return false;
         }
-        const auto outputCount = definition->second->outputs.size();
+        const std::size_t outputCount = shake ? 3 : definition->second->outputs.size();
         const auto first = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
         bool requiresPostImage =
             std::holds_alternative<runtime::CompiledBoundsReadout>(*kernel);
@@ -646,9 +692,17 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         valueOperations_.push_back(runtime::CompiledValueOperation{
             nodeId, first, static_cast<std::uint8_t>(outputCount), *std::move(kernel),
             requiresPostImage});
-        for (std::size_t slot = 0; slot < outputCount; ++slot) {
-            valueOutputs_.emplace(ValueOutputKey{nodeId, definition->second->outputs[slot].name},
-                                  runtime::ValueOutputIndex::fromRaw(valueOutputCount_ + slot));
+        if (shake) {
+            valueOutputs_.emplace(ValueOutputKey{nodeId, std::string(document::kCameraShakeOffsetPort)},
+                                  runtime::ValueOutputIndex::fromRaw(valueOutputCount_));
+            valueOutputs_.emplace(ValueOutputKey{nodeId, std::string(document::kCameraShakeRollPort)},
+                                  runtime::ValueOutputIndex::fromRaw(valueOutputCount_ + 1));
+        } else {
+            for (std::size_t slot = 0; slot < outputCount; ++slot) {
+                valueOutputs_.emplace(
+                    ValueOutputKey{nodeId, definition->second->outputs[slot].name},
+                    runtime::ValueOutputIndex::fromRaw(valueOutputCount_ + slot));
+            }
         }
         postImageValueOutputs_.resize(valueOutputCount_ + outputCount, 0);
         if (requiresPostImage)

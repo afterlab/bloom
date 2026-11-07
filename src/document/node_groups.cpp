@@ -27,10 +27,10 @@ constexpr std::array<std::string_view, 7> kChannels{
 constexpr std::array<std::string_view, 8> kKeyingMattes{
     "bloom.luma-key",      "bloom.cryptomatte", "bloom.mask",         "bloom.mask-combine",
     "bloom.image-to-mask", "bloom.matte-blur",  "bloom.matte-dilate", "bloom.matte-erode"};
-// Planned: Camera Shake, Tile & Mirror.
-constexpr std::array<std::string_view, 7> kTransform{
-    "bloom.transform-2d", "bloom.crop", "bloom.pad",      "bloom.fit",
-    "bloom.resize",       "bloom.flip", "bloom.rotate-90"};
+// Planned: Tile & Mirror.
+constexpr std::array<std::string_view, 8> kTransform{
+    "bloom.transform-2d", "bloom.camera-shake", "bloom.crop", "bloom.pad",
+    "bloom.fit",          "bloom.resize",       "bloom.flip", "bloom.rotate-90"};
 // Planned: Corner Pin, ST Map, Displace, Procedural Warp, Lens Distortion, Chromatic Aberration.
 constexpr std::array<std::string_view, 0> kDistort{};
 // Planned: Denoise.

@@ -25,6 +25,7 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             });
         bool dependent = fieldAnimated ||
             std::holds_alternative<CompiledValueTime>(operation.kernel) ||
+            std::holds_alternative<CompiledValueShake>(operation.kernel) ||
             (sample != nullptr &&
              std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
             std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||

@@ -456,6 +456,8 @@ class Evaluator final {
                          const runtime::CompiledValueCombine& kernel);
     void evaluateRandom(const runtime::CompiledValueOperation& operation,
                         const runtime::CompiledValueRandom& kernel);
+    void evaluateShake(const runtime::CompiledValueOperation& operation,
+                       const runtime::CompiledValueShake& kernel);
     void evaluatePromotion(const runtime::CompiledValueOperation& operation,
                            const runtime::CompiledValuePromotion& kernel);
     void evaluateUtility(const runtime::CompiledValueOperation& operation,
@@ -511,6 +513,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateCombine(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueRandom>) {
                 evaluateRandom(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueShake>) {
+                evaluateShake(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueUtility>) {
                 evaluateUtility(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledBoundsReadout>) {
@@ -1072,6 +1076,31 @@ void Evaluator::evaluateRandom(const runtime::CompiledValueOperation& operation,
              "The minimum bound was substituted.");
     }
     write(operation, 0, outcome.value);
+}
+
+void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,
+                              const runtime::CompiledValueShake& kernel) {
+    const auto* amplitudeX = asScalar(operandOf(kernel.amplitudeX));
+    const auto* amplitudeY = asScalar(operandOf(kernel.amplitudeY));
+    const auto* roll = asScalar(operandOf(kernel.roll));
+    if (amplitudeX == nullptr || amplitudeY == nullptr || roll == nullptr) {
+        fail(operation, kernel.amplitudeX.id, "Camera Shake operand has the wrong kind",
+             "The amplitudes and the roll must reach the kernel as Scalars.");
+        write(operation, 0, document::Vec2d{});
+        write(operation, 1, 0.0);
+        write(operation, 2, document::Vec2d{1.0, 1.0});
+        return;
+    }
+    const double frameRate = static_cast<double>(rate_.numerator()) /
+                             static_cast<double>(rate_.denominator());
+    const auto sample = core::camera_shake::evaluate(kernel.settings, time_.toSeconds(), frameRate);
+    const double scale =
+        kernel.overscan ? core::camera_shake::fillScale(*amplitudeX, *amplitudeY, *roll,
+                                                        kernel.width, kernel.height)
+                        : 1.0;
+    write(operation, 0, document::Vec2d{*amplitudeX * sample.x, *amplitudeY * sample.y});
+    write(operation, 1, *roll * sample.roll);
+    write(operation, 2, document::Vec2d{scale, scale});
 }
 
 void Evaluator::evaluatePromotion(const runtime::CompiledValueOperation& operation,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/camera_shake.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/data_block.hpp>
@@ -309,13 +310,32 @@ struct CompiledValueFieldSample final {
                            const CompiledValueFieldSample&) noexcept;
 };
 
+// #512 Camera Shake: the node's seeded motion (core/camera_shake.hpp) at the frame being rendered,
+// scaled by its amplitudes, as the three values Transform 2D takes. Three outputs: the translation
+// (Vector 2, pixels), the roll (Scalar, degrees clockwise) and the scale (Vector 2: 1, or with
+// `overscan` the smallest scale that keeps a `width` by `height` frame covered at the largest
+// motion the amplitudes allow). The settings are constants; the amplitudes are operands, so they
+// animate and take drivers. Like a Time node it varies with the frame, which
+// analyzeTimeDependence knows.
+struct CompiledValueShake final {
+    core::camera_shake::Settings settings;
+    CompiledValueOperand amplitudeX;
+    CompiledValueOperand amplitudeY;
+    CompiledValueOperand roll;
+    bool overscan = true;
+    double width = 0.0;
+    double height = 0.0;
+
+    friend bool operator==(const CompiledValueShake&, const CompiledValueShake&) = default;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
-                 CompiledValueGradientSample, CompiledValueFieldSample>;
+                 CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -335,6 +355,10 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 for (const auto& operand : step.operands)
                     visit(operand);
                 visit(step.position);
+            } else if constexpr (std::is_same_v<Step, CompiledValueShake>) {
+                visit(step.amplitudeX);
+                visit(step.amplitudeY);
+                visit(step.roll);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {

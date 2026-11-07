@@ -40,6 +40,14 @@ inline constexpr std::string_view kEchoNodeType = "bloom.echo";
 inline constexpr std::string_view kDirectionalBlurNodeType = "bloom.directional-blur";
 inline constexpr std::string_view kSpinBlurNodeType = "bloom.spin-blur";
 inline constexpr std::string_view kZoomBlurNodeType = "bloom.zoom-blur";
+// #512 Camera Shake (Transform): a seeded handheld, impact or gate-weave shake applied as a
+// Transform 2D, with the same shutter for its motion blur. Its parameters live in this vocabulary
+// (camera_shake_parameters below) but it is not a motion-blur node: isMotionBlurNodeType is false.
+inline constexpr std::string_view kCameraShakeNodeType = "bloom.camera-shake";
+// Besides its Image, the shake publishes what it applied: `offset` (Vector 2, pixels) and `roll`
+// (Scalar, degrees clockwise).
+inline constexpr std::string_view kCameraShakeOffsetPort = "offset";
+inline constexpr std::string_view kCameraShakeRollPort = "roll";
 inline constexpr std::uint32_t kMotionBlurNodeSchemaVersion = 1;
 
 // The ports. Vector Motion Blur reads `vectors` (an Image or a channel set), an optional `depth`
@@ -126,6 +134,11 @@ inline constexpr std::int64_t kEchoOperatorMinimum = 2;
 inline constexpr std::int64_t kEchoOperatorScreen = 3;
 inline constexpr std::int64_t kEchoOperatorOver = 4;
 inline constexpr std::int64_t kEchoOperatorUnder = 5;
+
+// Camera Shake's style and edges.
+inline constexpr std::int64_t kShakeModeHandheld = 0;
+inline constexpr std::int64_t kShakeModeImpact = 1;
+inline constexpr std::int64_t kShakeModeGateWeave = 2;
 
 inline constexpr std::int64_t kMaximumMotionSamples = 64;
 inline constexpr std::int64_t kMaximumEchoes = 64;
@@ -286,8 +299,38 @@ inline constexpr std::array kSpinBlurParameters{
 inline constexpr std::array kZoomBlurParameters{
     BLOOM_RADIAL_PARAMETERS("amount", 0.1, -0.95, 16.0, "Zoom", -0.95, 1.0, "")};
 
+inline constexpr std::array<std::string_view, 3> kShakeModes{"Handheld", "Impact", "Gate weave"};
+
+// Auto overscan is on by default.
+inline constexpr DepthParameterSpec shakeOverscan() {
+    auto spec = boolean("overscan", "Auto overscan");
+    spec.value = {1.0, 0.0, 0.0, 0.0};
+    return spec;
+}
+
 // Transform 2D's motion blur: off by default; its shutter as the nodes'.
 inline constexpr std::array kTransformMotionBlurParameters{
+    boolean("motionBlur", "Motion blur"),
+    BLOOM_SHUTTER_PARAMETERS(kMotionQualityFinal),
+    boolean("jitter", "Jitter samples"),
+};
+
+// #512 Camera Shake. The amplitudes and the roll are animatable and have sockets; the style,
+// frequency, octaves, roughness, smoothing, seed, loop and overscan choose the arithmetic and are
+// constants. The motion blur follows Transform 2D's: off by default, the same shutter.
+inline constexpr std::array kCameraShakeParameters{
+    choice("mode", kShakeModes, kShakeModeHandheld, "Style"),
+    scalar("amplitudeX", 10.0, 0.0, 4096.0, "Amplitude X", 0.0, 100.0, 0.5, 1, "px"),
+    scalar("amplitudeY", 10.0, 0.0, 4096.0, "Amplitude Y", 0.0, 100.0, 0.5, 1, "px"),
+    scalar("rollAmount", 0.5, 0.0, 90.0, "Roll amount", 0.0, 5.0, 0.05, 2, "\xc2\xb0"),
+    constantScalar("frequency", 2.0, 0.05, 30.0, "Frequency", 0.1, 10.0, 0.05, 2, "Hz"),
+    integer("octaves", 2, 1, 4, "Octaves"),
+    constantScalar("roughness", 0.35, 0.0, 1.0, "Roughness", 0.0, 1.0, 0.01, 2),
+    constantScalar("smoothing", 0.0, 0.0, 1.0, "Smoothing", 0.0, 1.0, 0.01, 2),
+    integer("seed", 1, 0, 999999, "Seed"),
+    boolean("loop", "Loop"),
+    constantScalar("loopLength", 4.0, 0.1, 600.0, "Loop length", 0.5, 30.0, 0.1, 1, "s"),
+    shakeOverscan(),
     boolean("motionBlur", "Motion blur"),
     BLOOM_SHUTTER_PARAMETERS(kMotionQualityFinal),
     boolean("jitter", "Jitter samples"),
@@ -329,6 +372,8 @@ motionBlurParameters(const std::string_view typeId) noexcept {
         return motion_parameters::kZoomBlurParameters;
     if (typeId == kTransform2DNodeType)
         return motion_parameters::kTransformMotionBlurParameters;
+    if (typeId == kCameraShakeNodeType)
+        return motion_parameters::kCameraShakeParameters;
     return {};
 }
 
@@ -338,7 +383,7 @@ motionParameterSpec(const std::string_view schemaKey) noexcept {
     for (const auto type :
          {kMotionBlurNodeType, kVectorMotionBlurNodeType, kOpticalFlowNodeType,
           kOpticalFlowMotionBlurNodeType, kEchoNodeType, kDirectionalBlurNodeType,
-          kSpinBlurNodeType, kZoomBlurNodeType, kTransform2DNodeType}) {
+          kSpinBlurNodeType, kZoomBlurNodeType, kTransform2DNodeType, kCameraShakeNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

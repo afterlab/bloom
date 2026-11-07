@@ -155,8 +155,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
-    // Zoom Blur.
-    expectations.expect(registry.definitions().size() == 187,
+    // Zoom Blur; #512 adds Camera Shake.
+    expectations.expect(registry.definitions().size() == 188,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -303,6 +303,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         "#504: Colorize has its constant choices and an animatable socket per value");
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
+    expectCategory({"bloom.camera-shake"}, document::NodeCategory::Transform);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
                     "bloom.sharpen"},

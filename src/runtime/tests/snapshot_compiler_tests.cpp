@@ -1,3 +1,4 @@
+#include <bloom/core/camera_shake.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <map>
@@ -1926,6 +1927,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_mute_tests.ipp"
 #include "snapshot_compiler_recipe_tests.ipp"
 #include "snapshot_compiler_motion_tests.ipp"
+#include "snapshot_compiler_camera_shake_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 
 } // namespace
@@ -1958,6 +1960,7 @@ int main() {
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);
         testMotionBlurLowering(expectations);
+        testCameraShake(expectations);
         testSharpenLowering(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);

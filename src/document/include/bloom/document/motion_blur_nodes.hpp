@@ -17,6 +17,9 @@ namespace bloom::document {
                                                const ParameterValue& value) noexcept;
 // The registered definition of a motion-blur node (before the effect mask is appended).
 [[nodiscard]] NodeDefinition motionBlurDefinition(std::string_view typeId);
+// #512 Camera Shake's registered definition: Transform group, the image in and out, the animatable
+// amounts' sockets, then every parameter of camera_shake_parameters.
+[[nodiscard]] NodeDefinition cameraShakeDefinition();
 // Transform 2D's optional motion blur parameters, appended to its six (not required: a node saved
 // before #484 has none and renders without motion blur; opening it binds them at their defaults).
 [[nodiscard]] std::vector<ParameterDefinition> transformMotionBlurParameterDefinitions();

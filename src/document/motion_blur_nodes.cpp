@@ -171,6 +171,16 @@ NodeDefinition motionBlurDefinition(const std::string_view typeId) {
     return definition;
 }
 
+NodeDefinition cameraShakeDefinition() {
+    auto definition = motionBlurDefinition(kCameraShakeNodeType);
+    definition.category = NodeCategory::Transform;
+    // The shake itself, for any other parameter: the translation applied in pixels (Transform 2D's
+    // translate) and the roll applied in degrees clockwise (its rotation).
+    definition.outputs.push_back({std::string(kCameraShakeOffsetPort), SocketValueKind::Vector2});
+    definition.outputs.push_back({std::string(kCameraShakeRollPort), SocketValueKind::Scalar});
+    return definition;
+}
+
 std::vector<ParameterDefinition> transformMotionBlurParameterDefinitions() {
     std::vector<ParameterDefinition> parameters;
     for (const auto& parameter : motionBlurParameters(kTransform2DNodeType))

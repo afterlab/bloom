@@ -6,7 +6,9 @@
 #include "node_operation_support.hpp"
 #include "render_footprint.hpp"
 
+#include <bloom/core/value_primitives.hpp>
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/persisted_text.hpp>
 
@@ -143,6 +145,12 @@ OperationResult AddNode::apply(document::Draft& draft) const {
                         ? document::Vec2d{static_cast<double>(composition->format().width()),
                                           static_cast<double>(composition->format().height()) / 2.0}
                         : document::Vec2d{static_cast<double>(composition->format().width()), 0.0};
+        // #512: a new Camera Shake gets a seed of its own, hashed from its node id, so two shakes
+        // added with default settings never move together. It is an ordinary stored constant.
+        else if (parameter.schemaKey == document::motionSchemaKey(document::kCameraShakeNodeType, "seed"))
+            value = static_cast<std::int64_t>(
+                core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
+                1'000'000ULL);
         else if (parameter.schemaKey == document::kPositionParameterSchemaKey)
             value = document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                                     static_cast<double>(composition->format().height()) / 2.0};

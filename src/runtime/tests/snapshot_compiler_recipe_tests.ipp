@@ -12,9 +12,10 @@ struct RecipeFixture final {
 recipeFixture(const std::string_view type,
               const std::unordered_map<std::string, document::ParameterValue>& values = {},
               const std::vector<std::string>& secondSolidPorts = {},
-              const std::string_view outputPort = "image") {
+              const std::string_view outputPort = "image", const bool singleLayer = false) {
     using namespace document;
-    RecipeFixture fixture{makeProject(), NodeId::fromRaw(1300), {}};
+    RecipeFixture fixture{makeProject(singleLayer ? singleLayerOptions() : ProjectOptions{}),
+                          NodeId::fromRaw(1300), {}};
     auto* composition = fixture.project.findComposition(kCompositionId);
     auto& graph = composition->graph();
     const auto* definition = builtInNodeDefinitions().find(

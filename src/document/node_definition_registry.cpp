@@ -578,6 +578,9 @@ template <typename Definition>
         // #484 the motion-blur nodes: the exact generated shapes.
         if (isMotionBlurNodeType(definition.key.typeId))
             return definition == motionBlurDefinition(definition.key.typeId);
+        // #512 Camera Shake: the exact generated shape.
+        if (definition.key.typeId == kCameraShakeNodeType)
+            return definition == cameraShakeDefinition();
         // #486 Sharpen: the exact generated shape.
         if (definition.key.typeId == kSharpenNodeType)
             return definition == sharpenDefinition();
@@ -1669,6 +1672,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         vignetteDefinition(),
         filmGrainDefinition(),
         sharpenDefinition(),
+        cameraShakeDefinition(),
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),
         lensFlareDefinition(),

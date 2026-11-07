@@ -982,6 +982,36 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{257.0});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *sharpenThreshold,
                                ConstantValueSource{-0.1});
+
+    // #512 Camera Shake: each new node gets a seed of its own (two default nodes never shake
+    // alike), stored as an ordinary constant that edits within its domain; its Seed edits and
+    // refuses outside it, and its outputs offer the shake to other parameters.
+    const auto shakeA = addRecipe("bloom.camera-shake");
+    const auto shakeB = addRecipe("bloom.camera-shake");
+    const auto seedA = shakeA.outputId<ParameterId>("parameter.seed");
+    const auto seedB = shakeB.outputId<ParameterId>("parameter.seed");
+    const auto shakeAmplitude = shakeA.outputId<ParameterId>("parameter.amplitudeX");
+    if (!seedA || !seedB || !shakeAmplitude)
+        throw std::logic_error("Camera Shake exposes registered control identities");
+    const auto seedOf = [&](const ParameterId id) {
+        const auto* record = composition(fixture.document.snapshot()).parameters().find(id);
+        const auto* constant =
+            record ? std::get_if<ConstantValueSource>(&record->source) : nullptr;
+        const auto* seed = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+        if (!seed)
+            throw std::logic_error("Camera Shake seed is an integer constant");
+        return *seed;
+    };
+    test.expect(seedOf(*seedA) != seedOf(*seedB), "two new Camera Shake nodes have different seeds");
+    test.expect(seedOf(*seedA) >= 0 && seedOf(*seedB) >= 0, "a new Camera Shake seed is in range");
+    (void)exercise<SetParameterSource>(test, fixture, *seedA,
+                                       ConstantValueSource{std::int64_t{987654}});
+    test.expect(seedOf(*seedA) == 987654, "a Camera Shake seed can be set");
+    (void)exercise<SetParameterSource>(test, fixture, *shakeAmplitude, ConstantValueSource{24.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *seedA,
+                               ConstantValueSource{std::int64_t{-1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *shakeAmplitude,
+                               ConstantValueSource{-1.0});
 }
 
 void testAddAndLayout(TestContext& test) {

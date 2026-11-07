@@ -1,5 +1,6 @@
 #include "zip_container_test_support.hpp"
 
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -178,7 +179,7 @@ void blurNodeReopen() {
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen"}) {
+          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -266,6 +267,22 @@ void blurNodeReopen() {
                 : parameter.valueKind == document::ParameterValueKind::Float64 &&
                         parameter.schemaKey.starts_with("bloom.film-grain.")
                     ? document::ParameterValue{0.625}
+                // #512 Camera Shake: its own seed, a loop and moved values.
+                : parameter.schemaKey == "bloom.camera-shake.seed"
+                    ? document::ParameterValue{std::int64_t{424242}}
+                : parameter.schemaKey == "bloom.camera-shake.mode"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.camera-shake.loop"
+                    ? document::ParameterValue{true}
+                : parameter.schemaKey.starts_with("bloom.camera-shake.") &&
+                        parameter.valueKind == document::ParameterValueKind::Float64
+                    ? document::ParameterValue{0.5}
+                : parameter.schemaKey.starts_with("bloom.camera-shake.") &&
+                        parameter.valueKind == document::ParameterValueKind::Boolean
+                    ? document::ParameterValue{true}
+                : parameter.schemaKey.starts_with("bloom.camera-shake.") &&
+                        parameter.valueKind == document::ParameterValueKind::Path
+                    ? document::ParameterValue{document::defaultShutterCurve()}
                 // #486 Sharpen: moved values.
                 : parameter.schemaKey.starts_with("bloom.sharpen.")
                     ? document::ParameterValue{0.625}
