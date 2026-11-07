@@ -23,8 +23,10 @@ frame, an export and a second machine agree, and the CPU and the GPU draw the sa
 
 **Amplitude X** and **Amplitude Y** are the largest the picture moves sideways and up and down, in
 full-resolution pixels, so a preview looks like the full frame. Set one to 0 for a shake along one
-axis. **Roll amount** is the largest turn, in degrees; its dial turns clockwise, like Transform 2D's rotation.
-All three can be keyed or driven.
+axis. **Roll amount** is the largest turn, in degrees, on the row after Amplitude Y; its dial sits
+beside its field and turns clockwise, like Transform 2D's rotation. **Amplitude X**, **Amplitude Y**, **Roll amount**,
+**Frequency**, **Roughness** and **Smoothing** can all be keyed or driven. A keyed Frequency changes
+the pace of the movement at each frame; it does not slow or speed a movement already under way.
 
 **Smoothing** rounds the movement off by averaging it over a short window: 0 is untouched, 1
 averages over a whole interval, which takes the sharp edge off an impact and the frame-to-frame
@@ -33,7 +35,7 @@ nervousness off a gate weave.
 ## Seed
 
 **Seed** chooses which shake. Every new Camera Shake gets a seed of its own, so two nodes added with
-their defaults never move together. **Randomise seed** on the card gives the node a new seed in one
+their defaults never move together. **Randomise seed**, beside the Seed field on the card and in Properties, gives the node a new seed in one
 click; you can also type one, to match a shake you liked on another node. The seed (0 to 999999) is saved in the
 project. A copy of a Camera Shake keeps its seed and so shakes the same; use **Randomise seed** on
 the copy to make it different. Two projects can start with the same seed on their first node.
@@ -56,7 +58,8 @@ the picture keeps its own size and the moved edge shows as transparency.
 
 Turn on **Motion blur** and the picture is resampled along the shake across the shutter, exactly as
 Transform 2D's [motion blur](motion-blur.md#transform-2d): the same shutter angle, offset, curve,
-quality and jitter, shown on the card while it is on. It is off by default, because it costs one
+quality and jitter, shown on the card while it is on; the shutter angle is a dial on its row among
+them. It is off by default, because it costs one
 resample per sample.
 
 ## Using the shake elsewhere
@@ -64,7 +67,8 @@ resample per sample.
 Besides the picture, the node has two outputs: **Offset**, the movement it applied in pixels, and
 **Roll**, the turn in degrees. Connect them to any parameter that takes a vector or a number: shake a
 camera-locked title with the same movement, nudge a light, or drive a second Transform 2D to give a
-layer on top the same wobble. They are the exact values the picture was drawn with at that frame.
+layer on top the same wobble. They are the exact values the picture was drawn with at that frame, and
+Properties shows both at the playhead.
 
 ## Cost
 
