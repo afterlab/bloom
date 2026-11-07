@@ -2,6 +2,7 @@
 #include "composition_driver_probe.hpp"
 #include <QTimer>
 #include <algorithm>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
@@ -40,6 +41,26 @@ runtime::CompiledValue promotedValue(const runtime::CompiledValue& value, std::s
     }
     return value;
 }
+// The slot of `port` among its operation's outputs: the port's place among the definition's
+// outputs, except for Camera Shake, whose operation publishes the offset, the roll and the scale
+// while its definition lists the image first.
+std::optional<std::size_t> valueSlot(const document::NodeRecord& node,
+                                     const document::NodeDefinition& definition,
+                                     const std::string_view port) {
+    if (node.typeId == document::kCameraShakeNodeType) {
+        if (port == document::kCameraShakeOffsetPort)
+            return 0;
+        if (port == document::kCameraShakeRollPort)
+            return 1;
+        return std::nullopt;
+    }
+    const auto found =
+        std::ranges::find(definition.outputs, port, &document::OutputPortDefinition::name);
+    if (found == definition.outputs.end())
+        return std::nullopt;
+    return static_cast<std::size_t>(found - definition.outputs.begin());
+}
+
 QString valueText(const runtime::CompiledValue& value) {
     return std::visit(
         [](const auto& held) -> QString {
@@ -203,10 +224,13 @@ void DrivenValueResolver::start() {
                                                   : nullptr;
                     if (node == nullptr || definition == nullptr)
                         continue;
-                    for (std::size_t slot = 0; slot < definition->outputs.size(); ++slot) {
-                        const auto index = operation.firstOutput.value() + slot;
+                    for (const auto& output : definition->outputs) {
+                        const auto slot = valueSlot(*node, *definition, output.name);
+                        if (!slot)
+                            continue;
+                        const auto index = operation.firstOutput.value() + *slot;
                         if (index < evaluatedOutputs.size())
-                            values->outputs[{node->id, definition->outputs[slot].name}] =
+                            values->outputs[{node->id, output.name}] =
                                 valueText(evaluatedOutputs[index]);
                     }
                 }
@@ -223,16 +247,13 @@ void DrivenValueResolver::start() {
                                                   : nullptr;
                     if (!definition)
                         continue;
-                    const auto output = std::ranges::find(definition->outputs, driver->outputPort,
-                                                          &document::OutputPortDefinition::name);
-                    if (output == definition->outputs.end())
+                    const auto slot = valueSlot(*node, *definition, driver->outputPort);
+                    if (!slot)
                         continue;
                     for (const auto& operation : plan.valueOperations()) {
                         if (operation.sourceNodeId != node->id)
                             continue;
-                        const auto index =
-                            operation.firstOutput.value() +
-                            static_cast<std::size_t>(output - definition->outputs.begin());
+                        const auto index = operation.firstOutput.value() + *slot;
                         if (index < evaluatedOutputs.size()) {
                             auto value =
                                 promotedValue(evaluatedOutputs[index], parameter->schemaKey);

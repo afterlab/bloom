@@ -761,17 +761,17 @@ void filmGrainCard() {
     }
 }
 
-// #512: the Camera Shake card draws the roll amount as a dial and the shutter only with its motion
-// blur on, hides the loop length until Loop is on and the octaves under Impact, and its Randomise
-// seed button is one command that gives the node a new seed. A new node already has a seed of its
-// own, not the definition's.
+// #512: the Camera Shake card draws the roll amount and the shutter angle as dials on their own
+// rows (the roll after Amplitude Y, the shutter angle inside the motion blur's rows), its Randomise
+// seed button on the Seed row, and shows the shutter only with its motion blur on, the loop length
+// only with Loop and the octaves not under Impact; Randomise seed is one command that gives the node
+// a new seed. A new node already has a seed of its own, not the definition's.
 void cameraShakeCard() {
     CardFixture fixture(document::kCameraShakeNodeType);
-    auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
-                              : nullptr;
-    expect(card != nullptr, "Camera Shake draws its controls card");
-    if (card == nullptr)
+    if (fixture.item == nullptr) {
+        expect(false, "Camera Shake draws a card");
         return;
+    }
     QApplication::processEvents();
     if (!paintsInsideCard(*fixture.item)) {
         std::cerr << "camera shake paints outside its card\n";
@@ -780,6 +780,23 @@ void cameraShakeCard() {
     if (!cardContentFits(*fixture.item, "camera-shake"))
         ++failures;
     capture(fixture, QStringLiteral("camera-shake"));
+    // The card's rows by the parameter role they edit.
+    const auto rowOf = [&](const char* role) -> QWidget* {
+        for (auto* child : fixture.item->childItems())
+            if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+                proxy != nullptr && proxy->isVisible() && proxy->widget() != nullptr &&
+                proxy->widget()->property("nodeParameterRole").toString() == QLatin1String(role))
+                return proxy->widget();
+        return nullptr;
+    };
+    const auto rowTop = [&](const char* role) {
+        auto* row = rowOf(role);
+        for (auto* child : fixture.item->childItems())
+            if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+                proxy != nullptr && row != nullptr && proxy->widget() == row)
+                return proxy->pos().y();
+        return -1.0;
+    };
     const auto seedOf = [&]() -> std::optional<std::int64_t> {
         const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "seed");
         const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
@@ -788,20 +805,40 @@ void cameraShakeCard() {
     };
     const auto first = seedOf();
     expect(first && *first != 1, "a new Camera Shake has a seed of its own");
-    bool dial = false;
-    for (const auto* angle : card->angleRows())
-        dial = dial || angle->role() == "rollAmount";
-    expect(dial, "the roll amount is a dial");
-    expect(card->showsRole("amplitudeX") && card->showsRole("amplitudeY") && card->showsRole("seed") &&
-               card->showsRole("overscan") && card->showsRole("octaves") &&
-               !card->showsRole("loopLength") && !card->showsRole("quality") &&
-               !card->showsRole("rollAmount"),
-           "the card shows the amounts and hides the loop length and shutter until they are read");
-    expect(card->socketY("rollAmount").has_value(), "the roll dial carries its socket");
 
-    // Randomise seed.
-    auto* randomise = card->findChild<ui::kit::KButton*>(QStringLiteral("randomiseSeed"));
-    expect(randomise != nullptr && randomise->isEnabled(), "the card has a Randomise seed button");
+    // The roll's dial sits on its own row, before its field, between Amplitude Y and Frequency.
+    auto* roll = rowOf("rollAmount");
+    auto* rollDial = roll ? roll->findChild<ui::kit::KAngleDial*>() : nullptr;
+    auto* rollField = roll ? roll->findChild<ui::kit::KValueField*>() : nullptr;
+    expect(rollDial != nullptr && rollField != nullptr && rollDial->x() < rollField->x(),
+           "the roll amount is a dial before its field on its own row");
+    expect(rowTop("amplitudeY") < rowTop("rollAmount") && rowTop("rollAmount") < rowTop("frequency"),
+           "the roll amount follows Amplitude Y");
+    expect(fixture.item->cardWidget() != nullptr &&
+               !qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                    ->showsRole("loopLength") &&
+               !qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                    ->showsRole("quality"),
+           "the card hides the loop length and the shutter until they are read");
+    expect(rowOf("loopLength") == nullptr && rowOf("quality") == nullptr &&
+               rowOf("shutterAngle") == nullptr,
+           "their rows are not shown");
+
+    // Frequency, roughness and smoothing carry a keyframe diamond as the amplitudes do.
+    for (const char* role : {"amplitudeX", "frequency", "roughness", "smoothing"}) {
+        auto* row = rowOf(role);
+        expect(row != nullptr && row->findChild<ui::KeyframeDiamond*>() != nullptr,
+               "an animatable Camera Shake value has a keyframe diamond");
+    }
+
+    // Randomise seed sits on the Seed row beside its field.
+    auto* seedRow = rowOf("seed");
+    auto* randomise = seedRow ? seedRow->findChild<ui::kit::KButton*>(QStringLiteral("randomiseSeed"))
+                              : nullptr;
+    auto* seedField = seedRow ? seedRow->findChild<ui::kit::KValueField*>() : nullptr;
+    expect(randomise != nullptr && randomise->isEnabled() && seedField != nullptr &&
+               randomise->x() > seedField->x(),
+           "Randomise seed is on the Seed row, after its field");
     if (randomise != nullptr) {
         const auto commands = fixture.stack.size();
         randomise->click();
@@ -813,25 +850,34 @@ void cameraShakeCard() {
         expect(fixture.session.undo() && seedOf() == first, "undo restores the seed");
     }
 
-    // Loop reveals the loop length; the motion blur reveals the shutter.
+    // The dial follows the value.
     const auto set = [&](const std::string& role, const document::ParameterValue& value) {
         const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
         expect(id && fixture.session.setParameterValue(*id, value, QStringLiteral("Set")),
                "a value is set");
         QApplication::processEvents();
     };
+    set("rollAmount", 3.0);
+    rollDial = rowOf("rollAmount")->findChild<ui::kit::KAngleDial*>();
+    expect(rollDial != nullptr && std::abs(rollDial->value() - 3.0) < 1e-9,
+           "the roll dial follows the roll amount");
+    set("rollAmount", 0.5);
+
+    // Loop reveals the loop length; the motion blur reveals the shutter, its angle a dial after
+    // Motion blur and before Shutter opens.
     set("loop", true);
-    expect(card->showsRole("loopLength"), "Loop shows the loop length");
+    expect(rowOf("loopLength") != nullptr, "Loop shows the loop length");
     set("motionBlur", true);
-    expect(card->showsRole("quality") && card->showsRole("shutterOffset"),
+    expect(rowOf("quality") != nullptr && rowOf("shutterOffset") != nullptr,
            "Motion blur shows the shutter's rows");
-    bool shutterDial = false;
-    for (const auto* angle : card->angleRows())
-        shutterDial = shutterDial || angle->role() == "shutterAngle";
-    expect(shutterDial, "the shutter angle is a dial");
+    auto* shutter = rowOf("shutterAngle");
+    auto* shutterDial = shutter ? shutter->findChild<ui::kit::KAngleDial*>() : nullptr;
+    expect(shutterDial != nullptr && rowTop("motionBlur") < rowTop("shutterAngle") &&
+               rowTop("shutterAngle") < rowTop("shutterOffset"),
+           "the shutter angle is a dial inside the motion blur's rows");
     capture(fixture, QStringLiteral("camera-shake-motion-blur"));
     set("mode", std::int64_t{1});
-    expect(!card->showsRole("octaves") && !card->showsRole("roughness"),
+    expect(rowOf("octaves") == nullptr && rowOf("roughness") == nullptr,
            "Impact hides the octaves and roughness");
     capture(fixture, QStringLiteral("camera-shake-impact"));
 }

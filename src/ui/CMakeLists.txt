@@ -622,6 +622,7 @@ target_sources(
         properties_editor_sections.cpp
         properties_editor_sources.cpp
         properties_registry_row.cpp
+        row_inline_controls.cpp
         channel_checklist_field.cpp
         properties_editor_registry.cpp
         properties_upstream.cpp

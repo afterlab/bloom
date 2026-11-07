@@ -53,6 +53,10 @@ QLabel* makePropertyRowLabel(const QString& text, QWidget* parent) {
 KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
                            std::initializer_list<QWidget*> values, QWidget* parent,
                            bool leadingIndicator)
+    : KPropertyRow(label, indicator, std::vector<QWidget*>(values), parent, leadingIndicator) {}
+
+KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator, const std::vector<QWidget*>& values,
+                           QWidget* parent, bool leadingIndicator)
     : QWidget(parent), label_(label), leadingIndicator_(leadingIndicator) {
     this->setObjectName(QStringLiteral("propertiesRow"));
     this->setProperty("rowLabel", label->toolTip());

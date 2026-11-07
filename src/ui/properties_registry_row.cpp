@@ -5,6 +5,7 @@
 #include "properties_sections.hpp"
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
+#include "row_inline_controls.hpp"
 #include "text_font_choices.hpp"
 #include "value_presentation.hpp"
 #include <QCoreApplication>
@@ -372,6 +373,12 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(integer_);
         properties::bindValueEdit(session_, *integer_, [this] { return parameter_; });
         connect(integer_, &kit::KValueField::integerValueChanged, this, [this] { commit(); });
+        // #512: the Seed's Randomise button, beside the field.
+        if (rowInlineFor(definition_.schemaKey) == RowInline::RandomiseSeed) {
+            randomise_ = makeRandomiseSeedButton(
+                session_, [this] { return std::optional(parameter_); }, controls);
+            layout->addWidget(randomise_);
+        }
     } else if (definition_.valueKind == document::ParameterValueKind::Boolean) {
         toggle_ = new kit::KSwitch(controls);
         toggle_->setObjectName(definition_.schemaKey == "bloom.image.premultiply"
@@ -429,6 +436,16 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                     refresh();
                 }
             });
+        }
+        // #512: an angle's dial before its field, as Transform's Rotation row.
+        if (count == 1 && !color_ && rowInlineFor(definition_.schemaKey) == RowInline::AngleDial) {
+            dial_ = makeRowAngleDial(
+                session_, [this] { return parameter_; }, label,
+                std::get_if<double>(&definition_.defaultValue)
+                    ? *std::get_if<double>(&definition_.defaultValue)
+                    : 0.0,
+                controls);
+            layout->addWidget(dial_);
         }
         for (int i = 0; i < count; ++i) {
             auto* field = fields_[static_cast<std::size_t>(i)] = new kit::KValueField(controls);
@@ -583,6 +600,11 @@ void PropertiesRegistryRow::refresh() {
                           static_cast<QWidget*>(checklist_)})
         if (control)
             control->setEnabled(editable);
+    if (dial_)
+        refreshRowAngleDial(session_, *dial_, parameter ? std::optional(parameter_) : std::nullopt,
+                            composition == nullptr || composition->nodeLocked(node_));
+    if (randomise_)
+        randomise_->setEnabled(editable);
     if (parameter) {
         auto value = definition_.defaultValue;
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source))

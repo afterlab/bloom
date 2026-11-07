@@ -253,7 +253,8 @@ void PropertiesEditor::configureRegistryRows() {
                 hasValueOutputs = true;
                 const auto label = node_editor::displayTypeName(output.name);
                 auto* rowLabel = kit::makePropertyRowLabel(label, section->body());
-                auto* readout = new kit::KLabel(section->body());
+                auto* readout = new kit::KLabel(QString{}, section->body(), kit::TypeRole::Value);
+                readout->setTone(kit::Color::Foreground);
                 readout->setObjectName(QStringLiteral("propertiesValueOutput.%1")
                                            .arg(QString::fromStdString(output.name)));
                 readout->setProperty(

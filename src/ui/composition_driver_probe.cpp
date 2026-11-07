@@ -3,7 +3,9 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <vector>
 
 namespace bloom::ui {
 namespace {
@@ -60,15 +62,29 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
     // it, which is also the only way the value it reports can be trusted to be the value the
     // viewer renders.
     const auto merge = probe.add(document::kLayerStackNodeType);
+    // What the probe reads: each driven parameter's source output, and the offset and roll a
+    // Camera Shake publishes (so its Properties can show them whether or not they drive anything).
+    std::vector<document::OutputPortRef> outputs;
     for (const auto id : parameters) {
-        if (cancellation.isCancellationRequested())
-            return {};
         const auto* parameter = composition->parameters().find(id);
         const auto* driver =
             parameter ? std::get_if<document::DriverBindingSource>(&parameter->source) : nullptr;
-        if (!driver)
+        if (driver)
+            outputs.push_back({driver->sourceNodeId, driver->outputPort});
+    }
+    for (const auto& node : composition->graph().nodes()) {
+        if (node.typeId != document::kCameraShakeNodeType)
             continue;
-        document::OutputPortRef output{driver->sourceNodeId, driver->outputPort};
+        // Only its values are read: muting keeps the value operation and skips the image input
+        // a shake with nothing connected yet would be refused for.
+        if (!probe.edit<commands::SetNodeMuted>(node.id, true).succeeded())
+            return {};
+        for (const auto port : {document::kCameraShakeOffsetPort, document::kCameraShakeRollPort})
+            outputs.push_back({node.id, std::string(port)});
+    }
+    for (auto output : outputs) {
+        if (cancellation.isCancellationRequested())
+            return {};
         const auto kind = composition->graph().outputKind(output);
         if (!kind || *kind == document::SocketValueKind::Image)
             return {};

@@ -13,6 +13,10 @@ class QLineEdit;
 class QPlainTextEdit;
 namespace bloom::ui {
 class CompositionSession;
+namespace kit {
+class KAngleDial;
+class KButton;
+} // namespace kit
 QString imageDimensionsText(const document::AssetRecord* asset);
 QString imageRangeText(const document::AssetRecord* asset);
 // Document 1.25 video source metadata as shown in Properties and the Assets tooltip.
@@ -142,6 +146,9 @@ class PropertiesRegistryRow final : public QWidget {
     kit::KTextArea* multiline_ = nullptr;
     ChannelChecklistField* checklist_ = nullptr;
     KeyframeDiamond* diamond_ = nullptr;
+    // #512: the dial before a Camera Shake angle's field, the button after its Seed field.
+    kit::KAngleDial* dial_ = nullptr;
+    kit::KButton* randomise_ = nullptr;
     bool refreshing_ = false;
     bool detached_ = false;
 };

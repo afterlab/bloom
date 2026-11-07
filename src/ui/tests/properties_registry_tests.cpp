@@ -23,9 +23,13 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/assets_editor.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/angle_dial.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -1025,6 +1029,110 @@ void recipeRows() {
     }
 }
 
+// #512 Camera Shake in Properties: the roll amount and the shutter angle are rows like Transform's
+// Rotation (a right-aligned label, the dial and the field together, the diamond in the diamond
+// column), the Seed row carries Randomise seed, every animatable value has a diamond, and the
+// offset and roll outputs read out their values in readable text.
+void cameraShakeRows() {
+    auto project = document::makeNewProject("Shake", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.resize(700, 1400);
+    properties.show();
+    const auto shake = addNode(session, document::kCameraShakeNodeType);
+    session.selectNode(shake);
+    QCoreApplication::processEvents();
+    const auto top = [&](QWidget* widget) { return widget->mapTo(&properties, QPoint()).y(); };
+    const auto left = [&](QWidget* widget) { return widget->mapTo(&properties, QPoint()).x(); };
+    const auto setValue = [&](const char* role, const document::ParameterValue& value) {
+        const auto* node = session.composition()->graph().findNode(shake);
+        for (const auto& binding : node->parameters)
+            if (binding.role == role)
+                expect(session.setParameterValue(binding.parameterId, value, "Set"),
+                       "a Camera Shake value is set");
+        QCoreApplication::processEvents();
+    };
+    auto* amplitudeX = row(properties, "amplitudeX");
+    auto* amplitudeY = row(properties, "amplitudeY");
+    auto* roll = row(properties, "rollAmount");
+    auto* frequency = row(properties, "frequency");
+    expect(amplitudeX && amplitudeY && roll && frequency, "Camera Shake presents its rows");
+    if (!amplitudeX || !amplitudeY || !roll || !frequency)
+        return;
+    auto* dial = roll->findChild<ui::kit::KAngleDial*>();
+    auto* field = roll->findChild<ui::kit::KValueField*>();
+    expect(dial != nullptr && field != nullptr && left(dial) < left(field) &&
+               left(field) - (left(dial) + dial->width()) < 16,
+           "the roll amount's dial sits right before its field");
+    auto* label = roll->findChild<QLabel*>("propertiesRowLabel");
+    auto* otherLabel = amplitudeX->findChild<QLabel*>("propertiesRowLabel");
+    expect(label != nullptr && otherLabel != nullptr && (label->alignment() & Qt::AlignRight) &&
+               left(label) == left(otherLabel) && label->width() == otherLabel->width(),
+           "the roll amount's label is right-aligned in the label column as every other row's");
+    auto* diamond = roll->findChild<ui::KeyframeDiamond*>();
+    auto* otherDiamond = amplitudeX->findChild<ui::KeyframeDiamond*>();
+    expect(diamond != nullptr && otherDiamond != nullptr && left(diamond) == left(otherDiamond),
+           "the roll amount's diamond is in the diamond column");
+    expect(top(amplitudeY) < top(roll) && top(roll) < top(frequency),
+           "the roll amount follows Amplitude Y");
+    for (const char* role : {"frequency", "roughness", "smoothing"}) {
+        auto* animatable = row(properties, role);
+        auto* key = animatable ? animatable->findChild<ui::KeyframeDiamond*>() : nullptr;
+        expect(key != nullptr && otherDiamond != nullptr && left(key) == left(otherDiamond),
+               "Frequency, Roughness and Smoothing have a keyframe diamond as Amplitude does");
+    }
+    auto* seed = row(properties, "seed");
+    auto* randomise = seed ? seed->findChild<ui::kit::KButton*>("randomiseSeed") : nullptr;
+    auto* seedField = seed ? seed->findChild<ui::kit::KValueField*>() : nullptr;
+    expect(randomise != nullptr && seedField != nullptr && left(randomise) > left(seedField),
+           "Randomise seed sits on the Seed row beside its field");
+    // Nothing above the rows: no widget block with a lone dial or button.
+    expect(properties.findChild<QWidget*>("propertiesControls") == nullptr ||
+               !properties.findChild<QWidget*>("propertiesControls")->isVisible() ||
+               properties.findChild<QWidget*>("propertiesControls")->height() == 0,
+           "Camera Shake has no controls block above its rows");
+    if (randomise != nullptr) {
+        const auto before = stack.size();
+        randomise->click();
+        QCoreApplication::processEvents();
+        expect(stack.size() == before + 1, "Randomise seed is one command");
+    }
+    // The shutter angle is a dial inside the motion blur's rows.
+    expect(row(properties, "shutterAngle") == nullptr || !row(properties, "shutterAngle")->isVisible(),
+           "the shutter angle waits for the motion blur");
+    setValue("motionBlur", true);
+    auto* motionBlur = row(properties, "motionBlur");
+    auto* shutter = row(properties, "shutterAngle");
+    auto* shutterOpens = row(properties, "shutterOffset");
+    expect(motionBlur && shutter && shutterOpens && shutter->isVisible() &&
+               shutter->findChild<ui::kit::KAngleDial*>() != nullptr &&
+               top(motionBlur) < top(shutter) && top(shutter) < top(shutterOpens),
+           "the shutter angle is a dial after Motion blur, before Shutter opens");
+    // The outputs' values: readable text, no placeholder once resolved.
+    QElapsedTimer wait;
+    wait.start();
+    QLabel* offset = nullptr;
+    QLabel* rollOutput = nullptr;
+    while (wait.elapsed() < 8000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+        offset = properties.findChild<QLabel*>("propertiesValueOutput.offset");
+        rollOutput = properties.findChild<QLabel*>("propertiesValueOutput.roll");
+        if (offset && rollOutput && offset->text() != "Resolving…" &&
+            rollOutput->text() != "Resolving…")
+            break;
+    }
+    expect(offset != nullptr && rollOutput != nullptr && offset->text() != "Resolving…" &&
+               rollOutput->text() != "Resolving…" && !offset->text().isEmpty() &&
+               !rollOutput->text().isEmpty(),
+           "the offset and roll outputs read out their values");
+    if (offset != nullptr)
+        expect(offset->palette().color(QPalette::WindowText).lightness() > 128,
+               "the output readouts are in readable text");
+}
+
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
@@ -1040,6 +1148,7 @@ int main(int argc, char** argv) try {
     colourEffectRows();
     discreteImageRows();
     transform2DRows();
+    cameraShakeRows();
     matteBlurRows();
     matteKeyRows();
     recipeRows();

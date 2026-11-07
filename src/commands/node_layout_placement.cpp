@@ -114,9 +114,6 @@ struct NodeControlsEstimate final {
         return {0, 1, true, 1};
     if (typeId == "bloom.transform-2d")
         return {1, 0, true};
-    // #512 Camera Shake: the roll dial (the shutter's rows follow its motion blur).
-    if (typeId == document::kCameraShakeNodeType)
-        return {1, 0, false};
     if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
         return {0, 0, true, 1};
     if (typeId == "bloom.glow")
@@ -351,9 +348,6 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #486: the Sharpen card's edge graph and its three slider rows, each a value over a slider.
     if (node->typeId == document::kSharpenNodeType)
         thumbnail = kSharpenGraphHeight + kSmall + 3.0 * (kControl + kSmall) + kPadding;
-    // #512: the Camera Shake card's Randomise seed button.
-    if (node->typeId == document::kCameraShakeNodeType)
-        thumbnail = kControl + kSmall;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

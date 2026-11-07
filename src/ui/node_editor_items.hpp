@@ -5,6 +5,10 @@
 #include "properties_sections.hpp"
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
+#include "row_inline_controls.hpp"
+#include <bloom/ui/kit/angle_dial.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/grading_controls.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -717,6 +721,10 @@ class NodeItem final : public QGraphicsObject {
         std::string_view role;
         std::optional<document::AnimationComponent> component{};
         KeyframeDiamond* componentDiamond = nullptr;
+        // #512: a control that sits beside the field on its own row: a dial before it, a button
+        // after it.
+        QWidget* before = nullptr;
+        QWidget* after = nullptr;
     };
 
     // A generic editor for one parameter, built from its declared ParameterValueKind (task S7).
@@ -743,6 +751,9 @@ class NodeItem final : public QGraphicsObject {
         // Composition Output's layers).
         ChannelChecklistField* checklist = nullptr;
         std::vector<platform::FontFace> fontFaces;
+        // #512: the dial of a Camera Shake angle and the Randomise button of its Seed.
+        kit::KAngleDial* dial = nullptr;
+        kit::KButton* randomise = nullptr;
     };
 
     // This card's own node, named as the target of every write below. The card used to call
@@ -1008,6 +1019,7 @@ class NodeItem final : public QGraphicsObject {
             }
         }
         propertyRows_.clear();
+        inlineControls_.clear();
         valueRows_.clear();
         readOnlyRows_.clear();
         readOnlyLabels_.clear();
@@ -1238,7 +1250,8 @@ class NodeItem final : public QGraphicsObject {
                     row.componentDiamond->setComponent(row.component);
                 }
             }
-            wrapPropertyRow(row.label, row.widget, row.diamond, row.componentDiamond);
+            wrapPropertyRow(row.label, row.widget, row.diamond, row.componentDiamond, row.before,
+                            row.after);
         }
         if (colorChip_)
             wrapPropertyRow(colorRowLabel_, colorChip_, colorDiamond_);
@@ -1431,6 +1444,13 @@ class NodeItem final : public QGraphicsObject {
             bindCell(field, [commit] { commit(); });
             row.numeric[0] = field;
             valueRows_.push_back({label, field, nullptr, {}});
+            if (rowInlineFor(declared->schemaKey) == RowInline::RandomiseSeed && session_ != nullptr) {
+                row.randomise = makeRandomiseSeedButton(
+                    *session_,
+                    [id = row.parameterId] { return std::optional(id); }, nullptr);
+                prepareField(row.randomise);
+                valueRows_.back().after = row.randomise;
+            }
             break;
         }
         case document::ParameterValueKind::Float64:
@@ -1456,6 +1476,14 @@ class NodeItem final : public QGraphicsObject {
                 registerControlRole(field, role);
                 bindCell(field, [this, index, component] { commitOperand(index, component); });
                 row.numeric[static_cast<std::size_t>(component)] = field;
+                if (components == 1 && session_ != nullptr &&
+                    rowInlineFor(declared->schemaKey) == RowInline::AngleDial) {
+                    const auto* neutral = std::get_if<double>(&declared->defaultValue);
+                    row.dial = makeRowAngleDial(
+                        *session_, [id = row.parameterId] { return id; }, label,
+                        neutral ? *neutral : 0.0, nullptr);
+                    prepareField(row.dial);
+                }
                 const std::array names{document::AnimationComponent::X,
                                        document::AnimationComponent::Y,
                                        document::AnimationComponent::Z};
@@ -1464,6 +1492,7 @@ class NodeItem final : public QGraphicsObject {
                      animatable && component == 0 ? makeCardDiamond(role) : nullptr, role,
                      components > 1 ? std::optional(names[static_cast<std::size_t>(component)])
                                     : std::nullopt});
+                valueRows_.back().before = row.dial;
             }
             break;
         }
@@ -1653,6 +1682,16 @@ class NodeItem final : public QGraphicsObject {
     // to the very snapshot an edit produced, and a widget that re-emitted here would commit its own
     // readback as a second edit.
     void refreshOperandRows(const document::Composition& composition) {
+        // #512: the dial and the button follow their parameter (locked, driven or absent: off).
+        if (session_ != nullptr)
+            for (const auto& row : operandRows_) {
+                if (row.dial != nullptr)
+                    refreshRowAngleDial(*session_, *row.dial, row.parameterId,
+                                        composition.nodeLocked(id_));
+                if (row.randomise != nullptr)
+                    row.randomise->setEnabled(!composition.nodeLocked(id_) &&
+                                              scalarEditable(*session_, row.parameterId));
+            }
         for (const auto& row : operandRows_) {
             if (row.checklist != nullptr) {
                 if (!timeOnly_)
@@ -2106,13 +2145,27 @@ class NodeItem final : public QGraphicsObject {
     }
 
     void wrapPropertyRow(const QString& label, QWidget* field, KeyframeDiamond* diamond,
-                         KeyframeDiamond* componentDiamond = nullptr) {
+                         KeyframeDiamond* componentDiamond = nullptr, QWidget* before = nullptr,
+                         QWidget* after = nullptr) {
         if (auto* value = qobject_cast<kit::KValueField*>(field))
             value->setCompact(true);
-        auto* row = new kit::KPropertyRow(
-            kit::makePropertyRowLabel(label, nullptr), diamond,
-            componentDiamond ? std::initializer_list<QWidget*>{field, componentDiamond}
-                             : std::initializer_list<QWidget*>{field});
+        std::vector<QWidget*> values;
+        if (before != nullptr)
+            values.push_back(before);
+        values.push_back(field);
+        if (componentDiamond != nullptr)
+            values.push_back(componentDiamond);
+        if (after != nullptr)
+            values.push_back(after);
+        auto* row = new kit::KPropertyRow(kit::makePropertyRowLabel(label, nullptr), diamond,
+                                          values);
+        if (before != nullptr || after != nullptr) {
+            auto& inlineControls = inlineControls_[field];
+            if (before != nullptr)
+                inlineControls.push_back(before);
+            if (after != nullptr)
+                inlineControls.push_back(after);
+        }
         row->setObjectName("nodePropertyRow");
         row->setProperty("nodeParameterRole", field->property("nodeParameterRole"));
         row->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
@@ -2318,6 +2371,9 @@ class NodeItem final : public QGraphicsObject {
             const auto role = controlRoles_.find(field);
             const bool linked = role != controlRoles_.end() && linkedInputs_.contains(role->second);
             field->setVisible(!linked);
+            if (const auto inlined = inlineControls_.find(field); inlined != inlineControls_.end())
+                for (auto* control : inlined->second)
+                    control->setVisible(!linked);
             if (role != controlRoles_.end())
                 parameterSocketY_.try_emplace(role->second, top + rowHeight / 2);
             row->graphicsProxyWidget()->setVisible(!layout_.collapsed);
@@ -2448,6 +2504,8 @@ class NodeItem final : public QGraphicsObject {
     std::vector<std::string> builtRoles_;
     std::vector<ValueRow> valueRows_;
     std::map<QWidget*, kit::KPropertyRow*> propertyRows_;
+    // #512: the dial and the button that sit beside a field on its own row.
+    std::map<QWidget*, std::vector<QWidget*>> inlineControls_;
     std::vector<OperandRow> operandRows_;
     std::vector<std::pair<QString, QString>> readOnlyRows_;
     kit::KValueField* positionX_ = nullptr;

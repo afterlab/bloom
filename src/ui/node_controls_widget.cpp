@@ -9,7 +9,6 @@
 #include <bloom/document/project.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
-#include <bloom/ui/kit/button.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/curve_graph.hpp>
@@ -24,7 +23,6 @@
 
 #include <QCoreApplication>
 #include <QFontMetrics>
-#include <QRandomGenerator>
 #include <QSignalBlocker>
 
 #include <algorithm>
@@ -430,8 +428,6 @@ struct Controls final {
     std::vector<Curve> curves;
     // #484: a role is shown only while the node's motion blur reads it (Transform 2D).
     bool readsMotion = false;
-    // #512: a button that gives the node's `seed` a new random value.
-    bool randomiseSeed = false;
 };
 
 [[nodiscard]] std::optional<Controls> controlsFor(const std::string_view typeId) {
@@ -481,21 +477,15 @@ struct Controls final {
                                          "(left) to closing (right)")});
         controls.readsMotion = true;
     } else if (typeId == document::kCameraShakeNodeType) {
-        // #512: the roll amount's dial, the seed's dice and the motion blur's shutter, shown
-        // while the motion blur is on.
-        const auto key = [](const std::string_view role) {
-            return document::motionSchemaKey(document::kCameraShakeNodeType, role);
-        };
-        controls.angles.push_back(angle("rollAmount", key("rollAmount"), false, false));
-        controls.angles.push_back(angle("shutterAngle", key("shutterAngle"), false, false));
-        controls.angles.push_back(angle("shutterPhase", key("shutterPhase"), false, false));
+        // #512: the roll and the shutter's dials and the seed's button sit on their own rows (see
+        // row_inline_controls.hpp); the widget keeps the custom shutter curve's graph and decides
+        // which of the shutter's rows the motion blur reads.
         controls.curves.push_back(
             {"shutterShape", QCoreApplication::translate("NodeControls", "Shutter curve"),
              QCoreApplication::translate("NodeControls",
                                          "How much light the shutter lets through from opening "
                                          "(left) to closing (right)")});
         controls.readsMotion = true;
-        controls.randomiseSeed = true;
     } else if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient") {
         controls.gradients.push_back(
             {"gradient", std::string(document::kColorOperandParameterSchemaKey),
@@ -669,19 +659,6 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
         angle.neutral = defaultScalar(session_, node_, angle.role);
         angles_.push_back(new AngleDialRow(session_, node_, std::move(angle), this));
     }
-    if (controls.randomiseSeed) {
-        randomise_ = new kit::KButton(tr("Randomise seed"), this);
-        randomise_->setObjectName(QStringLiteral("randomiseSeed"));
-        randomise_->setVariant(kit::KButton::Variant::Secondary);
-        randomise_->setToolTip(tr("Give this shake a new random seed"));
-        connect(randomise_, &kit::KButton::clicked, this, [this] {
-            if (const auto id = nodeRoleParameter(session_, node_, "seed"))
-                static_cast<void>(session_.setParameterValue(
-                    *id,
-                    static_cast<std::int64_t>(QRandomGenerator::global()->bounded(1000000U)),
-                    tr("Randomise Seed")));
-        });
-    }
     for (auto& curve : controls.curves) {
         CurveControl control;
         control.role = curve.role;
@@ -752,8 +729,6 @@ int NodeControlsCardWidget::heightAt(const int width) const {
         if (readsRole(curve.role))
             height +=
                 curve.label->sizeHint().height() + curveHeight(curve.canvas, width) + 2 * small();
-    if (randomise_ != nullptr)
-        height += randomise_->sizeHint().height() + small();
     return std::max(0, height - small());
 }
 
@@ -770,8 +745,6 @@ int NodeControlsCardWidget::minimumWidthHint() const {
     for (const auto& curve : curves_)
         width = std::max({width, curve.canvas->minimumSizeHint().width(),
                           curve.label->sizeHint().width()});
-    if (randomise_ != nullptr)
-        width = std::max(width, randomise_->sizeHint().width());
     return width;
 }
 
@@ -832,11 +805,6 @@ void NodeControlsCardWidget::place() {
         curve.canvas->setGeometry(0, y, width(), h);
         y += h + small();
     }
-    if (randomise_ != nullptr) {
-        const auto size = randomise_->sizeHint();
-        randomise_->setGeometry(0, y, std::min(width(), size.width()), size.height());
-        y += size.height() + small();
-    }
 }
 
 void NodeControlsCardWidget::refresh() {
@@ -854,8 +822,6 @@ void NodeControlsCardWidget::refresh() {
         curve.canvas->setEnabled(!locked && curve.canvas->parameter().has_value());
         curve.canvas->update();
     }
-    if (randomise_ != nullptr)
-        randomise_->setEnabled(!locked && nodeRoleParameter(session_, node_, "seed").has_value());
     // A shutter row appears or goes with the motion blur that reads it.
     if (!typeId_.empty()) {
         std::vector<bool> reads;

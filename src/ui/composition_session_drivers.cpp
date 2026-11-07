@@ -2,6 +2,7 @@
 #include "node_editor_items.hpp"
 #include <algorithm>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <deque>
@@ -166,7 +167,8 @@ void CompositionSession::refreshDrivenValues() {
             }
         }
         hasBoundsReadout = std::ranges::any_of(current->graph().nodes(), [](const auto& node) {
-            return node.typeId == document::kLayerBoundsNodeType;
+            return node.typeId == document::kLayerBoundsNodeType ||
+                   node.typeId == document::kCameraShakeNodeType;
         });
     }
     // The signature is what the answer would depend on: the document it is read from, the instant
@@ -181,7 +183,8 @@ void CompositionSession::refreshDrivenValues() {
     }
     if (hasBoundsReadout) {
         for (const auto& node : current->graph().nodes())
-            if (node.typeId == document::kLayerBoundsNodeType)
+            if (node.typeId == document::kLayerBoundsNodeType ||
+                node.typeId == document::kCameraShakeNodeType)
                 signature += QString("/bounds:%1").arg(node.id.value());
     }
     if (signature == drivenRequest_) {

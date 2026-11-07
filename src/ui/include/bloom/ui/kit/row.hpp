@@ -4,11 +4,16 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <initializer_list>
 #include <optional>
+#include <vector>
 namespace bloom::ui::kit {
 class KPropertyRow final : public QWidget {
     Q_OBJECT
   public:
     KPropertyRow(QLabel* label, QWidget* indicator, std::initializer_list<QWidget*> values,
+                 QWidget* parent = nullptr, bool leadingIndicator = false);
+    // The same row for a list of values built at run time (a row with a control before or after
+    // its field).
+    KPropertyRow(QLabel* label, QWidget* indicator, const std::vector<QWidget*>& values,
                  QWidget* parent = nullptr, bool leadingIndicator = false);
     QSize minimumSizeHint() const override;
     void setLineCount(int lines);
