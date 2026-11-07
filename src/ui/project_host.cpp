@@ -402,6 +402,19 @@ void ProjectHost::setRecoveryPolicy(const host::SessionRecoveryPolicy policy) {
     recoveryTimer_.setInterval(static_cast<int>(recoveryPolicy_.interval.count()) * 1000);
 }
 
+void ProjectHost::setCrashRecoveryEnabled(const bool enabled) {
+    if (crashRecoveryEnabled_ == enabled) {
+        return;
+    }
+    crashRecoveryEnabled_ = enabled;
+    if (!enabled) {
+        recoveryRefreshPending_ = false;
+        if (recoveryTaskState_) {
+            recoveryTaskState_->cancelled.store(true, std::memory_order_release);
+        }
+    }
+}
+
 std::optional<host::SessionRecoveryOffer> ProjectHost::recoveryOffer() const {
     return cachedRecoveryOffer_;
 }
@@ -435,7 +448,7 @@ void ProjectHost::retireRecoveryPath(std::filesystem::path path) {
 }
 
 void ProjectHost::writeRecoverySnapshot() {
-    if (!session_.has_value()) {
+    if (!crashRecoveryEnabled_ || !session_.has_value()) {
         return;
     }
     const auto path = currentRecoveryPath();
@@ -459,7 +472,7 @@ void ProjectHost::writeRecoverySnapshot() {
 }
 
 void ProjectHost::offerRecoveryOnStartup() {
-    if (recoveryScanTask_ || !recoveryDecisionProvider_) {
+    if (!crashRecoveryEnabled_ || recoveryScanTask_ || !recoveryDecisionProvider_) {
         return;
     }
     auto state = std::make_shared<RecoveryScanState>();
@@ -556,7 +569,7 @@ void ProjectHost::scheduleRecoveryWork() {
         recoveryWorkPollTimer_.start(kPollIntervalMs);
         return;
     }
-    if (!recoveryRefreshPending_ || !session_.has_value() || isBusy() ||
+    if (!crashRecoveryEnabled_ || !recoveryRefreshPending_ || !session_.has_value() || isBusy() ||
         !hasDirtyDecodedContent() || !publicationCoordinator_ || !artifactCoordinator_) {
         return;
     }

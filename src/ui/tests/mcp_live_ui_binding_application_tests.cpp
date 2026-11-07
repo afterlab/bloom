@@ -100,7 +100,10 @@ void preferences(const mcp::McpLiveUiPort& port) {
                preference(values, "importSequenceFrameRate").has_value() &&
                !preference(values, "timelineLayerColumnWidth").has_value(),
            "preferences.get lists the Preferences window's settings, not layout");
-    auto result = port.setPreferences({{.key = "loopPlayback", .value = false},
+    expect(preference(values, "crashRecovery") == mcp::McpPreferenceValue(false),
+           "preferences.get lists crashRecovery, off by default");
+    auto result = port.setPreferences({{.key = "crashRecovery", .value = true},
+                                       {.key = "loopPlayback", .value = false},
                                        {.key = "timelineTimeFormat",
                                         .value = std::string("timecode")},
                                        {.key = "importSequenceFrameRate",
@@ -108,7 +111,8 @@ void preferences(const mcp::McpLiveUiPort& port) {
                                        {.key = "soundVolume", .value = 15.0}});
     expect(result.ok(), "preferences.set applies valid entries");
     const auto stored = ui::loadApplicationPreferences(QSettings{});
-    expect(!stored.loopPlayback && stored.timelineTimeFormat == ui::TimelineTimeFormat::Timecode &&
+    expect(!stored.loopPlayback && stored.crashRecoveryEnabled &&
+               stored.timelineTimeFormat == ui::TimelineTimeFormat::Timecode &&
                stored.importSequenceFrameRate &&
                stored.importSequenceFrameRate->numerator() == 25 &&
                stored.soundVolumePercent == 15,

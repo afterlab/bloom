@@ -530,6 +530,31 @@ QWidget* PreferencesWindow::buildGeneralPage() {
         loop->setChecked(draft_.loopPlayback);
     });
 
+    auto* recoverySection = properties::makeSection(
+        layout, content, QStringLiteral("preferencesRecoverySection"), tr("Crash recovery"),
+        QStringLiteral("preferences/sections/recovery/collapsed"));
+    recoverySection->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*recoverySection,
+                 [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+                     draft.crashRecoveryEnabled = base.crashRecoveryEnabled;
+                 });
+    auto* recovery = addSwitchRow(recoverySection->bodyLayout(), content,
+                                  QStringLiteral("preferencesCrashRecoverySwitch"),
+                                  tr("Recover unsaved changes after a crash"), false);
+    recovery->setToolTip(tr("While on, Bloom periodically saves a recovery copy of unsaved work and "
+                            "offers it after an unexpected exit. While off, it writes no recovery "
+                            "copies and shows no prompt; copies already on disk are left alone. "
+                            "Takes effect immediately."));
+    recovery->setChecked(draft_.crashRecoveryEnabled);
+    connect(recovery, &QAbstractButton::toggled, this, [this](const bool enabled) {
+        draft_.crashRecoveryEnabled = enabled;
+        updateApplyEnabled();
+    });
+    refreshCallbacks_.push_back([this, recovery] {
+        const QSignalBlocker blocker(recovery);
+        recovery->setChecked(draft_.crashRecoveryEnabled);
+    });
+
     // The MCP server's port and auto-start live in the MCP Server panel only; a link, not a copy.
     auto* mcpLink = new kit::KButton(tr("MCP server settings are in the MCP Server panel"), content);
     mcpLink->setObjectName(QStringLiteral("preferencesMcpLink"));

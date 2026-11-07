@@ -221,6 +221,11 @@ class ProjectHost final : public QObject {
     [[nodiscard]] const std::filesystem::path& recoveryDirectory() const noexcept;
     void setRecoveryDirectory(std::filesystem::path directory);
     void setRecoveryPolicy(host::SessionRecoveryPolicy policy);
+    // The Crash recovery preference (#572). Off (the default) writes no recovery data and offers
+    // none at startup; files already on disk are never touched or offered. Turning it off cancels
+    // a snapshot still being written; on resumes the cadence.
+    [[nodiscard]] bool crashRecoveryEnabled() const noexcept { return crashRecoveryEnabled_; }
+    void setCrashRecoveryEnabled(bool enabled);
     // Last completed worker result, without filesystem I/O on the UI thread. Startup scanning
     // and recovery publication update it; std::nullopt until a worker finds an offer.
     [[nodiscard]] std::optional<host::SessionRecoveryOffer> recoveryOffer() const;
@@ -387,6 +392,7 @@ class ProjectHost final : public QObject {
     std::optional<host::SessionRecoveryOffer> cachedRecoveryOffer_;
     std::vector<std::filesystem::path> recoveryRetirePaths_;
     bool recoveryRefreshPending_ = false;
+    bool crashRecoveryEnabled_ = false;
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
     host::SessionRecoveryPolicy recoveryPolicy_;
     std::filesystem::path recoveryDirectory_;

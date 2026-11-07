@@ -11,6 +11,7 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QFontMetrics>
@@ -64,6 +65,7 @@ QWidget* gOwner = nullptr;
     ui::ApplicationPreferences prefs;
     prefs.audioEnabled = false;
     prefs.loopPlayback = false;
+    prefs.crashRecoveryEnabled = true;
     prefs.ramHeadroomBytes = 6ULL * 1024 * 1024 * 1024;
     prefs.vramHeadroomBytes = 512ULL * 1024 * 1024;
     prefs.mediaDiskCacheEnabled = false;
@@ -93,6 +95,10 @@ void testControlsReflectPreferences(Expectations& check) {
         window.findChild<QAbstractButton*>(QStringLiteral("preferencesLoopPlaybackSwitch"));
     check.expect(loop != nullptr && !loop->isChecked(),
                  "the loop switch reflects the stored value");
+    auto* recoverySwitch =
+        window.findChild<QAbstractButton*>(QStringLiteral("preferencesCrashRecoverySwitch"));
+    check.expect(recoverySwitch != nullptr && recoverySwitch->isChecked(),
+                 "the crash recovery switch reflects the stored value");
 
     auto* ramHeadroom =
         window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamHeadroomField"));
@@ -707,6 +713,28 @@ void testPerformancePageDestructionSafe(Expectations& check) {
 
 } // namespace
 
+// Review captures: BLOOM_PREFERENCES_CAPTURE_DIR saves the General page at 2000 and 900 pixels wide
+// (run once per device pixel ratio, for example with QT_SCALE_FACTOR=1.5).
+void testCaptureGeneralPage(Expectations&) {
+    const auto directory = qEnvironmentVariable("BLOOM_PREFERENCES_CAPTURE_DIR");
+    if (directory.isEmpty())
+        return;
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    window.show();
+    if (auto* rail = window.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail")))
+        rail->setCurrentRow(0);
+    for (const int width : {2000, 900}) {
+        window.resize(width, window.height());
+        QTest::qWait(100);
+        (void)QDir().mkpath(directory);
+        (void)window.grab().save(QDir(directory).filePath(
+            QStringLiteral("preferences-general-w%1-%2.png")
+                .arg(width)
+                .arg(window.devicePixelRatioF() > 1.0 ? QStringLiteral("dpr15")
+                                                      : QStringLiteral("dpr1"))));
+    }
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -732,5 +760,6 @@ int main(int argc, char** argv) {
     testPerformancePageUsesInjectedProvider(check);
     testPerformancePageRefreshesWhileVisible(check);
     testPerformancePageDestructionSafe(check);
+    testCaptureGeneralPage(check);
     return check.failures() == 0 ? 0 : 1;
 }

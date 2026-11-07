@@ -57,6 +57,7 @@ void testFullRoundTrip(Expectations& check) {
     ui::ApplicationPreferences prefs;
     prefs.audioEnabled = false;
     prefs.loopPlayback = false;
+    prefs.crashRecoveryEnabled = true;
     prefs.ramHeadroomBytes = 6ULL * 1024 * 1024 * 1024;
     prefs.vramHeadroomBytes = 512ULL * 1024 * 1024;
     prefs.mediaDiskCacheEnabled = false;
@@ -141,6 +142,8 @@ void testSoundDefaultsAndBounds(Expectations& check) {
                      defaults.renderNotificationsEnabled,
                  "sounds, event sounds and render notifications default on");
     check.expect(!defaults.interactionSoundsEnabled, "interaction sounds default off");
+    check.expect(!defaults.crashRecoveryEnabled && !ui::defaultApplicationPreferences().crashRecoveryEnabled,
+                 "crash recovery defaults off");
     check.expect(defaults.soundVolumePercent == 40, "the default volume is 40 percent");
     settings.setValue(QStringLiteral("sound/volume-percent"), 400);
     check.expect(ui::loadApplicationPreferences(settings).soundVolumePercent == 40,

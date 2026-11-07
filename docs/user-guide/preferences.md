@@ -21,7 +21,7 @@ or create, is refused under the field and OK waits.
 
 | Page | What it controls | When it takes effect |
 | --- | --- | --- |
-| General | Audio playback, loop playback | Immediately |
+| General | Audio playback, loop playback, and **Crash recovery** (see below) | Immediately |
 | Import | **Sequence frame rate** (Match composition, or a rate such as 24 or 23.976; default 24) and **Still duration** (Composition length, or a fixed length in seconds) that newly imported footage starts with. See [Interpret Footage](interpret-footage.md#import-options-and-preferences) | The next import |
 | Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
@@ -35,6 +35,14 @@ which applies it through the same setters its own menus use. Headroom reaches th
 cache enable, location and disk-space budget, marked once in the Media disk cache header) are read
 when Bloom starts. Leave the cache directory empty for the default location; **Browse…** picks a
 folder and the reset button beside it returns to the default.
+
+## Crash recovery
+
+**Recover unsaved changes after a crash** (General page, stored as `recovery/enabled`, MCP key
+`crashRecovery`) is off by default. While it is off Bloom writes no recovery data, shows no
+**Recover Unsaved Changes** prompt at startup, and leaves recovery files already on disk untouched
+and unoffered. While it is on, Bloom periodically writes a recovery copy of unsaved work and offers
+it after an unexpected exit. Changing it takes effect at once, without a restart.
 
 ## Import
 

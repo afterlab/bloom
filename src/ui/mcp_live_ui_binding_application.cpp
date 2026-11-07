@@ -140,6 +140,7 @@ const std::vector<PreferenceKey>& preferenceKeys() {
         std::vector<PreferenceKey> list;
         list.push_back(flagKey("audioPlayback", &ApplicationPreferences::audioEnabled));
         list.push_back(flagKey("loopPlayback", &ApplicationPreferences::loopPlayback));
+        list.push_back(flagKey("crashRecovery", &ApplicationPreferences::crashRecoveryEnabled));
         list.push_back(bytesKey("ramHeadroomBytes", &ApplicationPreferences::ramHeadroomBytes,
                                 runtime::kMaximumMemoryHeadroomBytes));
         list.push_back(bytesKey("vramHeadroomBytes", &ApplicationPreferences::vramHeadroomBytes,

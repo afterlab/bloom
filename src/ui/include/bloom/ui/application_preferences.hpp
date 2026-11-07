@@ -71,6 +71,9 @@ struct ApplicationPreferences final {
     // General / playback.
     bool audioEnabled = true;
     bool loopPlayback = true;
+    // Crash recovery (#572): off by default. Off writes no recovery data and offers none at
+    // startup; recovery files already on disk are left untouched. Applied live.
+    bool crashRecoveryEnabled = false;
 
     // Memory and caches. Headroom is what Bloom leaves free for the rest of the computer (0 to 256
     // GiB each); Bloom uses everything else. Applied live on Apply and OK. The defaults are

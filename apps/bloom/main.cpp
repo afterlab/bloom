@@ -1048,6 +1048,16 @@ int main(int argc, char* argv[]) try {
 
     // SAVEFIX-1: the launch after an abnormal exit. Queued, not called inline, so the offer is
     // presented over a window that is already on screen rather than in front of one.
+    // The Crash recovery preference (#572) is off by default; it is applied before the offer and
+    // follows every committed change (Preferences window or preferences.set) without a restart.
+    const auto applyCrashRecovery = [&projectHost] {
+        const QSettings recoverySettings;
+        projectHost.setCrashRecoveryEnabled(
+            bloom::ui::loadApplicationPreferences(recoverySettings).crashRecoveryEnabled);
+    };
+    applyCrashRecovery();
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
+                     applyCrashRecovery);
     QTimer::singleShot(0, &projectHost, &bloom::ui::ProjectHost::offerRecoveryOnStartup);
 
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)

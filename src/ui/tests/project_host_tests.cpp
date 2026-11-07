@@ -290,6 +290,7 @@ void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
     bloom::runtime::TaskScheduler scheduler;
     ProjectHost host(scheduler);
     host.setRecoveryDirectory(recoveryDirectory);
+    host.setCrashRecoveryEnabled(true);
 
     host.writeRecoverySnapshot();
     expectations.expect(!host.recoveryOffer().has_value(),
@@ -374,6 +375,7 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
     {
         ProjectHost crashed(scheduler);
         crashed.setRecoveryDirectory(recoveryDirectory);
+        crashed.setCrashRecoveryEnabled(true);
         crashedSessionId = crashed.stateSnapshot().projectSessionId;
         expectations.expect(executeRename(crashed, "Unsaved before restart"),
                             "recovery restart: the first host becomes dirty");
@@ -391,6 +393,7 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
 
     ProjectHost restarted(scheduler);
     restarted.setRecoveryDirectory(recoveryDirectory);
+    restarted.setCrashRecoveryEnabled(true);
     expectations.expect(restarted.stateSnapshot().projectSessionId == crashedSessionId,
                         "recovery restart: runtime session IDs restart at the same value");
     restarted.writeRecoverySnapshot();
@@ -417,6 +420,69 @@ void testRecoverySurvivesCleanRestartAndPendingDecision(Expectations& expectatio
                         "recovery restart: declining the offer leaves the prior artifact intact");
 }
 
+// Crash recovery is off by default (#572): a dirty session writes no recovery data, a recovery
+// file already on disk is neither offered nor touched, and turning it on restores both.
+void testCrashRecoveryOffByDefault(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "recovery off: temp directory is available");
+        return;
+    }
+    const auto recoveryDirectory = directory.path() / "recovery";
+    bloom::runtime::TaskScheduler scheduler;
+    std::filesystem::path existingPath;
+    {
+        ProjectHost crashed(scheduler);
+        crashed.setRecoveryDirectory(recoveryDirectory);
+        crashed.setCrashRecoveryEnabled(true);
+        expectations.expect(executeRename(crashed, "Unsaved on disk"),
+                            "recovery off: the earlier host becomes dirty");
+        crashed.writeRecoverySnapshot();
+        expectations.expect(waitUntil([&] { return crashed.recoveryOffer().has_value(); }),
+                            "recovery off: the enabled host writes recovery data");
+        if (const auto offer = crashed.recoveryOffer())
+            existingPath = offer->recoveryPath;
+    }
+    const auto countFiles = [&] {
+        std::size_t count = 0;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(recoveryDirectory, ec))
+            count += entry.is_regular_file() ? 1 : 0;
+        return count;
+    };
+    const auto before = countFiles();
+    expectations.expect(!existingPath.empty() && before > 0,
+                        "recovery off: recovery data exists before the default host runs");
+
+    ProjectHost host(scheduler);
+    host.setRecoveryDirectory(recoveryDirectory);
+    expectations.expect(!host.crashRecoveryEnabled(), "recovery off: a new host defaults to off");
+    expectations.expect(executeRename(host, "Unsaved while off"),
+                        "recovery off: the default host becomes dirty");
+    host.writeRecoverySnapshot();
+    expectations.expect(!waitUntil([&] { return host.recoveryOffer().has_value(); }),
+                        "recovery off: no recovery snapshot is written");
+    expectations.expect(countFiles() == before, "recovery off: no recovery file is added");
+    int asked = 0;
+    host.setRecoveryDecisionProvider([&asked](const std::filesystem::path&) {
+        ++asked;
+        return false;
+    });
+    host.offerRecoveryOnStartup();
+    expectations.expect(!waitUntil([&] { return asked > 0; }),
+                        "recovery off: no recovery prompt is shown");
+    expectations.expect(std::filesystem::exists(existingPath) && countFiles() == before,
+                        "recovery off: recovery data already on disk is left untouched");
+
+    host.setCrashRecoveryEnabled(true);
+    host.writeRecoverySnapshot();
+    expectations.expect(waitUntil([&] { return countFiles() > before; }),
+                        "recovery on: the snapshot is written without a restart");
+    host.offerRecoveryOnStartup();
+    expectations.expect(waitUntil([&] { return asked == 1; }),
+                        "recovery on: the startup prompt is offered again");
+}
+
 void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) {
     TempDirectory directory;
     if (!directory.isValid()) {
@@ -428,7 +494,9 @@ void testConcurrentRecoveryOwnersAndExplicitDiscard(Expectations& expectations) 
     ProjectHost first(scheduler);
     ProjectHost second(scheduler);
     first.setRecoveryDirectory(recoveryDirectory);
+    first.setCrashRecoveryEnabled(true);
     second.setRecoveryDirectory(recoveryDirectory);
+    second.setCrashRecoveryEnabled(true);
     expectations.expect(first.stateSnapshot().projectSessionId ==
                             second.stateSnapshot().projectSessionId,
                         "recovery owners: concurrent hosts have colliding runtime session IDs");
@@ -502,6 +570,7 @@ void testDiscardKeepsRecoveryWhenOpenFails(Expectations& expectations) {
     bloom::runtime::TaskScheduler scheduler;
     ProjectHost host(scheduler);
     host.setRecoveryDirectory(directory.path() / "recovery");
+    host.setCrashRecoveryEnabled(true);
     expectations.expect(executeRename(host, "Keep this work"),
                         "failed open: the current project becomes dirty");
     host.writeRecoverySnapshot();
@@ -612,6 +681,7 @@ void testRecoveryCoalescesToNewestRevision(Expectations& expectations) {
     }
     ProjectHost host(scheduler);
     host.setRecoveryDirectory(directory.path() / "recovery");
+    host.setCrashRecoveryEnabled(true);
     expectations.expect(executeRename(host, "First revision"),
                         "recovery revision: first edit succeeds");
     host.writeRecoverySnapshot();
@@ -1198,6 +1268,7 @@ int main(int argc, char** argv) {
     testDirtyAfterExecutedTransaction(expectations);
     testFullSaveThenOpenCycle(expectations);
     testRecoverySnapshotAndStartupOffer(expectations);
+    testCrashRecoveryOffByDefault(expectations);
     testRecoverySurvivesCleanRestartAndPendingDecision(expectations);
     testConcurrentRecoveryOwnersAndExplicitDiscard(expectations);
     testDiscardKeepsRecoveryWhenOpenFails(expectations);

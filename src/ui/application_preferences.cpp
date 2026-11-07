@@ -18,6 +18,7 @@ namespace {
 
 constexpr auto kAudioEnabledKey = "playback/audio-enabled";
 constexpr auto kLoopPlaybackKey = "playback/loop";
+constexpr auto kCrashRecoveryKey = "recovery/enabled";
 constexpr auto kMediaDiskCacheEnabledKey = "media/disk-cache-enabled";
 constexpr auto kMediaDiskCacheDirectoryKey = "media/disk-cache-directory";
 constexpr auto kMediaDiskCacheBudgetKey = "media/disk-cache-budget-bytes";
@@ -192,6 +193,8 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     ApplicationPreferences preferences;
     preferences.audioEnabled = settings.value(QLatin1String(kAudioEnabledKey), true).toBool();
     preferences.loopPlayback = settings.value(QLatin1String(kLoopPlaybackKey), true).toBool();
+    preferences.crashRecoveryEnabled =
+        settings.value(QLatin1String(kCrashRecoveryKey), false).toBool();
     preferences.ramHeadroomBytes = headroomFromSettings(settings, runtime::kRamHeadroomKey,
                                                         runtime::defaultRamHeadroomBytes());
     preferences.vramHeadroomBytes = headroomFromSettings(settings, runtime::kVramHeadroomKey,
@@ -264,6 +267,7 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
 void saveApplicationPreferences(QSettings& settings, const ApplicationPreferences& preferences) {
     settings.setValue(QLatin1String(kAudioEnabledKey), preferences.audioEnabled);
     settings.setValue(QLatin1String(kLoopPlaybackKey), preferences.loopPlayback);
+    settings.setValue(QLatin1String(kCrashRecoveryKey), preferences.crashRecoveryEnabled);
     // A headroom equal to the computed default is not stored, so the default keeps following the
     // measured capacity (a later process limit or GPU); any other value is an explicit preference.
     const auto storeHeadroom = [&settings](const std::string_view key, const std::uint64_t bytes,
