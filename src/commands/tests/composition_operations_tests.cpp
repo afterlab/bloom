@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace bloom::commands::test {
 namespace {
@@ -505,6 +506,97 @@ void testAddAndUpdateCompositionSettings(TestContext& test) {
     test.expect(copy != nullptr && copy->timecode() == composition->timecode(),
                 "DuplicateComposition carries the timecode labelling");
 }
+
+// #557: a composition whose animation spans several curves (several properties on several layers)
+// duplicates into an equal copy with fresh curve and keyframe ids, and the copy's curves are
+// independent of the original's.
+void testDuplicateCompositionWithManyAnimatedProperties(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto key = [&](const document::ParameterId parameter, const std::int64_t time,
+                         const double value) {
+        Transaction transaction("Key", document.snapshot().revision());
+        transaction.emplace<SetKeyframeAtTimeForParameter>(
+            kCompositionId, parameter, core::RationalTime::fromInteger(time), value);
+        return stack.execute(std::move(transaction)).changed();
+    };
+    for (const auto parameter :
+         {kOpacityId, kSecondOpacityId, kFirstRotationId, kSecondRotationId}) {
+        test.expect(key(parameter, 0, 0.25) && key(parameter, 2, 0.75),
+                    "fixture keys several parameters on several layers");
+    }
+
+    const auto before = document.snapshot();
+    const auto* source = before.project().findComposition(kCompositionId);
+    requireFixture(source != nullptr, "duplicate source must exist");
+    test.expect(source->animationCurves().records().size() == 4,
+                "the source has four animation curves");
+    const auto normalized = [](const document::Composition& composition) {
+        auto records = std::vector<document::AnimationCurveRecord>(
+            composition.animationCurves().records().begin(),
+            composition.animationCurves().records().end());
+        for (auto& record : records)
+            std::get<document::ScalarAnimationCurve>(record).id = document::AnimationCurveId{};
+        for (auto& record : records)
+            for (auto& keyframe : std::get<document::ScalarAnimationCurve>(record).keyframes)
+                keyframe.id = document::KeyframeId{};
+        return records;
+    };
+    const auto sourceCurves = normalized(*source);
+
+    Transaction duplicate("Duplicate Composition", before.revision());
+    duplicate.emplace<DuplicateComposition>(kCompositionId);
+    const auto result = stack.execute(std::move(duplicate));
+    const auto copyId = result.outputId<document::CompositionId>(kDuplicateCompositionOutput)
+                            .value_or(document::CompositionId{});
+    const auto after = document.snapshot();
+    const auto* copy = after.project().findComposition(copyId);
+    test.expect(result.changed() && copy != nullptr,
+                "DuplicateComposition succeeds with several animated properties");
+    if (copy == nullptr)
+        return;
+    test.expect(normalized(*copy) == sourceCurves,
+                "the copy's animation equals the original's apart from ids");
+    test.expect(std::ranges::none_of(copy->animationCurves().records(),
+                                     [&](const auto& record) {
+                                         return source->animationCurves().find(
+                                                    document::animationCurveId(record)) != nullptr;
+                                     }),
+                "the copy's curves have fresh ids");
+    std::set<document::KeyframeId> keyframeIds;
+    for (const auto* composition : {source, copy})
+        for (const auto& record : composition->animationCurves().records())
+            for (const auto& keyframe : std::get<document::ScalarAnimationCurve>(record).keyframes)
+                keyframeIds.insert(keyframe.id);
+    test.expect(keyframeIds.size() == 16, "all sixteen keyframes carry distinct ids");
+
+    // The copy's keys are its own: re-keying a copied parameter leaves the original alone.
+    const auto copiedOpacity = std::ranges::find_if(
+        copy->parameters().records(),
+        [&](const auto& parameter) {
+            return parameter.schemaKey == document::kOpacityParameterSchemaKey &&
+                   std::holds_alternative<document::AnimationCurveSource>(parameter.source);
+        });
+    requireFixture(copiedOpacity != copy->parameters().records().end(),
+                   "copy has animated opacity");
+    Transaction edit("Edit Copy", after.revision());
+    edit.emplace<SetKeyframeAtTimeForParameter>(copyId, copiedOpacity->id,
+                                                core::RationalTime::fromInteger(2), 0.1);
+    test.expect(stack.execute(std::move(edit)).changed(), "the copy's key is edited");
+    const auto edited = document.snapshot();
+    test.expect(normalized(*edited.project().findComposition(kCompositionId)) == sourceCurves &&
+                    normalized(*edited.project().findComposition(copyId)) != sourceCurves,
+                "editing the copy's keys leaves the original's curves unchanged");
+
+    test.expect(stack.undo().changed() && stack.undo().changed() &&
+                    document.snapshot().project().findComposition(copyId) == nullptr,
+                "undo removes the edit and then the copy");
+    test.expect(stack.redo().changed() &&
+                    document.snapshot().project().findComposition(copyId) != nullptr &&
+                    normalized(*document.snapshot().project().findComposition(copyId)) ==
+                        sourceCurves,
+                "redo restores the copy with its animation");
+}
 } // namespace
 } // namespace bloom::commands::test
 
@@ -514,6 +606,7 @@ int main() {
         bloom::commands::test::testAddCompositionBuildsTopologyAndUndoRedo(test);
         bloom::commands::test::testDeleteCompositionAllowsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);
+        bloom::commands::test::testDuplicateCompositionWithManyAnimatedProperties(test);
         bloom::commands::test::testSafeAreaSettingsAreUndoableAndDuplicated(test);
         bloom::commands::test::testWorkingColorSpaceOverrideIsUndoable(test);
         bloom::commands::test::testCompositionSettingsAreOneUndoableCommand(test);

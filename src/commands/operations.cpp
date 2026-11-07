@@ -142,6 +142,7 @@ allocateCompositionCloneIds(document::Draft& draft, const document::Composition&
     for (const auto& record : source.animationCurves().records())
         keyframeCount +=
             std::visit([](const auto& curve) { return storedKeyframeCount(curve); }, record);
+    // keyframeCount spans every curve, so the allocation total is verified once after all of them.
     for (const auto& record : source.animationCurves().records()) {
         const auto curveId = draft.ids().allocateAnimationCurve();
         if (!curveId) {
@@ -159,9 +160,9 @@ allocateCompositionCloneIds(document::Draft& draft, const document::Composition&
                 });
             },
             record);
-        if (ids.keyframes.size() != keyframeCount) {
-            return std::nullopt;
-        }
+    }
+    if (ids.keyframes.size() != keyframeCount) {
+        return std::nullopt;
     }
     for (const auto& [groupId, unused] : source.nodeGroups()) {
         static_cast<void>(unused);
@@ -181,9 +182,10 @@ template <typename Id>
 
 [[nodiscard]] std::optional<document::Composition>
 cloneComposition(document::Draft& draft, const document::Composition& source,
-                 const std::string& name) {
+                 const std::string& name, std::string& failure) {
     const auto ids = allocateCompositionCloneIds(draft, source);
     if (!ids) {
+        failure = "Document ID space is exhausted";
         return std::nullopt;
     }
 
@@ -198,6 +200,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             binding.parameterId = remap(ids->parameters, binding.parameterId);
         }
         if (!graph.addNode(std::move(node))) {
+            failure = "Composition copy failed: a node could not be added to the copy";
             return std::nullopt;
         }
     }
@@ -208,8 +211,10 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         // ADR 0028: masks take fresh ids and the cloned parameters; a matte follows its source.
         for (auto& mask : boundary.masks) {
             const auto maskId = draft.ids().allocateLayerMask();
-            if (!maskId)
+            if (!maskId) {
+                failure = "Document ID space is exhausted";
                 return std::nullopt;
+            }
             mask.id = *maskId;
             mask.path = remap(ids->parameters, mask.path);
             mask.feather = remap(ids->parameters, mask.feather);
@@ -226,6 +231,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         for (auto& binding : boundary.parameters)
             binding.parameterId = remap(ids->parameters, binding.parameterId);
         if (!graph.addLayerOutput(std::move(boundary))) {
+            failure = "Composition copy failed: a layer could not be added to the copy";
             return std::nullopt;
         }
     }
@@ -238,6 +244,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
                                sourceEntry.layerId.isValid()
                                    ? remap(ids->layers, sourceEntry.layerId)
                                    : document::LayerId{}})) {
+                failure =
+                    "Composition copy failed: a layer stack entry could not be added to the copy";
                 return std::nullopt;
             }
         }
@@ -257,6 +265,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             },
             edge.destination);
         if (!graph.addEdge(std::move(edge))) {
+            failure = "Composition copy failed: an edge could not be added to the copy";
             return std::nullopt;
         }
     }
@@ -287,6 +296,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             },
             parameter.source);
         if (!composition.parameters().insert(std::move(parameter))) {
+            failure = "Composition copy failed: a parameter could not be added to the copy";
             return std::nullopt;
         }
     }
@@ -301,6 +311,7 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             },
             record);
         if (!composition.animationCurves().insert(std::move(record))) {
+            failure = "Composition copy failed: an animation curve could not be added to the copy";
             return std::nullopt;
         }
     }
@@ -998,9 +1009,13 @@ OperationResult DuplicateComposition::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Duplicated composition name is invalid");
     }
-    auto copy = cloneComposition(draft, *source, name);
+    std::string failure;
+    auto copy = cloneComposition(draft, *source, name, failure);
     if (!copy) {
-        return exhaustedIds();
+        return OperationResult::rejected(failure == "Document ID space is exhausted"
+                                             ? OperationIssueCode::Unsupported
+                                             : OperationIssueCode::InvalidValue,
+                                         failure);
     }
     const auto copyId = copy->id();
     if (!draft.project().addComposition(std::move(*copy))) {

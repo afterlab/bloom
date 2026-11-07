@@ -12,7 +12,9 @@
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <source_location>
@@ -1014,7 +1016,180 @@ void entryLayerEdits() {
 
 } // namespace
 
+
+// #557: curve records with every curve and keyframe id zeroed, so two compositions' animation can
+// be compared for equality independent of the fresh ids a copy takes.
+[[nodiscard]] std::vector<document::AnimationCurveRecord>
+withoutIds(const document::Composition& composition) {
+    std::vector<document::AnimationCurveRecord> records;
+    for (auto record : composition.animationCurves().records()) {
+        std::visit(
+            [](auto& curve) {
+                using Curve = std::remove_cvref_t<decltype(curve)>;
+                curve.id = document::AnimationCurveId{};
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+                    for (auto& key : curve.keyframes)
+                        key.id = document::KeyframeId{};
+                } else {
+                    for (auto& component : curve.components)
+                        for (auto& key : component.keyframes)
+                            key.id = document::KeyframeId{};
+                }
+            },
+            record);
+        records.push_back(std::move(record));
+    }
+    return records;
+}
+
+[[nodiscard]] std::vector<document::KeyframeId>
+keyframeIds(const document::Composition& composition) {
+    std::vector<document::KeyframeId> found;
+    for (const auto& record : composition.animationCurves().records())
+        std::visit(
+            [&](const auto& curve) {
+                using Curve = std::remove_cvref_t<decltype(curve)>;
+                if constexpr (document::kWholeValueAnimationCurve<Curve>) {
+                    for (const auto& key : curve.keyframes)
+                        found.push_back(key.id);
+                } else {
+                    for (const auto& component : curve.components)
+                        for (const auto& key : component.keyframes)
+                            found.push_back(key.id);
+                }
+            },
+            record);
+    return found;
+}
+
+void duplicateCompositionWithKeyframes() {
+    Fixture fixture;
+    const auto mainArgument = Value(StableId{fixture.main.value()});
+    for (const auto* name : {"One", "Two", "Three"}) {
+        expect(fixture
+                   .run("bloom.layer.add-solid", {{"composition", mainArgument},
+                                                  {"name", Value(std::string(name))},
+                                                  {"color", Value(core::Color4d{1, 0, 0, 1})}})
+                   .succeeded(),
+               "a solid layer is added");
+    }
+    fixture.refresh();
+    // Key every constant scalar and 2D parameter of the layers and their nodes at two times:
+    // many curves in one composition, which is what a template shot looks like.
+    std::size_t keyed = 0;
+    for (const auto& record : fixture.composition(fixture.main).parameters().records()) {
+        const auto* constant = std::get_if<document::ConstantValueSource>(&record.source);
+        if (constant == nullptr)
+            continue;
+        for (const std::int64_t time : {1, 2}) {
+            Value value(0.0);
+            if (const auto* scalar = std::get_if<double>(&constant->value))
+                value = Value(*scalar + static_cast<double>(time));
+            else if (const auto* vec = std::get_if<document::Vec2d>(&constant->value))
+                value = Value(document::Vec2d{vec->x + static_cast<double>(time), vec->y});
+            else
+                break;
+            if (fixture
+                    .run("bloom.animation.set-keyframe-at-time-for-parameter",
+                         {{"composition", mainArgument},
+                          {"parameter", Value(StableId{record.id.value()})},
+                          {"time", Value(time)},
+                          {"value", value}})
+                    .succeeded() &&
+                time == 2)
+                ++keyed;
+        }
+    }
+    expect(keyed >= 8, "several parameters across layers and nodes are keyed");
+    fixture.refresh();
+    const auto source = fixture.composition(fixture.main);
+    expect(source.animationCurves().records().size() == keyed, "each keyed parameter has a curve");
+
+    auto duplicated = fixture.run("bloom.composition.duplicate", {{"composition", mainArgument}});
+    expect(duplicated.succeeded(), "duplicating a composition with many animated properties works");
+    const auto copies = Fixture::outputs<document::CompositionId>(duplicated, "composition");
+    expect(copies.size() == 1, "duplicate outputs the copy");
+    if (copies.size() != 1)
+        return;
+    fixture.refresh();
+    const auto copy = fixture.composition(copies.front());
+    expect(withoutIds(copy) == withoutIds(source), "the copy's animation equals the original's");
+    expect(copy.parameters().records().size() == source.parameters().records().size() &&
+               copy.graph().nodes().size() == source.graph().nodes().size(),
+           "the copy has the same parameters and nodes");
+    auto sourceKeys = keyframeIds(source);
+    const auto copyKeys = keyframeIds(copy);
+    expect(copyKeys.size() == sourceKeys.size() && !copyKeys.empty() &&
+               std::ranges::none_of(copyKeys,
+                                    [&](const auto id) {
+                                        return std::ranges::find(sourceKeys, id) !=
+                                               sourceKeys.end();
+                                    }),
+           "the copy's keyframes have fresh ids");
+    expect(std::ranges::none_of(copy.animationCurves().records(),
+                                [&](const auto& record) {
+                                    return source.animationCurves().find(
+                                               document::animationCurveId(record)) != nullptr;
+                                }),
+           "the copy's curves have fresh ids");
+
+    // Independent curves: re-key the copy's first animated parameter; the original is unchanged.
+    const auto animated =
+        std::ranges::find_if(copy.parameters().records(), [&](const auto& record) {
+            const auto* held = std::get_if<document::AnimationCurveSource>(&record.source);
+            return held != nullptr && copy.animationCurves().findScalar(held->curveId) != nullptr;
+        });
+    expect(animated != copy.parameters().records().end(), "the copy has an animated scalar");
+    if (animated != copy.parameters().records().end()) {
+        expect(fixture
+                   .run("bloom.animation.set-keyframe-at-time-for-parameter",
+                        {{"composition", Value(StableId{copies.front().value()})},
+                         {"parameter", Value(StableId{animated->id.value()})},
+                         {"time", Value(std::int64_t{1})},
+                         {"value", Value(12345.0)}})
+                   .succeeded(),
+               "the copy's keyframe is edited");
+        fixture.refresh();
+        expect(withoutIds(fixture.composition(fixture.main)) == withoutIds(source),
+               "editing the copy leaves the original's curves untouched");
+        expect(withoutIds(fixture.composition(copies.front())) != withoutIds(source),
+               "the edit changed the copy");
+        expect(fixture.session->undo().succeeded(), "undo the copy edit");
+    }
+
+    // Undo and redo the duplicate itself.
+    expect(fixture.session->undo().succeeded(), "undo the duplicate");
+    fixture.refresh();
+    expect(fixture.snapshot->project().findComposition(copies.front()) == nullptr,
+           "undo removes the copy");
+    expect(fixture.session->redo().succeeded(), "redo the duplicate");
+    fixture.refresh();
+    expect(fixture.snapshot->project().findComposition(copies.front()) != nullptr &&
+               withoutIds(fixture.composition(copies.front())) == withoutIds(source),
+           "redo restores the copy with its animation");
+
+    // Save and reopen.
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        ("bloom-duplicate-keys-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".bloom");
+    std::filesystem::remove(path);
+    expect(fixture.session->saveAs(path).succeeded(), "the project saves");
+    auto reopened = scripting::Session::open(path);
+    expect(static_cast<bool>(reopened), "the project reopens");
+    if (reopened) {
+        const auto snapshot = reopened.session()->snapshot();
+        const auto* reopenedCopy = snapshot.project().findComposition(copies.front());
+        expect(reopenedCopy != nullptr &&
+                   std::ranges::equal(reopenedCopy->animationCurves().records(),
+                                      copy.animationCurves().records()),
+               "save and reopen keep the copy's curves and keys");
+    }
+    std::filesystem::remove(path);
+}
+
 int main() {
+    duplicateCompositionWithKeyframes();
     layerOperations();
     addFromAssets();
     nodeOperations();
