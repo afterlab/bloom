@@ -2,10 +2,13 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 
 #include <algorithm>
 #include <map>
@@ -597,6 +600,133 @@ void testDuplicateCompositionWithManyAnimatedProperties(TestContext& test) {
                         sourceCurves,
                 "redo restores the copy with its animation");
 }
+// #557: every id the copy holds resolves inside the copy. Layer timing extents, parent links, track
+// mattes, masks, stack entries, edges and parameter sources all point at the copy's own records,
+// and compiling the copy reports no unresolved layer extent.
+void testDuplicateCompositionRemapsEveryReference(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto run = [&](auto operation) {
+        Transaction transaction("Fixture", document.snapshot().revision());
+        static_cast<void>(transaction.add(std::move(operation)));
+        return stack.execute(std::move(transaction)).changed();
+    };
+    // The first layer plays a source node of its own (a video layer); the second one plays its own
+    // node too (an audio layer's source is likewise a node of the composition).
+    test.expect(run(std::make_unique<SetLayerContentExtent>(
+                    kCompositionId, kFirstLayerId, document::SourceLayerExtent{kFirstLayerNodeId})) &&
+                    run(std::make_unique<SetLayerContentExtent>(
+                        kCompositionId, kSecondLayerId,
+                        document::SourceLayerExtent{kSecondLayerNodeId})),
+                "fixture gives both layers a source extent");
+    test.expect(run(std::make_unique<SetLayerParent>(kCompositionId, kFirstLayerId,
+                                                     std::optional(kSecondLayerId))),
+                "fixture links a parent");
+    test.expect(run(std::make_unique<SetTrackMatte>(kCompositionId, kFirstLayerId,
+                                                    document::TrackMatte{kSecondLayerId})),
+                "fixture sets a track matte");
+    document::PathValue path;
+    path.closed = true;
+    path.anchors = {{{0, 0}, {}, {}}, {{4, 0}, {}, {}}, {{4, 4}, {}, {}}};
+    test.expect(run(std::make_unique<AddLayerMask>(kCompositionId, kFirstLayerId, path)),
+                "fixture adds a mask");
+
+    const auto before = document.snapshot();
+    Transaction duplicate("Duplicate Composition", before.revision());
+    duplicate.emplace<DuplicateComposition>(kCompositionId);
+    const auto result = stack.execute(std::move(duplicate));
+    const auto copyId = result.outputId<document::CompositionId>(kDuplicateCompositionOutput)
+                            .value_or(document::CompositionId{});
+    const auto after = document.snapshot();
+    const auto* copy = after.project().findComposition(copyId);
+    requireFixture(result.changed() && copy != nullptr, "the composition duplicates");
+
+    std::set<document::LayerId> layers;
+    std::set<document::LayerSlotId> slots;
+    for (const auto& layer : copy->graph().layerOutputs())
+        layers.insert(layer.layerId);
+    for (const auto& stackNode : copy->graph().merges())
+        for (const auto& entry : stackNode.entries())
+            slots.insert(entry.slotId);
+    const auto node = [&](const NodeId id) { return copy->graph().findNode(id) != nullptr; };
+    const auto parameter = [&](const document::ParameterId id) {
+        return copy->parameters().find(id) != nullptr;
+    };
+    const auto bindings = [&](const auto& list) {
+        return std::ranges::all_of(
+            list, [&](const auto& binding) { return parameter(binding.parameterId); });
+    };
+
+    bool resolved = true;
+    for (const auto& layer : copy->graph().layerOutputs()) {
+        resolved = resolved && node(layer.nodeId) && bindings(layer.parameters);
+        if (layer.parent)
+            resolved = resolved && layers.contains(*layer.parent);
+        if (layer.trackMatte && layer.trackMatte->source.isValid())
+            resolved = resolved && layers.contains(layer.trackMatte->source);
+        if (layer.trackMatte && layer.trackMatte->node)
+            resolved = resolved && node(layer.trackMatte->node->nodeId);
+        if (const auto* extent = std::get_if<document::SourceLayerExtent>(&layer.timing.contentExtent))
+            resolved = resolved && node(extent->sourceNodeId);
+        if (layer.entrySlot)
+            resolved = resolved && slots.contains(*layer.entrySlot);
+        for (const auto& mask : layer.masks) {
+            resolved = resolved && parameter(mask.path) && parameter(mask.feather) &&
+                       parameter(mask.expansion) && parameter(mask.opacity);
+            if (mask.matte)
+                resolved = resolved && node(mask.matte->nodeId);
+        }
+    }
+    for (const auto& record : copy->graph().nodes())
+        resolved = resolved && bindings(record.parameters);
+    for (const auto& edge : copy->graph().edges()) {
+        resolved = resolved && node(edge.source.nodeId);
+        if (const auto* input = std::get_if<document::NodeInputRef>(&edge.destination))
+            resolved = resolved && node(input->nodeId);
+        else if (const auto* stackInput = std::get_if<document::LayerStackInputRef>(&edge.destination))
+            resolved = resolved && node(stackInput->stackNodeId) && slots.contains(stackInput->slotId);
+    }
+    for (const auto& stackNode : copy->graph().merges()) {
+        resolved = resolved && node(stackNode.nodeId());
+        for (const auto& entry : stackNode.entries())
+            resolved = resolved && (!entry.layerId.isValid() || layers.contains(entry.layerId));
+    }
+    for (const auto& record : copy->parameters().records()) {
+        if (const auto* curve = std::get_if<document::AnimationCurveSource>(&record.source))
+            resolved = resolved && copy->animationCurves().find(curve->curveId) != nullptr;
+        if (const auto* driver = std::get_if<document::DriverBindingSource>(&record.source))
+            resolved = resolved && node(driver->sourceNodeId);
+    }
+    for (const auto& [id, layout] : copy->nodeLayout()) {
+        static_cast<void>(layout);
+        resolved = resolved && node(id);
+    }
+    test.expect(resolved, "every id in the copy resolves to a record of the copy");
+
+    const auto* original = after.project().findComposition(kCompositionId);
+    requireFixture(original != nullptr, "the original remains");
+    const auto none = std::ranges::none_of(copy->graph().layerOutputs(), [&](const auto& layer) {
+        const auto* extent = std::get_if<document::SourceLayerExtent>(&layer.timing.contentExtent);
+        return original->graph().findNode(layer.nodeId) != nullptr ||
+               original->graph().findLayer(layer.layerId) != nullptr ||
+               (extent != nullptr && original->graph().findNode(extent->sourceNodeId) != nullptr) ||
+               (layer.parent && original->graph().findLayer(*layer.parent) != nullptr) ||
+               (layer.trackMatte && original->graph().findLayer(layer.trackMatte->source) != nullptr);
+    });
+    test.expect(none, "no layer id in the copy points into the original");
+
+    const runtime::NodeDefinitionRegistry registry;
+    const runtime::SnapshotCompiler compiler{registry};
+    const runtime::CancellationToken never;
+    const auto unresolved = [&](const document::CompositionId id) {
+        const auto compiled = compiler.compile({after, id}, never);
+        return std::ranges::count_if(compiled.diagnostics, [](const auto& diagnostic) {
+            return diagnostic.code == runtime::CompileDiagnosticCode::LayerExtentUnresolved;
+        });
+    };
+    test.expect(unresolved(kCompositionId) == 0 && unresolved(copyId) == 0,
+                "compiling the copy reports no unresolved layer extent");
+}
 } // namespace
 } // namespace bloom::commands::test
 
@@ -607,6 +737,7 @@ int main() {
         bloom::commands::test::testDeleteCompositionAllowsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);
         bloom::commands::test::testDuplicateCompositionWithManyAnimatedProperties(test);
+        bloom::commands::test::testDuplicateCompositionRemapsEveryReference(test);
         bloom::commands::test::testSafeAreaSettingsAreUndoableAndDuplicated(test);
         bloom::commands::test::testWorkingColorSpaceOverrideIsUndoable(test);
         bloom::commands::test::testCompositionSettingsAreOneUndoableCommand(test);

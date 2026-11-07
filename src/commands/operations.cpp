@@ -220,9 +220,21 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             mask.feather = remap(ids->parameters, mask.feather);
             mask.expansion = remap(ids->parameters, mask.expansion);
             mask.opacity = remap(ids->parameters, mask.opacity);
+            if (mask.matte)
+                mask.matte->nodeId = remap(ids->nodes, mask.matte->nodeId);
         }
-        if (boundary.trackMatte)
-            boundary.trackMatte->source = remap(ids->layers, boundary.trackMatte->source);
+        if (boundary.trackMatte) {
+            // A node matte (#383) has no source layer; a layer matte has no node.
+            if (boundary.trackMatte->source.isValid())
+                boundary.trackMatte->source = remap(ids->layers, boundary.trackMatte->source);
+            if (boundary.trackMatte->node)
+                boundary.trackMatte->node->nodeId =
+                    remap(ids->nodes, boundary.trackMatte->node->nodeId);
+        }
+        // The Source extent names a node of this composition, resolved at compile time.
+        if (auto* extent = std::get_if<document::SourceLayerExtent>(&boundary.timing.contentExtent);
+            extent != nullptr && extent->sourceNodeId.isValid())
+            extent->sourceNodeId = remap(ids->nodes, extent->sourceNodeId);
         if (sourceBoundary.parent)
             boundary.parent = remap(ids->layers, *sourceBoundary.parent);
         // #502: an entry layer follows its slot and owns cloned parameters.
