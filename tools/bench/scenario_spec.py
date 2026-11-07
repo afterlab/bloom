@@ -303,6 +303,21 @@ SCENARIOS["sharpen-2k"] = {
     ],
 }
 
+# #512: Camera Shake over a plate with its motion blur on: every frame is new (the shake is a function
+# of the frame), and each frame resamples the plate once per shutter sample.
+SCENARIOS["camera-shake-2k"] = {
+    "description": "A PNG16 plate under a Handheld Camera Shake with three octaves, auto overscan "
+                   "and its motion blur on.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.camera-shake",
+                      {"mode": "Handheld", "amplitudeX": 24.0, "amplitudeY": 16.0,
+                       "rollAmount": 1.0, "octaves": 3, "seed": 7, "motionBlur": True}]]},
+    ],
+}
+
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
 # is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
 # the render's camera depth and read as data), the focus racking from the near pillars to the back;

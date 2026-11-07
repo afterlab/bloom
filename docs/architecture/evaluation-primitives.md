@@ -423,6 +423,65 @@ output that exceeds the remaining pixel budget. Native work uses the executor's 
 allocation, cancellation, cache pin and proven-retirement ownership. macOS and Windows keep the
 explicit CPU fallback contract until native qualification.
 
+### Camera Shake
+
+`bloom.camera-shake` schema 1 (#512, group Transform) is Transform 2D driven by a seeded shake. The
+compiler lowers it to the same `Transform2DKernel` (extent Input, Bilinear), so the CPU reference, the
+resident GPU command, the cache identity, cancellation and budget are Transform 2D's, and the motion
+blur is its `MotionPathBlurKernel` in Transform mode with the node's own shutter (the Transform 2D
+motion blur vocabulary: `motionBlur`, `shutterAngle`, `shutterOffset`, `shutterPhase`,
+`shutterCurve`, `shutterShape`, `quality`, `minSamples`, `maxSamples`, `jitter`). The transform's
+`translate`, `rotation` and `scale` are not authored values: they are the three outputs of one value
+operation, `CompiledValueShake`, which the compiler appends to the value graph, so the host resolves
+them per frame (and per shutter row) exactly as it resolves a driven Transform 2D, and the CPU and
+GPU routes receive the same numbers.
+
+Parameters (schema keys `bloom.camera-shake.<role>`): `mode` (0 Handheld, 1 Impact, 2 Gate weave),
+`amplitudeX` and `amplitudeY` (pixels, >= 0, default 10), `rollAmount` (degrees, >= 0, default 0.5)
+are animatable with operand sockets; `frequency` (Hz, default 2), `octaves` (1 to 4, default 2),
+`roughness` (0 to 1, default 0.35), `smoothing` (0 to 1, default 0), `seed` (integer 0 to 999999, default 1 in the
+definition; AddNode stores a seed hashed from the new node's id modulo 1000000, so two new nodes in a
+project differ and the seed is an ordinary saved constant. The project's own id is a constant (1) in
+today's files, so it is not mixed in: the first shake of two projects can share a seed, and Randomise
+seed gives a different one. A duplicated node copies its parameters, so a copy keeps the seed and
+shakes the same), `loop` (default off), `loopLength` (seconds, default 4),
+`overscan` (default on) and the motion blur parameters are constants.
+
+Outputs: `image`, `offset` (Vector 2, pixels: Transform 2D's `translate`) and `roll` (Scalar,
+clockwise degrees: its `rotation`). They name outputs 0 and 1 of the shake operation, which is also
+what the Transform 2D reads, so a driven parameter sees exactly the transform that was applied. The
+node is compiled in the value pass (it is not a value node, but it publishes values); its operands
+are resolved there like any value node's.
+
+The motion (`core/camera_shake.hpp`) is a pure function of the settings, the time in seconds and the
+frame rate: three streams (x, y, roll) of unit motion in [-1, 1], each hashing `(seed, stream,
+lattice index)` with the versioned value hash (`hashWord`). Handheld is fractal value noise: lattice
+values joined by a smootherstep at `frequency` points a second, octave `o` at `3^o` times the rate and
+`roughness^o` of the weight, normalised by the weights so it stays within [-1, 1]. Impact adds, per
+lattice point, a random push `exp(-6 s) sin(2 pi 2.5 s)` (`s` the intervals since the hit, normalised
+by its peak 0.5889, summed over the last three hits and clamped to [-1, 1]). Gate weave is 0.75 a
+per-frame hash (frame = `floor(t * rate + 1e-6)`) plus 0.25 of the Handheld drift. `smoothing` averages
+nine samples across `smoothing / frequency` seconds centred on the time. Offset is `(amplitudeX * x,
+amplitudeY * y)` and roll `rollAmount * roll`.
+
+With `loop` on, the lattice has `max(1, round(loopLength * frequency))` points (octave `o`: `3^o` times
+as many) and the time maps to `t / loopLength * points`, snapped to 1e-9, with indices wrapped, so the
+motion at `t` and at `t + loopLength` is the same; Gate weave wraps its frame index by `round(loopLength
+* rate)`.
+
+`overscan` sets the scale (both axes) to `fillScale`: the smallest scale about the frame centre at which
+the shaken image covers the frame for every translation within +-`amplitudeX`, +-`amplitudeY` and every
+roll within +-`rollAmount`, found by mapping the frame's corners (four full-resolution pixels out, so
+the resampler's blend of neighbouring pixels stays inside the image even in a preview at an eighth of
+the resolution) back through each extreme translation and a 256-step sweep of the roll. It is 1 when
+nothing moves. The scale follows keyed amplitudes frame by frame.
+
+Both the motion and the cover scale are evaluated on the host in binary64, so the CPU and the GPU draw
+the same transform; the GPU coverage contract classifies the node as `node.bloom.camera-shake`,
+satisfied by a genuine Transform 2D resident preparation of a rolled, scaled, sub-pixel shaken move.
+No pixel operation of its own exists, so there is nothing to opt out.
+
+
 ### Blending
 
 The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output

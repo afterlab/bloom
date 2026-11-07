@@ -420,6 +420,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `motion-blur-2k` | 1920×1080 | 24 | Moving plates through Transform 2D's shutter and Directional Blur at High, Motion Blur at Draft and Echo, under a CG layer blurred by Vector Motion Blur (#484) from a per-pixel vector image (the bench media's mist pass stands in: it has no vector pass) |
 | `motion-blur-flow-2k` | 1920×1080 | 24 | A PNG16 plate through Optical Flow Motion Blur with a matte (#484): two layers and eight solves, at Draft |
 | `sharpen-2k` | 1920×1080 | 24 | A PNG16 plate under Sharpen (#486) with a radius of 8 pixels, its amount keyed from 50% to 200% so every frame is new |
+| `camera-shake-2k` | 1920×1080 | 24 | A PNG16 plate under a Handheld Camera Shake (#512) of 24 by 16 pixels and 1° of roll, three octaves, auto overscan on and its motion blur on, so every frame is new and resamples the plate once per shutter sample |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
