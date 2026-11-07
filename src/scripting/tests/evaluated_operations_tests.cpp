@@ -274,6 +274,72 @@ void assetReload() {
     std::filesystem::remove_all(folder, error);
 }
 
+// #558: a replacement path relative to the project file's folder relinks like an absolute one,
+// when the old file is gone, from whatever directory the process runs in, and after the project
+// is saved and opened again from elsewhere; an unreadable path's refusal names the path tried.
+void assetRelinkRelative() {
+    const auto folder = scratch("relink-relative");
+    const auto elsewhere = scratch("relink-elsewhere");
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::create_directories(folder / "media");
+    {
+        Fixture fixture;
+        expect(fixture.session->saveAs(folder / "shot.bloom").succeeded(), "the project is saved");
+        const auto old = folder / "old.png";
+        writePixel(old);
+        fixture.run<commands::ImportAssets>(std::vector{old}, folder);
+        const auto id = fixture.session->snapshot().project().assets().front().id;
+        std::filesystem::remove(old);
+        writePixel(folder / "media" / "new.png", "replacement");
+
+        std::filesystem::current_path(elsewhere);
+        const auto args = [&](const std::string& path) {
+            return scripting::Arguments{{"asset", Value(StableId{id.value()})},
+                                        {"path", Value(path)},
+                                        {"projectDirectory", Value(std::string("."))}};
+        };
+        auto result = fixture.op("bloom.asset.relink", args("media/new.png"));
+        expect(result.succeeded(), "a project-relative path relinks: " + codeOf(result));
+        const auto* relinked = fixture.session->snapshot().project().findAsset(id);
+        expect(relinked && relinked->locator.portability == "project-relative" &&
+                   relinked->locator.path == "media/new.png",
+               "the relinked locator is stored project-relative, like an import's");
+
+        result = fixture.op("bloom.asset.relink", args("media/missing.png"));
+        auto message = codeOf(result);
+        if (result.command && !result.command->operationFailures.empty())
+            message += ": " + result.command->operationFailures.front().issue.message;
+        expect(!result.succeeded() && message.find("media/missing.png") != std::string::npos,
+               "an unreadable path's refusal names the path tried: " + message);
+        expect(fixture.session->save().succeeded(), "the relinked project is saved");
+    }
+    // Opened again with the process in another folder: the locator still finds the file.
+    auto opened = scripting::Session::open(folder / "shot.bloom");
+    expect(static_cast<bool>(opened), "the saved project opens");
+    if (opened) {
+        auto session = std::move(opened).takeSession();
+        const auto id = session->snapshot().project().assets().front().id;
+        expect(session->snapshot().project().assets().front().locator.path == "media/new.png",
+               "the reopened asset keeps its project-relative locator");
+        const auto result = session->executeJsonOperation(
+            "bloom.asset.reload", {{"asset", Value(StableId{id.value()})}});
+        expect(result.succeeded() || codeOf(result).find("rejected") == std::string::npos,
+               "the reopened asset's file resolves: " + codeOf(result));
+        writePixel(folder / "media" / "again.png", "again");
+        const auto relink = session->executeJsonOperation(
+            "bloom.asset.relink", {{"asset", Value(StableId{id.value()})},
+                                   {"path", Value(std::string("media/again.png"))},
+                                   {"projectDirectory", Value(std::string("."))}});
+        expect(relink.succeeded() && session->snapshot().project().findAsset(id)->locator.path ==
+                                         "media/again.png",
+               "a relative relink works after reopening: " + codeOf(relink));
+    }
+    std::filesystem::current_path(previous);
+    std::error_code error;
+    std::filesystem::remove_all(folder, error);
+    std::filesystem::remove_all(elsewhere, error);
+}
+
 // ---- bloom.cryptomatte.pick -------------------------------------------------------------------
 
 void cryptomattePick() {
@@ -376,6 +442,7 @@ void cryptomattePick() {
 int main() {
     anchorPreset();
     assetReload();
+    assetRelinkRelative();
     cryptomattePick();
     if (failures != 0) {
         std::cerr << failures << " failure(s)\n";

@@ -307,6 +307,11 @@ window's thread, and stop when the request is cancelled (`bloom.scripting.cancel
   file again the way it was imported and updates its size, duration and digest in one undo step.
   A font answers that it reloads from the system catalogue; a missing file is refused with the
   probe's reason (`bloom.asset.relink` points the asset at another file).
+- `bloom.asset.relink` (`asset`, `path`, `projectDirectory`) accepts an absolute path or one
+  relative to the project file's folder, even when the old file is gone. A saved project's own
+  folder is the base for both the relative path and the stored locator (`projectDirectory` only
+  stands in for an unsaved project), so the locator is stored project-relative like an import's. An
+  unreadable path is refused with the reason and the absolute path that was tried.
 - `bloom.layer.set-anchor-preset` (`layer` contextual, `anchor` one of `top-left`, `top`,
   `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`, `time`
   contextual) is the anchor grid in Properties > Transform: it measures the layer's evaluated local

@@ -1807,9 +1807,9 @@ class AssetOps:
               Unit: asset id (query:assets)
               Range: >= 1
           path  str  required
-              The replacement media path.
+              The replacement media path: absolute, or relative to the project file's folder.
           projectDirectory  str  required
-              The project directory the locator is made relative to.
+              The project directory the locator is made relative to; a saved project's folder wins.
               Unit: directory path; relative locators are made relative to it
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.

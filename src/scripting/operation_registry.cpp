@@ -1913,9 +1913,11 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.asset.relink",
         {need("asset", ValueKind::Id, StableId{1}, "The asset to repoint."),
-         need("path", ValueKind::String, "footage/plate.exr", "The replacement media path."),
+         need("path", ValueKind::String, "footage/plate.exr",
+              "The replacement media path: absolute, or relative to the project file's folder."),
          need("projectDirectory", ValueKind::String, ".",
-              "The project directory the locator is made relative to.")},
+              "The project directory the locator is made relative to; a saved project's folder "
+              "wins.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto asset = id(args, op, "asset", error);
@@ -1930,6 +1932,24 @@ OperationRegistry OperationRegistry::builtIn() {
                                                         std::filesystem::path(*directory)),
                 std::nullopt);
         });
+    // The project file's folder is what a relative path and the stored locator are relative to;
+    // the argument only stands in when the session has no saved project (or no source).
+    all.back().contextualFactory = [factory = all.back().factory](
+                                       const std::string& op, const Arguments& args,
+                                       const OperationContext& context) {
+        if (context.source) {
+            if (const auto source = context.source();
+                source && !source->assetBaseDirectory.empty()) {
+                auto resolved = args;
+                const auto bytes = source->assetBaseDirectory.generic_u8string();
+                resolved.insert_or_assign(
+                    "projectDirectory",
+                    Value(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size())));
+                return factory(op, resolved);
+            }
+        }
+        return factory(op, args);
+    };
 
     add("bloom.asset.move",
         {need("assets", ValueKind::Array, ValueArray{Value(StableId{1})}, "The assets to move."),

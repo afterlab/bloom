@@ -725,16 +725,32 @@ ImportOptions relinkOptions(const document::AssetRecord& asset) {
         options.frameRange = asset.manifest.range;
     return options;
 }
+namespace {
+// A relative replacement path is a project-relative one: it is read under the project folder,
+// never under whatever directory the process happens to run in.
+std::filesystem::path underProjectFolder(const std::filesystem::path& path,
+                                         const std::filesystem::path& base) {
+    return path.is_relative() && !base.empty() ? base / path : path;
+}
+} // namespace
 RelinkAsset::RelinkAsset(document::AssetId id, const std::filesystem::path& path,
                          const std::filesystem::path& base, const std::function<bool()>& cancel,
                          const ImportOptions& options)
-    : id_(id), path_(path), base_(base), prepared_({path}, base, cancel, {}, options) {}
+    : id_(id), path_(underProjectFolder(path, base)), base_(base),
+      prepared_({underProjectFolder(path, base)}, base, cancel, {}, options) {}
 OperationResult RelinkAsset::apply(document::Draft& draft) const {
     auto* target = draft.project().findAsset(id_);
     if (!target)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget, "Asset does not exist");
-    if (!prepared_.diagnostic().empty() || prepared_.prepared().size() != 1)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, prepared_.diagnostic());
+    if (!prepared_.diagnostic().empty() || prepared_.prepared().size() != 1) {
+        // Name the file that was tried, so a path that does not resolve is plain to see.
+        std::error_code error;
+        const auto tried = std::filesystem::absolute(path_, error).lexically_normal();
+        auto message = prepared_.diagnostic().empty() ? std::string("The file could not be read")
+                                                      : prepared_.diagnostic();
+        message += " (path tried: " + utf8(error ? path_ : tried) + ")";
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, std::move(message));
+    }
     auto replacement = prepared_.prepared().front();
     // A still stays the still chosen, however its file is numbered.
     if (target->kind == document::AssetKind::Image &&

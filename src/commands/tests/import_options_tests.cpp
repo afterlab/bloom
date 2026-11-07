@@ -203,6 +203,39 @@ void testImportOptions(TestContext& test) {
     }
 }
 
+// #558: a relative replacement path is read under the project folder, whatever directory the
+// process runs in, and a path that cannot be read is named in the refusal.
+void testRelativeRelink(TestContext& test) {
+    const Fixture fixture;
+    std::filesystem::create_directories(fixture.directory / "media");
+    writePixel(fixture.directory / "media" / "plate.png");
+    auto seed = document::makeNewProject("Rel", "Main", core::RationalTime::fromInteger(10));
+    Document document(std::move(seed.project));
+    CommandStack stack(document);
+    ImportOptions single;
+    single.sequences = false;
+    (void)run(document, stack,
+              std::make_unique<ImportAssets>(std::vector{fixture.frame_(1)}, fixture.directory,
+                                             std::function<bool()>{}, ImportProgressCallback{},
+                                             single));
+    const auto id = only(document).id;
+    std::filesystem::remove(fixture.frame_(1));
+    (void)run(document, stack,
+              std::make_unique<RelinkAsset>(id, std::filesystem::path("media/plate.png"),
+                                            fixture.directory, std::function<bool()>{}, single));
+    const auto& after = only(document);
+    test.expect(after.locator.portability == "project-relative" && after.locator.path == "media/plate.png",
+                "a relative relink reads under the project folder and stays project-relative");
+    const auto refused =
+        run(document, stack,
+            std::make_unique<RelinkAsset>(id, std::filesystem::path("media/gone.png"),
+                                          fixture.directory, std::function<bool()>{}, single));
+    test.expect(!refused.operationFailures.empty() &&
+                    refused.operationFailures.front().issue.message.find("media/gone.png") !=
+                        std::string::npos,
+                "an unreadable path's refusal names the path tried");
+}
+
 void testStillDuration(TestContext& test) {
     auto seed = document::makeNewProject("Still", "Main", core::RationalTime::fromInteger(10));
     const auto composition = seed.initialCompositionId;
@@ -353,6 +386,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testImportOptions(test);
+        bloom::commands::test::testRelativeRelink(test);
         bloom::commands::test::testStillDuration(test);
         bloom::commands::test::testReimportReturnsExistingAsset(test);
         bloom::commands::test::testSequenceGrouping(test);
