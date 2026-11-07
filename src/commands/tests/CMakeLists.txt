@@ -74,7 +74,7 @@ bloom_add_test(NAME bloom.commands.evaluation-inputs COMMAND bloom_commands_eval
                LABELS commands unit)
 
 add_executable(bloom_commands_composition_test composition_operations_tests.cpp)
-target_link_libraries(bloom_commands_composition_test PRIVATE bloom_commands bloom_runtime_compiler bloom_runtime_evaluator)
+target_link_libraries(bloom_commands_composition_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_composition_test)
 bloom_add_test(NAME bloom.commands.compositions COMMAND bloom_commands_composition_test LABELS commands unit)
 

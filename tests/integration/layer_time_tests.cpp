@@ -781,6 +781,33 @@ void compileFailureNamesItsSubject() {
                .empty(),
            "a compiled result has no failure to describe");
 }
+// #557: a duplicated composition whose layer plays a nested composition keeps a layer extent that
+// resolves inside the copy, so compiling the copy gives no LayerExtentUnresolved diagnostic.
+void duplicatedCompositionResolvesLayerExtents() {
+    NestedFixture fixture;
+    fixture.run<commands::SetLayerContentExtent>(fixture.main, fixture.layer,
+                                                 document::SourceLayerExtent{fixture.sourceNode});
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto unresolved = [&](const document::Snapshot& snapshot,
+                                const document::CompositionId id) {
+        const auto compiled = compiler.compile({snapshot, id}, {});
+        return std::pair{compiled.plan != nullptr,
+                         std::ranges::count_if(compiled.diagnostics, [](const auto& diagnostic) {
+                             return diagnostic.code ==
+                                    runtime::CompileDiagnosticCode::LayerExtentUnresolved;
+                         })};
+    };
+    expect(unresolved(fixture.document.snapshot(), fixture.main) == std::pair{true, 0L},
+           "the original compiles with a resolved layer extent");
+    const auto result = fixture.run<commands::DuplicateComposition>(fixture.main);
+    const auto copyId =
+        result.outputId<document::CompositionId>(commands::kDuplicateCompositionOutput);
+    expect(copyId.has_value(), "the composition duplicates");
+    if (!copyId)
+        return;
+    expect(unresolved(fixture.document.snapshot(), *copyId) == std::pair{true, 0L},
+           "compiling the copy reports no unresolved layer extent");
+}
 } // namespace
 
 int main() {
@@ -795,6 +822,7 @@ int main() {
         remapWrapsWithLayerLoop();
         loopingSourceInsideLayer();
         compositionSourceOffset();
+        duplicatedCompositionResolvesLayerExtents();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

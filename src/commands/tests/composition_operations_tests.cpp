@@ -7,8 +7,6 @@
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/new_project.hpp>
-#include <bloom/runtime/node_definition_registry.hpp>
-#include <bloom/runtime/snapshot_compiler.hpp>
 
 #include <algorithm>
 #include <map>
@@ -602,7 +600,8 @@ void testDuplicateCompositionWithManyAnimatedProperties(TestContext& test) {
 }
 // #557: every id the copy holds resolves inside the copy. Layer timing extents, parent links, track
 // mattes, masks, stack entries, edges and parameter sources all point at the copy's own records,
-// and compiling the copy reports no unresolved layer extent.
+// (compiling the copy is checked in tests/integration/layer_time_tests.cpp, which may depend on
+// the runtime).
 void testDuplicateCompositionRemapsEveryReference(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -714,18 +713,6 @@ void testDuplicateCompositionRemapsEveryReference(TestContext& test) {
                (layer.trackMatte && original->graph().findLayer(layer.trackMatte->source) != nullptr);
     });
     test.expect(none, "no layer id in the copy points into the original");
-
-    const runtime::NodeDefinitionRegistry registry;
-    const runtime::SnapshotCompiler compiler{registry};
-    const runtime::CancellationToken never;
-    const auto unresolved = [&](const document::CompositionId id) {
-        const auto compiled = compiler.compile({after, id}, never);
-        return std::ranges::count_if(compiled.diagnostics, [](const auto& diagnostic) {
-            return diagnostic.code == runtime::CompileDiagnosticCode::LayerExtentUnresolved;
-        });
-    };
-    test.expect(unresolved(kCompositionId) == 0 && unresolved(copyId) == 0,
-                "compiling the copy reports no unresolved layer extent");
 }
 } // namespace
 } // namespace bloom::commands::test
