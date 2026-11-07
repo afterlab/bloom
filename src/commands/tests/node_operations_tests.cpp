@@ -1075,6 +1075,14 @@ void testAddAndLayout(TestContext& test) {
             if (parameter.schemaKey == document::kPositionParameterSchemaKey)
                 expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
                                            static_cast<double>(comp.format().height()) / 2.0};
+            // #512: a new Camera Shake gets a seed of its own, an ordinary stored constant.
+            if (parameter.schemaKey == "bloom.camera-shake.seed" && record) {
+                const auto* constant = std::get_if<ConstantValueSource>(&record->source);
+                const auto* seed =
+                    constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+                if (seed && *seed >= 0 && *seed < 1'000'000)
+                    expected = *seed;
+            }
             test.expect(record && record->schemaKey == parameter.schemaKey &&
                             record->source == ParameterSource{ConstantValueSource{expected}},
                         "composition-aware default is copied into an independent parameter: " +
