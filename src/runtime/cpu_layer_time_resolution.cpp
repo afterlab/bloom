@@ -11,7 +11,9 @@
 
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/composition_time.hpp>
+#include <bloom/runtime/value_graph_evaluation.hpp>
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -92,8 +94,26 @@ sampleAt(const CompiledCompositionPlan& plan, const ResolvedEvaluation& base,
 } // namespace
 
 std::optional<core::RationalTime> offsetTime(const core::RationalTime parent,
-                                             const TimeSampleKernel& sample) {
+                                             const TimeSampleKernel& sample,
+                                             const document::FrameRate rate) {
     using Wide = __int128;
+    // #563: the frame `keyframe + max(min(step, position) - lag, 0)` of the group of pictures the
+    // parent's frame lies in; a keyframe is every multiple of the group's length.
+    if (sample.gopLength > 0) {
+        const auto frame = valueGraphFrameIndex(parent, rate);
+        if (!frame || sample.gopStep < 0 || sample.gopLag < 0)
+            return std::nullopt;
+        const std::int64_t length = sample.gopLength;
+        std::int64_t keyframe = (*frame / length) * length;
+        if (*frame % length != 0 && *frame < 0)
+            keyframe -= length;
+        const std::int64_t position = *frame - keyframe;
+        const std::int64_t target =
+            keyframe + std::max<std::int64_t>(std::min(sample.gopStep, position) - sample.gopLag, 0);
+        return core::RationalTime::create(
+            target * static_cast<std::int64_t>(rate.denominator()),
+            static_cast<std::int64_t>(rate.numerator()));
+    }
     Wide numerator = parent.numerator();
     Wide denominator = parent.denominator();
     if (denominator <= 0)
@@ -175,7 +195,7 @@ PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledComposit
             const auto& parentTime = times[clock.parent];
             if (!parentTime)
                 continue;
-            const auto time = offsetTime(*parentTime, *sample);
+            const auto time = offsetTime(*parentTime, *sample, plan->format().frameRate());
             if (!time)
                 return failure("Motion blur sample time cannot be represented",
                                effect->sourceNodeId);

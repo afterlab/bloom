@@ -8,6 +8,7 @@
 #include "film_grain_image_effect.hpp"
 #include "motion_blur_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
+#include "codec_degrade_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -582,6 +583,14 @@ enum class ScalarDomain : std::uint8_t {
                 } else if (std::holds_alternative<SharpenKernel>(effect.kernel)) {
                     // #486: a Sharpen reads its one blur.
                     validKernel = validKernel && effect.fieldImages.size() == 1 &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
+                } else if (const auto* codec = std::get_if<CodecDegradeKernel>(&effect.kernel)) {
+                    // #563: a step after the first reads its Encoded source frame and its flow.
+                    validKernel = validKernel &&
+                                  effect.fieldImages.size() ==
+                                      (codec->role == CodecDegradeRole::Step && codec->step > 0
+                                           ? 2U
+                                           : 0U) &&
                                   std::ranges::all_of(effect.fieldImages, earlier);
                 } else {
                     validKernel =
@@ -2301,6 +2310,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<DepthMapKernel>(effect->kernel) ||
                                std::holds_alternative<DefocusKernel>(effect->kernel) ||
                                std::holds_alternative<LensFlareKernel>(effect->kernel) ||
+                               std::holds_alternative<CodecDegradeKernel>(effect->kernel) ||
                                isMotionKernel(effect->kernel))) {
                     fullSupport[effect->input.value()] = true;
                     // #484: a motion kernel reads its sample, vectors, neighbour frames and
@@ -3531,7 +3541,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     motionInputs.clear();
                                 }
                             }
-                            if ((motion ? !motionInputs.empty() : slots[index] != nullptr) &&
+                            // #563: a predicted step still has a picture when its input has none.
+                            const bool codecKernel =
+                                std::holds_alternative<CodecDegradeKernel>(effect.kernel);
+                            if ((motion ? !motionInputs.empty()
+                                        : (codecKernel || slots[index] != nullptr)) &&
                                 !preparedEffect->identity()) {
                                 // #525: a field raster reads its program's images beside its
                                 // canvas (an empty image is an absent slot).
@@ -3561,7 +3575,18 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                           .value()]
                                                     .get();
                                 auto result =
-                                    gradeKind == detail::ColorGradeKind::Sharpen
+                                    gradeKind == detail::ColorGradeKind::CodecDegrade
+                                        ? detail::applyCodecDegrade(
+                                              *preparedEffect->colorGrade, slots[index].get(),
+                                              effect.fieldImages.empty()
+                                                  ? nullptr
+                                                  : slots[effect.fieldImages[0].value()].get(),
+                                              effect.fieldImages.size() < 2
+                                                  ? nullptr
+                                                  : slots[effect.fieldImages[1].value()].get(),
+                                              resolved.horizontalScale, effectPixelBudget,
+                                              cancellation, operationIndex, progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::Sharpen
                                         ? detail::applySharpen(
                                               *preparedEffect->colorGrade, *slots[index],
                                               slots[effect.fieldImages[0].value()].get(),

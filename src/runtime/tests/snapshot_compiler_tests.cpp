@@ -5,6 +5,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
@@ -1959,6 +1960,7 @@ int main() {
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);
+        testCodecDegradeLowering(expectations);
         testMotionBlurLowering(expectations);
         testCameraShake(expectations);
         testSharpenLowering(expectations);

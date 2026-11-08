@@ -179,7 +179,7 @@ void blurNodeReopen() {
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake"}) {
+          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -283,6 +283,15 @@ void blurNodeReopen() {
                 : parameter.schemaKey.starts_with("bloom.camera-shake.") &&
                         parameter.valueKind == document::ParameterValueKind::Path
                     ? document::ParameterValue{document::defaultShutterCurve()}
+                // #563 Codec Degrade: 16 px blocks, a 6-frame GOP, chroma bleed off and moved values.
+                : parameter.schemaKey == "bloom.codec-degrade.blockSize"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.codec-degrade.gopLength"
+                    ? document::ParameterValue{std::int64_t{3}}
+                : parameter.schemaKey == "bloom.codec-degrade.chromaBleed"
+                    ? document::ParameterValue{false}
+                : parameter.schemaKey.starts_with("bloom.codec-degrade.")
+                    ? document::ParameterValue{0.625}
                 // #486 Sharpen: moved values.
                 : parameter.schemaKey.starts_with("bloom.sharpen.")
                     ? document::ParameterValue{0.625}

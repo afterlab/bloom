@@ -5,6 +5,7 @@
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "codec_degrade_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
@@ -941,6 +942,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return lensFlareProbeProgramText();
     case ColorGradeKind::FilmGrain:
         return filmGrainProgramText();
+    case ColorGradeKind::CodecDegrade:
+        return codecDegradeProgramText();
     case ColorGradeKind::Motion:
         return {}; // One program per pass: the caller asks with the pass (motionProgramText).
     case ColorGradeKind::Sharpen: {
@@ -1058,6 +1061,16 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
             return std::nullopt;
         values.push_back(time->toSeconds());
     }
+    // #563: a Codec Degrade step reads the frame, to place itself in its group of pictures.
+    if (const auto* codec = std::get_if<CodecDegradeKernel>(&kernel);
+        codec != nullptr && codec->role == CodecDegradeRole::Step) {
+        if (!time)
+            return std::nullopt;
+        const auto frame = valueGraphFrameIndex(*time, plan.format().frameRate());
+        if (!frame)
+            return std::nullopt;
+        values.push_back(static_cast<double>(*frame));
+    }
     // #486: Film Grain then reads the frame it is drawn for, by the same exact arithmetic as a Time
     // node's frame output, so one instant always names one frame's grain. Held grain reads none.
     if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel)) {
@@ -1103,6 +1116,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareLensFlareGrade(*flare, values);
     if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel))
         return prepareFilmGrainGrade(*grain, values);
+    if (const auto* codec = std::get_if<CodecDegradeKernel>(&kernel))
+        return prepareCodecDegradeGrade(*codec, values);
     if (isMotionKernel(kernel))
         return prepareMotionGrade(kernel, values);
     if (const auto* sharpen = std::get_if<SharpenKernel>(&kernel))
@@ -1138,7 +1153,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
         grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
         grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
-        grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::Motion ||
+        grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::CodecDegrade ||
+        grade.kind == ColorGradeKind::Motion ||
         grade.kind == ColorGradeKind::Sharpen)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
@@ -1266,6 +1282,8 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::LensFlareProbe
                             ? validLensFlareProbeData(data)
                         : kind == ColorGradeKind::FilmGrain ? validFilmGrainProgramData(data)
+                        : kind == ColorGradeKind::CodecDegrade
+                            ? validCodecDegradeProgramData(data)
                         : kind == ColorGradeKind::Motion ? validMotionProgramData(data)
                             : data.size() == kHueSaturationFloats;
     if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) ||
@@ -1344,6 +1362,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_film_grain";
         program.resourcePrefix = "bloom_film_grain_";
         program.semanticsId = "bloom.render.film-grain.v1";
+        break;
+    case ColorGradeKind::CodecDegrade:
+        program.functionName = "bloom_codec_degrade";
+        program.resourcePrefix = "bloom_codec_degrade_";
+        program.semanticsId = "bloom.render.codec-degrade.v1";
         break;
     case ColorGradeKind::Motion:
         program.functionName = "bloom_motion";

@@ -2,6 +2,7 @@
 
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -734,6 +735,13 @@ struct TimeSampleKernel final {
     std::int64_t posterizeNumerator = 0;
     std::int64_t posterizeDenominator = 1;
     bool holdFootage = false;
+    // #563 Codec Degrade's look-back: with `gopLength` positive the sample is on the frame
+    // `keyframe + max(min(gopStep, position) - gopLag, 0)`, where `keyframe` is the last multiple of
+    // `gopLength` at or before this clock's frame and `position` the frames since it. The offset and
+    // the posterize fields are then unused.
+    std::int64_t gopLength = 0;
+    std::int64_t gopStep = 0;
+    std::int64_t gopLag = 0;
     friend bool operator==(const TimeSampleKernel&, const TimeSampleKernel&) = default;
 };
 // Two images combined over the union of their windows, premultiplied and HDR-safe: `input` (the
@@ -864,6 +872,27 @@ struct SharpenKernel final {
     friend bool operator==(const SharpenKernel&, const SharpenKernel&) = default;
 };
 
+// #563 Codec Degrade (docs/architecture/image-filters.md, "Codec Degrade"): one pass of the node's
+// imitation of a codec. The node lowers to a look-back chain of `gopFrames` steps, each reading the
+// source frame `keyframe + min(step, position)` through time samples:
+//   Encode  the input's colour as straight, display-referred, clamped values (a pointwise pass);
+//   Step    the chain's step `step`: step 0 codes its Encoded input as a keyframe, a later step on or
+//           before the current frame codes the Encoded frame in fieldImages[0] against its input (the
+//           chain so far) moved by the block motion of the optical flow in fieldImages[1], and a
+//           later step after the current frame is the exact identity;
+//   Finish  the chain's last step back to premultiplied scene-linear colour.
+// `values` are the quality and the persistence, operands of a Step only.
+enum class CodecDegradeRole : std::uint8_t { Encode, Step, Finish };
+struct CodecDegradeKernel final {
+    CodecDegradeRole role = CodecDegradeRole::Encode;
+    std::int64_t blockPixels = 8;
+    std::int64_t gopFrames = 12;
+    std::int64_t step = 0;
+    bool chromaBleed = true;
+    std::array<CompiledScalarParameter, document::kCodecDegradeScalarCount> values{};
+    friend bool operator==(const CodecDegradeKernel&, const CodecDegradeKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -873,7 +902,8 @@ using ImageEffectKernel =
                  AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
-                 MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel>;
+                 MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
+                 CodecDegradeKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1046,6 +1076,13 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(sharpen->radius);
         return true;
     }
+    // #563: the quality and the persistence of a step; an Encode and a Finish have no operands.
+    if (const auto* codec = std::get_if<CodecDegradeKernel>(&kernel)) {
+        if (codec->role == CodecDegradeRole::Step)
+            for (const auto& value : codec->values)
+                visit(value);
+        return true;
+    }
     return isMotionKernel(kernel);
 }
 
@@ -1063,7 +1100,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<DefocusKernel>(kernel) ||
            std::holds_alternative<LensFlareKernel>(kernel) ||
            std::holds_alternative<FilmGrainKernel>(kernel) ||
-           std::holds_alternative<SharpenKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<SharpenKernel>(kernel) ||
+           std::holds_alternative<CodecDegradeKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
@@ -1083,7 +1121,8 @@ struct CompiledImageEffect final {
     // #525: a FieldRasterKernel's image slots, in slot order (an Image Field's image, a mask Shape
     // Distance's distance image), each sampled by its own data window; #483 a DefocusKernel's
     // (DefocusKernel::slotImages); #507 a LensFlareKernel's occlusion matte; #484 a VectorBlurKernel's
-    // and an OpticalFlowKernel's (their slotImages); #486 a SharpenKernel's blur.
+    // and an OpticalFlowKernel's (their slotImages); #486 a SharpenKernel's blur; #563 a Codec Degrade
+    // step's Encoded source frame, then its optical flow.
     std::vector<OperationIndex> fieldImages{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };

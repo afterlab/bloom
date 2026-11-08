@@ -15,6 +15,7 @@
 #include "compositing_recipe_test_support.hpp"
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
+#include "codec_degrade_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -2357,6 +2358,125 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #563 Codec Degrade against the CPU oracle: a frame inside a GOP (so the chain of predicted steps
+// runs), a keyframe, 16 px blocks without chroma bleed, a full-frame proxy and a region of interest;
+// warm RAM reuse with zero dispatches; a later frame with parity; a changed value re-running with
+// parity.
+void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::codec_test::CodecValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        CodecValues values;
+        const char* name;
+        std::int64_t frame = 6;
+        bool proxy = false;
+        bool roi = false;
+    };
+    std::vector<Case> cases;
+    cases.push_back({CodecValues{}, "inside a GOP"});
+    cases.push_back({CodecValues{}, "a keyframe", 8});
+    {
+        CodecValues wide;
+        wide.blockPixels = 16;
+        wide.chromaBleed = false;
+        wide.gopFrames = 6;
+        cases.push_back({wide, "16 px, no chroma bleed"});
+    }
+    {
+        CodecValues proxy;
+        proxy.still = true;
+        proxy.aligned = true;
+        cases.push_back({proxy, "a proxy", 6, true});
+        CodecValues wide = proxy;
+        wide.blockPixels = 16;
+        cases.push_back({wide, "a proxy, 16 px", 6, true});
+        CodecValues keys = proxy;
+        keys.gopFrames = 1;
+        cases.push_back({keys, "a proxy, every frame a keyframe", 6, true});
+    }
+    cases.push_back({CodecValues{}, "a region of interest", 6, false, true});
+    std::uint64_t id = 56300;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("codec degrade native (") + item.name + "): ";
+        const auto built = bloom::codec_test::codecPlan(item.values, id);
+        const auto plan = built.plan;
+        id += 200;
+        auto request = requestFor(*plan);
+        request.time = *RationalTime::create(item.frame, 24);
+        if (item.proxy) {
+            const auto extent = bloom::render::ImageExtent::create(16, 12);
+            request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        }
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(6, 4, 20, 14);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        auto nextRequest = request;
+        nextRequest.time = *RationalTime::create(item.frame + 1, 24);
+        auto nextOracleRequest = nextRequest;
+        nextOracleRequest.bypassOperationCache = true;
+        const auto next = builder.build(plan, nextRequest);
+        const auto nextOracle = evaluator.evaluate(plan, nextOracleRequest, {});
+        expectations.expect(next && nextOracle.frame(), name + "the next frame prepares");
+        if (!next || !nextOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, next.scene);
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, nextOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact),
+                            name + "the next frame matches the CPU: " + detail);
+        CodecValues changedValues = item.values;
+        changedValues.quality = 15.0;
+        const auto changedPlan = bloom::codec_test::codecPlan(changedValues, id - 200).plan;
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "a changed value re-runs with CPU parity: " + detail);
+    }
+}
+
 // #484 Motion blur: every kernel through the production chains over the moving HDR texture against
 // the CPU oracle at the strict gate (colour within 2e-6, alpha exact), at frame 4. The windows,
 // resident dispatches with no readback, warm reuse with zero dispatches and a changed value
@@ -2646,6 +2766,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runDepthEffects(expectations, device, cache);
     runLensFlares(expectations, device, cache);
     runFilmGrains(expectations, device, cache);
+    runCodecDegrades(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
     runSharpens(expectations, device, cache);
 #if defined(__linux__)

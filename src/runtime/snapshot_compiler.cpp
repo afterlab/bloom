@@ -5,6 +5,7 @@
 #include "compositing_recipes.hpp"
 #include "depth_effect_recipes.hpp"
 #include "motion_blur_recipes.hpp"
+#include "codec_degrade_recipes.hpp"
 #include "motion_shutter.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"
@@ -19,6 +20,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>

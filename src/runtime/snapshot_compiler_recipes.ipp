@@ -59,6 +59,32 @@ lowerSharpen(const document::NodeRecord& node, std::vector<runtime::CompiledOper
     return runtime::detail::appendSharpen(emitter, *input, {*amount, *radius, *threshold});
 }
 
+// #563 Codec Degrade: its look-back chain of codec passes over time samples of its input.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerCodecDegrade(const document::NodeRecord& node,
+                  std::vector<runtime::CompiledOperation>& operations,
+                  std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    const auto quality = compiledScalarParameter(findParameterBinding(node, "quality"));
+    const auto persistence = compiledScalarParameter(findParameterBinding(node, "persistence"));
+    const auto* block = parameterConstant<std::int64_t>(findParameterBinding(node, "blockSize"));
+    const auto* gop = parameterConstant<std::int64_t>(findParameterBinding(node, "gopLength"));
+    const auto* chroma = parameterConstant<bool>(findParameterBinding(node, "chromaBleed"));
+    const auto blockPixels = block != nullptr ? document::codecDegradeBlockPixels(*block) : 0;
+    const auto gopFrames = gop != nullptr ? document::codecDegradeGopFrames(*gop) : 0;
+    if (!quality || !persistence || blockPixels == 0 || gopFrames == 0 || chroma == nullptr) {
+        addTopologyFailure(node.id, "Codec Degrade parameters could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    return runtime::detail::appendCodecDegrade(
+        emitter, *input, {blockPixels, gopFrames, *chroma, *quality, *persistence});
+}
+
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {

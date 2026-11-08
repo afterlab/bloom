@@ -28,6 +28,7 @@
 #include "film_grain_image_effect.hpp"
 #include "motion_blur_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
+#include "codec_degrade_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -202,6 +203,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_lens_flare_emission.ipp"
 #include "gpu_scene_motion_emission.ipp"
 #include "gpu_scene_sharpen_emission.ipp"
+#include "gpu_scene_codec_degrade_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -347,6 +349,24 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         }
         return emitDepthMapCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
                                    emit, charge, chargeCoverage, result);
+    }
+    // #563 Codec Degrade: one pass of the codec imitation over its images.
+    if (std::holds_alternative<CodecDegradeKernel>(effect.kernel)) {
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Codec Degrade values are out of domain");
+        // A step after the current frame aliases its input, as on the CPU reference.
+        if (grade->identity) {
+            result.identity = true;
+            return std::nullopt;
+        }
+        return emitCodecDegradeCommand(effect, *grade, operationIndex, ctx, ocioContext,
+                                       cancellation, emit, charge, chargeCoverage, result);
     }
     // #486 Sharpen: one two-input dispatch over the input and its blur.
     if (std::holds_alternative<SharpenKernel>(effect.kernel)) {

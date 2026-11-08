@@ -155,8 +155,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
-    // Zoom Blur; #512 adds Camera Shake.
-    expectations.expect(registry.definitions().size() == 188,
+    // Zoom Blur; #512 adds Camera Shake; #563 adds Codec Degrade.
+    expectations.expect(registry.definitions().size() == 189,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -306,7 +306,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectCategory({"bloom.camera-shake"}, document::NodeCategory::Transform);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
-                    "bloom.sharpen"},
+                    "bloom.sharpen", "bloom.codec-degrade"},
                    document::NodeCategory::Filters);
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
@@ -373,6 +373,22 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             sharpenUnmasked->outputs.size() == 1 &&
             sharpenUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Sharpen has an animatable socket per value");
+    // #563 Codec Degrade: an Image in and out, its block size, GOP length and chroma bleed with no
+    // socket, and a socket for Quality and P-frame persistence; the effect mask follows.
+    const auto codecUnmasked = withoutMask(registry.find("bloom.codec-degrade", 1));
+    expectations.expect(
+        codecUnmasked && codecUnmasked->inputs.size() == 3 && codecUnmasked->parameters.size() == 5 &&
+            codecUnmasked->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            codecUnmasked->inputs[1].name == "quality" &&
+            codecUnmasked->inputs[2].name == "persistence" &&
+            codecUnmasked->parameters[0].defaultValue == document::ParameterValue{40.0} &&
+            codecUnmasked->parameters[1].defaultValue == document::ParameterValue{0.5} &&
+            codecUnmasked->parameters[2].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            codecUnmasked->parameters[3].defaultValue == document::ParameterValue{std::int64_t{5}} &&
+            codecUnmasked->parameters[4].defaultValue == document::ParameterValue{true} &&
+            codecUnmasked->outputs.size() == 1 &&
+            codecUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#563: Codec Degrade has its constants and an animatable socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
                     "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);
@@ -1066,7 +1082,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 24>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 25>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
@@ -1075,13 +1091,13 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                                          "bloom.z-defocus", "bloom.depth-fog", "bloom.film-grain",
                                          "bloom.motion-blur", "bloom.echo", "bloom.directional-blur",
                                          "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur",
-                                         "bloom.sharpen"},
+                                         "bloom.sharpen", "bloom.codec-degrade"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 24,
+    expectations.expect(shaped && named && masked == 25,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);

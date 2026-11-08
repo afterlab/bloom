@@ -242,7 +242,7 @@ void everyNodeGroupIsNamed() {
            "blur-sharpen");
     pinned({"bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"},
            "keying-mattes");
-    pinned({"bloom.vignette", "bloom.film-grain"}, "stylize");
+    pinned({"bloom.vignette", "bloom.film-grain", "bloom.codec-degrade"}, "stylize");
     pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");
     pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},
            "light-shadow");

@@ -170,6 +170,10 @@ BLOOM_GPU_REQUIRED_EFFECT(OpticalFlowKernel,
 BLOOM_GPU_REQUIRED_EFFECT(SharpenKernel,
                           "Sharpen: an unsharp mask over the input and its blur with an amount and "
                           "a threshold, colour compared straight and alpha kept (#486)");
+BLOOM_GPU_REQUIRED_EFFECT(CodecDegradeKernel,
+                          "Codec Degrade: encode and decode of display-referred straight colour and "
+                          "the DCT block quantiser of a keyframe or a predicted frame with 4:2:0 "
+                          "chroma, block motion from optical flow and P-frame persistence (#563)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

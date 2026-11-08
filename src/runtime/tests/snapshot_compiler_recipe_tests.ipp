@@ -903,6 +903,69 @@ void testFilmGrainLowering(Expectations& expectations) {
     }
 }
 
+// #563 Codec Degrade lowers to an Encode pass, a keyframe step, one step per further frame of its GOP
+// and a Finish pass, all on the node, each value's identity on the first step; a GOP of one frame is
+// the Encode, one keyframe and the Finish. The chain follows time. A muted node passes its Image
+// through.
+void testCodecDegradeLowering(Expectations& expectations) {
+    using namespace document;
+    const auto kernelsOf = [](const runtime::CompiledCompositionPlan& plan, const NodeId node) {
+        std::vector<const runtime::CodecDegradeKernel*> kernels;
+        for (const auto& operation : plan.operations())
+            if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+                effect != nullptr && effect->sourceNodeId == node)
+                if (const auto* kernel = std::get_if<runtime::CodecDegradeKernel>(&effect->kernel))
+                    kernels.push_back(kernel);
+        return kernels;
+    };
+    std::size_t previous = 0;
+    for (const std::int64_t gop : {std::int64_t{1}, std::int64_t{4}}) {
+        auto fixture = recipeFixture(kCodecDegradeNodeType, {{"gopLength", gop == 1 ? std::int64_t{0}
+                                                                               : std::int64_t{2}},
+                                                             {"blockSize", std::int64_t{1}},
+                                                             {"chromaBleed", false},
+                                                             {"quality", 33.0},
+                                                             {"persistence", 0.25}});
+        const auto node = fixture.node;
+        const auto params = fixture.parameters;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Codec Degrade compiles");
+        if (!result.plan)
+            continue;
+        const auto kernels = kernelsOf(*result.plan, node);
+        expectations.expect(kernels.size() >= 3 && kernels.size() > previous,
+                            "a longer GOP lowers to more steps");
+        previous = kernels.size();
+        if (kernels.size() < 3)
+            continue;
+        expectations.expect(kernels.front()->role == runtime::CodecDegradeRole::Encode &&
+                                kernels.back()->role == runtime::CodecDegradeRole::Finish,
+                            "Codec Degrade starts with an Encode and ends with a Finish");
+        const auto steps = std::count_if(kernels.begin(), kernels.end(), [](const auto* kernel) {
+            return kernel->role == runtime::CodecDegradeRole::Step;
+        });
+        expectations.expect(steps >= gop, "one step per frame of the GOP, at least");
+        expectations.expect(kernels.front()->blockPixels == 16 && !kernels.front()->chromaBleed &&
+                                kernels.front()->gopFrames == (gop == 1 ? 1 : 4),
+                            "Codec Degrade lowers its constants");
+        const auto ops = recipeOperations(*result.plan, node);
+        expectations.expect(!ops.empty(), "Codec Degrade's operations belong to its node");
+        bool animated = false;
+        for (std::size_t index = 0; index < result.plan->operations().size(); ++index)
+            animated = animated || result.plan->operationTimeDependent(
+                                       runtime::OperationIndex::fromRaw(index));
+        expectations.expect(animated, "Codec Degrade follows time");
+    }
+    {
+        auto fixture = recipeFixture(kCodecDegradeNodeType);
+        fixture.project.findComposition(kCompositionId)->nodeLayout()[fixture.node].muted = true;
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr && kernelsOf(*result.plan, node).empty(),
+                            "a muted Codec Degrade passes its Image through");
+    }
+}
+
 // #486 Sharpen lowers to the Gaussian blur of its input, frame edge clamped, and one kernel over the
 // input and that blur, each value's identity on the operation it drives. A muted node passes its Image
 // through.

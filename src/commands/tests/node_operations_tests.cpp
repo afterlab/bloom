@@ -966,6 +966,32 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainSeed,
                                ConstantValueSource{std::int64_t{-1}});
 
+    // #563 Codec Degrade: its two values and three constants edit within their domains and refuse
+    // outside them.
+    const auto codec = addRecipe("bloom.codec-degrade");
+    const auto codecQuality = codec.outputId<ParameterId>("parameter.quality");
+    const auto codecPersistence = codec.outputId<ParameterId>("parameter.persistence");
+    const auto codecBlock = codec.outputId<ParameterId>("parameter.blockSize");
+    const auto codecGop = codec.outputId<ParameterId>("parameter.gopLength");
+    const auto codecChroma = codec.outputId<ParameterId>("parameter.chromaBleed");
+    if (!codecQuality || !codecPersistence || !codecBlock || !codecGop || !codecChroma)
+        throw std::logic_error("Codec Degrade exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *codecQuality, ConstantValueSource{75.0});
+    (void)exercise<SetParameterSource>(test, fixture, *codecPersistence, ConstantValueSource{0.9});
+    (void)exercise<SetParameterSource>(test, fixture, *codecBlock,
+                                       ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *codecGop,
+                                       ConstantValueSource{std::int64_t{8}});
+    (void)exercise<SetParameterSource>(test, fixture, *codecChroma, ConstantValueSource{false});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *codecQuality,
+                               ConstantValueSource{101.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *codecPersistence,
+                               ConstantValueSource{1.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *codecBlock,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *codecGop,
+                               ConstantValueSource{std::int64_t{9}});
+
     // #486 Sharpen: its values edit within their domains and refuse outside them.
     const auto sharpen = addRecipe("bloom.sharpen");
     const auto sharpenAmount = sharpen.outputId<ParameterId>("parameter.amount");

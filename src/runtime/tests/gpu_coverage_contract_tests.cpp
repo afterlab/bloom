@@ -36,6 +36,7 @@
 #include "gpu_route_proof_io.hpp"
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
+#include "codec_degrade_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -1970,6 +1971,57 @@ displayProofRunner(const bool customView) {
                                 487000,
                                 "production Film Grain node: the default, strong distinct "
                                 "channels and Monochrome, on a moved frame, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #563 Codec Degrade: a frame inside a GOP (the chain of predicted steps), a keyframe, 16 px
+    // blocks without chroma bleed, full frame and ROI.
+    {
+        using bloom::codec_test::CodecValues;
+        const auto runCodec = [](const std::vector<std::pair<CodecValues, std::int64_t>>& variants,
+                                 std::uint64_t idBase, std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& [values, frame] : variants) {
+                const auto plan = bloom::codec_test::codecPlan(values, idBase).plan;
+                idBase += 200;
+                auto request = requestFor(*plan);
+                request.time = *bloom::core::RationalTime::create(frame, 24);
+                auto run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(6, 4, 20, 14);
+                request.roi = *roiWindow.value();
+                run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+        CodecValues wide;
+        wide.blockPixels = 16;
+        wide.chromaBleed = false;
+        wide.gopFrames = 6;
+        add(
+            "effect.CodecDegradeKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime codec degrade tests",
+            [runCodec, wide] {
+                return runCodec({{CodecValues{}, 6}, {CodecValues{}, 8}, {wide, 7}}, 563000,
+                                "production Codec Degrade: a frame inside a GOP, a keyframe and "
+                                "16 px blocks without chroma bleed, over an HDR moving picture, "
+                                "full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.codec-degrade", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime codec degrade tests",
+            [runCodec] {
+                return runCodec({{CodecValues{}, 6}}, 564000,
+                                "production Codec Degrade node: the defaults on a moving frame "
+                                "inside a GOP, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }
