@@ -357,6 +357,72 @@ lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     return runtime::CompiledValueKernel{std::move(shake)};
 }
 
+// #568 Rolling Shutter: the Camera Shake behind its camera offset and roll, read at three moments of
+// the readout (the first row, the middle and the last, -1/2, 0 and +1/2 of the readout after the
+// frame's time). Each is a copy of the shake's operation that publishes (offset x, offset y, roll)
+// as scalars, kept under the node's id as "shutter0", "shutter1" and "shutter2". Nothing is added
+// when neither socket is connected (a typed value is a camera that does not move). Any other source
+// is refused: only a Camera Shake can be read at another moment.
+[[nodiscard]] bool appendRollingShutterSamples(const document::NodeRecord& node,
+                                               const runtime::NodeDefinition& definition) {
+    const auto offset = valueOperand(node, definition, document::kRollingShutterCameraOffsetRole);
+    const auto roll = valueOperand(node, definition, document::kRollingShutterCameraRollRole);
+    const auto readout = compiledScalarParameter(runtime::detail::findParameterBinding(node, "readout"));
+    const auto* readoutValue = readout ? std::get_if<double>(&readout->source) : nullptr;
+    if (!offset || !roll || readoutValue == nullptr) {
+        addTopologyFailure(node.id, "Rolling Shutter parameters could not be lowered.");
+        return false;
+    }
+    const auto* offsetSource = std::get_if<runtime::ValueOutputIndex>(&offset->source);
+    const auto* rollSource = std::get_if<runtime::ValueOutputIndex>(&roll->source);
+    if (offsetSource == nullptr && rollSource == nullptr)
+        return true;
+    // The shake operation that produced a linked output, and the slot (0 offset, 1 roll) it is.
+    const auto shakeOf = [&](const runtime::ValueOutputIndex output,
+                             const std::size_t slot) -> const runtime::CompiledValueOperation* {
+        for (const auto& operation : valueOperations_) {
+            const auto first = operation.firstOutput.value();
+            if (output.value() < first || output.value() >= first + operation.outputCount)
+                continue;
+            const auto* shake = std::get_if<runtime::CompiledValueShake>(&operation.kernel);
+            return shake != nullptr && !shake->components && output.value() == first + slot
+                       ? &operation
+                       : nullptr;
+        }
+        return nullptr;
+    };
+    const runtime::CompiledValueOperation* source = nullptr;
+    for (const auto& [linked, slot] : {std::pair{offsetSource, std::size_t{0}},
+                                       std::pair{rollSource, std::size_t{1}}}) {
+        if (linked == nullptr)
+            continue;
+        const auto* found = shakeOf(*linked, slot);
+        if (found == nullptr || (source != nullptr && source != found)) {
+            addTopologyFailure(node.id,
+                               "Rolling Shutter reads camera motion only from the Offset and Roll "
+                               "outputs of one Camera Shake.");
+            return false;
+        }
+        source = found;
+    }
+    const auto shake = std::get<runtime::CompiledValueShake>(source->kernel);
+    for (std::size_t sample = 0; sample < 3; ++sample) {
+        auto copy = shake;
+        copy.components = true;
+        copy.timeOffsetFrames = (static_cast<double>(sample) - 1.0) * 0.5 * *readoutValue;
+        const auto first = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
+        valueOperations_.push_back(runtime::CompiledValueOperation{
+            node.id, first, 3, runtime::CompiledValueKernel{std::move(copy)}, false});
+        for (std::size_t slot = 0; slot < 3; ++slot)
+            valueOutputs_.emplace(
+                ValueOutputKey{node.id, "shutter" + std::to_string(sample * 3 + slot)},
+                runtime::ValueOutputIndex::fromRaw(valueOutputCount_ + slot));
+        postImageValueOutputs_.resize(valueOutputCount_ + 3, 0);
+        valueOutputCount_ += 3;
+    }
+    return true;
+}
+
 [[nodiscard]] std::optional<runtime::CompiledValueKernel>
 lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition& definition) {
     using namespace document;
@@ -672,6 +738,12 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
         const bool shake = node != nullptr && node->typeId == document::kCameraShakeNodeType;
+        if (node != nullptr && definition != definitions_.end() &&
+            node->typeId == document::kRollingShutterNodeType) {
+            if (!appendRollingShutterSamples(*node, *definition->second))
+                return false;
+            continue;
+        }
         if (node == nullptr || definition == definitions_.end() || (!isValueNode(nodeId) && !shake)) {
             continue;
         }

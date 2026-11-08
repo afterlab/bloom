@@ -1062,6 +1062,206 @@ lowerChromaticAberration(const document::NodeRecord& node,
     return true;
 }
 
+// #568 Rolling Shutter: one field raster over the input's data window. A row (or column) of phase
+// s, -1/2 at the first read to +1/2 at the last, shows the scene s * readout frames after the
+// frame's time, so the pixel at p reads the input at q(p), where the scene's motion over that time
+// is undone:
+//
+//   camera  a Camera Shake's translation o (pixels) and roll g (degrees clockwise), each read at
+//           the three shake copies the value pass made (-1/2, 0, +1/2 of the readout): the change
+//           since the frame's time is the quadratic through the three samples a, b, c,
+//           d(s) = s (c - a) + 2 s^2 (c + a - 2 b), times the amount. With v = p - o(b) - d_o and
+//           the roll's small angle g_d (radians) the position is q = v + g_d perp(v) + o(b), perp
+//           the quarter turn (-y, x): the exact inverse of the shake's move to first order in the
+//           roll's change over the readout.
+//   motion  a forward flow f (pixels a frame, y down) read at p: q -= f s readout amount.
+//
+// Field positions are y up, the shake's and the flow's y down, hence the sign flips. Rows (or
+// columns) are in composition pixels, so a proxy computes the same phases. The result is the
+// input's premultiplied texel, bilinear, Extend or Transparent at the edge. Muting, no readout, no
+// amount or neither motion source is the identity.
+[[nodiscard]] bool
+lowerRollingShutter(const document::NodeRecord& node,
+                    std::vector<runtime::CompiledOperation>& operations,
+                    std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    using core::field::FieldOutputMode;
+    using core::field::FieldResultKind;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    const auto amount = compiledScalarParameter(findParameterBinding(node, "amount"));
+    const auto readout = compiledScalarParameter(findParameterBinding(node, "readout"));
+    const auto* readoutValue = readout ? std::get_if<double>(&readout->source) : nullptr;
+    const auto* direction = parameterConstant<std::int64_t>(findParameterBinding(node, "direction"));
+    const auto* edges = parameterConstant<std::int64_t>(findParameterBinding(node, "edges"));
+    if (!amount || readoutValue == nullptr || direction == nullptr || edges == nullptr ||
+        *direction < kRollingShutterTopToBottom || *direction > kRollingShutterRightToLeft ||
+        *edges < kRollingShutterEdgeExtend || *edges > kRollingShutterEdgeTransparent) {
+        addTopologyFailure(node.id, "Rolling Shutter parameters could not be lowered.");
+        return false;
+    }
+    const auto motion = findInputOperation(node.id, kRollingShutterMotionPort, indices);
+    const auto sample = [&](const std::size_t index, const std::size_t slot) {
+        const auto found =
+            valueOutputs_.find(ValueOutputKey{node.id, "shutter" + std::to_string(index * 3 + slot)});
+        return found == valueOutputs_.end()
+                   ? std::optional<runtime::CompiledScalarParameter>{}
+                   : std::optional{runtime::CompiledScalarParameter{{}, found->second}};
+    };
+    const bool shake = sample(0, 0).has_value();
+    const auto* constantAmount = std::get_if<double>(&amount->source);
+    if (isMuted(node.id) || *readoutValue == 0.0 ||
+        (constantAmount != nullptr && *constantAmount == 0.0) || (!shake && !motion)) {
+        portOperations_.insert_or_assign({node.id, "image"}, *input);
+        indices.emplace(node.id, *input);
+        return true;
+    }
+    // Which of the shake's two connections are real: an unconnected one is a lane of zeros.
+    const auto offsetLinked =
+        std::holds_alternative<runtime::ValueOutputIndex>(
+            compiledVec2Parameter(findParameterBinding(node, kRollingShutterCameraOffsetRole))
+                .value_or(runtime::CompiledVec2Parameter{})
+                .source);
+    const auto rollLinked =
+        std::holds_alternative<runtime::ValueOutputIndex>(
+            compiledScalarParameter(findParameterBinding(node, kRollingShutterCameraRollRole))
+                .value_or(runtime::CompiledScalarParameter{})
+                .source);
+    const auto& format = composition_->format();
+    const auto width = std::max(static_cast<double>(format.width()), 1.0);
+    const auto height = std::max(static_cast<double>(format.height()), 1.0);
+    constexpr double kRadiansPerDegree = 0.017453292519943295;
+
+    FieldBuild build;
+    build.operations = &operations;
+    build.indices = &indices;
+    const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+    const auto slot = fieldSlot(build, node, *input);
+    if (slot < 0)
+        return false;
+    // The row phase in every lane, and the same times the readout (frames).
+    std::array<std::int64_t, 4> lane{};
+    double phaseScale = 0.0;
+    switch (*direction) {
+    case kRollingShutterTopToBottom:
+        lane = {1, 1, 1, 1};
+        phaseScale = -1.0 / height;
+        break;
+    case kRollingShutterBottomToTop:
+        lane = {1, 1, 1, 1};
+        phaseScale = 1.0 / height;
+        break;
+    case kRollingShutterLeftToRight:
+        lane = {0, 0, 0, 0};
+        phaseScale = 1.0 / width;
+        break;
+    default:
+        lane = {0, 0, 0, 0};
+        phaseScale = -1.0 / width;
+        break;
+    }
+    const auto phase = fieldSwizzle(build, c, lane,
+                                    {phaseScale, phaseScale, phaseScale, phaseScale});
+    // The amount in every lane: its parameter is one operand (an authored value belongs to one
+    // instruction), then a swizzle spreads it.
+    const auto amountOnce = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                      {*amount, fieldConstant(0.0), fieldConstant(0.0),
+                                       fieldConstant(0.0)});
+    const auto amountLanes = fieldSwizzle(build, amountOnce, {0, 0, 0, 0});
+    int where = c;
+    if (shake) {
+        const auto constants = [&](const std::size_t index) {
+            const auto lanes = [&](const std::size_t part, const bool real) {
+                return real ? *sample(index, part) : fieldConstant(0.0);
+            };
+            return fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                             {lanes(0, offsetLinked), lanes(1, offsetLinked), lanes(2, rollLinked),
+                              fieldConstant(0.0)});
+        };
+        const auto a = constants(0);
+        const auto b = constants(1);
+        const auto cc = constants(2);
+        const auto sub = [&](const int x, const int y) {
+            return fieldEmit(build, FieldOp::Math, {x, y, -1, -1}, {1},
+                             {fieldConstant(0.1), fieldConstant(0.0)});
+        };
+        const auto add = [&](const int x, const int y) {
+            return fieldEmit(build, FieldOp::Math, {x, y, -1, -1}, {0},
+                             {fieldConstant(0.1), fieldConstant(0.0)});
+        };
+        const auto mul = [&](const int x, const int y) {
+            return fieldEmit(build, FieldOp::Math, {x, y, -1, -1}, {2},
+                             {fieldConstant(0.1), fieldConstant(0.0)});
+        };
+        const std::array<std::int64_t, 4> all{0, 1, 2, 3};
+        const auto linear = sub(cc, a);
+        const auto twiceB = fieldSwizzle(build, b, all, {2.0, 2.0, 2.0, 2.0});
+        const auto curve = sub(add(a, cc), twiceB);
+        const auto twiceCurve = fieldSwizzle(build, curve, all, {2.0, 2.0, 2.0, 2.0});
+        const auto change = mul(add(linear, mul(twiceCurve, phase)), phase);
+        const auto scaled = mul(change, amountLanes);
+        const auto moved = fieldSwizzle(build, scaled, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+        const auto angle = fieldSwizzle(build, scaled, {2, 2, 2, 2},
+                                        {kRadiansPerDegree, kRadiansPerDegree, kRadiansPerDegree,
+                                         kRadiansPerDegree});
+        const auto rest = fieldSwizzle(build, b, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+        const auto v = sub(sub(where, rest), moved);
+        const auto turned = fieldSwizzle(build, v, {1, 0, 4, 4}, {-1.0, 1.0, 0.0, 0.0});
+        where = add(add(v, mul(turned, angle)), rest);
+    }
+    if (motion) {
+        if (build.images.size() >= core::field::kMaxFieldImages) {
+            addTopologyFailure(node.id, "A field program reads at most four images.");
+            return false;
+        }
+        const auto flowSlot = static_cast<std::int8_t>(build.images.size());
+        build.images.push_back(*motion);
+        FieldBuild::Step step;
+        step.instruction.op = static_cast<std::uint8_t>(FieldOp::Image);
+        // Bilinear, the edge pixel beyond the picture, the stored red and green.
+        step.instruction.choices = {0, 0, 1, 0, 0, 1};
+        step.instruction.slot = flowSlot;
+        step.output = build.nextRegister++;
+        step.inputs = {c, -1, -1, -1};
+        build.steps.push_back(std::move(step));
+        const auto flow = build.steps.back().output;
+        const auto flowUp = fieldSwizzle(build, flow, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+        // s * readout * amount frames of that velocity.
+        const auto frames = fieldSwizzle(build, c, lane,
+                                         {phaseScale * *readoutValue, phaseScale * *readoutValue,
+                                          phaseScale * *readoutValue, phaseScale * *readoutValue});
+        const auto times = fieldEmit(build, FieldOp::Math, {frames, amountLanes, -1, -1}, {2},
+                                     {fieldConstant(0.1), fieldConstant(0.0)});
+        const auto shift = fieldEmit(build, FieldOp::Math, {flowUp, times, -1, -1}, {2},
+                                     {fieldConstant(0.1), fieldConstant(0.0)});
+        where = fieldEmit(build, FieldOp::Math, {where, shift, -1, -1}, {1},
+                          {fieldConstant(0.1), fieldConstant(0.0)});
+    }
+    FieldBuild::Step read;
+    read.instruction.op = static_cast<std::uint8_t>(FieldOp::Image);
+    // Bilinear, Extend (0) or Transparent (1) at the edge, the texel as stored (premultiplied).
+    read.instruction.choices = {0, *edges, 3, 4, 0, 1};
+    read.instruction.slot = slot;
+    read.output = build.nextRegister++;
+    read.inputs = {where, -1, -1, -1};
+    build.steps.push_back(std::move(read));
+    auto program = finishFieldProgram(build, build.steps.back().output,
+                                      FieldResultKind::Premultiplied, FieldOutputMode::Raw, node.id);
+    if (!program)
+        return false;
+    runtime::CompiledImageEffect effect{node.id, *input,
+                                        runtime::FieldRasterKernel{std::move(*program), 1}};
+    effect.fieldImages = std::move(build.images);
+    const auto index = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(std::move(effect));
+    portOperations_.insert_or_assign({node.id, "image"}, index);
+    indices.emplace(node.id, index);
+    return true;
+}
+
 // #508 Light Rays: one field raster over the input's data window. The rays op gathers the input
 // along the segment from each pixel towards the centre (its luma or alpha, weighed by the falloff),
 // the gathered scalar is tinted by the colour, and the input's own premultiplied texel is added to

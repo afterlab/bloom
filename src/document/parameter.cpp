@@ -6,6 +6,7 @@
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
+#include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
@@ -421,6 +422,11 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #508 Light Rays: every parameter within its document domain.
     if (schemaKey.starts_with("bloom.light-rays."))
         return isLightRaysParameterValueValid(schemaKey, constant.value);
+    // #568 Rolling Shutter: every parameter within its document domain.
+    if (rollingShutterParameterSpec(schemaKey) != nullptr ||
+        schemaKey == kRollingShutterCameraOffsetSchemaKey ||
+        schemaKey == kRollingShutterCameraRollSchemaKey)
+        return isRollingShutterParameterValueValid(schemaKey, constant.value);
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeParameterValueValid(schemaKey, constant.value);
@@ -612,6 +618,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isFilmGrainConstantSchemaKey(schemaKey) ||
          bloom::document::isCodecDegradeConstantSchemaKey(schemaKey) ||
          bloom::document::isLensDistortionConstantSchemaKey(schemaKey) ||
+         bloom::document::isRollingShutterConstantSchemaKey(schemaKey) ||
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||

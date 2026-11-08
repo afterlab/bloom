@@ -475,6 +475,17 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.chromatic-aberration")
         self.assertIn("amount", effect[2]["keys"])
 
+    def test_rolling_shutter_scenario_reads_a_camera_shake(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["rolling-shutter-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effects = scenario["layers"][0]["effects"]
+        self.assertEqual([effect[0] for effect in effects],
+                         ["bloom.camera-shake", "bloom.rolling-shutter"])
+        drives = effects[1][2]["drives"]
+        self.assertEqual(drives["cameraOffset"][0], "@previous")
+        self.assertEqual(drives["cameraRoll"][2], "roll")
+
     def test_light_flicker_scenario_drives_an_exposure(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["light-flicker-2k"]

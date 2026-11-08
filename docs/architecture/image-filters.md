@@ -1860,6 +1860,77 @@ the production builder at full frame and ROI for both sources, and the native ha
 the CPU oracle on a device. [Benchmarks](../development/benchmarks.md#light-rays-508) names the scenario and
 the suspected cost.
 
+## Rolling Shutter
+
+`bloom.rolling-shutter`, schema 1, under Distort (issue #568), has one Image in, `input`, an optional Image
+in, `motion`, and one Image output, `image`: the picture as a sensor that reads its rows one after another
+would have recorded it. It takes no effect mask.
+
+A rolling shutter reads the frame over a time, not at an instant: the row read at phase `s` (-1/2 at the
+first row read, +1/2 at the last) shows the scene `s * readout` frames after the frame's time. Whatever
+moves while the sensor reads is skewed, and a motion that changes during the read (a shake) wobbles.
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `readout` | 0.5 | 0 to 1 | The time the sensor takes to read the frame, a fraction of a frame; 0 is a global shutter. A constant: it fixes the moments the camera is read at |
+| `direction` | Top to Bottom | 0 to 3 | The order rows (or columns) are read: Top to Bottom, Bottom to Top, Left to Right, Right to Left. A constant |
+| `edges` | Extend | 0 or 1 | What a read past the picture's edge sees: the edge pixel (Extend) or transparent. A constant |
+| `amount` | 1 | 0 to 4 | Scales every motion below; 1 is the motion as it is. Socket, keyable and drivable |
+| `cameraOffset` | 0, 0 | within 1e6 px | A Camera Shake's Offset output. Socket and driver |
+| `cameraRoll` | 0 | within 1e6 | A Camera Shake's Roll output. Socket and driver |
+
+**Motion sources.** The node skews by whichever of the two it is given, and by both if both:
+
+- **Camera Shake, exactly.** Connect a Camera Shake's `offset` to `cameraOffset` and its `roll` to
+  `cameraRoll` (both from the same shake), the shake being upstream of the picture. The value pass then
+  makes three copies of the shake's value operation (`CompiledValueShake` with `timeOffsetFrames`
+  -readout/2, 0 and +readout/2 and `components`, publishing offset x, offset y and roll as three scalars),
+  so the node reads the shake's own motion (`core/camera_shake.hpp`) at the first, the middle and the last
+  moment of the readout: not an estimate from the pictures. The shake is a pure function of its seed and
+  the time, so this needs no earlier frame. Any other source on those two sockets (a keyed value, another
+  node's output, a different Camera Shake for each socket) is refused with a named diagnostic, because only
+  a Camera Shake can be read at another moment; a typed constant is a camera that does not move during the
+  readout and does nothing.
+- **Optical flow.** Connect an Optical Flow's `forward` image to `motion`. The flow is read at each pixel
+  (bilinear, edge pixel beyond the picture): its red and green are the velocity in pixels per frame, y down.
+
+**The model.** With the shake's samples `a`, `b`, `c` of offset (and roll) at the three moments, the change
+since the frame's time at phase `s` is the quadratic through them, `d(s) = s (c - a) + 2 s^2 (c + a - 2 b)`,
+exact for any motion up to quadratic over the readout and within a fraction of a pixel for Camera Shake's
+motion (a test holds it to half a pixel). The input already carries the shake at the frame's time, so the pixel at
+`p` reads the input at `q`, with `v = p - o(b) - d_o`, `q = v + g perp(v) + o(b)`: `d_o` the offset's change,
+`g` the roll's change in radians (clockwise), `perp(x, y) = (-y, x)` and positions measured from the
+composition's centre; this is the inverse of the shake's move to first order in the roll's change over the
+readout, and it ignores the shake's overscan scale. The flow adds `q -= f s readout amount`. Everything
+is multiplied by `amount`. The field raster works in y up, the shake and flow in y down, so the y of each is
+flipped. `s` is measured in composition pixels (`-y / height`, `y / height`, `x / width`, `-x / width` for
+the four directions), so a proxy computes the same phases.
+
+**Lowering.** One field raster (`docs/architecture/fields.md`) over the input's data window, program
+`Coordinate`, the phase (a Swizzle), the constants of the three samples, the quadratic (Add, Subtract,
+Multiply and Swizzle instructions), the optional flow read (`Image` instruction, selector 1, bilinear, Extend)
+and the final premultiplied `Image` read of the input; no new field instruction. A constant amount of zero, a
+zero readout, no connection on either camera socket with no flow, and a muted node are the identity and
+add no operation. The Camera Shake is a pure function of the seed and the time, so any frame renders on its
+own and the same in preview, scrubbing and export; the node carries no state between frames and its cache
+identity is the program with the operands (the three samples' outputs, the amount) and the frame time. The
+raster reads the input wherever the position points, so a region of interest or a proxy gives the whole
+frame's pixels, and CPU work checks cancellation per row, reports row progress and refuses an output past
+the remaining pixel budget.
+
+**On the GPU.** The field raster's program, unchanged: the picture and the flow are moved beside the canvas
+in the atlas, one dispatch of the fixed field program, nothing read back, the operands changing only the
+program's data. `node.bloom.rolling-shutter` is a Required contract entry satisfied by the production
+preparation of its lowering's program (full frame and ROI), and the native harness holds the same program to
+the CPU oracle on a device.
+
+**Evidence.** `src/runtime/tests/snapshot_compiler_rolling_shutter_tests.ipp`: the lowering (the identities,
+the three shake copies and their offsets, the program against the coverage fixture's, time dependence),
+and on the CPU reference over a checker grid each pixel against an independent double-precision reading of
+the input through the quadratic of the shake's three samples, the quadratic's gap from the shake's exact
+motion, a flow image skewing by phase, a region of interest, the pixel budget and cancellation.
+[Benchmarks](../development/benchmarks.md#rolling-shutter-568) names the scenario and the suspected cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,

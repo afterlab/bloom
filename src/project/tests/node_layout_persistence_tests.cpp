@@ -181,7 +181,8 @@ void blurNodeReopen() {
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
           "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade",
-          "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.test-card"}) {
+          "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
+          "bloom.test-card"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -310,6 +311,15 @@ void blurNodeReopen() {
                     ? document::ParameterValue{0.0625}
                 : parameter.schemaKey.starts_with("bloom.lens-distortion.")
                     ? document::ParameterValue{0.125}
+                // #568 Rolling Shutter: moved choices, a moved camera offset and moved scalars.
+                : parameter.schemaKey == "bloom.rolling-shutter.direction"
+                    ? document::ParameterValue{std::int64_t{2}}
+                : parameter.schemaKey == "bloom.rolling-shutter.edges"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.rolling-shutter.cameraOffset"
+                    ? document::ParameterValue{document::Vec2d{3.5, -2.25}}
+                : parameter.schemaKey.starts_with("bloom.rolling-shutter.")
+                    ? document::ParameterValue{0.375}
                 // #587 Test Card: moved choices, whole numbers, scalars and switches.
                 : parameter.schemaKey.starts_with("bloom.test-card.")
                     ? (document::testCardParameterSpec(parameter.schemaKey)->kind ==

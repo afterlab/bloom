@@ -390,6 +390,23 @@ SCENARIOS["chromatic-aberration-2k"] = {
     ],
 }
 
+# #568: Rolling Shutter over a plate shaken by a Camera Shake, whose Offset and Roll drive the shutter's
+# camera sockets, so the shutter reads the shake exactly at three moments of the readout. The shake is
+# a function of the frame, so every frame is new.
+SCENARIOS["rolling-shutter-2k"] = {
+    "description": "A PNG16 plate shaken by a Camera Shake and skewed by a Rolling Shutter that reads it.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.camera-shake", {"amplitudeX": 24.0, "amplitudeY": 16.0, "rollAmount": 1.0,
+                                             "seed": 3}],
+                     ["bloom.rolling-shutter", {"readout": 0.8},
+                      {"drives": {"cameraOffset": ["@previous", {}, "offset"],
+                                  "cameraRoll": ["@previous", {}, "roll"]}}]]},
+    ],
+}
+
 # #567: Light Flicker driving an Exposure node's stops over a plate. The flicker is a function of the
 # frame, so every frame is new; the cost is the Exposure's, since the flicker itself is one value per frame.
 SCENARIOS["light-flicker-2k"] = {

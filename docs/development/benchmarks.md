@@ -427,6 +427,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `lens-distortion-2k` | 1920×1080 | 24 | A PNG16 plate under Lens Distortion (#486) in Redistort mode, its radial `k1` keyed from -0.1 to -0.3 so every frame is new. Only the warped image is read, so the ST map is not built. Written, not yet run: it has no recorded numbers and no budget |
 | `chromatic-aberration-2k` | 1920×1080 | 24 | A PNG16 plate under Chromatic Aberration (#486), its amount keyed from 1% to 4% so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 | `light-rays-2k` | 1920×1080 | 24 | A PNG16 plate under Light Rays (#508) from its luminance, its length keyed from 40% to 90% so every frame is new and each pixel gathers a different number of samples. Written, not yet run: it has no recorded numbers and no budget |
+| `rolling-shutter-2k` | 1920×1080 | 24 | A PNG16 plate under a Camera Shake (#512) of 24 by 16 pixels and 1° of roll, read by a Rolling Shutter (#568) with an 80% readout whose camera sockets are the shake's Offset and Roll, so every frame is new and the shake is evaluated three more times. Written, not yet run: it has no recorded numbers and no budget |
 | `light-flicker-2k` | 1920×1080 | 24 | A PNG16 plate under an Exposure whose stops are driven by a seeded Light Flicker (#567), so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 
 | `test-card-2k` | 1920×1080 | 24 | A Zone Plate Test Card (#587), moving so every frame is new, drawn at the composition's size with 16 sub-samples per pixel; no media is read. Written, not yet run: it has no recorded numbers and no budget |
@@ -969,6 +970,15 @@ written to measure it end to end. Suspicions to check against it, not findings: 
 three times, so it should cost about three bilinear reads where Lens Distortion's Undistort costs one; and
 on the GPU the input is moved beside the canvas in the field raster's atlas, one more full-frame copy and a
 larger dispatched image than the output alone.
+
+### Rolling Shutter (#568)
+
+Rolling Shutter has no recorded numbers and no budget yet. The scenario `rolling-shutter-2k` is written to
+measure it end to end. Suspicions to check against it, not findings: the raster reads the input once, plus the
+flow once when a motion image is connected, so it should cost about one bilinear read where Chromatic
+Aberration costs three; the three shake evaluations are three more hashes of a few lattice points a frame and
+should be negligible; and on the GPU the input (and the flow) is moved beside the canvas in the field raster's
+atlas, one more full-frame copy and a larger dispatched image than the output alone.
 
 ### Light Flicker (#567)
 

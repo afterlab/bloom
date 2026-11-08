@@ -1583,12 +1583,15 @@ displayProofRunner(const bool customView) {
                 bloom::gpu_coverage_plans::effectPlan(kernel, idBase)->copyDefinition();
             definition.operations[0] = bloom::gpu_coverage_plans::gradient(false, idBase + 50);
             if (const auto* field = std::get_if<bloom::runtime::FieldRasterKernel>(&kernel);
-                field != nullptr && std::ranges::any_of(field->program.instructions,
-                                                        [](const auto& instruction) {
-                                                            return instruction.slot >= 0;
-                                                        }))
+                field != nullptr) {
+                // One image per slot the program reads (the same picture in each).
+                int slots = 0;
+                for (const auto& instruction : field->program.instructions)
+                    slots = std::max(slots, instruction.slot + 1);
                 std::get<bloom::runtime::CompiledImageEffect>(definition.operations[1])
-                    .fieldImages = {bloom::runtime::OperationIndex::fromRaw(0)};
+                    .fieldImages.assign(static_cast<std::size_t>(slots),
+                                        bloom::runtime::OperationIndex::fromRaw(0));
+            }
             const auto plan =
                 std::make_shared<const bloom::runtime::CompiledCompositionPlan>(std::move(definition));
             idBase += 100;
@@ -1699,6 +1702,15 @@ displayProofRunner(const bool customView) {
                  base + 100,
                  "production Chromatic Aberration lowering: red and blue read at opposite radial "
                  "offsets, full frame and ROI");
+        base += 1000;
+        // #568 Rolling Shutter: the one program its lowering builds, a picture read at a position
+        // moved by a quadratic camera term and a flow image.
+        addField("node.bloom.rolling-shutter",
+                 {bloom::runtime::FieldRasterKernel{
+                     bloom::field_test_programs::rollingShutterProgram(base), 1}},
+                 base + 100,
+                 "production Rolling Shutter lowering: camera and flow terms moving the read "
+                 "position, full frame and ROI");
         base += 1000;
         // #587 Test Card: every card, as the raster its lowering builds (four sub-samples, a variant
         // and option where the card has them, the label on every other card).

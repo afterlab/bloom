@@ -11,6 +11,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -387,6 +388,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kLensDistortionCenterSchemaKey ||
            schemaKey == kChromaticAberrationCenterSchemaKey ||
            schemaKey == kLightRaysCenterSchemaKey ||
+           schemaKey == kRollingShutterCameraOffsetSchemaKey ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }
@@ -425,7 +427,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) ||
            isLensDistortionScalarSchemaKey(schemaKey) ||
            isChromaticAberrationScalarSchemaKey(schemaKey) ||
-           isLightRaysScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
+           isLightRaysScalarSchemaKey(schemaKey) ||
+           isRollingShutterScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
@@ -550,6 +553,10 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #508 Light Rays (light_rays_nodes.hpp).
     if (isLightRaysScalarSchemaKey(schemaKey))
         return isLightRaysScalarWithinDomain(schemaKey, value);
+    // #568 Rolling Shutter (rolling_shutter_nodes.hpp).
+    if (rollingShutterParameterSpec(schemaKey) != nullptr ||
+        schemaKey == kRollingShutterCameraRollSchemaKey)
+        return isRollingShutterScalarWithinDomain(schemaKey, value);
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);

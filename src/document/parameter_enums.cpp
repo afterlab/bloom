@@ -209,6 +209,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                                static_cast<std::int64_t>(index)});
         return options;
     }
+    // #568 Rolling Shutter.
+    if (const auto* shutter = rollingShutterParameterSpec(schemaKey);
+        shutter != nullptr && shutter->kind == RollingShutterParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < shutter->choices.size(); ++index)
+            options.push_back({std::string(shutter->choices[index]),
+                               static_cast<std::int64_t>(index)});
+        return options;
+    }
     // #587 Test Card.
     if (const auto* card = testCardParameterSpec(schemaKey);
         card != nullptr && card->kind == TestCardParameterKind::Choice) {

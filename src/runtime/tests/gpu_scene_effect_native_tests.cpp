@@ -1787,6 +1787,12 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                          bloom::runtime::FieldRasterKernel{
                              bloom::field_test_programs::chromaticAberrationProgram(id), 1U});
     id += 100;
+    // #568 Rolling Shutter: the program its lowering builds (a camera term and a flow image moving
+    // the position a premultiplied HDR, partly transparent picture is read at).
+    kernels.emplace_back("rolling shutter",
+                         bloom::runtime::FieldRasterKernel{
+                             bloom::field_test_programs::rollingShutterProgram(id), 1U});
+    id += 100;
     // #587 Test Card: every card, the programs its lowering builds, CPU and device compared.
     for (std::int64_t card = 0; card < 16; ++card) {
         kernels.emplace_back("test card " + std::to_string(card),
@@ -1810,10 +1816,13 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
         id += 200;
         auto& effect = std::get<CompiledImageEffect>(definition.operations[1]);
         const auto* field = std::get_if<bloom::runtime::FieldRasterKernel>(&effect.kernel);
-        if (field != nullptr &&
-            std::ranges::any_of(field->program.instructions,
-                                [](const auto& instruction) { return instruction.slot >= 0; }))
-            effect.fieldImages = {OperationIndex::fromRaw(0)};
+        if (field != nullptr) {
+            // One image per slot the program reads (the same picture in each).
+            int slots = 0;
+            for (const auto& instruction : field->program.instructions)
+                slots = std::max(slots, instruction.slot + 1);
+            effect.fieldImages.assign(static_cast<std::size_t>(slots), OperationIndex::fromRaw(0));
+        }
         const auto plan = std::make_shared<const CompiledCompositionPlan>(definition);
         const auto request = requestFor(*plan);
         auto oracleRequest = request;

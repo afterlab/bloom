@@ -13,6 +13,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/rolling_shutter_nodes.hpp>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -186,6 +187,14 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #486 Chromatic Aberration.
     if (schemaKey == document::kChromaticAberrationAmountSchemaKey)
         return QCoreApplication::translate("PropertiesRow", "Amount");
+    // #568 Rolling Shutter: its table's own labels; the two camera sockets read Camera Offset and
+    // Camera Roll.
+    if (const auto* shutter = document::rollingShutterParameterSpec(schemaKey); shutter != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(shutter->label).c_str());
+    if (schemaKey == document::kRollingShutterCameraOffsetSchemaKey)
+        return QCoreApplication::translate("PropertiesRow", "Camera Offset");
+    if (schemaKey == document::kRollingShutterCameraRollSchemaKey)
+        return QCoreApplication::translate("PropertiesRow", "Camera Roll");
     // #486 Lens Distortion: its table's own labels.
     if (const auto* lens = document::lensDistortionParameterSpec(schemaKey); lens != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(lens->label).c_str());

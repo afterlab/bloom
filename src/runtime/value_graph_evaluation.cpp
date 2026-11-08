@@ -1091,6 +1091,12 @@ void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,
         fail(operation, kernel.amplitudeX.id, "Camera Shake operand has the wrong kind",
              "The amplitudes, the roll, the frequency, the roughness and the smoothing must "
              "reach the kernel as Scalars.");
+        if (kernel.components) {
+            write(operation, 0, 0.0);
+            write(operation, 1, 0.0);
+            write(operation, 2, 0.0);
+            return;
+        }
         write(operation, 0, document::Vec2d{});
         write(operation, 1, 0.0);
         write(operation, 2, document::Vec2d{1.0, 1.0});
@@ -1104,7 +1110,15 @@ void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,
     settings.frequency = std::isfinite(*frequency) ? std::clamp(*frequency, 0.05, 30.0) : 1.0;
     settings.roughness = *roughness;
     settings.smoothing = *smoothing;
-    const auto sample = core::camera_shake::evaluate(settings, time_.toSeconds(), frameRate);
+    // #568: a clone of the shake read at another moment of the frame.
+    const double seconds = time_.toSeconds() + kernel.timeOffsetFrames / frameRate;
+    const auto sample = core::camera_shake::evaluate(settings, seconds, frameRate);
+    if (kernel.components) {
+        write(operation, 0, *amplitudeX * sample.x);
+        write(operation, 1, *amplitudeY * sample.y);
+        write(operation, 2, *roll * sample.roll);
+        return;
+    }
     const double scale =
         kernel.overscan ? core::camera_shake::fillScale(*amplitudeX, *amplitudeY, *roll,
                                                         kernel.width, kernel.height)

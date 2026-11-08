@@ -7,6 +7,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
+#include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
@@ -558,6 +559,23 @@ std::optional<ParameterPresentation> lensDistortionPresentation(const std::strin
                   spec->decimals);
 }
 
+// #568 Rolling Shutter: the readout and amount percentages, the choices; the camera offset a pixel
+// offset and the camera roll degrees.
+std::optional<ParameterPresentation> rollingShutterPresentation(const std::string_view schemaKey) {
+    if (schemaKey == kRollingShutterCameraOffsetSchemaKey)
+        return pixels(-kMaximumRollingShutterCameraReach, kMaximumRollingShutterCameraReach, 4096.0);
+    if (schemaKey == kRollingShutterCameraRollSchemaKey)
+        return number(-kMaximumRollingShutterCameraReach, kMaximumRollingShutterCameraReach, -5.0,
+                      5.0, 0.01, 2, kDegrees);
+    const auto* spec = rollingShutterParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    if (spec->kind == RollingShutterParameterKind::Choice)
+        return choice();
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit, spec->displayScale);
+}
+
 // #486 Chromatic Aberration: the amount a percentage of half the diagonal; the centre a pixel offset.
 std::optional<ParameterPresentation> chromaticAberrationPresentation(const std::string_view schemaKey) {
     if (schemaKey == kChromaticAberrationCenterSchemaKey)
@@ -641,6 +659,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *lens;
     if (auto aberration = chromaticAberrationPresentation(schemaKey))
         return *aberration;
+    if (auto shutter = rollingShutterPresentation(schemaKey))
+        return *shutter;
     if (auto card = testCardPresentation(schemaKey))
         return *card;
     if (auto rays = lightRaysPresentation(schemaKey))

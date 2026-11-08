@@ -78,7 +78,7 @@ void movingAGroupLeavesTheEffectMaskAlone() {
     for (const auto typeId : {"bloom.lens-flare", "bloom.drop-shadow", "bloom.light-wrap",
                               "bloom.luma-key", "bloom.channel-shuffle", "bloom.alpha-association",
                               "bloom.lens-distortion", "bloom.chromatic-aberration",
-                              "bloom.test-card"})
+                              "bloom.rolling-shutter", "bloom.test-card"})
         expect(!masked(typeId), std::string(typeId) + " still takes no effect mask");
 }
 

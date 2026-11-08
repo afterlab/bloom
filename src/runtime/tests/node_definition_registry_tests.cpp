@@ -157,8 +157,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker.
-    expectations.expect(registry.definitions().size() == 195,
+    // Flicker; #568 adds Rolling Shutter.
+    expectations.expect(registry.definitions().size() == 196,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -448,6 +448,24 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             aberration->outputs.size() == 1 && aberration->outputs[0].name == "image" &&
             aberration->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Chromatic Aberration has an animatable socket per value and a default of no effect");
+    // #568 Rolling Shutter: the picture, an optional motion image, the amount, the camera offset and
+    // the camera roll as sockets; the readout, direction and edges are constants. No effect mask.
+    const auto* shutter = registry.find("bloom.rolling-shutter", 1);
+    expectations.expect(
+        shutter != nullptr && !document::hasEffectMask(*shutter) && shutter->inputs.size() == 5 &&
+            shutter->parameters.size() == 6 && shutter->inputs[0].name == "input" &&
+            shutter->inputs[1].name == "motion" && !shutter->inputs[1].required &&
+            shutter->inputs[1].valueKind == runtime::SocketValueKind::Image &&
+            shutter->inputs[2].name == "amount" && shutter->inputs[3].name == "cameraOffset" &&
+            shutter->inputs[3].valueKind == runtime::SocketValueKind::Vector2 &&
+            shutter->inputs[4].name == "cameraRoll" && shutter->parameters[0].role == "readout" &&
+            shutter->parameters[0].defaultValue == document::ParameterValue{0.5} &&
+            shutter->parameters[3].role == "amount" &&
+            shutter->parameters[3].defaultValue == document::ParameterValue{1.0} &&
+            shutter->outputs.size() == 1 && shutter->outputs[0].name == "image",
+        "#568: Rolling Shutter has a motion image, sockets for the amount and the camera, constants "
+        "for the rest");
+    expectCategory({"bloom.rolling-shutter"}, document::NodeCategory::Transform);
     expectCategory({"bloom.light-flicker"}, document::NodeCategory::Values);
     // #563 Codec Degrade: an Image in and out, its block size, GOP length and chroma bleed with no
     // socket, and a socket for Quality and P-frame persistence; the effect mask follows.

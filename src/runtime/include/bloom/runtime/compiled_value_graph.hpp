@@ -330,6 +330,12 @@ struct CompiledValueShake final {
     bool overscan = true;
     double width = 0.0;
     double height = 0.0;
+    // #568 Rolling Shutter reads the same shake at other moments of the frame: the motion is
+    // evaluated `timeOffsetFrames` frames after the frame being rendered. With `components` the
+    // three outputs are the scalars (offset x, offset y, roll) with no overscan scale, which a
+    // field program takes as operands. Both are zero/false for the node's own operation.
+    double timeOffsetFrames = 0.0;
+    bool components = false;
 
     friend bool operator==(const CompiledValueShake&, const CompiledValueShake&) = default;
 };

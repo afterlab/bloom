@@ -325,4 +325,84 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     return b.finish(joined, FieldResultKind::Premultiplied);
 }
 
+// #568 Rolling Shutter: the program its lowering builds for a top-to-bottom readout of half a frame
+// over the 16 x 12 test composition, a Camera Shake behind both camera sockets and a flow image
+// connected, mirroring snapshot_compiler_fields.ipp's lowerRollingShutter (the snapshot compiler
+// test holds the two to the same instruction sequence). Slot 0 is the picture, slot 1 the flow.
+[[nodiscard]] inline FieldProgram rollingShutterProgram(const std::uint64_t idBase) {
+    Builder b(idBase);
+    constexpr double kRadians = 0.017453292519943295;
+    const auto math = [&](const std::int64_t operation, const int x, const int y) {
+        return b.add(FieldOp::Math, {x, y}, {operation}, {0.1, 0.0});
+    };
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto phase = b.add(FieldOp::Swizzle, {c}, {1, 1, 1, 1}, {-1.0 / 12.0, -1.0 / 12.0, -1.0 / 12.0, -1.0 / 12.0});
+    const auto amountOnce = b.add(FieldOp::Constant, {}, {}, {1.0, 0.0, 0.0, 0.0});
+    const auto amount = b.add(FieldOp::Swizzle, {amountOnce}, {0, 0, 0, 0}, {1.0, 1.0, 1.0, 1.0});
+    const auto a = b.add(FieldOp::Constant, {}, {}, {3.0, 1.0, 0.5, 0.0});
+    const auto mid = b.add(FieldOp::Constant, {}, {}, {4.0, 2.0, 1.0, 0.0});
+    const auto cc = b.add(FieldOp::Constant, {}, {}, {5.0, 3.0, 1.5, 0.0});
+    const auto linear = math(1, cc, a);
+    const auto twiceB = b.add(FieldOp::Swizzle, {mid}, {0, 1, 2, 3}, {2.0, 2.0, 2.0, 2.0});
+    const auto sum = math(0, a, cc);
+    const auto curve = math(1, sum, twiceB);
+    const auto twiceCurve = b.add(FieldOp::Swizzle, {curve}, {0, 1, 2, 3}, {2.0, 2.0, 2.0, 2.0});
+    const auto weighted = math(2, twiceCurve, phase);
+    const auto shifted = math(0, linear, weighted);
+    const auto change = math(2, shifted, phase);
+    const auto scaled = math(2, change, amount);
+    const auto moved = b.add(FieldOp::Swizzle, {scaled}, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+    const auto angle = b.add(FieldOp::Swizzle, {scaled}, {2, 2, 2, 2}, {kRadians, kRadians, kRadians, kRadians});
+    const auto rest = b.add(FieldOp::Swizzle, {mid}, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+    const auto fromRest = math(1, c, rest);
+    const auto v = math(1, fromRest, moved);
+    const auto turned = b.add(FieldOp::Swizzle, {v}, {1, 0, 4, 4}, {-1.0, 1.0, 0.0, 0.0});
+    const auto swung = math(2, turned, angle);
+    const auto sway = math(0, v, swung);
+    const auto where0 = math(0, sway, rest);
+    const auto flow = b.add(FieldOp::Image, {c}, {0, 0, 1, 0, 0, 1});
+    b.last().slot = 1;
+    const auto flowUp = b.add(FieldOp::Swizzle, {flow}, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+    const auto frames = b.add(FieldOp::Swizzle, {c}, {1, 1, 1, 1}, {-0.5 / 12.0, -0.5 / 12.0, -0.5 / 12.0, -0.5 / 12.0});
+    const auto times = math(2, frames, amount);
+    const auto shift = math(2, flowUp, times);
+    const auto where = math(1, where0, shift);
+    const auto read = b.add(FieldOp::Image, {where}, {0, 0, 3, 4, 0, 1});
+    b.last().slot = 0;
+    auto program = b.finish(read, FieldResultKind::Premultiplied);
+    // The lowering packs virtual registers into the sixteen physical ones by last use; so does this.
+    const auto count = program.instructions.size();
+    std::vector<std::size_t> lastUse(count, 0);
+    for (std::size_t i = 0; i < count; ++i) {
+        lastUse[static_cast<std::size_t>(program.instructions[i].output)] = i;
+        for (const auto input : program.instructions[i].inputs)
+            if (input >= 0)
+                lastUse[static_cast<std::size_t>(input)] = i;
+    }
+    lastUse[program.result] = count;
+    std::vector<int> physicalOf(count, -1);
+    std::array<std::size_t, 16> freeAfter{};
+    std::array<bool, 16> used{};
+    for (std::size_t i = 0; i < count; ++i) {
+        auto& instruction = program.instructions[i];
+        const auto virtualOutput = static_cast<std::size_t>(instruction.output);
+        for (auto& input : instruction.inputs)
+            if (input >= 0)
+                input = static_cast<std::int8_t>(physicalOf[static_cast<std::size_t>(input)]);
+        // A register whose last read is this very instruction may be written by it.
+        for (std::size_t r = 0; r < 16; ++r)
+            if (used[r] && freeAfter[r] <= i)
+                used[r] = false;
+        std::size_t chosen = 0;
+        while (chosen < 16 && used[chosen])
+            ++chosen;
+        physicalOf[virtualOutput] = static_cast<int>(chosen);
+        used[chosen] = true;
+        freeAfter[chosen] = lastUse[virtualOutput];
+        instruction.output = static_cast<std::int8_t>(chosen);
+    }
+    program.result = static_cast<std::uint8_t>(physicalOf[program.result]);
+    return program;
+}
+
 } // namespace bloom::field_test_programs

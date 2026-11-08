@@ -8,6 +8,7 @@
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
+#include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
@@ -583,6 +584,9 @@ template <typename Definition>
         // #486 Lens Distortion: the exact generated shape.
         if (definition.key.typeId == kLensDistortionNodeType)
             return definition == lensDistortionDefinition();
+        // #568 Rolling Shutter: the exact generated shape.
+        if (definition.key.typeId == kRollingShutterNodeType)
+            return definition == rollingShutterDefinition();
         // #486 Chromatic Aberration: the exact generated shape.
         if (definition.key.typeId == kChromaticAberrationNodeType)
             return definition == chromaticAberrationDefinition();
@@ -1695,6 +1699,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         codecDegradeDefinition(),
         lensDistortionDefinition(),
         chromaticAberrationDefinition(),
+        rollingShutterDefinition(),
         testCardDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),
