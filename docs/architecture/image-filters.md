@@ -1616,6 +1616,84 @@ passes again, each with parity.
 `effect.SharpenKernel` and `node.bloom.sharpen` prepare through the production builder at full frame and
 ROI. [Benchmarks](../development/benchmarks.md#sharpen-486) holds its cost.
 
+## Lens Distortion
+
+`bloom.lens-distortion`, schema 1, under Distort (issue #486), has one Image in, `input`, and two Image
+outputs: `image`, the warped picture, and `stMap`, the same warp as an ST map. It takes no effect mask.
+Undistort and Redistort are inverses of each other.
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `mode` | Undistort | Undistort, Redistort | Which way the lens model is applied (constant) |
+| `k1` | 0 | -2 to 2 | Radial coefficient: negative is barrel, positive pincushion |
+| `k2` | 0 | -2 to 2 | Radial coefficient that grows faster towards the corners |
+| `p1` | 0 | -0.5 to 0.5 | Tangential (decentring) coefficient |
+| `p2` | 0 | -0.5 to 0.5 | Tangential (decentring) coefficient |
+| `center` | 0, 0 | within 1e6 px | The lens centre, pixels from the composition's centre with y down |
+
+Every value except `mode` has a socket and can be keyed or driven.
+
+**The model.** Brown, "Decentering Distortion of Lenses" (Photogrammetric Engineering 32(3), 1966), after
+Conrady, "Decentred Lens-Systems" (Monthly Notices of the Royal Astronomical Society 79, 1919): the
+Brown-Conrady model with two radial and two tangential terms, in the form every common lens calibration
+uses. Coordinates `(x, y)` are normalised about the centre by half the composition's diagonal (a corner of
+the frame is at `r = 1` for a centred lens, whatever the frame's shape), and `r2 = x x + y y`:
+
+```text
+s    = 1 + k1 r2 + k2 r2 r2
+D(x, y) = ( x s + 2 p1 x y + p2 (r2 + 2 x x),
+            y s + p1 (r2 + 2 y y) + 2 p2 x y )
+```
+
+`D` takes an undistorted position to the distorted one the lens put it at. Each output pixel reads the
+input at one position, found from the pixel's own: **Undistort** reads `D(p)`, the picture the lens
+would have to have produced; **Redistort** reads `D^-1(p)`, which puts the lens's distortion onto a
+straight picture. The two are inverses wherever `D` rises monotonically from the centre, which holds
+across the frame for ordinary lens values; far outside that (a `k1` below -1 on a centred lens, say) the
+inverse has no solution and Redistort is not defined there. `D^-1` is found by twelve Newton steps from
+the pixel's own position over `D`'s analytic Jacobian, each step limited to one normalised unit, and
+costs about twelve times what Undistort does per pixel.
+
+**The ST map.** `stMap` holds, in red and green, the position each pixel reads, normalised over the
+composition frame: 0, 0 is the frame's bottom left and 1, 1 its top right, blue is 0 and alpha is 1. It is
+the data an ST-map warp reads, so the same warp can be applied to another picture. It is raw data,
+scene-linear, and the frame stands for the composition whatever the input's size, so a proxy draws the
+same values at fewer pixels. An output nothing reads is not built.
+
+**Lowering.** The node lowers to a field raster (`docs/architecture/fields.md`) per output the graph reads,
+each over the input's data window. The program is `Coordinate`, one `Lens Warp` instruction holding the
+model, and for `image` an `Image` instruction reading the input at the warp's position, bilinear over its
+premultiplied texels, transparent outside the input, result kind Premultiplied (a texel is kept exactly as
+stored, colour at zero alpha included). For `stMap` the position is scaled by `1 / frame size` and moved by
+one half. The single `Lens Warp` instruction is in `src/core/field_kernel.glsl`, the one kernel the CPU
+reference and the GPU program both run, so the two share every operation and rounding. With all four
+coefficients constant zero the `image` output is the input itself and the node adds no operation; a muted
+node is the same, and its `stMap` is the identity map.
+
+**HDR and alpha.** The image is read, never remapped through colour: bilinear sampling of premultiplied
+texels is linear in the light, so values above one, negative values and partial alpha keep their range and
+their ratio, and a pixel outside the input is transparent black. Nothing is divided by alpha. Because
+the raster reads the input wherever the warp points, a region of interest or a proxy gives the whole
+frame's pixels (the input is required whole behind a region, as for Transform 2D).
+
+**On the GPU.** The field raster's program, unchanged: the input is moved beside the canvas in an atlas,
+one dispatch of the fixed field program reads it at the warp's positions, and the canvas is cut back out.
+Nothing is read back. A coefficient or the centre changes only the program's data, not the program, so
+changing one re-dispatches without recompiling.
+
+**Evidence.** `src/core/tests/field_program_tests.cpp` holds the Lens Warp instruction to an independent
+double-precision reading of the model, Undistort and Redistort as inverses of each other, the identity at
+zero, the centre fixed, barrel against pincushion, and the premultiplied selector keeping colour at zero
+alpha. `src/runtime/tests/snapshot_compiler_lens_distortion_tests.ipp` holds the lowering (which
+operations, the program, the operands, mute, identity, time dependence) and, on the CPU reference over a
+checker grid, the ST map against an independent reading of the model in both modes at two proxy sizes,
+Redistort as the inverse of Undistort at the node, the warped image as the input read bilinearly at the
+ST map's positions, HDR and partial alpha kept, transparency outside the input, a region of interest equal
+to the whole frame's pixels, the pixel budget and cancellation. `effect.FieldRasterKernel` and
+`node.bloom.lens-distortion` prepare through the production builder at full frame and ROI, and the native
+harness holds the node to the CPU oracle on a device. [Benchmarks](../development/benchmarks.md#lens-distortion-486)
+names the scenario and the suspected cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,

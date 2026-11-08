@@ -83,6 +83,19 @@ over a transparent base, after which the target is cut back out. The program rea
 atlas position with the CPU's own bounds, filter and edge rules. The table, and so the prepared
 command, carries the geometry; a keyed parameter changes only data, never the program.
 
+### Lens Warp
+
+Lens Distortion (`image-filters.md`) lowers to field rasters, and adds one instruction and two small
+extensions to the vocabulary below (`core::field::FieldOp::LensWarp`, a Required GPU coverage feature as
+every operation is). **Lens Warp** takes a coordinate and returns the position to read: the Brown-Conrady
+model about a centre in normalised units (the scale a length in field pixels), forward, or inverted by
+twelve Newton steps over its Jacobian. The **Image** instruction gains selector 3, the filtered texel as
+stored (premultiplied), and a raster gains result kind 3, **Premultiplied**, which keeps a premultiplied
+register whole, colour at zero alpha included (the straight colour of kind 2 cannot carry it). A raster
+that reads an image through a position it computes is evaluated over the whole image in a region of
+interest, since the position can point anywhere. These change no existing operation, so
+`kFieldProgramSemanticsVersion` stays.
+
 ### Image slots
 
 An Image Field reads an image through a slot; a mask Shape Distance reads the **exact signed

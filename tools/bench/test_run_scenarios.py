@@ -438,6 +438,15 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[1]["gopLength"], "12 frames")
         self.assertIn("quality", effect[2]["keys"])
 
+    def test_lens_distortion_scenario_keys_its_radial_coefficient(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["lens-distortion-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.lens-distortion")
+        self.assertEqual(effect[1]["mode"], "Redistort")
+        self.assertIn("k1", effect[2]["keys"])
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]

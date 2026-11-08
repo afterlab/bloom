@@ -96,6 +96,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   monochrome grain, the response to brightness, and holding or redrawing it over time.
 - [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
   smearing: quality, block size, GOP length and P-frame persistence.
+- [Lens Distortion](user-guide/lens-distortion.md) — undistort or redistort a picture with the standard
+  radial and tangential lens model, and an ST map of the same warp.
 - [Motion blur](user-guide/motion-blur.md) — which motion blur to use, the shared shutter, sub-frame
   Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
   Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of

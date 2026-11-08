@@ -334,6 +334,20 @@ SCENARIOS["codec-degrade-2k"] = {
     ],
 }
 
+# #486: Lens Distortion in Redistort mode (the inverse solved per pixel) over a plate, its radial
+# coefficient keyed so every frame is new. Only the warped image is read, so the ST map is not built.
+SCENARIOS["lens-distortion-2k"] = {
+    "description": "A PNG16 plate under Lens Distortion in Redistort mode, its radial k1 keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.lens-distortion",
+                      {"mode": "Redistort", "k2": 0.05},
+                      {"keys": {"k1": [[0, -0.1], [23, -0.3]]}}]]},
+    ],
+}
+
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
 # is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
 # the render's camera depth and read as data), the focus racking from the near pillars to the back;
