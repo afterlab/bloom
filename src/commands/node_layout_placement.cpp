@@ -297,6 +297,8 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                                  ? std::max(width, kGradeCardWidth)
                              : node->typeId == document::kLevelsNodeType
                                  ? std::max(width, kLevelsCardWidth)
+                             : node->typeId == document::kChromaticAberrationNodeType
+                                 ? std::max(width, kPadCardWidth)
                              : wide ? std::max(width, kWideCardWidth)
                                     : width;
     // #490: an Image Preview draws its thumbnail below its rows at the composition's aspect, at
