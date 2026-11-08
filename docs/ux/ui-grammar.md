@@ -207,7 +207,9 @@ untitled cell that takes the slack and holds the row's ⋯ button (`exportJobMen
 column stretches across a wide panel. Below the panel's width for them, Started and then Render
 Time hide, and Composition and Status narrow. Status words are plain: Queued, Needs output, Needs
 attention, Waiting for your OK, Getting ready, Rendering 25%, Paused while you work in the Viewer,
-Checking the file, Done, Done, with a note, Failed, Stopped. Every status is Muted ink; only Failed
+Checking the file, Done, Done, with a note, Failed, Stopped. A running job with no progress for 30
+seconds says why in the same cell (No progress: waiting for the Viewer, for GPU memory, for the
+GPU, for a media worker, or still checking where it saves), with the idle time as its tooltip. Every status is Muted ink; only Failed
 uses Error. While a job runs, a thin `KProgressBar` sits after its words in the Status cell. There
 is no label color and no switch. A job row drags to a new place (an Accent line shows where), and
 compositions dropped from Assets become jobs at that line, as one undo entry.

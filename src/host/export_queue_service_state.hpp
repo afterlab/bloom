@@ -96,10 +96,13 @@ struct JobRuntime final {
     std::uint64_t lastLogSequence = 0;
     // Progress timing.
     std::chrono::steady_clock::time_point started;
-    std::chrono::steady_clock::duration excluded{};
-    std::optional<std::chrono::steady_clock::time_point> excludedSince;
+    std::chrono::steady_clock::duration paused{};
+    std::optional<std::chrono::steady_clock::time_point> pausedSince;
     std::deque<std::chrono::steady_clock::time_point> frameTimes;
     std::uint64_t lastFrames = 0;
+    // Stall tracking: the last time the progress key changed.
+    std::chrono::steady_clock::time_point lastProgress;
+    std::string progressKey;
     ExportJobProgress progress;
     // Snapshot bookkeeping.
     std::string viewKey;

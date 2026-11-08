@@ -74,7 +74,8 @@ struct Fixture {
         std::make_shared<host::testing::FakeExportRunBackend>();
     std::unique_ptr<host::ExportQueueService> service;
 
-    Fixture() { makeService(); }
+    host::ExportQueueServiceLimits limits;
+    explicit Fixture(host::ExportQueueServiceLimits value = {}) : limits(value) { makeService(); }
     void makeService() {
         service = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
             .session = session,
@@ -87,7 +88,7 @@ struct Fixture {
             .retirement = nullptr,
             .presets = host::ExportPresetCatalogue::create(
                 {.userDataDirectory = std::nullopt, .initialEncoders = encoders()}),
-            .limits = {},
+            .limits = limits,
             .displayProcessor = nullptr,
             .scratchDirectory = {},
             .backend = fake});
@@ -331,6 +332,46 @@ void testFailsWithVerification() {
            "a failed job can retry");
 }
 
+// Issue #585: a running job held on a blocked dependency reports a stall with its reason, and
+// its elapsed time keeps counting although no frame completes.
+void testStalledJobReportsReason() {
+    struct Case {
+        host::testing::FakeExportScript script;
+        host::ExportStallReason reason;
+    };
+    const Case cases[] = {
+        {{.framesPerPoll = 1, .waitingForViewerAfterFrames = 0, .waitingForViewerPolls = 100000000},
+         host::ExportStallReason::Viewer},
+        {{.framesPerPoll = 0}, host::ExportStallReason::Worker},
+    };
+    for (const auto& item : cases) {
+        host::ExportQueueServiceLimits limits;
+        limits.stallAfter = std::chrono::milliseconds(30);
+        Fixture f(limits);
+        f.fake->push(item.script);
+        const auto job = f.addJob();
+        f.settle();
+        const document::ExportJobId ids[] = {job};
+        expect(f.service->start(ids).accepted, "start");
+        expect(f.pumpUntil([&] { return f.view(job)->state == ExportJobState::Rendering; }),
+               "rendering");
+        expect(!f.view(job)->progress.stall, "no stall before the threshold");
+        expect(f.pumpUntil([&] { return f.view(job)->progress.stall.has_value(); }),
+               "the held job reports a stall");
+        const auto stalled = f.view(job);
+        expect(stalled->progress.stall && stalled->progress.stall->reason == item.reason,
+               "the stall names what the job waits on");
+        expect(stalled->progress.stall->idle >= limits.stallAfter, "the stall reports idle time");
+        expect(stalled->progress.framesCompleted == 0, "no frame completed");
+        const auto elapsed = stalled->progress.elapsed;
+        expect(f.pumpUntil([&] { return f.view(job)->progress.elapsed > elapsed; }),
+               "elapsed keeps counting without a completed frame");
+        expect(f.service->stop(job).accepted, "stop");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }), "stopped");
+        expect(!f.view(job)->progress.stall, "a finished job reports no stall");
+    }
+}
+
 void testCancelAndPause() {
     Fixture f;
     f.fake->push({});
@@ -416,6 +457,21 @@ void testTransientAndPlatform() {
                "an active transient job cannot be acknowledged");
         expect(f.pumpUntil([&] { return host::isTerminal(f.view(*submitted.job)->state); }),
                "the transient job finishes");
+        {
+            // Issue #585: a finished job shows no pending destination check.
+            const auto done = f.view(*submitted.job);
+            bool pending = false;
+            for (const auto& output : done->outputs)
+                for (const auto& issue : output.preflight)
+                    pending = pending ||
+                              issue.code == host::ExportPreflightCode::DestinationCheckPending;
+            expect(!pending, "a finished job has no pending destination check");
+            expect(done->commands[ExportCommand::Start].code !=
+                           host::ExportUnavailableCode::DestinationCheckPending &&
+                       done->commands[ExportCommand::Retry].code !=
+                           host::ExportUnavailableCode::DestinationCheckPending,
+                   "Start and Retry of a finished job do not report a pending check");
+        }
         expect(f.service->acknowledgeTransient(*submitted.job) && !f.view(*submitted.job),
                "an acknowledged transient job leaves the snapshot");
     }
@@ -433,6 +489,7 @@ int main() {
     try {
         testSucceedsWithProgressAndWaitingForViewer();
         testFailsWithVerification();
+        testStalledJobReportsReason();
         testCancelAndPause();
         testNeedsConfirmation();
         testTransientAndPlatform();

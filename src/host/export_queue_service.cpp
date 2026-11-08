@@ -369,10 +369,12 @@ struct Pump final {
         job.log.clear();
         job.logCount = 0;
         job.started = Clock::now();
-        job.excluded = {};
-        job.excludedSince.reset();
+        job.paused = {};
+        job.pausedSince.reset();
         job.frameTimes.clear();
         job.lastFrames = 0;
+        job.lastProgress = job.started;
+        job.progressKey.clear();
         job.progress = {};
         job.captured = record;
         job.capturedSnapshot = s.snapshot;
@@ -523,6 +525,62 @@ struct Pump final {
         job.state = ExportJobState::Rendering;
     }
 
+    // Elapsed excludes paused time only, so it keeps counting while a job waits. A job whose
+    // progress key (state, frames, output, destination checks, run phase) has not changed for the
+    // stall threshold reports a stall and its cause.
+    void updateTiming(JobRuntime& job, const Clock::time_point now) {
+        auto& progress = job.progress;
+        const bool paused = job.state == ExportJobState::Paused;
+        if (paused && !job.pausedSince)
+            job.pausedSince = now;
+        if (!paused && job.pausedSince) {
+            job.paused += now - *job.pausedSince;
+            job.pausedSince.reset();
+            job.lastProgress = now;
+        }
+        const auto pausedNow =
+            job.paused + (job.pausedSince ? now - *job.pausedSince : Clock::duration{});
+        progress.elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - job.started - pausedNow);
+        const auto key = std::to_string(static_cast<int>(job.state)) + ':' +
+                         std::to_string(progress.framesCompleted) + ':' +
+                         std::to_string(progress.outputIndex) + ':' +
+                         std::to_string(job.preparedSamples.size()) + ':' +
+                         (job.runner ? std::to_string(static_cast<int>(job.runner->phase())) : "-");
+        if (key != job.progressKey) {
+            job.progressKey = key;
+            job.lastProgress = now;
+        }
+        progress.stall.reset();
+        if (paused || job.state == ExportJobState::Pausing || job.state == ExportJobState::Stopping)
+            return;
+        const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - job.lastProgress);
+        if (idle < s.dependencies.limits.stallAfter)
+            return;
+        ExportStall stall;
+        stall.idle = idle;
+        if (!job.runner) {
+            stall.reason = ExportStallReason::DestinationCheck;
+        } else {
+            switch (progress.route) {
+            case ExportDeviceRoute::WaitingForViewer:
+                stall.reason = ExportStallReason::Viewer;
+                break;
+            case ExportDeviceRoute::WaitingForMemory:
+                stall.reason = ExportStallReason::GpuCapacity;
+                break;
+            case ExportDeviceRoute::RecoveringGpu:
+                stall.reason = ExportStallReason::GpuRecovery;
+                break;
+            default:
+                stall.reason = ExportStallReason::Worker;
+                break;
+            }
+        }
+        progress.stall = stall;
+    }
+
     void updateProgress(JobRuntime& job) {
         auto& runner = *job.runner;
         auto& progress = job.progress;
@@ -541,16 +599,7 @@ struct Pump final {
         const bool excluded = job.state == ExportJobState::Paused ||
                               progress.route == ExportDeviceRoute::WaitingForViewer ||
                               progress.route == ExportDeviceRoute::WaitingForMemory;
-        if (excluded && !job.excludedSince)
-            job.excludedSince = now;
-        if (!excluded && job.excludedSince) {
-            job.excluded += now - *job.excludedSince;
-            job.excludedSince.reset();
-        }
-        const auto excludedNow =
-            job.excluded + (job.excludedSince ? now - *job.excludedSince : Clock::duration{});
-        progress.elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - job.started - excludedNow);
+        updateTiming(job, now);
         while (job.lastFrames < progress.framesCompleted) {
             ++job.lastFrames;
             job.frameTimes.push_back(now);
@@ -579,6 +628,8 @@ struct Pump final {
             return;
         }
         auto& job = found->second;
+        if (job.state == ExportJobState::Preparing && !job.runner)
+            updateTiming(job, Clock::now());
         if (job.state == ExportJobState::Preparing ||
             (job.state == ExportJobState::Stopping && !job.runner &&
              !job.preparingSamples.empty())) {
@@ -657,8 +708,9 @@ struct Pump final {
         job.runner.reset();
         job.preparingSamples.clear();
         job.capturedSnapshot.reset();
-        job.excludedSince.reset();
+        job.pausedSince.reset();
         job.progress.remaining.reset();
+        job.progress.stall.reset();
         if (job.group) {
             job.group.reset();
         }

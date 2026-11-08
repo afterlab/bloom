@@ -165,6 +165,29 @@ struct ExportResolvedRange final {
     friend bool operator==(const ExportResolvedRange&, const ExportResolvedRange&) = default;
 };
 
+// What a running job that makes no progress is waiting on (issue #585).
+enum class ExportStallReason : std::uint8_t {
+    // The destination check (preflight sample) has not returned.
+    DestinationCheck,
+    // The Viewer holds the GPU.
+    Viewer,
+    // GPU preparation or capacity: the frame waits for memory another phase holds.
+    GpuCapacity,
+    // The GPU is reconnecting.
+    GpuRecovery,
+    // A media, render or encode worker has not delivered the next frame.
+    Worker,
+};
+
+// A running job with no progress (no frame, output step or destination check finished) for the
+// queue's stall threshold. Waiting that is not yet a failure; absent while progress is being made.
+struct ExportStall final {
+    ExportStallReason reason = ExportStallReason::Worker;
+    // Time since the last progress, excluding paused time.
+    std::chrono::milliseconds idle{0};
+    friend bool operator==(const ExportStall&, const ExportStall&) = default;
+};
+
 struct ExportJobProgress final {
     // Over all enabled outputs of the job: frames completed / frames to render.
     std::uint64_t framesCompleted = 0;
@@ -175,8 +198,9 @@ struct ExportJobProgress final {
     std::optional<std::uint64_t> currentFrame;
     // 0..1; absent while indeterminate (Preparing, Verifying, an unknown total).
     std::optional<double> fraction;
-    // Excludes paused time.
+    // Excludes paused time only; keeps counting while the job waits and no frame completes.
     std::chrono::milliseconds elapsed{0};
+    std::optional<ExportStall> stall;
     // Smoothed over recent frame completions; absent until enough frames finished to estimate, and
     // while the route is WaitingForViewer (no honest estimate exists then).
     std::optional<std::chrono::milliseconds> remaining;
@@ -682,6 +706,8 @@ struct ExportQueueServiceLimits final {
     std::size_t retainedEvents = 256;
     // Frames that must finish before an ETA is published.
     std::uint32_t etaMinimumFrames = 3;
+    // A running job with no progress for this long reports a stall and what it waits on.
+    std::chrono::milliseconds stallAfter{30000};
 };
 
 // Borrowed collaborators. All must outlive the service; the composition root passes the same

@@ -422,6 +422,12 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
                 outputView.freeBytesAtDestination = sample->second.freeBytes;
             outputView.preflight = preflightFor(state, record, output, outputView.destination,
                                                 outputView.estimatedBytes, outputView.availability);
+            // A finished run has nothing left to check: a retry re-samples the destination in
+            // Preparing, and a transient job is never sampled at all (issue #585).
+            if (isTerminal(runtime.state))
+                std::erase_if(outputView.preflight, [](const auto& issue) {
+                    return issue.code == ExportPreflightCode::DestinationCheckPending;
+                });
             const auto confirmation = state.confirmations.find(output.id);
             const auto sample = state.samples.find(output.id);
             outputView.replaceConfirmed = confirmation != state.confirmations.end() &&
@@ -539,7 +545,9 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             << view.recordChangedSinceStart << '|' << (view.failure ? view.failure->reason : "")
             << '|' << (view.resolvedRange ? view.resolvedRange->last : 0) << '|'
             << view.progress.remaining.value_or(std::chrono::milliseconds(-1)).count() << '|'
-            << snapshot->catalogueRevision << '|' << (view.audioSourceRefusal ? 1 : 0);
+            << snapshot->catalogueRevision << '|' << (view.audioSourceRefusal ? 1 : 0) << '|'
+            << (view.progress.stall ? static_cast<int>(view.progress.stall->reason) : -1) << '|'
+            << view.progress.elapsed.count() / 1000;  // a running clock republishes each second
         for (const auto& issue : view.preflight)
             key << ',' << static_cast<int>(issue.code) << static_cast<int>(issue.severity);
         for (const auto& output : view.outputs) {

@@ -85,8 +85,34 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// The status text of a running job that has made no progress for the stall threshold.
+[[nodiscard]] StatusText stalledStatus(const host::ExportJobView& job) {
+    const auto minutes = std::max<std::int64_t>(1, job.progress.stall->idle.count() / 60000);
+    const auto since = QCoreApplication::translate("ExportPanel", "No progress for %1 min").arg(minutes);
+    switch (job.progress.stall->reason) {
+    case host::ExportStallReason::DestinationCheck:
+        return {tr("No progress: still checking where it saves"), since, StatusTone::Neutral};
+    case host::ExportStallReason::Viewer:
+        return {tr("No progress: waiting for the Viewer"), since, StatusTone::Neutral};
+    case host::ExportStallReason::GpuCapacity:
+        return {tr("No progress: waiting for GPU memory"), since, StatusTone::Neutral};
+    case host::ExportStallReason::GpuRecovery:
+        return {tr("No progress: waiting for the GPU"), since, StatusTone::Neutral};
+    case host::ExportStallReason::Worker:
+        return {tr("No progress: waiting for a media worker"), since, StatusTone::Neutral};
+    }
+    return {};
+}
+
+} // namespace
+
 StatusText jobStatus(const host::ExportJobView& job) {
     const auto reasonOf = [&job] { return failureSentence(job); };
+    if (job.progress.stall && (job.state == ExportJobState::Preparing ||
+                               job.state == ExportJobState::Rendering))
+        return stalledStatus(job);
     switch (job.state) {
     case ExportJobState::Ready: {
         const auto& start = job.commands[host::ExportCommand::Start];

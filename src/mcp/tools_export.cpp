@@ -119,6 +119,22 @@ std::string_view routeName(const host::ExportDeviceRoute route) {
     return "none";
 }
 
+std::string_view stallReasonName(const host::ExportStallReason reason) {
+    switch (reason) {
+    case host::ExportStallReason::DestinationCheck:
+        return "destination-check";
+    case host::ExportStallReason::Viewer:
+        return "viewer";
+    case host::ExportStallReason::GpuCapacity:
+        return "gpu-capacity";
+    case host::ExportStallReason::GpuRecovery:
+        return "gpu-recovery";
+    case host::ExportStallReason::Worker:
+        return "worker";
+    }
+    return "worker";
+}
+
 std::string hex(const core::Sha256Digest& digest) {
     const auto text = digest.toLowercaseHex();
     return "sha256:" + std::string(text.data(), text.size());
@@ -214,6 +230,17 @@ yyjson_mut_val* jobValue(Json& out, const host::ExportJobView& job) {
             job.progress.remaining
                 ? out.number(static_cast<std::uint64_t>(job.progress.remaining->count()))
                 : out.null());
+    // Present only while a running job has made no progress for the stall threshold.
+    if (job.progress.stall) {
+        auto* stall = out.object();
+        out.set(stall, "waitingOn", out.text(stallReasonName(job.progress.stall->reason)));
+        out.set(stall, "idleMs",
+                out.number(static_cast<std::uint64_t>(job.progress.stall->idle.count())));
+        out.set(progress, "stalled", out.boolean(true));
+        out.set(progress, "stall", stall);
+    } else {
+        out.set(progress, "stalled", out.boolean(false));
+    }
     out.set(value, "progress", progress);
     if (job.failure) {
         auto* failure = out.object();
