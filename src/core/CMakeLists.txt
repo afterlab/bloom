@@ -11,6 +11,7 @@ target_sources(
         field_program.cpp
         film_grain_noise.cpp
         camera_shake.cpp
+        light_flicker.cpp
         sha256.cpp
         utf8.cpp
         file_uri.cpp
@@ -25,6 +26,7 @@ target_sources(
             include/bloom/core/field_program.hpp
             include/bloom/core/film_grain_noise.hpp
             include/bloom/core/camera_shake.hpp
+            include/bloom/core/light_flicker.hpp
             include/bloom/core/color.hpp
             include/bloom/core/floating_point.hpp
             include/bloom/core/frame_time_mapping.hpp
@@ -129,6 +131,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.camera_shake
         COMMAND bloom_core_camera_shake_test
+        LABELS unit
+    )
+
+    add_executable(bloom_core_light_flicker_test tests/light_flicker_tests.cpp)
+    target_link_libraries(bloom_core_light_flicker_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_light_flicker_test)
+    bloom_enable_strict_floating_point(bloom_core_light_flicker_test)
+    bloom_add_test(
+        NAME bloom.core.light_flicker
+        COMMAND bloom_core_light_flicker_test
         LABELS unit
     )
 

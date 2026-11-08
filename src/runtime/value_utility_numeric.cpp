@@ -1,6 +1,7 @@
 #include "value_utility_support.hpp"
 
 #include <bloom/core/color.hpp>
+#include <bloom/core/light_flicker.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 
 #include <array>
@@ -237,6 +238,22 @@ ValueUtilityOutcome evaluateValueNumeric(const ValueUtilityInvocation& invocatio
         outcome.outputs[1] = (vector.x == 0.0 && vector.y == 0.0)
                                  ? 0.0
                                  : std::atan2(vector.y, vector.x) * kDegreesPerRadian;
+        break;
+    }
+    case Kernel::LightFlicker: {
+        // #567: a pure function of the settings and the frame's time, so a frame renders the same
+        // in preview, scrubbing and export. The seed is a stored integer; any value is a seed.
+        core::light_flicker::Settings settings;
+        settings.rate = reader.scalar(0);
+        settings.depth = reader.scalar(1);
+        settings.dropoutRate = reader.scalar(2);
+        settings.dropoutLength = reader.scalar(3);
+        settings.dropoutLevel = reader.scalar(4);
+        settings.softness = reader.scalar(5);
+        settings.seed = reader.integer(6);
+        const double gain = core::light_flicker::evaluate(settings, invocation.time.toSeconds());
+        outcome.outputs[0] = gain;
+        outcome.outputs[1] = core::light_flicker::stopsOf(gain);
         break;
     }
     case Kernel::SeparateHsv: {

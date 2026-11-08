@@ -427,6 +427,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `lens-distortion-2k` | 1920×1080 | 24 | A PNG16 plate under Lens Distortion (#486) in Redistort mode, its radial `k1` keyed from -0.1 to -0.3 so every frame is new. Only the warped image is read, so the ST map is not built. Written, not yet run: it has no recorded numbers and no budget |
 | `chromatic-aberration-2k` | 1920×1080 | 24 | A PNG16 plate under Chromatic Aberration (#486), its amount keyed from 1% to 4% so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 | `light-rays-2k` | 1920×1080 | 24 | A PNG16 plate under Light Rays (#508) from its luminance, its length keyed from 40% to 90% so every frame is new and each pixel gathers a different number of samples. Written, not yet run: it has no recorded numbers and no budget |
+| `light-flicker-2k` | 1920×1080 | 24 | A PNG16 plate under an Exposure whose stops are driven by a seeded Light Flicker (#567), so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 
 | `test-card-2k` | 1920×1080 | 24 | A Zone Plate Test Card (#587), moving so every frame is new, drawn at the composition's size with 16 sub-samples per pixel; no media is read. Written, not yet run: it has no recorded numbers and no budget |
 
@@ -968,6 +969,13 @@ written to measure it end to end. Suspicions to check against it, not findings: 
 three times, so it should cost about three bilinear reads where Lens Distortion's Undistort costs one; and
 on the GPU the input is moved beside the canvas in the field raster's atlas, one more full-frame copy and a
 larger dispatched image than the output alone.
+
+### Light Flicker (#567)
+
+Light Flicker has no recorded numbers and no budget yet. The scenario `light-flicker-2k` is written to measure
+it end to end. Suspicion to check against it, not a finding: the flicker is one value per frame, so the
+scenario's cost should be the Exposure's own; each frame evaluates the dropout slots a dropout could reach
+(at most about 21), which should be negligible beside a frame.
 
 ### Test Card (#587)
 

@@ -103,6 +103,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   radial and tangential lens model, and an ST map of the same warp.
 - [Chromatic Aberration](user-guide/chromatic-aberration.md) — pull red and blue apart radially about a
   centre, growing towards the edges, with green left in place.
+- [Light Flicker](user-guide/light-flicker.md) — a seeded flicker and dropout generator with a gain and a
+  stops output that drives Exposure or any parameter.
 - [Test Card](user-guide/test-card.md) — sixteen procedural test patterns (bars, patch, ramps, geometry, sharpness,
   motion, countdown, alpha), the size rules, the Patch's expected display value, and the sources of every
   standard value.

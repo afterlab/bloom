@@ -432,8 +432,52 @@ void testMalformedOperands(Expectations& expectations) {
 
 } // namespace
 
+// #567 Light Flicker through the kernel: its two outputs, the frame time it reads, the seed it
+// keys on, and the descriptor shape that makes it a Values node.
+void testLightFlicker(Expectations& expectations) {
+    const auto& registry = document::builtInNodeDefinitions();
+    const auto* definition =
+        registry.find(document::kLightFlickerNodeType, document::kValueNodeSchemaVersion);
+    expectations.expect(definition != nullptr &&
+                            definition->category == document::NodeCategory::Values &&
+                            definition->outputs.size() == 2 && definition->outputs[0].name == "value" &&
+                            definition->outputs[1].name == "stops" &&
+                            definition->inputs.size() == 7 && definition->inputs[6].name == "seed",
+                        "Light Flicker is a Values node with a value and a stops output");
+    const auto at = [](const std::int64_t seed, const core::RationalTime time) {
+        const std::vector<CompiledValue> values{12.0, 0.5, 2.0, 0.2, 0.0, 0.5, seed};
+        std::vector<const CompiledValue*> operands;
+        for (const auto& value : values)
+            operands.push_back(&value);
+        return runtime::evaluateValueUtility({Kernel::LightFlicker, operands, {}, time,
+                                              document::FrameRate::framesPerSecond24()});
+    };
+    const auto a = at(3, core::RationalTime::fromInteger(2));
+    const auto b = at(3, core::RationalTime::fromInteger(2));
+    const auto other = at(4, core::RationalTime::fromInteger(2));
+    expectations.expect(!a.failed && a.outputCount == 2 && a.outputs[0] == b.outputs[0] &&
+                            a.outputs[1] == b.outputs[1],
+                        "Light Flicker repeats for one seed and time");
+    bool seedMatters = false;
+    bool timeMatters = false;
+    for (std::int64_t second = 0; second < 8; ++second) {
+        seedMatters = seedMatters || at(3, core::RationalTime::fromInteger(second)).outputs[0] !=
+                                         at(4, core::RationalTime::fromInteger(second)).outputs[0];
+        timeMatters = timeMatters || at(3, core::RationalTime::fromInteger(second)).outputs[0] !=
+                                         at(3, core::RationalTime::fromInteger(second + 1)).outputs[0];
+    }
+    (void)other;
+    expectations.expect(seedMatters && timeMatters, "Light Flicker follows its seed and the time");
+    const auto* gain = std::get_if<double>(&a.outputs[0]);
+    const auto* stops = std::get_if<double>(&a.outputs[1]);
+    expectations.expect(gain != nullptr && stops != nullptr && *gain > 0.0 && *gain <= 1.0 &&
+                            std::fabs(*stops - std::log2(*gain)) < 1e-12,
+                        "stops is the log2 of the gain");
+}
+
 int main() {
     Expectations expectations;
+    testLightFlicker(expectations);
     testMathSectionMembership(expectations);
     testIntegerMath(expectations);
     testShapingOperations(expectations);

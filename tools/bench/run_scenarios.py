@@ -417,6 +417,7 @@ class Builder:
         for effect in effects:
             node_type, values = effect[0], effect[1]
             options = effect[2] if len(effect) > 2 else {}
+            fed_by = node
             node = self.transact("bloom.node.add-fed-by", composition=self.composition,
                                  nodeType=node_type, node=node, port=port)["node"]
             port = "image"
@@ -440,6 +441,19 @@ class Builder:
                               sourceNode=input_node, sourcePort=input_output, targetNode=node,
                               port=input_port)
             self.set_keys(node, options.get("keys") or {})
+            for role, (driver_type, driver_values, driver_port) in (options.get("drives") or {}).items():
+                # #567: a value node (Light Flicker) added beside the effect, its output driving one
+                # of the effect's parameters. #568: "@previous" is the effect before this one in the
+                # chain (a Camera Shake whose Offset and Roll drive a Rolling Shutter).
+                if driver_type == "@previous":
+                    driver = fed_by
+                else:
+                    driver = self.transact("bloom.node.add", composition=self.composition,
+                                           nodeType=driver_type)["node"]
+                    self.set_values(driver, driver_type, driver_values)
+                self.transact("bloom.node.connect", composition=self.composition,
+                              sourceNode=driver, sourcePort=driver_port, targetNode=node,
+                              port=role)
             if options.get("mask"):
                 # #383: the effect's mask input, limited to a named Mask of the shot.
                 self.transact("bloom.node.connect", composition=self.composition,

@@ -110,6 +110,8 @@ enum class ValueUtilityKernel : std::uint8_t {
     RampSample,
     TableLookup,
     PointSetRead,
+    // #567 Light Flicker: a seeded gain of the time.
+    LightFlicker,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -187,6 +189,7 @@ inline constexpr std::string_view kDataSampleNodeType = "bloom.data-sample";
 inline constexpr std::string_view kRampSampleNodeType = "bloom.ramp-sample";
 inline constexpr std::string_view kTableLookupNodeType = "bloom.table-lookup";
 inline constexpr std::string_view kPointSetReadNodeType = "bloom.point-set-read";
+inline constexpr std::string_view kLightFlickerNodeType = "bloom.light-flicker";
 inline constexpr std::string_view kDataBlockParameterSchemaKey = "bloom.data.block";
 inline constexpr std::string_view kDataBlockParameterRole = "block";
 

@@ -373,6 +373,42 @@ evaluation request, not to the document's authored values.
 | Composition Size | none | `result` Vector2 | The composition's pixel extent |
 | Layer Bounds | `image` Image | `size` Vector2, `origin` Vector2, `anchor` Vector2, `center` Vector2 | Evaluated image bounds in composition pixels; read after the image pass |
 
+## Light Flicker
+
+`bloom.light-flicker` (#567, group Values) is a seeded generator: a gain that is 1 for a steady light and
+dips for a flicker and for dropouts. It is the one library node whose kernel is a function of the frame
+time besides Frame Number, and it is marked time dependent the same way. The function is
+`core/light_flicker.hpp`.
+
+| Operand | Kind | Default | Domain (clamped, not refused) |
+| --- | --- | --- | --- |
+| `rate` | Scalar | 12 | 0.1 to 120 lattice points a second |
+| `depth` | Scalar | 0.35 | 0 to 1 |
+| `dropoutRate` | Scalar | 0.5 | 0 to 10 dropouts a second on average |
+| `dropoutLength` | Scalar | 0.12 | 0.005 to 2 seconds, the longest a dropout lasts |
+| `dropoutLevel` | Scalar | 0.1 | 0 to 1, the gain a dropout falls to |
+| `softness` | Scalar | 0.5 | 0 (hard steps and edges) to 1 (smooth) |
+| `seed` | Integer | 1 in the definition | any; AddNode stores a seed hashed from the new node's id, so two new nodes differ |
+
+Outputs: `value` (Scalar, the gain) and `stops` (Scalar, its log2 limited to -10 to 16 so a dropout to black
+is -10 rather than minus infinity), which drives Exposure's `stops` directly.
+
+The flicker is value noise: a hashed level in [0, 1) at each lattice point, `depth` times the noise
+subtracted from 1, the move to the next point is `softness` times a smootherstep, so softness 0 holds each
+level until the next point. Dropouts cut time into slots of `2 / dropoutRate` seconds; a slot holds one
+dropout with probability one half, starting at a hashed moment in the slot and lasting between half and the
+whole of `dropoutLength`; the slots a dropout could still be running from (`ceil(length / slot) + 1` of
+them) are all checked, so a long dropout is not cut at a slot boundary. A dropout multiplies the flicker by
+`1 - shape * (1 - dropoutLevel)`, `shape` rising and falling over `softness` times half its length (a
+smootherstep; a step at softness 0), and overlapping dropouts take the deeper. The hash is the versioned
+value hash (`hashWord`), keyed by the seed, a stream and the lattice or slot index, never by evaluation order.
+
+Because the result is a pure function of the seed and the request time, any frame is the same in preview,
+scrubbing and export, with no state carried from earlier frames; a value is host parameter resolution
+(`prep.parameter.resolution`) and has no pixel work of its own, so it adds no GPU coverage entry: the node
+that it drives (Exposure) carries the pixel route. The value cache identity is the node's operands and the
+request time (the graph's usual time dependence).
+
 ### Three of these are constants in the plan
 
 `Frame Rate`, `Composition Duration` and `Composition Size` describe the COMPOSITION, and a plan is

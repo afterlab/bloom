@@ -390,6 +390,21 @@ SCENARIOS["chromatic-aberration-2k"] = {
     ],
 }
 
+# #567: Light Flicker driving an Exposure node's stops over a plate. The flicker is a function of the
+# frame, so every frame is new; the cost is the Exposure's, since the flicker itself is one value per frame.
+SCENARIOS["light-flicker-2k"] = {
+    "description": "A PNG16 plate under an Exposure whose stops are driven by a seeded Light Flicker.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.exposure", {},
+                      {"drives": {"stops": ["bloom.light-flicker",
+                                            {"rate": 14.0, "depth": 0.5, "dropoutRate": 2.0,
+                                             "seed": 11}, "stops"]}}]]},
+    ],
+}
+
 # #587: a Test Card source drawn as a procedural layer: the Zone Plate, the card with the most samples per
 # pixel (16), moving so every frame is new. No media is read: the card is drawn at the composition's size.
 # Written, not run.

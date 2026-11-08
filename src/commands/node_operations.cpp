@@ -4,6 +4,7 @@
 #include <bloom/commands/operations.hpp>
 
 #include "node_operation_support.hpp"
+#include <bloom/document/value_utility_nodes.hpp>
 #include "render_footprint.hpp"
 
 #include <bloom/core/value_primitives.hpp>
@@ -155,6 +156,11 @@ OperationResult AddNode::apply(document::Draft& draft) const {
         else if (parameter.schemaKey == document::motionSchemaKey(document::kCameraShakeNodeType, "seed") ||
                  parameter.schemaKey ==
                      document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed"))
+            value = static_cast<std::int64_t>(
+                core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
+                1'000'000ULL);
+        // #567: a new Light Flicker's seed is its own too (its seed is an Integer operand).
+        else if (nodeTypeId_ == document::kLightFlickerNodeType && parameter.role == "seed")
             value = static_cast<std::int64_t>(
                 core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
                 1'000'000ULL);

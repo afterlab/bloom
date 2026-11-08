@@ -475,6 +475,16 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.chromatic-aberration")
         self.assertIn("amount", effect[2]["keys"])
 
+    def test_light_flicker_scenario_drives_an_exposure(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["light-flicker-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.exposure")
+        driver = effect[2]["drives"]["stops"]
+        self.assertEqual(driver[0], "bloom.light-flicker")
+        self.assertEqual(driver[2], "stops")
+
     def test_test_card_scenario_draws_a_moving_zone_plate_with_no_media(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["test-card-2k"]

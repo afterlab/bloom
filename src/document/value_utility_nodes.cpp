@@ -60,6 +60,19 @@ constexpr std::array<ValueUtilityOperand, 2> kTableLookupOperands{
     ValueUtilityOperand{.role = "column", .kind = SocketValueKind::Integer}};
 constexpr std::array<ValueUtilityOperand, 1> kPointSetIndexOperand{
     ValueUtilityOperand{.role = "index", .kind = SocketValueKind::Integer}};
+// #567 Light Flicker. The operands are the dials in the order the evaluator reads them; the seed is
+// an ordinary Integer operand (AddNode stores a seed of its own, hashed from the node id).
+constexpr std::array<ValueUtilityOperand, 7> kLightFlickerOperands{
+    ValueUtilityOperand{.role = "rate", .kind = SocketValueKind::Scalar, .number = 12.0},
+    ValueUtilityOperand{.role = "depth", .kind = SocketValueKind::Scalar, .number = 0.35},
+    ValueUtilityOperand{.role = "dropoutRate", .kind = SocketValueKind::Scalar, .number = 0.5},
+    ValueUtilityOperand{.role = "dropoutLength", .kind = SocketValueKind::Scalar, .number = 0.12},
+    ValueUtilityOperand{.role = "dropoutLevel", .kind = SocketValueKind::Scalar, .number = 0.1},
+    ValueUtilityOperand{.role = "softness", .kind = SocketValueKind::Scalar, .number = 0.5},
+    ValueUtilityOperand{.role = "seed", .kind = SocketValueKind::Integer, .integer = 1}};
+constexpr std::array<ValueUtilityOutput, 2> kLightFlickerOutputs{
+    ValueUtilityOutput{"value", SocketValueKind::Scalar},
+    ValueUtilityOutput{"stops", SocketValueKind::Scalar}};
 constexpr std::array<ValueUtilityOutput, 2> kPointSetOutputs{
     ValueUtilityOutput{"count", SocketValueKind::Integer},
     ValueUtilityOutput{"point", SocketValueKind::Vector3}};
@@ -362,7 +375,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 66> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 67> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -566,6 +579,9 @@ constexpr std::array<ValueUtilityDescriptor, 66> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kPointSetReadNodeType, "Point Set",
                            ValueUtilityKernel::PointSetRead, NodeCategory::Values,
                            kPointSetIndexOperand, kDataBlockSelector, kPointSetOutputs},
+    ValueUtilityDescriptor{bloom::document::kLightFlickerNodeType, "Light Flicker",
+                           ValueUtilityKernel::LightFlicker, NodeCategory::Values,
+                           kLightFlickerOperands, kNoSelectors, kLightFlickerOutputs},
 };
 
 } // namespace

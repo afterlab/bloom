@@ -156,8 +156,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
-    // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays.
-    expectations.expect(registry.definitions().size() == 194,
+    // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
+    // Flicker.
+    expectations.expect(registry.definitions().size() == 195,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -447,6 +448,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             aberration->outputs.size() == 1 && aberration->outputs[0].name == "image" &&
             aberration->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Chromatic Aberration has an animatable socket per value and a default of no effect");
+    expectCategory({"bloom.light-flicker"}, document::NodeCategory::Values);
     // #563 Codec Degrade: an Image in and out, its block size, GOP length and chroma bleed with no
     // socket, and a socket for Quality and P-frame persistence; the effect mask follows.
     const auto codecUnmasked = withoutMask(registry.find("bloom.codec-degrade", 1));

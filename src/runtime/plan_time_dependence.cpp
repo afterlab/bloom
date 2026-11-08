@@ -29,7 +29,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             (sample != nullptr &&
              std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
             std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||
-            (utility != nullptr && utility->operation == document::ValueUtilityKernel::FrameNumber);
+            (utility != nullptr &&
+             (utility->operation == document::ValueUtilityKernel::FrameNumber ||
+              utility->operation == document::ValueUtilityKernel::LightFlicker));
         forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
             if (const auto* input = std::get_if<ValueOutputIndex>(&operand.source))
                 dependent =

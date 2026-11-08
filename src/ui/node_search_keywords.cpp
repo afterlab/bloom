@@ -5,6 +5,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
@@ -153,6 +154,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kLightRaysNodeType)
         return QStringLiteral("light rays god rays shafts volumetric beams radial streaks burst "
                               "sun glare crepuscular");
+    if (typeId == document::kLightFlickerNodeType)
+        return QStringLiteral("light flicker flickering dropout bulb headlight sputter fluorescent "
+                              "unsteady seeded noise exposure");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     if (typeId == document::kFrameRateHoldNodeType)

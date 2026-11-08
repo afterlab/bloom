@@ -87,6 +87,7 @@ enum class Family : std::uint8_t {
     case Kernel::BooleanLogic:
     case Kernel::BooleanNot:
     case Kernel::InRange:
+    case Kernel::LightFlicker:
         return Family::Numeric;
     case Kernel::DataSample:
     case Kernel::RampSample:
