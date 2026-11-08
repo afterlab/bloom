@@ -14,7 +14,7 @@ to store.
 - **Size** is **Composition** (the default) or **Custom**. Composition draws the card at the composition's size,
   so it follows the composition when that changes. Custom shows **Width** and **Height** and draws the card at
   that size, centred in the composition (cut off where it is larger, transparent where it is smaller).
-- **Name and size label** is shown on the cards where a label does not defeat the card's purpose (see each card).
+- **Label** shows the card's name and size, on the cards where it does not defeat the card's purpose (see each card).
 
 Geometry is computed from the real pixel size: a circle stays round and a grid cell stays square at any shape.
 The four standard bar cards (SD Bars, HD Bars, EBU Bars and HDR Bars) are defined in a 16:9 frame: in a frame of
@@ -68,7 +68,7 @@ values: black, near black (2%, 4%), greys from 10% to 90% in steps of 10%, near 
 primaries and secondaries at 75% and at 100%. **Colour space** names the space the value is written in: Rec.709
 (the default), Rec.2100 HLG, Rec.2100 PQ or the working space itself (linear). **Window** shows the patch full
 frame or as a centred window of half, a quarter or a tenth of the frame's area on black, to keep the display's
-own limiting out of the reading. **Step through the set** advances through the 27 values one per frame.
+own limiting out of the reading. **Step through** advances through the 27 values one per frame.
 
 The card shows what it should produce: its signal in its colour space and the **expected display value**, the
 signal taken through the same colour space transform and then through the Viewer's current **Display** and
