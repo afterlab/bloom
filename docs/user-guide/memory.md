@@ -50,6 +50,10 @@ container memory limit when that is smaller (about 6 GiB on a 64 GB workstation,
 the default follows the measured capacity; missing, malformed or out-of-range values select it.
 Apply takes effect immediately.
 
+Export workers have their own, opt-in limits in the same section: a **Worker memory cap** and
+**Worker threads** (see [Preferences](preferences.md#export-workers)). They are off by default, and
+they limit only the export's encoding helper process, not Bloom's caches.
+
 Headless processes (`bloom-cli`, `bloom-mcp`, scripting and their exports) have no Preferences
 window and use the default RAM headroom. Their caches follow the same rules as the application's
 and share the free memory beyond the headroom. Memory is measured when a render asks for it, at

@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <vector>
 
 // Test support only (never linked into production): a deterministic, scriptable ExportRunBackend
 // for ExportQueueService. Each poll() of a run advances it by exactly one step, so a test (or a
@@ -38,6 +39,9 @@ struct FakeExportScript final {
     bool writeDestinations = false;
     // The stalled run reports waiting on GPU preparation instead of a media worker.
     bool waitingOnGpuPreparation = false;
+    // When nonzero, each output's verification reports a measured media worker peak of this many
+    // bytes, with the cap the run was started under (issue #581).
+    std::uint64_t workerPeakBytes = 0;
 };
 
 class FakeExportRunBackend final : public ExportRunBackend {
@@ -49,6 +53,8 @@ class FakeExportRunBackend final : public ExportRunBackend {
     void setExisting(const std::filesystem::path& firstPath, std::uint64_t generation = 1);
     void clearExisting(const std::filesystem::path& firstPath);
     [[nodiscard]] std::size_t runsStarted() const;
+    // The worker limits each started run was given, in start order.
+    [[nodiscard]] std::vector<ExportWorkerLimits> startedLimits() const;
 
     std::unique_ptr<ExportRun> start(ExportJobRunnerDependencies dependencies,
                                      ExportJobRunRequest request) override;
@@ -60,6 +66,7 @@ class FakeExportRunBackend final : public ExportRunBackend {
     std::deque<FakeExportScript> scripts_;
     std::map<std::filesystem::path, std::uint64_t> existing_;
     std::size_t started_ = 0;
+    std::vector<ExportWorkerLimits> limits_;
 };
 
 } // namespace bloom::host::testing

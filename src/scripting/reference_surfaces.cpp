@@ -462,7 +462,6 @@ void addTools(std::vector<ReferenceEntry>& out) {
                  "--out frames"}});
     addRelated(render, {"capture", "export", "export.confirm-replace"});
     const auto renderErrors = render.errors;
-    const auto renderResult = render.result;
     out.push_back(std::move(render));
 
     auto exportTool = makeEntry(
@@ -531,8 +530,24 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .defaultValue = "ask",
           .choices = {{"ask", "Fail and name the existing file"},
                       {"replace", "Replace existing files"},
-                      {"refuse", "Fail when a file exists"}}}});
-    exportTool.result = renderResult;
+                      {"refuse", "Fail when a file exists"}}},
+         {.name = "workerMemoryCapBytes",
+          .type = "integer",
+          .summary = "Opt-in cap on the encode worker's memory: at the cap the export waits for the "
+                     "worker, and fails with a message if it cannot go on. 0 is no cap. Not given "
+                     "uses the saved Preferences value.",
+          .unit = "bytes",
+          .range = "0..1099511627776",
+          .defaultValue = "the Preferences value (no cap)"},
+         {.name = "workerThreads",
+          .type = "integer",
+          .summary = "Encoder threads in the worker. 0 is automatic. Not given uses the saved "
+                     "Preferences value.",
+          .range = "0..64",
+          .defaultValue = "the Preferences value (automatic)"}});
+    exportTool.result = "{publishedFrames, preservationReport, workerMemory:{measured, peakBytes, "
+                        "capBytes, waits, waitedMs} (a movie or WAV), files:[{path, "
+                        "digest:\"sha256:<hex>\"}]}";
     exportTool.errors = renderErrors;
     addExamples(
         exportTool,
@@ -649,7 +664,36 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                   .required = true,
                                   .summary = "The jobs to start, in run order.",
                                   .unit = "export job ids (export.status)",
-                                  .range = "1..1024 ids"}});
+                                  .range = "1..1024 ids"},
+                                 {.name = "workerMemoryCapBytes",
+          .type = "integer",
+          .summary = "Opt-in cap on the encode worker's memory: at the cap the export waits for the "
+                     "worker, and fails with a message if it cannot go on. 0 is no cap. Not given "
+                     "uses the saved Preferences value.",
+          .unit = "bytes",
+          .range = "0..1099511627776",
+          .defaultValue = "the Preferences value (no cap)"},
+         {.name = "workerThreads",
+          .type = "integer",
+          .summary = "Encoder threads in the worker. 0 is automatic. Not given uses the saved "
+                     "Preferences value.",
+          .range = "0..64",
+          .defaultValue = "the Preferences value (automatic)"}});
+        if (name == "export.start-all")
+            addArguments(value, {{.name = "workerMemoryCapBytes",
+          .type = "integer",
+          .summary = "Opt-in cap on the encode worker's memory: at the cap the export waits for the "
+                     "worker, and fails with a message if it cannot go on. 0 is no cap. Not given "
+                     "uses the saved Preferences value.",
+          .unit = "bytes",
+          .range = "0..1099511627776",
+          .defaultValue = "the Preferences value (no cap)"},
+         {.name = "workerThreads",
+          .type = "integer",
+          .summary = "Encoder threads in the worker. 0 is automatic. Not given uses the saved "
+                     "Preferences value.",
+          .range = "0..64",
+          .defaultValue = "the Preferences value (automatic)"}});
         if (name == "export.pause" || name == "export.resume" || name == "export.stop" ||
             name == "export.retry" || name == "export.confirm-replace" || name == "export.log")
             addArguments(value, {{.name = "job",

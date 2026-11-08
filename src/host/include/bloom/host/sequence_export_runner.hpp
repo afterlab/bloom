@@ -78,6 +78,8 @@ struct SequenceExportRequestV1 {
     std::string pcmCodec = "pcm_s16le", bwfDescription;
     std::filesystem::path assetBaseDirectory;
     media::provider::EncodeSessionOptionsV1 worker;
+    // Encoder threads for the worker; zero is automatic (the default).
+    std::uint32_t encoderThreads = 0;
     std::optional<std::uint64_t> startFrame = {};
     std::uint32_t framePadding = 4;
     std::string namePattern = "<base>.####.<ext>";
@@ -206,6 +208,9 @@ struct SequenceExportResultV1 {
     // ADR 0033 section 16: the worker wrote the container straight into the staged artifact
     // (Linux) instead of returning chunks for a copy.
     bool streamedPublication = false;
+    // The encode worker's measured memory, cap and waits (see EncodeWorkerMemoryV1), for a result
+    // and for a failure alike.
+    media::provider::EncodeWorkerMemoryV1 workerMemory;
     // ADR 0035: the media provider that encoded the artifact and every provider skipped or failed
     // before it. Diagnostics and provenance only; never artist-facing text.
     media::provider::MediaProviderProvenanceV1 mediaProvider;

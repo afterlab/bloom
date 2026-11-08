@@ -21,6 +21,7 @@ struct ExportDriverInput final {
     ExportEncoderStatus encoders;
     runtime::TaskOwner owner;
     bool requireDevice = false;
+    ExportWorkerLimits workerLimits = {};
 };
 
 struct ExportDriverReport final {

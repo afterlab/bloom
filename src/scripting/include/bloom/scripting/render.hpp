@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/host/export_verification.hpp>
+#include <bloom/host/export_worker_limits.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/runtime/evaluation.hpp>
@@ -35,6 +37,9 @@ struct RenderRequest final {
     // taking the CPU reference path. No device fails before any frame is evaluated, and a frame the
     // CPU evaluated anyway is refused before it is published. Image presets only.
     bool requireDevice = false;
+    // Issue #581: opt-in limits on the media worker processes (movie and WAV presets). The default
+    // applies none.
+    host::ExportWorkerLimits workerLimits = {};
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
@@ -68,6 +73,8 @@ struct RenderResult final {
     std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
     RenderDiagnosticCode diagnosticCode = RenderDiagnosticCode::None;
+    // Issue #581: the media worker's measured memory; absent for an image preset (no worker).
+    std::optional<host::ExportWorkerMemory> workerMemory = std::nullopt;
 };
 
 // Own the effective working-space/config identity before dispatching an asynchronous export.

@@ -1060,6 +1060,17 @@ int main(int argc, char* argv[]) try {
     applyCrashRecovery();
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
                      applyCrashRecovery);
+    // Export worker limits (#581): opt-in, none by default. They reach the export queue for every
+    // export that starts after a committed change, without a restart.
+    const auto applyExportWorkerLimits = [&projectHost] {
+        const QSettings exportSettings;
+        const auto preferences = bloom::ui::loadApplicationPreferences(exportSettings);
+        projectHost.setExportWorkerLimits({preferences.exportWorkerMemoryCapBytes,
+                                           preferences.exportWorkerThreads});
+    };
+    applyExportWorkerLimits();
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
+                     applyExportWorkerLimits);
     QTimer::singleShot(0, &projectHost, &bloom::ui::ProjectHost::offerRecoveryOnStartup);
 
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)

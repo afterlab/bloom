@@ -27,7 +27,7 @@ or create, is refused under the field and OK waits.
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size | Immediately |
-| Memory & Caches | RAM and VRAM headroom, media disk cache enable/directory/budget | Headroom on Apply or OK; disk cache after restart |
+| Memory & Caches | RAM and VRAM headroom, **Worker memory cap** and **Worker threads** for export workers, media disk cache enable/directory/budget | Headroom on Apply or OK; worker limits on the next export you start; disk cache after restart |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,
@@ -52,6 +52,31 @@ The Import page sets what footage starts with when it is imported: a new image s
 seconds as `n/d`, or `composition` for the composition's length). Bloom writes them into each new
 asset's interpretation when it imports; footage already in the project keeps its own, which
 **Interpret Footage** changes. An unreadable or out-of-range stored value reads as the default.
+
+## Export workers
+
+Movie and WAV exports encode in a separate helper process, the export worker. Two rows in the
+Memory section of **Memory & Caches** limit it. Both are off by default, and with both off an
+export behaves exactly as it does without them:
+
+- **Worker memory cap** (`export/worker-memory-cap-bytes`, MCP key `exportWorkerMemoryCapBytes`):
+  **No limit**, or **Limit** with a size from 0 to 1024 GiB. At the cap the export waits instead of
+  using more memory: it holds back the next frame until the worker has finished what it already
+  holds, and goes on once the worker is under the cap. If the worker is still at the cap with
+  nothing left to finish, the export stops with a message that names the memory the worker holds and
+  the cap, and publishes nothing.
+- **Worker threads** (`export/worker-threads`, MCP key `exportWorkerThreads`): **Automatic**, or
+  **Custom** with 1 to 64 encoder threads. More threads encode faster and hold more frames in
+  memory, so lowering them is the other way to fit under a cap. A movie made through the
+  platform's own media framework chooses its own threads and ignores this row;
+  the memory cap still applies.
+
+The cap measures the worker's resident memory as the operating system reports it for that process;
+it does not limit Bloom itself, other helper processes or the graphics card. Both rows apply to
+every export the application starts after the change, from the Export panel or over MCP, and `export`,
+`export.start` and `export.start-all` can override them for one call (see
+[MCP](mcp.md#export-worker-limits)). The result of an export reports the worker's peak memory
+whether or not a cap is set.
 
 ## Memory headroom and disk budget
 

@@ -115,6 +115,8 @@ struct detail::SequenceExportWorkV1 {
     std::uint64_t gpuProcessPayloadBytes = 0;
     std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    // The encode worker's memory as of the last time the encoder was alive.
+    media::provider::EncodeWorkerMemoryV1 workerMemory;
     // The export's display/view as one GPU command shared by every frame attempt (video only).
     std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay;
     std::uint64_t gpuDisplayFrames = 0;
@@ -217,7 +219,10 @@ struct detail::SequenceExportWorkV1 {
         return codec == "prores_ks" ? "ffmpeg-prores" : "ffmpeg-" + codec;
     }
     // The frames' route provenance, for a published result and for a failure alike.
-    void provenanceInto(SequenceExportResultV1& out) const {
+    void provenanceInto(SequenceExportResultV1& out) {
+        if (encoder)
+            workerMemory = encoder->workerMemory();
+        out.workerMemory = workerMemory;
         out.gpuEvaluatedFrames = gpuEvaluatedFrames;
         out.gpuNativeDispatches = gpuNativeDispatches;
         out.gpuReadbacks = gpuReadbacks;
@@ -334,7 +339,7 @@ struct detail::SequenceExportWorkV1 {
         // Issue #369: multithreaded encode (automatic thread count), the destination-derived
         // byte limit, the requested bit rate, the probed render node and colour tags derived from
         // the output colour intent.
-        s.threads = 0;
+        s.threads = request.encoderThreads;
         s.videoBitrateKbps = request.videoBitrateKbps.value_or(0);
         s.vaapiDevice = request.vaapiDevice;
         if (request.artifactByteLimit)
@@ -455,6 +460,8 @@ struct detail::SequenceExportWorkV1 {
         if (const auto* refused = std::get_if<Unavailable>(&finished);
             refused && refused->detail.starts_with("Reopen"))
             failureStage = SequenceExportFailureStageV1::Verification;
+        // The peak is on the worker's record once it has flushed and reopened the file.
+        workerMemory = encoder->workerMemory();
         const auto qc = checked(std::move(finished));
         // Captured before the encoder is released below: the serving provider and why the
         // providers ahead of it in the platform chain did not serve (ADR 0035).

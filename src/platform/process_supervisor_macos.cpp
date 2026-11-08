@@ -6,9 +6,11 @@
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
+#include <libproc.h>
 #include <poll.h>
 #include <pthread.h>
 #include <spawn.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
@@ -337,6 +339,17 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->reaped = true;
 }
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+std::optional<ProcessMemory> ProcessSupervisor::memory() const {
+    if (state_->reaped || state_->pid <= 0)
+        return std::nullopt;
+    rusage_info_v4 usage{};
+    if (::proc_pid_rusage(state_->pid, RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&usage)) !=
+        0)
+        return std::nullopt;
+    return ProcessMemory{usage.ri_resident_size,
+                         std::max<std::uint64_t>(usage.ri_resident_size,
+                                                 usage.ri_lifetime_max_phys_footprint)};
+}
 std::optional<ProcessExit> ProcessSupervisor::waitExit(const std::chrono::milliseconds grace) {
     if (!state_->waitUntil(Clock::now() + grace))
         return std::nullopt;

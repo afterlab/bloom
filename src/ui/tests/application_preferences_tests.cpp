@@ -63,6 +63,8 @@ void testFullRoundTrip(Expectations& check) {
     prefs.mediaDiskCacheEnabled = false;
     prefs.mediaDiskCacheDirectory = directory.filePath(QStringLiteral("media-cache")).toStdString();
     prefs.mediaDiskCacheBudgetBytes = 2ULL * 1024 * 1024 * 1024;
+    prefs.exportWorkerMemoryCapBytes = 3ULL * 1024 * 1024 * 1024;
+    prefs.exportWorkerThreads = 8;
     prefs.timelineTimeFormat = ui::TimelineTimeFormat::Timecode;
     prefs.timelineSnapping = false;
     prefs.timelineKeyframesVisible = false;
@@ -88,6 +90,42 @@ void testFullRoundTrip(Expectations& check) {
     ui::saveApplicationPreferences(settings, prefs);
     const auto reloaded = ui::loadApplicationPreferences(settings);
     check.expect(reloaded == prefs, "every global preference round-trips through QSettings");
+}
+
+// Issue #581: the export worker limits are opt-in. Nothing is stored for the defaults, and a stored
+// value outside the accepted range reads as "no limit".
+void testExportWorkerPreferences(Expectations& check) {
+    QTemporaryDir directory;
+    auto settings = openSettings(directory);
+    const auto defaults = ui::loadApplicationPreferences(settings);
+    check.expect(defaults.exportWorkerMemoryCapBytes == 0 && defaults.exportWorkerThreads == 0,
+                 "the export worker cap and threads default to no limit and automatic");
+    ui::saveApplicationPreferences(settings, defaults);
+    check.expect(!settings.contains(QStringLiteral("export/worker-memory-cap-bytes")) &&
+                     !settings.contains(QStringLiteral("export/worker-threads")),
+                 "the defaults store nothing");
+
+    ui::ApplicationPreferences prefs;
+    prefs.exportWorkerMemoryCapBytes = 1536ULL * 1024 * 1024;
+    prefs.exportWorkerThreads = 4;
+    ui::saveApplicationPreferences(settings, prefs);
+    check.expect(settings.value(QStringLiteral("export/worker-memory-cap-bytes")).toString() ==
+                         QStringLiteral("1610612736") &&
+                     settings.value(QStringLiteral("export/worker-threads")).toInt() == 4 &&
+                     ui::loadApplicationPreferences(settings) == prefs,
+                 "a set cap and thread count are stored and read back");
+
+    settings.setValue(QStringLiteral("export/worker-memory-cap-bytes"),
+                      QString::number((1ULL << 40U) + 1));
+    settings.setValue(QStringLiteral("export/worker-threads"), 65);
+    auto loaded = ui::loadApplicationPreferences(settings);
+    check.expect(loaded.exportWorkerMemoryCapBytes == 0 && loaded.exportWorkerThreads == 0,
+                 "a cap above 1 TiB or more than 64 threads reads as no limit");
+    settings.setValue(QStringLiteral("export/worker-memory-cap-bytes"), QStringLiteral("garbage"));
+    settings.setValue(QStringLiteral("export/worker-threads"), QStringLiteral("-3"));
+    loaded = ui::loadApplicationPreferences(settings);
+    check.expect(loaded.exportWorkerMemoryCapBytes == 0 && loaded.exportWorkerThreads == 0,
+                 "garbage reads as no limit");
 }
 
 void testHeadroomPreferences(Expectations& check) {
@@ -350,6 +388,7 @@ int main(int argc, char** argv) {
     testDefaultsRoundTrip(check);
     testFullRoundTrip(check);
     testHeadroomPreferences(check);
+    testExportWorkerPreferences(check);
     testSoundDefaultsAndBounds(check);
     testImportPreferences(check);
     testInvalidValuesFallBack(check);

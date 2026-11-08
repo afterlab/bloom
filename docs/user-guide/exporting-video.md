@@ -171,6 +171,12 @@ memory other active work holds (after Bloom's caches gave back theirs), the job 
 memory** with the amount needed. Waiting and paused time do not count toward the export's time
 limits. Neither is a fault.
 
+**Worker memory cap** and **Worker threads** in Preferences (Memory & Caches) are opt-in limits on
+the helper process that encodes a movie or WAV; see [Preferences](preferences.md#export-workers).
+With a cap set, a job that reaches it waits for the worker instead of using more memory, and fails
+with a message naming the memory and the cap if the worker still cannot go on. A job's result
+reports the worker's peak memory.
+
 Quitting or closing the project while exports run asks "N exports are running. Stop them and
 quit?"; **Keep Exporting** is the default. Saving the project during an export is allowed.
 

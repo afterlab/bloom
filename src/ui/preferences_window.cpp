@@ -2,6 +2,8 @@
 
 #include "properties_sections.hpp"
 
+#include <bloom/host/export_worker_limits.hpp>
+
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dialog.hpp>
@@ -578,6 +580,8 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     resetSection(*memory, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
         draft.ramHeadroomBytes = base.ramHeadroomBytes;
         draft.vramHeadroomBytes = base.vramHeadroomBytes;
+        draft.exportWorkerMemoryCapBytes = base.exportWorkerMemoryCapBytes;
+        draft.exportWorkerThreads = base.exportWorkerThreads;
     });
     auto* memoryRows = memory->bodyLayout();
 
@@ -608,6 +612,45 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         content);
     hint->setObjectName(QStringLiteral("preferencesMemoryHint"));
     addHelperRow(memoryRows, content, hint);
+
+    // Export workers (#581): opt-in limits on the helper processes that encode movies. Both rows
+    // are Automatic-style rows: zero is "No limit" and "Automatic", and nothing changes until
+    // one is set.
+    auto* workerCap = addAutomaticRow(
+        memoryRows, content, QStringLiteral("preferencesExportWorkerMemoryCapField"),
+        tr("Worker memory cap"),
+        static_cast<double>(host::kMaximumExportWorkerMemoryCapBytes) / kBytesPerGiB, 2,
+        QStringLiteral("GiB"), 4.0, tr("No limit"), tr("Limit"));
+    workerCap->setValue(static_cast<double>(draft_.exportWorkerMemoryCapBytes) / kBytesPerGiB);
+    connect(workerCap, &kit::KValueField::valueChanged, this, [this](const double value) {
+        draft_.exportWorkerMemoryCapBytes =
+            std::min(budgetBytesFromGiB(value), host::kMaximumExportWorkerMemoryCapBytes);
+        updateApplyEnabled();
+    });
+    refreshCallbacks_.push_back([this, workerCap] {
+        const QSignalBlocker blocker(workerCap);
+        workerCap->setValue(static_cast<double>(draft_.exportWorkerMemoryCapBytes) / kBytesPerGiB);
+    });
+    auto* workerThreads = addAutomaticRow(
+        memoryRows, content, QStringLiteral("preferencesExportWorkerThreadsField"),
+        tr("Worker threads"), static_cast<double>(host::kMaximumExportWorkerThreads), 0,
+        tr("threads"), 4.0);
+    workerThreads->setValue(static_cast<double>(draft_.exportWorkerThreads));
+    connect(workerThreads, &kit::KValueField::valueChanged, this, [this](const double value) {
+        draft_.exportWorkerThreads = static_cast<std::uint32_t>(std::llround(value));
+        updateApplyEnabled();
+    });
+    refreshCallbacks_.push_back([this, workerThreads] {
+        const QSignalBlocker blocker(workerThreads);
+        workerThreads->setValue(static_cast<double>(draft_.exportWorkerThreads));
+    });
+    auto* workerHint = new kit::KLabel(
+        tr("Export workers are the helper processes that encode movies. With a memory cap set, an "
+           "export waits at the cap instead of using more, and stops with a message if a worker "
+           "cannot continue within it. Both apply to the next export you start."),
+        content);
+    workerHint->setObjectName(QStringLiteral("preferencesExportWorkerHint"));
+    addHelperRow(memoryRows, content, workerHint);
 
     auto* disk = properties::makeSection(
         layout, content, QStringLiteral("preferencesMediaCacheSection"), tr("Media disk cache"),

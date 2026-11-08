@@ -3,6 +3,7 @@
 #include <bloom/document/export_queue.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_verification.hpp>
+#include <bloom/host/export_worker_limits.hpp>
 #include <bloom/runtime/task_types.hpp>
 
 #include <array>
@@ -689,6 +690,8 @@ struct ExportTransientJobRequest final {
     // Shown as the job's name; empty shows the composition's name.
     std::string name;
     std::string presetId;
+    // Worker limits for this run only; absent uses the service's default (setWorkerLimits).
+    std::optional<ExportWorkerLimits> workerLimits = std::nullopt;
 };
 
 struct ExportTransientSubmitResult final {
@@ -771,8 +774,11 @@ class ExportQueueService final {
 
     // Session commands. Each records its intent, runs pump(), and returns; a refusal carries the
     // availability that refused it.
-    ExportCommandResult startAll();
-    ExportCommandResult start(std::span<const ExportJobId> jobs);
+    // `workerLimits` apply to the runs these commands start (a Retry uses the default); absent uses
+    // the service's default set by setWorkerLimits().
+    ExportCommandResult startAll(std::optional<ExportWorkerLimits> workerLimits = std::nullopt);
+    ExportCommandResult start(std::span<const ExportJobId> jobs,
+                              std::optional<ExportWorkerLimits> workerLimits = std::nullopt);
     ExportCommandResult pause(ExportJobId job);
     ExportCommandResult resume(ExportJobId job);
     ExportCommandResult stop(ExportJobId job);
@@ -794,6 +800,10 @@ class ExportQueueService final {
     // While an interactive edit gesture is open, ready asset imports wait (section 8). The owner
     // reports the gesture state; imports apply on the first pump after it closes.
     void setInteractiveGestureActive(bool active);
+    // The default limits on the media worker processes of every run that starts after this call
+    // (the user's Preferences). No limits is the default; runs already started keep theirs.
+    void setWorkerLimits(ExportWorkerLimits limits);
+    [[nodiscard]] ExportWorkerLimits workerLimits() const noexcept;
 
     // Shutdown edge: refuses new starts, stops every active job with `cause` and cancels the
     // preflight samples. Non-blocking; the owner keeps pumping until quiescent(), then retires the

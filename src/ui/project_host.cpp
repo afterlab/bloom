@@ -216,6 +216,7 @@ void ProjectHost::createExportQueue() {
         .displayProcessor = deps.displayProcessor,
         .scratchDirectory = deps.scratchDirectory,
         .backend = deps.backend});
+    exportQueue_->setWorkerLimits(exportWorkerLimits_);
 }
 
 void ProjectHost::retireExportQueue(const host::ExportStopCause cause) {
@@ -400,6 +401,12 @@ void ProjectHost::setRecoveryPolicy(const host::SessionRecoveryPolicy policy) {
     }
     recoveryPolicy_ = policy;
     recoveryTimer_.setInterval(static_cast<int>(recoveryPolicy_.interval.count()) * 1000);
+}
+
+void ProjectHost::setExportWorkerLimits(const host::ExportWorkerLimits limits) {
+    exportWorkerLimits_ = limits;
+    if (exportQueue_)
+        exportQueue_->setWorkerLimits(limits);
 }
 
 void ProjectHost::setCrashRecoveryEnabled(const bool enabled) {

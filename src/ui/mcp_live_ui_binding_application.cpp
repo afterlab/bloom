@@ -9,6 +9,7 @@
 
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/host/export_worker_limits.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -145,6 +146,22 @@ const std::vector<PreferenceKey>& preferenceKeys() {
                                 runtime::kMaximumMemoryHeadroomBytes));
         list.push_back(bytesKey("vramHeadroomBytes", &ApplicationPreferences::vramHeadroomBytes,
                                 runtime::kMaximumMemoryHeadroomBytes));
+        list.push_back(bytesKey("exportWorkerMemoryCapBytes",
+                                &ApplicationPreferences::exportWorkerMemoryCapBytes,
+                                host::kMaximumExportWorkerMemoryCapBytes));
+        list.push_back(
+            {"exportWorkerThreads",
+             [](const ApplicationPreferences& p) { return Value(static_cast<double>(p.exportWorkerThreads)); },
+             [](ApplicationPreferences& p, const Value& value) {
+                 const auto number = numberOf(value);
+                 if (!number || *number < 0.0 || *number != std::floor(*number) ||
+                     *number > static_cast<double>(host::kMaximumExportWorkerThreads))
+                     return std::optional(
+                         QObject::tr("is a whole number of encoder threads from 0 (automatic) to %1")
+                             .arg(host::kMaximumExportWorkerThreads));
+                 p.exportWorkerThreads = static_cast<std::uint32_t>(*number);
+                 return std::optional<QString>{};
+             }});
         list.push_back(flagKey("mediaDiskCache", &ApplicationPreferences::mediaDiskCacheEnabled));
         list.push_back(
             {"mediaDiskCacheDirectory",

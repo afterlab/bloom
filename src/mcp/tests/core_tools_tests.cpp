@@ -718,6 +718,7 @@ void retiredTransientJobs() {
     } release{queue, captures};
     host::ExportEncoderStatus encoders;
     encoders.probed = true;
+    encoders.mediaWorker = true;
     queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
         .session = *server.session->hostSession(),
         .scheduler = server.scheduler,
@@ -820,6 +821,64 @@ void retiredTransientJobs() {
     status = server.call("export.status", "{}");
     expect(contains(status, R"("recentTransientJobs":[])"),
            "a new queue generation releases the retired jobs: " + status);
+
+    // Issue #581: worker limits and the worker memory report over MCP.
+    {
+        constexpr std::uint64_t mib = std::uint64_t{1} << 20U;
+        const auto movie = (captures / "limits.mov").string();
+        fake->push({.workerPeakBytes = 5 * mib});
+        const auto limited =
+            server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
+                                  R"("destination":")" +
+                                      movie + R"(","workerMemoryCapBytes":1073741824,)"
+                                              R"("workerThreads":3})");
+        expect(contains(limited, R"("isError":false)") &&
+                   contains(limited, R"("workerMemory":{"measured":true,"peakBytes":5242880,)"
+                                     R"("capBytes":1073741824,"waits":0,"waitedMs":0})"),
+               "export reports the worker's peak memory and the cap it ran under: " + limited);
+        expect(fake->startedLimits().back() == host::ExportWorkerLimits{1073741824, 3},
+               "export passes its worker options to the run");
+        fake->push({.workerPeakBytes = 5 * mib});
+        const auto plain = server.call("export", R"({"composition":1,"frame":0,)"
+                                                 R"("preset":"ProResMovV1","destination":")" +
+                                                     movie + R"("})");
+        expect(contains(plain, R"("capBytes":0)") &&
+                   fake->startedLimits().back() == host::ExportWorkerLimits{},
+               "with no option and no saved default an export runs with no limit: " + plain);
+        queue->setWorkerLimits({2048 * mib, 6});
+        fake->push({.workerPeakBytes = 5 * mib});
+        const auto saved = server.call("export", R"({"composition":1,"frame":0,)"
+                                                 R"("preset":"ProResMovV1","destination":")" +
+                                                     movie + R"(","workerThreads":2})");
+        expect(contains(saved, R"("isError":false)") &&
+                   fake->startedLimits().back() == host::ExportWorkerLimits{2048 * mib, 2},
+               "an option not given keeps the saved Preferences value: " + saved);
+        queue->setWorkerLimits({});
+        const auto tooMany =
+            server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
+                                  R"("destination":")" +
+                                      movie + R"(","workerThreads":65})");
+        const auto tooBig =
+            server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
+                                  R"("destination":")" +
+                                      movie + R"(","workerMemoryCapBytes":1099511627777})");
+        expect(contains(tooMany, "-32602") && contains(tooMany, "workerThreads") &&
+                   contains(tooBig, "-32602") && contains(tooBig, "workerMemoryCapBytes"),
+               "out-of-range worker options are refused: " + tooMany + tooBig);
+        const auto still =
+            server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                                  R"("destination":")" +
+                                      (captures / "limits.png").string() +
+                                      R"(","workerThreads":2})");
+        expect(contains(still, "-32602") && contains(still, "worker"),
+               "a still render has no worker to limit: " + still);
+        const auto badStart = server.call("export.start", R"({"jobs":[1],"workerThreads":65})");
+        const auto emptyStart = server.call("export.start-all", R"({"workerThreads":2})");
+        expect(contains(badStart, "-32602") && contains(badStart, "workerThreads") &&
+                   !contains(emptyStart, "-32602") && contains(emptyStart, "NothingToStart"),
+               "export.start and export.start-all take the worker options: " + badStart +
+                   emptyStart);
+    }
 }
 
 } // namespace

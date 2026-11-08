@@ -125,7 +125,8 @@ struct ExportJobRunner::State {
                                             .range = request.range,
                                             .encoders = request.encoders,
                                             .owner = request.owner,
-                                            .requireDevice = request.requireDevice};
+                                            .requireDevice = request.requireDevice,
+                                            .workerLimits = request.workerLimits};
             driver = detail::makeExportOutputDriver(dependencies, std::move(input));
             driver->setPaused(pauseRequested);
             note(runtime::DiagnosticSeverity::Information, "export.output.started",

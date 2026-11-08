@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <variant>
+#include <vector>
 
 namespace {
 // This executable also acts as a codec-free trusted worker. Bootstrap proves the real fd3 gate;
@@ -28,6 +29,62 @@ int worker() {
         return 3;
     constexpr char reply = 'R';
     return ::write(STDOUT_FILENO, &reply, 1) == 1 ? 0 : 4;
+}
+
+// A worker that holds about 48 MiB of touched memory before it answers, so the parent can read the
+// memory the operating system reports for a supervised child.
+constexpr std::size_t kHeldBytes = std::size_t{48} << 20U;
+int memoryWorker() {
+    if (!bloom::platform::processWorkerBootstrap())
+        return 1;
+    std::vector<unsigned char> held(kHeldBytes);
+    for (std::size_t at = 0; at < held.size(); at += 4096)
+        held[at] = static_cast<unsigned char>(at >> 12U) | 1U;
+    char received = 0;
+    if (::read(STDIN_FILENO, &received, 1) != 1 || received != 'Q')
+        return 3;
+    // Every touched page is read back, so the compiler cannot drop the stores.
+    unsigned long sum = 0;
+    for (std::size_t at = 0; at < held.size(); at += 4096)
+        sum += held[at];
+    const char reply = sum != 0 ? 'R' : 'X';
+    if (::write(STDOUT_FILENO, &reply, 1) != 1)
+        return 4;
+    // Hold the memory until the parent has read it: an exiting process releases it first.
+    return ::read(STDIN_FILENO, &received, 1) == 1 && received == 'Z' ? 0 : 5;
+}
+
+int memoryReport(const std::string& executable) {
+    bloom::platform::ProcessOptions options;
+    options.executable = executable;
+    options.arguments = {"--memory-worker"};
+    auto launched = bloom::platform::ProcessSupervisor::launch(options);
+    auto* process = std::get_if<std::unique_ptr<bloom::platform::ProcessSupervisor>>(&launched);
+    if (!process)
+        return 20;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    const std::array query{std::byte{'Q'}};
+    std::array<std::byte, 1> reply{};
+    if (!std::holds_alternative<std::size_t>((*process)->write(query, deadline, {})) ||
+        !std::holds_alternative<std::size_t>((*process)->read(reply, deadline, {})) ||
+        reply.front() != std::byte{'R'})
+        return 21;
+    const auto held = (*process)->memory();
+    if (!held)
+        return 22;
+    // The child holds 48 MiB; a generous floor keeps the check about the report, not the runtime.
+    if (held->residentBytes < (std::size_t{40} << 20U) ||
+        held->peakResidentBytes < held->residentBytes)
+        return 23;
+    const std::array release{std::byte{'Z'}};
+    if (!std::holds_alternative<std::size_t>((*process)->write(release, deadline, {})))
+        return 26;
+    const auto finished = (*process)->finish(deadline);
+    if (!std::holds_alternative<int>(finished) || std::get<int>(finished) != 0)
+        return 24;
+    (void)(*process)->waitExit(std::chrono::milliseconds(0));
+    // A reaped child has no memory to report.
+    return (*process)->memory().has_value() ? 25 : 0;
 }
 
 int exchange(const std::string& executable, const bool occupied) {
@@ -96,7 +153,13 @@ int main(const int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--descriptor-worker")
             return worker();
+        if (argc == 2 && std::string_view(argv[1]) == "--memory-worker")
+            return memoryWorker();
         const auto executable = std::filesystem::absolute(argv[0]).string();
+        if (const int code = memoryReport(executable); code != 0) {
+            std::fprintf(stderr, "worker memory report failed: %d\n", code);
+            return 1;
+        }
         return isolatedExchange(executable, false) && isolatedExchange(executable, true) ? 0 : 1;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "descriptor fixture failed: %s\n", error.what());

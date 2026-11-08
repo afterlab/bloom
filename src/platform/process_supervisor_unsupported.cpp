@@ -23,5 +23,6 @@ std::int64_t ProcessSupervisor::processId() const { return -1; }
 std::optional<ProcessExit> ProcessSupervisor::waitExit(std::chrono::milliseconds) {
     return std::nullopt;
 }
+std::optional<ProcessMemory> ProcessSupervisor::memory() const { return std::nullopt; }
 bool processWorkerBootstrap() { return false; }
 } // namespace bloom::platform

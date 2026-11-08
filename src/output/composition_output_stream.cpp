@@ -362,6 +362,9 @@ bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
 const Handshake& CompositionOutputStreamV1::handshake() const {
     return state_->encoder->handshake();
 }
+EncodeWorkerMemoryV1 CompositionOutputStreamV1::workerMemory() const {
+    return state_->encoder->workerMemory();
+}
 const MediaProviderProvenanceV1& CompositionOutputStreamV1::provenance() const {
     return state_->encoder->provenance();
 }

@@ -443,7 +443,9 @@ struct Pump final {
             .outputs = {},
             .encoders = s.dependencies.presets->snapshot()->encoders,
             .owner = {runtime::TaskOwnerKind::Export, job.run->owner},
-            .group = job.run->group.isValid() ? std::optional(job.run->group) : std::nullopt};
+            .group = job.run->group.isValid() ? std::optional(job.run->group) : std::nullopt,
+            .requireDevice = false,
+            .workerLimits = job.workerLimits.value_or(s.workerLimits)};
         const auto* composition =
             job.capturedSnapshot->project().findComposition(record.composition);
         for (const auto& output : record.outputs) {
@@ -1167,7 +1169,16 @@ ExportCommandResult refused(ExportCommandAvailability availability, const std::u
 }
 } // namespace
 
-ExportCommandResult ExportQueueService::start(const std::span<const ExportJobId> jobs) {
+void ExportQueueService::setWorkerLimits(const ExportWorkerLimits limits) {
+    state_->workerLimits = validExportWorkerLimits(limits) ? limits : ExportWorkerLimits{};
+}
+
+ExportWorkerLimits ExportQueueService::workerLimits() const noexcept {
+    return state_->workerLimits;
+}
+
+ExportCommandResult ExportQueueService::start(const std::span<const ExportJobId> jobs,
+                                              const std::optional<ExportWorkerLimits> limits) {
     auto& s = *state_;
     std::optional<ExportCommandAvailability> refusal;
     bool accepted = false;
@@ -1182,6 +1193,9 @@ ExportCommandResult ExportQueueService::start(const std::span<const ExportJobId>
         job.state = ExportJobState::Waiting;
         job.failure.reset();
         job.stopCause.reset();
+        job.workerLimits = limits && validExportWorkerLimits(*limits)
+                               ? limits
+                               : std::optional<ExportWorkerLimits>{};
         s.waiting.push_back(id);
         s.runner = ExportRunnerState::Running;
         accepted = true;
@@ -1192,7 +1206,7 @@ ExportCommandResult ExportQueueService::start(const std::span<const ExportJobId>
     return {true, {true, ExportUnavailableCode::None, {}}, snapshot()->revision};
 }
 
-ExportCommandResult ExportQueueService::startAll() {
+ExportCommandResult ExportQueueService::startAll(const std::optional<ExportWorkerLimits> limits) {
     const auto allowed = availability(ExportCommand::StartAll);
     if (!allowed)
         return refused(allowed, snapshot()->revision);
@@ -1200,7 +1214,7 @@ ExportCommandResult ExportQueueService::startAll() {
     for (const auto& view : snapshot()->jobs)
         if (view.record.enabled && view.commands[ExportCommand::Start])
             jobs.push_back(view.id);
-    return start(jobs);
+    return start(jobs, limits);
 }
 
 namespace {
@@ -1331,6 +1345,8 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
     s.transients.emplace(id, std::move(job));
     auto& runtime = s.jobs[id];
     runtime.transient = true;
+    if (request.workerLimits && validExportWorkerLimits(*request.workerLimits))
+        runtime.workerLimits = request.workerLimits;
     runtime.state = ExportJobState::Waiting;
     s.waiting.push_back(id);
     s.runner = ExportRunnerState::Running;

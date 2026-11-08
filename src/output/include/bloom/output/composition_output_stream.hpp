@@ -42,6 +42,8 @@ class CompositionOutputStreamV1 final {
     [[nodiscard]] bool audioSourceFailed() const noexcept;
     [[nodiscard]] const media::provider::Handshake& handshake() const;
     [[nodiscard]] const media::provider::MediaProviderProvenanceV1& provenance() const;
+    // The encode worker's measured memory so far (peak, cap, waits); see EncodeWorkerMemoryV1.
+    [[nodiscard]] media::provider::EncodeWorkerMemoryV1 workerMemory() const;
 
   private:
     struct State;

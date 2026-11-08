@@ -1515,6 +1515,9 @@ class MediaDriver final : public DriverBase {
         request.bypassLookNodes = !settings.bakeLook;
         request.videoBitrateKbps = settings.videoBitrateKbps;
         request.vaapiDevice = encoders.vaapiRenderNode;
+        // Opt-in worker limits (issue #581); with none set the request is unchanged.
+        request.worker.memoryCapBytes = input_.workerLimits.memoryCapBytes;
+        request.encoderThreads = input_.workerLimits.encoderThreads;
         const bool mp4 = settings.format == ExportFormat::H264Mp4 ||
                          settings.format == ExportFormat::HevcMp4 ||
                          settings.format == ExportFormat::Av1Mp4;
@@ -1635,6 +1638,12 @@ class MediaDriver final : public DriverBase {
         if (const auto* analysis = runner_->analysis())
             provenance.implementationNote = analysis->implementationNote;
         provenance.encoder = result.encoder;
+        report_.verification.workerMemory = ExportWorkerMemory{
+            result.workerMemory.measured,
+            result.workerMemory.peakResidentBytes,
+            result.workerMemory.capBytes,
+            result.workerMemory.waits,
+            static_cast<std::uint64_t>(result.workerMemory.waited.count())};
         if (report_.failure)
             return void(done_ = true);
         if (!result.published()) {
@@ -1672,6 +1681,13 @@ class MediaDriver final : public DriverBase {
             }
             const std::string detail =
                 result.failure ? result.failure->detail : std::string("no publication result");
+            // Issue #581: the worker stayed at the memory cap with nothing left to finish. The
+            // sentence names the memory and the cap, so it is the reason as it stands.
+            if (result.workerMemory.capReached) {
+                log(runtime::DiagnosticSeverity::Error, "export.worker.memory-cap", detail);
+                return fail(failure(ExportFailureCode::ResourceRefused, "export.worker.memory-cap",
+                                    detail));
+            }
             // #428: a failure whose stage is known names the stage and the input; the encoder is
             // blamed only for what it actually did.
             switch (result.failureStage) {

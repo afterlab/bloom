@@ -193,6 +193,9 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     out.set(value, "cpuReferenceFrames", out.number(verification.provenance.cpuReferenceFrames));
     out.set(value, "gpuDisplayFrames", out.number(verification.provenance.gpuDisplayFrames));
     out.set(value, "cpuDisplayFrames", out.number(verification.provenance.cpuDisplayFrames));
+    // The media worker's measured memory (issue #581); absent for an image output (no worker).
+    if (verification.workerMemory)
+        out.set(value, "workerMemory", workerMemoryValue(out, *verification.workerMemory));
     // A published movie's reopen measurements (issue #424), named as in ExportReopenQuality;
     // absent for an output without a tolerance profile.
     if (const auto& quality = verification.reopenQuality) {
@@ -357,6 +360,45 @@ void waitForQueue(McpServerCore::State& core, std::optional<host::ExportQueueSub
 
 } // namespace
 
+WorkerLimitArguments workerLimitArguments(yyjson_val* arguments) {
+    WorkerLimitArguments given;
+    if (auto* cap = member(arguments, "workerMemoryCapBytes")) {
+        const auto bytes = integer(cap);
+        if (bytes > host::kMaximumExportWorkerMemoryCapBytes)
+            throw InvalidInput("workerMemoryCapBytes is 0 (no cap) to " +
+                               std::to_string(host::kMaximumExportWorkerMemoryCapBytes));
+        given.memoryCapBytes = bytes;
+    }
+    if (auto* threads = member(arguments, "workerThreads")) {
+        const auto count = integer(threads);
+        if (count > host::kMaximumExportWorkerThreads)
+            throw InvalidInput("workerThreads is 0 (automatic) to " +
+                               std::to_string(host::kMaximumExportWorkerThreads));
+        given.threads = static_cast<std::uint32_t>(count);
+    }
+    return given;
+}
+
+host::ExportWorkerLimits applyWorkerLimits(host::ExportWorkerLimits base,
+                                           const WorkerLimitArguments& given) {
+    if (given.memoryCapBytes)
+        base.memoryCapBytes = *given.memoryCapBytes;
+    if (given.threads)
+        base.encoderThreads = *given.threads;
+    return base;
+}
+
+yyjson_mut_val* workerMemoryValue(Json& out, const host::ExportWorkerMemory& memory) {
+    auto* value = out.object();
+    out.set(value, "measured", out.boolean(memory.measured));
+    out.set(value, "peakBytes", out.number(memory.peakBytes));
+    out.set(value, "capBytes", out.number(memory.capBytes));
+    out.set(value, "waits", out.number(memory.waits));
+    out.set(value, "waitedMs", out.number(memory.waitedMs));
+    return value;
+}
+
+
 yyjson_mut_val* logEntries(Json& out, const std::vector<host::ExportLogEntry>& entries) {
     auto* rows = out.array();
     constexpr std::array<std::string_view, 4> severities{"information", "warning", "error",
@@ -421,7 +463,8 @@ McpServerCore::State::retiredJobs(const std::uint64_t generation) {
 }
 
 TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
-                                host::ExportTransientJobRequest request) {
+                                host::ExportTransientJobRequest request,
+                                const WorkerLimitArguments& limits) {
     const auto& stop = call.control.stop;
     host::ExportTransientSubmitResult submitted;
     std::optional<host::ExportQueueSubscription> sub;
@@ -435,6 +478,8 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 return;
             }
             generation = queueGeneration;
+            if (limits.any())
+                request.workerLimits = applyWorkerLimits(queue->workerLimits(), limits);
             submitted = queue->submitTransient(std::move(request));
             if (submitted.accepted && !core.dependencies.exports.callerIsOwner) {
                 auto subscribed = queue->subscribe();
@@ -524,6 +569,8 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 if (!output.verification)
                     continue;
                 result.frames += output.verification->artifacts.publishedArtifacts;
+                if (output.verification->workerMemory)
+                    result.workerMemory = output.verification->workerMemory;
                 for (auto& file : publishedFiles(output.verification->artifacts))
                     result.files.push_back(std::move(file));
             }
@@ -569,7 +616,8 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
     };
     switch (tool) {
     case McpTool::ExportStart: {
-        members(arguments, {"jobs"}, {"jobs"});
+        members(arguments, {"jobs", "workerMemoryCapBytes", "workerThreads"}, {"jobs"});
+        const auto limits = workerLimitArguments(arguments);
         auto* list = member(arguments, "jobs");
         if (!yyjson_is_arr(list) || yyjson_arr_size(list) == 0 || yyjson_arr_size(list) > 1024)
             throw InvalidInput("jobs is a list of 1..1024 job ids");
@@ -578,12 +626,24 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         while (auto* item = yyjson_arr_iter_next(&iterator))
             jobs.push_back(host::ExportJobId::fromRaw(identifier(item)));
         call.summary = std::to_string(jobs.size()) + " job(s)";
-        return command([&](host::ExportQueueService& queue) { return queue.start(jobs); });
+        return command([&](host::ExportQueueService& queue) {
+            return queue.start(jobs, limits.any() ? std::optional(applyWorkerLimits(
+                                                        queue.workerLimits(), limits))
+                                                  : std::nullopt);
+        });
     }
-    case McpTool::ExportStartAll:
-        if (arguments)
-            members(arguments, {});
-        return command([](host::ExportQueueService& queue) { return queue.startAll(); });
+    case McpTool::ExportStartAll: {
+        WorkerLimitArguments limits;
+        if (arguments) {
+            members(arguments, {"workerMemoryCapBytes", "workerThreads"});
+            limits = workerLimitArguments(arguments);
+        }
+        return command([&](host::ExportQueueService& queue) {
+            return queue.startAll(limits.any() ? std::optional(applyWorkerLimits(
+                                                     queue.workerLimits(), limits))
+                                               : std::nullopt);
+        });
+    }
     case McpTool::ExportStopAll:
         if (arguments)
             members(arguments, {});

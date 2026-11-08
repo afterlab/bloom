@@ -123,6 +123,28 @@ void preferences(const mcp::McpLiveUiPort& port) {
                    mcp::McpPreferenceValue(std::string("25/1")),
            "preferences.get reads them back");
 
+    // Issue #581: the export worker limits are preferences too.
+    expect(preference(values, "exportWorkerMemoryCapBytes") == mcp::McpPreferenceValue(0.0) &&
+               preference(values, "exportWorkerThreads") == mcp::McpPreferenceValue(0.0),
+           "preferences.get lists the export worker cap and threads, off by default");
+    result = port.setPreferences({{.key = "exportWorkerMemoryCapBytes", .value = 2147483648.0},
+                                  {.key = "exportWorkerThreads", .value = 4.0}});
+    const auto workers = ui::loadApplicationPreferences(QSettings{});
+    expect(result.ok() && workers.exportWorkerMemoryCapBytes == 2147483648ULL &&
+               workers.exportWorkerThreads == 4,
+           "preferences.set saves the export worker cap and threads");
+    result = port.setPreferences({{.key = "exportWorkerThreads", .value = 65.0}});
+    expect(result.refusal == McpUiRefusal::InvalidArgument &&
+               ui::loadApplicationPreferences(QSettings{}).exportWorkerThreads == 4,
+           "more than 64 worker threads is refused and changes nothing");
+    result = port.setPreferences({{.key = "exportWorkerMemoryCapBytes", .value = 1.5}});
+    expect(result.refusal == McpUiRefusal::InvalidArgument,
+           "a fractional worker memory cap is refused");
+    result = port.setPreferences({{.key = "exportWorkerMemoryCapBytes", .value = 0.0},
+                                  {.key = "exportWorkerThreads", .value = 0.0}});
+    expect(result.ok() && ui::loadApplicationPreferences(QSettings{}).exportWorkerMemoryCapBytes == 0,
+           "zero turns the worker limits back off");
+
     result = port.setPreferences({{.key = "loopPlayback", .value = true},
                                   {.key = "noSuchPreference", .value = true}});
     expect(result.refusal == McpUiRefusal::InvalidArgument &&

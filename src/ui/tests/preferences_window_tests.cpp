@@ -436,6 +436,63 @@ void testHeadroomFields(Expectations& check) {
                  "Restore Defaults on the Memory section restores the computed 10% defaults");
 }
 
+// Issue #581: the Memory section carries the opt-in export worker limits as Automatic-style rows.
+void testExportWorkerFields(Expectations& check) {
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    auto* cap = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesExportWorkerMemoryCapField"));
+    auto* threads = window.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesExportWorkerThreadsField"));
+    const auto* hint = window.findChild<QLabel*>(QStringLiteral("preferencesExportWorkerHint"));
+    check.expect(cap && threads && hint,
+                 "the Memory section has the worker memory cap and worker threads rows");
+    if (!cap || !threads)
+        return;
+    check.expect(window.preferences().exportWorkerMemoryCapBytes == 0 &&
+                     window.preferences().exportWorkerThreads == 0 && cap->value() == 0.0 &&
+                     threads->value() == 0.0,
+                 "both start at No limit and Automatic, so an untouched window changes nothing");
+    const auto* memorySection =
+        window.findChild<ui::kit::KSection*>(QStringLiteral("preferencesMemorySection"));
+    check.expect(memorySection != nullptr && memorySection->isAncestorOf(cap) &&
+                     memorySection->isAncestorOf(threads),
+                 "the rows sit in the existing Memory section, not a new one");
+    auto* capMode = window.findChild<ui::kit::KDropdown*>(
+        QStringLiteral("preferencesExportWorkerMemoryCapFieldMode"));
+    check.expect(capMode && capMode->itemText(0) == QStringLiteral("No limit") &&
+                     capMode->itemText(1) == QStringLiteral("Limit"),
+                 "the cap mode reads No limit or Limit");
+    cap->setValue(2.5);
+    threads->setValue(6.0);
+    check.expect(window.preferences().exportWorkerMemoryCapBytes == 2684354560ULL &&
+                     window.preferences().exportWorkerThreads == 6,
+                 "the fields edit the draft in GiB and threads");
+    cap->setValue(5000.0);
+    check.expect(window.preferences().exportWorkerMemoryCapBytes == (1ULL << 40U) &&
+                     cap->maximum() == 1024.0 && threads->maximum() == 64.0,
+                 "the cap clamps to 1 TiB and the threads to 64");
+    auto* memory =
+        window.findChild<ui::kit::KSection*>(QStringLiteral("preferencesMemorySection"));
+    if (memory != nullptr)
+        emit memory->resetRequested();
+    check.expect(window.preferences().exportWorkerMemoryCapBytes == 0 &&
+                     window.preferences().exportWorkerThreads == 0 && cap->value() == 0.0 &&
+                     threads->value() == 0.0,
+                 "the Memory section's reset returns the worker limits to off");
+    auto preferences = ui::ApplicationPreferences{};
+    preferences.exportWorkerMemoryCapBytes = 3 * gib;
+    preferences.exportWorkerThreads = 12;
+    ui::PreferencesWindow filled(owner(), preferences);
+    const auto* filledCap = filled.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesExportWorkerMemoryCapField"));
+    const auto* filledThreads = filled.findChild<ui::kit::KValueField*>(
+        QStringLiteral("preferencesExportWorkerThreadsField"));
+    check.expect(filledCap && filledThreads && filledCap->value() == 3.0 &&
+                     filledThreads->value() == 12.0,
+                 "saved worker limits are shown");
+}
+
 void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
     constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
     auto preferences = samplePreferences();
@@ -751,6 +808,7 @@ int main(int argc, char** argv) {
     testRestartBadgesAndRail(check);
     testSoundsPage(check);
     testHeadroomFields(check);
+    testExportWorkerFields(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);
     testPreferenceLabelsRemainReadable(check);
     testWindowFitsItsContent(check);

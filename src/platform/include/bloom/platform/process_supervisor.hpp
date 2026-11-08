@@ -45,6 +45,13 @@ struct ProcessExit {
     }
     return "exited with code " + std::to_string(exit.code);
 }
+// A child's resident memory as the operating system reports it. `peakResidentBytes` is the largest
+// resident size the system has recorded for the process since it started (Linux VmHWM, Windows
+// peak working set, macOS lifetime peak footprint) and is never below `residentBytes`.
+struct ProcessMemory {
+    std::uint64_t residentBytes = 0;
+    std::uint64_t peakResidentBytes = 0;
+};
 template <typename T> using ProcessResult = std::variant<T, ProcessFailure>;
 using ProcessDeadline = std::chrono::steady_clock::time_point;
 using ProcessCancellation = std::function<bool()>;
@@ -90,6 +97,9 @@ class ProcessSupervisor final {
     // non-blocking check). Returns how it ended, or nothing while it is still running. Safe to
     // call at any time, including while idle, so an exited worker is never left defunct.
     [[nodiscard]] std::optional<ProcessExit> waitExit(std::chrono::milliseconds grace);
+    // The child's memory right now, or nothing once it has been reaped or when the platform cannot
+    // report it. Non-blocking; any thread that owns the supervisor.
+    [[nodiscard]] std::optional<ProcessMemory> memory() const;
 
   private:
     struct State;

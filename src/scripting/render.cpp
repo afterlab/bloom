@@ -253,7 +253,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         .encoders = encoders,
         .owner = {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
         .group = std::nullopt,
-        .requireDevice = request.requireDevice};
+        .requireDevice = request.requireDevice,
+        .workerLimits = request.workerLimits};
     RenderResult result = failed({});
     {
         host::ExportJobRunner runner(
@@ -307,6 +308,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             result.gpuProcessPayloadBytes = provenance.gpuProcessPayloadBytes;
             result.gpuEncodedPayloadBytes = provenance.gpuEncodedPayloadBytes;
             result.gpuDeviceOwnershipEpoch = provenance.gpuDeviceOwnershipEpoch;
+            result.workerMemory = verification.workerMemory;
         }
         if (!result.succeeded) {
             if (runner.stopped()) {

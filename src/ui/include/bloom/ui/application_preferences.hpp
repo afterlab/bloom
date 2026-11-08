@@ -84,6 +84,11 @@ struct ApplicationPreferences final {
     bool mediaDiskCacheEnabled = true;
     std::string mediaDiskCacheDirectory;
     std::uint64_t mediaDiskCacheBudgetBytes = 0;
+    // Export workers (#581). Opt-in limits on the media worker processes an export launches: the
+    // most memory one may hold (0 = no limit) and its encoder threads (0 = automatic). Applied to
+    // every export that starts after the change; no restart.
+    std::uint64_t exportWorkerMemoryCapBytes = 0;
+    std::uint32_t exportWorkerThreads = 0;
 
     // Timeline.
     TimelineTimeFormat timelineTimeFormat = TimelineTimeFormat::Frames;

@@ -190,6 +190,22 @@ struct ExportReopenQuality final {
     std::uint32_t meanError = 0;
 };
 
+// What the export's media worker process did with memory. Diagnostics only; the numbers are the
+// operating system's report for the worker, never an estimate.
+struct ExportWorkerMemory final {
+    // False when the platform could not report the worker's memory (peak is then zero and a cap
+    // could not be enforced).
+    bool measured = false;
+    // The largest resident size the worker reached, in bytes.
+    std::uint64_t peakBytes = 0;
+    // The cap this run applied (0: none).
+    std::uint64_t capBytes = 0;
+    // Times the export held back a product because the worker was at the cap, and how long (ms).
+    std::uint32_t waits = 0;
+    std::uint64_t waitedMs = 0;
+    friend bool operator==(const ExportWorkerMemory&, const ExportWorkerMemory&) = default;
+};
+
 struct ExportFacetState final {
     output::OutputFacetIdV1 facet = output::OutputFacetIdV1::Pixels;
     output::OutputPreservationStateV1 state = output::OutputPreservationStateV1::Exact;
@@ -211,6 +227,8 @@ struct ExportOutputVerification final {
     ExportDeviceProvenance provenance;
     // Present for a published movie whose output carries a tolerance profile.
     std::optional<ExportReopenQuality> reopenQuality;
+    // Present for an output that launched a media worker (movie, WAV); absent for image outputs.
+    std::optional<ExportWorkerMemory> workerMemory;
 };
 
 // Problems known before Start. Destination facts (exists, writable, free space, the existing

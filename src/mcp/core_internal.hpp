@@ -201,7 +201,23 @@ inline constexpr std::size_t kTransientLogEntries = 64;
 // At most this many finished transient jobs stay readable after their call returned.
 inline constexpr std::size_t kRetiredTransientJobs = 32;
 
+// Issue #581: the optional worker limits of export, export.start and export.start-all. An argument
+// that is not given leaves the saved Preferences value in force for that call.
+struct WorkerLimitArguments final {
+    std::optional<std::uint64_t> memoryCapBytes;
+    std::optional<std::uint32_t> threads;
+    [[nodiscard]] bool any() const noexcept { return memoryCapBytes || threads; }
+};
+// Reads and validates workerMemoryCapBytes (0 = no cap, to the largest cap) and workerThreads (0 =
+// automatic, to the largest thread count). Throws InvalidInput.
+[[nodiscard]] WorkerLimitArguments workerLimitArguments(yyjson_val* arguments);
+[[nodiscard]] host::ExportWorkerLimits applyWorkerLimits(host::ExportWorkerLimits base,
+                                                         const WorkerLimitArguments& given);
+// {measured, peakBytes, capBytes, waits, waitedMs}
+[[nodiscard]] yyjson_mut_val* workerMemoryValue(Json& out, const host::ExportWorkerMemory& memory);
+
 struct TransientResult final {
+    std::optional<host::ExportWorkerMemory> workerMemory;
     std::uint64_t job = 0;
     std::vector<host::ExportLogEntry> log;
     std::uint64_t frames = 0;
@@ -215,7 +231,8 @@ struct TransientResult final {
 [[nodiscard]] yyjson_mut_val* logEntries(Json& out,
                                          const std::vector<host::ExportLogEntry>& entries);
 [[nodiscard]] TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
-                                              host::ExportTransientJobRequest request);
+                                              host::ExportTransientJobRequest request,
+                                              const WorkerLimitArguments& limits = {});
 // `path` as an export destination: absolute paths become external file URIs, relative paths stay
 // project-relative. `overwrite` is the tool's optional "ask"|"replace"|"refuse" argument; absent
 // means ask (nothing is replaced silently).

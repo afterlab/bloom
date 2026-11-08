@@ -226,6 +226,13 @@ class ProjectHost final : public QObject {
     // a snapshot still being written; on resumes the cadence.
     [[nodiscard]] bool crashRecoveryEnabled() const noexcept { return crashRecoveryEnabled_; }
     void setCrashRecoveryEnabled(bool enabled);
+    // The Export worker preferences (#581): opt-in limits on the media worker processes of every
+    // export that starts afterwards, in this project and in the ones opened or created next. The
+    // default is no limit.
+    [[nodiscard]] const host::ExportWorkerLimits& exportWorkerLimits() const noexcept {
+        return exportWorkerLimits_;
+    }
+    void setExportWorkerLimits(host::ExportWorkerLimits limits);
     // Last completed worker result, without filesystem I/O on the UI thread. Startup scanning
     // and recovery publication update it; std::nullopt until a worker finds an offer.
     [[nodiscard]] std::optional<host::SessionRecoveryOffer> recoveryOffer() const;
@@ -393,6 +400,7 @@ class ProjectHost final : public QObject {
     std::vector<std::filesystem::path> recoveryRetirePaths_;
     bool recoveryRefreshPending_ = false;
     bool crashRecoveryEnabled_ = false;
+    host::ExportWorkerLimits exportWorkerLimits_;
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
     host::SessionRecoveryPolicy recoveryPolicy_;
     std::filesystem::path recoveryDirectory_;

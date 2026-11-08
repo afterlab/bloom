@@ -87,7 +87,22 @@ struct EncodeSessionV1::State {
                                platform::describeProcessExit(*exit) + ")";
         return error;
     }
+    // The worker's memory right now through the seam or the operating system, folded into the peak.
+    std::optional<platform::ProcessMemory> sampleMemory() {
+        if (!process)
+            return std::nullopt;
+        const auto memory = options.memorySampler ? options.memorySampler(process->processId())
+                                                  : process->memory();
+        if (memory) {
+            report.measured = true;
+            report.peakResidentBytes =
+                std::max({report.peakResidentBytes, memory->residentBytes, memory->peakResidentBytes});
+        }
+        return memory;
+    }
+    EncodeWorkerMemoryV1 report;
     Payload stop(Unavailable e) {
+        sampleMemory();
         terminal = e;
         if (process)
             process->stop();
@@ -154,8 +169,67 @@ struct EncodeSessionV1::State {
         }
         return std::nullopt;
     }
+    static std::string mebibytes(const std::uint64_t bytes) {
+        return std::to_string((bytes + (1U << 20U) - 1U) >> 20U) + " MiB";
+    }
+    // The opt-in memory cap. While the worker is at or above the cap no product is sent: the
+    // acknowledgements of what it already holds are collected one at a time (the worker finishes
+    // those and releases their memory), and the memory is sampled again. A worker that holds
+    // nothing more and stays at the cap for the settle time cannot proceed, and the session fails
+    // with a sentence that says so. Without a cap this does nothing.
+    std::optional<Unavailable> holdForMemory() {
+        if (options.memoryCapBytes == 0)
+            return std::nullopt;
+        std::optional<std::chrono::steady_clock::time_point> idleSince;
+        bool counted = false;
+        const auto started = std::chrono::steady_clock::now();
+        const auto waited = [&] {
+            if (counted)
+                report.waited += std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started);
+        };
+        while (true) {
+            const auto memory = sampleMemory();
+            if (!memory || memory->residentBytes < options.memoryCapBytes) {
+                waited();
+                return std::nullopt;
+            }
+            if (!counted) {
+                counted = true;
+                ++report.waits;
+            }
+            if (unacknowledged > 0) {
+                idleSince.reset();
+                if (const auto error = collect(unacknowledged - 1)) {
+                    waited();
+                    return error;
+                }
+                continue;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (!idleSince)
+                idleSince = now;
+            if (now - *idleSince >= options.memorySettle) {
+                waited();
+                report.capReached = true;
+                return std::get<Unavailable>(stop(
+                    {Error::Busy,
+                     "The export worker holds " + mebibytes(memory->residentBytes) +
+                         " and the worker memory cap is " + mebibytes(options.memoryCapBytes) +
+                         ", so it cannot take the next frame. Raise the cap or lower the number "
+                         "of encoder threads, then try again. Nothing was published."}));
+            }
+            if (cancel && cancel()) {
+                waited();
+                return std::get<Unavailable>(stop({Error::Cancelled, "Encode cancelled"}));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
     std::optional<Unavailable> post(MessageKind kind, Payload payload) {
         if (const auto error = collect(kMaxUnacknowledged - 1))
+            return error;
+        if (const auto error = holdForMemory())
             return error;
         if (const auto error = send(kind, std::move(payload)))
             return error;
@@ -312,8 +386,11 @@ std::optional<Unavailable> EncodeSessionV1::audio(AudioBlock block) {
     return state_->post(MessageKind::Audio, std::move(block));
 }
 Result<EncodeQcV1> EncodeSessionV1::finish() {
-    return take<EncodeQcV1>(
+    auto result = take<EncodeQcV1>(
         state_->exchange(MessageKind::EncodeFinish, std::monostate{}, MessageKind::EncodeQc));
+    // The encoder has flushed and reopened the file: its peak is now on the worker's record.
+    state_->sampleMemory();
+    return result;
 }
 Result<EncodedChunkV1> EncodeSessionV1::read(std::uint64_t offset) {
     auto result = take<EncodedChunkV1>(
@@ -338,5 +415,10 @@ std::optional<Unavailable> EncodeSessionV1::close() {
 const ProviderExecutionKeyV1& EncodeSessionV1::execution() const { return state_->hello.execution; }
 const Handshake& EncodeSessionV1::handshake() const { return state_->hello; }
 const MediaProviderProvenanceV1& EncodeSessionV1::provenance() const { return state_->provenance; }
+EncodeWorkerMemoryV1 EncodeSessionV1::workerMemory() const {
+    auto report = state_->report;
+    report.capBytes = state_->options.memoryCapBytes;
+    return report;
+}
 std::string EncodeSessionV1::defaultWorker() { return ffmpegWorkerExecutable(); }
 } // namespace bloom::media::provider

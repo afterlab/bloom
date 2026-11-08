@@ -8,6 +8,11 @@
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
+#include <fstream>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <poll.h>
 #include <pthread.h>
 #include <spawn.h>
@@ -361,6 +366,40 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->reaped = true;
 }
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+namespace {
+// "VmRSS:    1234 kB" -> bytes, or nothing when the line is absent.
+std::optional<std::uint64_t> statusKilobytes(const std::string& text, const std::string_view key) {
+    const auto at = text.find(key);
+    if (at == std::string::npos)
+        return std::nullopt;
+    std::uint64_t value = 0;
+    bool any = false;
+    for (auto i = at + key.size(); i < text.size() && text[i] != '\n'; ++i) {
+        if (text[i] >= '0' && text[i] <= '9') {
+            value = value * 10 + static_cast<std::uint64_t>(text[i] - '0');
+            any = true;
+        } else if (any) {
+            break;
+        }
+    }
+    if (!any)
+        return std::nullopt;
+    return value * 1024U;
+}
+} // namespace
+std::optional<ProcessMemory> ProcessSupervisor::memory() const {
+    if (state_->reaped || state_->pid <= 0)
+        return std::nullopt;
+    std::ifstream file("/proc/" + std::to_string(state_->pid) + "/status");
+    if (!file)
+        return std::nullopt;
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    const auto resident = statusKilobytes(text, "VmRSS:");
+    if (!resident)
+        return std::nullopt; // a zombie keeps no address space
+    const auto peak = statusKilobytes(text, "VmHWM:");
+    return ProcessMemory{*resident, std::max(*resident, peak.value_or(*resident))};
+}
 std::optional<ProcessExit> ProcessSupervisor::waitExit(const std::chrono::milliseconds grace) {
     if (!state_->waitUntil(Clock::now() + grace))
         return std::nullopt;

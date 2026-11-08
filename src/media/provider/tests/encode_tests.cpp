@@ -771,6 +771,106 @@ int nvencTests(const std::filesystem::path& directory) {
     }
     return 0;
 }
+// Issue #581: the opt-in worker memory cap and the worker memory report.
+void workerMemoryCap() {
+    EncodeSettingsV1 settings;
+    settings.width = 64;
+    settings.height = 48;
+    settings.frames = 3;
+    constexpr std::uint64_t mib = std::uint64_t{1} << 20U;
+
+    // No cap (the default): nothing is held back, and the worker's memory is still reported.
+    {
+        EncodeSessionV1 session({});
+        ok(session.begin(settings));
+        for (std::uint64_t i = 0; i < settings.frames; ++i)
+            ok(session.video(image(settings, i)));
+        (void)get(session.finish());
+        const auto memory = session.workerMemory();
+        test::check(memory.capBytes == 0 && memory.waits == 0 && !memory.capReached &&
+                        memory.waited.count() == 0,
+                    "without a cap nothing waits");
+        test::check(!memory.measured || memory.peakResidentBytes > 0,
+                    "a measured worker reports a peak");
+#if defined(__linux__)
+        test::check(memory.measured && memory.peakResidentBytes > mib,
+                    "the worker's peak resident memory is measured");
+#endif
+        ok(session.close());
+    }
+
+    // The worker is above the cap with nothing left to finish: the session fails with a sentence
+    // that names the memory and the cap, and nothing is sent.
+    {
+        EncodeSessionOptionsV1 options;
+        options.memoryCapBytes = 100 * mib;
+        options.memorySettle = std::chrono::milliseconds(0);
+        options.memorySampler = [](std::int64_t) {
+            return std::optional(bloom::platform::ProcessMemory{300 * mib, 300 * mib});
+        };
+        EncodeSessionV1 session(options);
+        ok(session.begin(settings));
+        const auto refused = session.video(image(settings, 0));
+        test::check(refused && refused->reason == Error::Busy &&
+                        refused->detail.find("300 MiB") != std::string::npos &&
+                        refused->detail.find("cap is 100 MiB") != std::string::npos,
+                    "a worker that cannot proceed under the cap fails with a clear message");
+        const auto memory = session.workerMemory();
+        test::check(memory.capReached && memory.capBytes == 100 * mib && memory.waits == 1 &&
+                        memory.peakResidentBytes == 300 * mib,
+                    "the failure is reported with the cap and the peak");
+    }
+
+    // The worker is at the cap but recovers: the session waits (it does not fail), then goes on.
+    {
+        int samples = 0;
+        EncodeSessionOptionsV1 options;
+        options.memoryCapBytes = 100 * mib;
+        options.memorySettle = std::chrono::seconds(30);
+        options.memorySampler = [&samples](std::int64_t) {
+            ++samples;
+            return std::optional(bloom::platform::ProcessMemory{(samples >= 2 && samples <= 4 ? 150 : 50) * mib,
+                                                         150 * mib});
+        };
+        EncodeSessionV1 session(options);
+        ok(session.begin(settings));
+        for (std::uint64_t i = 0; i < settings.frames; ++i)
+            ok(session.video(image(settings, i)));
+        test::check(get(session.finish()).frames == settings.frames,
+                    "an export that waited at the cap still completes");
+        const auto memory = session.workerMemory();
+        test::check(memory.waits >= 1 && !memory.capReached && memory.capBytes == 100 * mib &&
+                        memory.peakResidentBytes == 150 * mib,
+                    "waiting at the cap is counted and the peak is the highest sample");
+        ok(session.close());
+    }
+
+    // Products the worker still holds are finished first: at the cap with acknowledgements
+    // outstanding, the session collects one and samples again instead of sending more.
+    {
+        bool high = false;
+        EncodeSessionOptionsV1 options;
+        options.memoryCapBytes = 100 * mib;
+        options.memorySettle = std::chrono::seconds(30);
+        options.memorySampler = [&high](std::int64_t) {
+            const auto value = high ? 150 * mib : 50 * mib;
+            high = false;
+            return std::optional(bloom::platform::ProcessMemory{value, value});
+        };
+        EncodeSessionV1 session(options);
+        ok(session.begin(settings));
+        ok(session.video(image(settings, 0)));
+        ok(session.video(image(settings, 1)));
+        high = true; // the next sample finds the worker at the cap with two products outstanding
+        ok(session.video(image(settings, 2)));
+        test::check(get(session.finish()).frames == settings.frames,
+                    "draining outstanding products brings the worker under the cap");
+        const auto memory = session.workerMemory();
+        test::check(memory.waits == 1 && !memory.capReached,
+                    "one hold at the cap, resolved by draining");
+        ok(session.close());
+    }
+}
 int main(int argc, char** argv) {
     try {
         test::check(argc == 2 || (argc == 3 && std::string_view(argv[2]) == "--nvenc"),
@@ -778,6 +878,7 @@ int main(int argc, char** argv) {
         if (argc == 3)
             return nvencTests(argv[1]);
         prores4444Threaded(argv[1]);
+        workerMemoryCap();
         tests(argv[1]);
         chromaSampling(argv[1]);
         targetBitrate();

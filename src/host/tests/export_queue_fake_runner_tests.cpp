@@ -487,8 +487,77 @@ void testTransientAndPlatform() {
 
 } // namespace
 
+// Issue #581: the worker limits reach the run, per call over the service default, and the worker
+// memory report reaches the output's verification.
+void testWorkerLimitsAndReport() {
+    Fixture f;
+    constexpr std::uint64_t gib = std::uint64_t{1} << 30U;
+    const auto runOne = [&](std::optional<host::ExportWorkerLimits> limits) {
+        f.fake->push({.framesPerPoll = 4,
+                      .outcome = FakeExportScript::Outcome::Succeed,
+                      .failAtFrame = 0,
+                      .workerPeakBytes = 3 * gib / 2});
+        const auto job = f.addJob();
+        f.settle();
+        const document::ExportJobId ids[] = {job};
+        expect(f.service->start(ids, limits).accepted, "the job starts");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }), "the job ends");
+        return f.view(job);
+    };
+
+    expect(f.service->workerLimits() == host::ExportWorkerLimits{},
+           "the default is no limit and automatic threads");
+    runOne(std::nullopt);
+    expect(f.fake->startedLimits().back() == host::ExportWorkerLimits{},
+           "with nothing set a run gets no limits");
+
+    f.service->setWorkerLimits({.memoryCapBytes = 2 * gib, .encoderThreads = 4});
+    const auto saved = runOne(std::nullopt);
+    expect(f.fake->startedLimits().back() ==
+               host::ExportWorkerLimits{.memoryCapBytes = 2 * gib, .encoderThreads = 4},
+           "the service default reaches the run");
+    const auto report = saved->outputs.front().verification->workerMemory;
+    expect(report && report->measured && report->peakBytes == 3 * gib / 2 &&
+               report->capBytes == 2 * gib,
+           "the output's verification reports the worker's peak and the cap");
+
+    runOne(host::ExportWorkerLimits{.memoryCapBytes = gib, .encoderThreads = 1});
+    expect(f.fake->startedLimits().back() ==
+               host::ExportWorkerLimits{.memoryCapBytes = gib, .encoderThreads = 1},
+           "limits given to Start win over the default for that run");
+    runOne(std::nullopt);
+    expect(f.fake->startedLimits().back() ==
+               host::ExportWorkerLimits{.memoryCapBytes = 2 * gib, .encoderThreads = 4},
+           "a later run goes back to the default");
+
+    f.service->setWorkerLimits({.memoryCapBytes = host::kMaximumExportWorkerMemoryCapBytes + 1});
+    expect(f.service->workerLimits() == host::ExportWorkerLimits{},
+           "an out-of-range default is refused, leaving no limit");
+
+    f.fake->push({.workerPeakBytes = gib});
+    host::ExportTransientJobRequest request{
+        .composition = currentSnapshot(f.session).project().compositions().front().id(),
+        .range = {document::ExportRangeKind::Custom, 0, 3},
+        .settings = host::builtInExportPreset("builtin:h264-mp4")->settings,
+        .destination = {"external", "file:///tmp/limits-test.mp4",
+                        document::ExportOverwritePolicy::Replace},
+        .name = {},
+        .presetId = "builtin:h264-mp4",
+        .workerLimits = host::ExportWorkerLimits{.memoryCapBytes = gib / 2, .encoderThreads = 2}};
+    const auto transient = f.service->submitTransient(request);
+    expect(transient.accepted, "a transient job with worker limits is accepted");
+    if (transient.job) {
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(*transient.job)->state); }),
+               "the transient job ends");
+        expect(f.fake->startedLimits().back() ==
+                   host::ExportWorkerLimits{.memoryCapBytes = gib / 2, .encoderThreads = 2},
+               "a transient job runs under its own limits");
+    }
+}
+
 int main() {
     try {
+        testWorkerLimitsAndReport();
         testSucceedsWithProgressAndWaitingForViewer();
         testFailsWithVerification();
         testStalledJobReportsReason();

@@ -11,6 +11,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <psapi.h>
 
 #include <algorithm>
 #include <array>
@@ -463,6 +464,17 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
 }
 
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+std::optional<ProcessMemory> ProcessSupervisor::memory() const {
+    if (state_->reaped || state_->process.get() == nullptr)
+        return std::nullopt;
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    if (!K32GetProcessMemoryInfo(state_->process.get(), &counters, sizeof(counters)))
+        return std::nullopt;
+    return ProcessMemory{static_cast<std::uint64_t>(counters.WorkingSetSize),
+                         std::max<std::uint64_t>(counters.WorkingSetSize,
+                                                 counters.PeakWorkingSetSize)};
+}
 
 std::optional<ProcessExit> ProcessSupervisor::waitExit(const std::chrono::milliseconds grace) {
     if (!state_->process.valid() || !state_->waitUntil(Clock::now() + grace))

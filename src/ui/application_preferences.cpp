@@ -1,6 +1,7 @@
 #include <bloom/ui/application_preferences.hpp>
 
 #include <bloom/document/asset.hpp>
+#include <bloom/host/export_worker_limits.hpp>
 
 #include <QSettings>
 #include <QString>
@@ -22,6 +23,8 @@ constexpr auto kCrashRecoveryKey = "recovery/enabled";
 constexpr auto kMediaDiskCacheEnabledKey = "media/disk-cache-enabled";
 constexpr auto kMediaDiskCacheDirectoryKey = "media/disk-cache-directory";
 constexpr auto kMediaDiskCacheBudgetKey = "media/disk-cache-budget-bytes";
+constexpr auto kExportWorkerMemoryCapKey = "export/worker-memory-cap-bytes";
+constexpr auto kExportWorkerThreadsKey = "export/worker-threads";
 constexpr auto kTimelineTimeFormatKey = "timeline/time-format";
 constexpr auto kTimelineSnappingKey = "timeline/snapping";
 constexpr auto kTimelineKeyframesVisibleKey = "timeline/keyframes-visible";
@@ -204,6 +207,13 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.mediaDiskCacheDirectory = absoluteDirectoryFromSettings(settings);
     preferences.mediaDiskCacheBudgetBytes =
         byteBudgetFromSettings(settings, kMediaDiskCacheBudgetKey);
+    // Zero (missing, unreadable or above the largest accepted cap) is "no cap".
+    if (const auto cap = byteBudgetFromSettings(settings, kExportWorkerMemoryCapKey);
+        cap <= host::kMaximumExportWorkerMemoryCapBytes)
+        preferences.exportWorkerMemoryCapBytes = cap;
+    if (const auto threads = nonNegativeIntFromSettings(settings, kExportWorkerThreadsKey);
+        threads >= 0 && static_cast<std::uint32_t>(threads) <= host::kMaximumExportWorkerThreads)
+        preferences.exportWorkerThreads = static_cast<std::uint32_t>(threads);
     preferences.timelineTimeFormat = timelineTimeFormatFromString(
         settings.value(QLatin1String(kTimelineTimeFormatKey), QStringLiteral("frames")).toString());
     preferences.timelineSnapping =
@@ -289,6 +299,15 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     else
         settings.setValue(QLatin1String(kMediaDiskCacheDirectoryKey), directoryText);
     writeByteBudget(settings, kMediaDiskCacheBudgetKey, preferences.mediaDiskCacheBudgetBytes);
+    writeByteBudget(settings, kExportWorkerMemoryCapKey,
+                    std::min(preferences.exportWorkerMemoryCapBytes,
+                             host::kMaximumExportWorkerMemoryCapBytes));
+    if (preferences.exportWorkerThreads == 0)
+        settings.remove(QLatin1String(kExportWorkerThreadsKey));
+    else
+        settings.setValue(QLatin1String(kExportWorkerThreadsKey),
+                          static_cast<int>(std::min(preferences.exportWorkerThreads,
+                                                    host::kMaximumExportWorkerThreads)));
     settings.setValue(QLatin1String(kTimelineTimeFormatKey),
                       QLatin1String(timelineTimeFormatValue(preferences.timelineTimeFormat)));
     settings.setValue(QLatin1String(kTimelineSnappingKey), preferences.timelineSnapping);

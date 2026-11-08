@@ -161,6 +161,9 @@ class FakeRun final : public ExportRun {
                              : ExportCheckOutcome::Passed;
         result.artifacts.publishedArtifacts = passed ? 1 : 0;
         result.provenance.gpuFrames = frames_;
+        if (script_.workerPeakBytes != 0)
+            result.workerMemory = ExportWorkerMemory{
+                true, script_.workerPeakBytes, request_.workerLimits.memoryCapBytes, 0, 0};
         return result;
     }
 
@@ -209,6 +212,7 @@ std::unique_ptr<ExportRun> FakeExportRunBackend::start(ExportJobRunnerDependenci
     {
         std::scoped_lock lock(mutex_);
         ++started_;
+        limits_.push_back(request.workerLimits);
         if (!scripts_.empty()) {
             script = scripts_.front();
             scripts_.pop_front();
@@ -237,4 +241,11 @@ FakeExportRunBackend::sampleDestination(const ExportDestinationSampleRequest& re
     return sample;
 }
 
+} // namespace bloom::host::testing
+
+namespace bloom::host::testing {
+std::vector<ExportWorkerLimits> FakeExportRunBackend::startedLimits() const {
+    std::scoped_lock lock(mutex_);
+    return limits_;
+}
 } // namespace bloom::host::testing

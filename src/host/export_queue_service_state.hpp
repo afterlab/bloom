@@ -75,6 +75,8 @@ struct JobRuntime final {
     std::optional<ExportFailure> failure;
     std::optional<ExportStopCause> stopCause;
     std::optional<ExportStopCause> pendingStopCause;
+    // Limits given to Start for this run; absent uses the service default.
+    std::optional<ExportWorkerLimits> workerLimits;
     // The record captured at Preparing; the run keeps it whatever happens to the document.
     std::optional<document::ExportJob> captured;
     std::optional<ExportResolvedRange> capturedRange;
@@ -180,6 +182,7 @@ struct ExportQueueService::State {
     std::map<ExportOutputId, core::Sha256Digest> ownPublications;
     std::set<ExportOutputId> resampleAfterPublish;
     bool refreshRequested = false;
+    ExportWorkerLimits workerLimits;
     bool gestureActive = false;
     std::uint64_t catalogueRevision = 0;
     std::string queueViewKey;

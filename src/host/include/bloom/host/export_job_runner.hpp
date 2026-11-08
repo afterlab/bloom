@@ -7,6 +7,7 @@
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/export_verification.hpp>
+#include <bloom/host/export_worker_limits.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/task_types.hpp>
@@ -92,6 +93,8 @@ struct ExportJobRunRequest final {
     // the output before it is published (ResourceRefused, `export.device.required`) instead of
     // taking the labelled CPU fallback. Image outputs only; a movie output refuses to start.
     bool requireDevice = false;
+    // Opt-in limits on the media worker processes this run launches; the default is no limit.
+    ExportWorkerLimits workerLimits = {};
 };
 
 enum class ExportJobRunPhase : std::uint8_t {

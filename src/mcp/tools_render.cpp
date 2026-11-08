@@ -162,8 +162,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     const auto& stop = call.control.stop;
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
-             "sampleRate", "overwrite"},
+             "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads"},
             {"composition", "preset", "destination"});
+    const auto workerLimits = workerLimitArguments(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = string(member(arguments, "preset"), 128);
     const auto requested = string(member(arguments, "destination"));
@@ -198,8 +199,8 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     if (!compositionExport && !still)
         throw InvalidInput("Use export for media presets and encoding settings");
     if (still && (member(arguments, "profile") || member(arguments, "audio") ||
-                  member(arguments, "sampleRate")))
-        throw InvalidInput("Still presets do not accept media encoding settings");
+                  member(arguments, "sampleRate") || workerLimits.any()))
+        throw InvalidInput("Still presets do not accept media encoding or worker settings");
     // #453: nothing is replaced unless overwrite is "replace". Headless has no confirmation, so
     // "ask" (the default) refuses like "refuse". Every file the render would write is checked: each
     // frame of an image range, or the one file; the publications enforce it again.
@@ -239,6 +240,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     std::uint64_t frames = 0;
     std::uint64_t gpuFrames = 0;
     std::string report;
+    std::optional<host::ExportWorkerMemory> workerMemory;
     if (still) {
         const auto result = scripting::Render::run(
             session, scheduler, compiler,
@@ -281,6 +283,8 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         // it into every per-frame attempt and defers the first evaluation until its bootstrap is
         // terminal, so the first frame is genuinely GPU when a device exists. The unchanged CPU
         // reference path is the fallback otherwise.
+        media::provider::EncodeSessionOptionsV1 worker;
+        worker.memoryCapBytes = workerLimits.memoryCapBytes.value_or(0);
         host::SequenceExportRunnerV1 runner(
             scheduler, compiler, *session.publicationCoordinator(), *session.artifactCoordinator(),
             ledger,
@@ -297,7 +301,8 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
              .pcmCodec = *preset == output::OutputPresetV1::PcmWavV1 ? profile : "pcm_s16le",
              .bwfDescription = {},
              .assetBaseDirectory = source.assetBaseDirectory,
-             .worker = {},
+             .worker = worker,
+             .encoderThreads = workerLimits.threads.value_or(0),
              .workingColorSpaceId = std::string(colorIntent->workingColorSpaceId),
              .ocioConfigRevision = colorIntent->ocioConfigRevision,
              .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
@@ -331,11 +336,17 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         }
         frames = runner.result()->encodedFrames;
         gpuFrames = runner.result()->gpuEvaluatedFrames;
+        const auto& memory = runner.result()->workerMemory;
+        workerMemory = host::ExportWorkerMemory{
+            memory.measured, memory.peakResidentBytes, memory.capBytes, memory.waits,
+            static_cast<std::uint64_t>(memory.waited.count())};
     }
     auto* result = out.object();
     out.set(result, "publishedFrames", out.number(frames));
     reportFileRoute(out, result, call, frames, gpuFrames);
     out.set(result, "preservationReport", out.text(report));
+    if (workerMemory)
+        out.set(result, "workerMemory", workerMemoryValue(out, *workerMemory));
     auto* files = out.array();
     const auto add = [&](const std::filesystem::path& path) {
         auto* file = out.object();
@@ -360,8 +371,9 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments, const bool compositionExport) {
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
-             "sampleRate", "overwrite"},
+             "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads"},
             {"composition", "preset", "destination"});
+    const auto workerLimits = workerLimitArguments(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = string(member(arguments, "preset"), 128);
     const auto requested = string(member(arguments, "destination"));
@@ -392,8 +404,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     if (!compositionExport && !found->still)
         throw InvalidInput("Use export for media presets and encoding settings");
     if (found->still && (member(arguments, "profile") || member(arguments, "audio") ||
-                         member(arguments, "sampleRate")))
-        throw InvalidInput("Still presets do not accept media encoding settings");
+                         member(arguments, "sampleRate") || workerLimits.any()))
+        throw InvalidInput("Still presets do not accept media encoding or worker settings");
     auto preset = host::builtInExportPreset(found->builtIn);
     if (!preset)
         throw std::runtime_error("The export preset is not available");
@@ -424,10 +436,12 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         request.settings.naming.pattern = *destination.pattern;
     request.destination =
         transientDestination(destination.path.string(), member(arguments, "overwrite"));
-    const auto result = runTransientJob(core, call, std::move(request));
+    const auto result = runTransientJob(core, call, std::move(request), workerLimits);
     auto* value = out.object();
     out.set(value, "publishedFrames", out.number(result.frames));
     out.set(value, "preservationReport", out.text(result.report));
+    if (result.workerMemory)
+        out.set(value, "workerMemory", workerMemoryValue(out, *result.workerMemory));
     out.set(value, "job", out.text(std::to_string(result.job)));
     out.set(value, "log", logEntries(out, result.log));
     auto* files = out.array();

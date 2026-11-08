@@ -534,6 +534,32 @@ Media Foundation provider remain open under #370; macOS export qualification und
 - **VA-API render-node discovery** (render node plus H.264 and HEVC encode entry points) is part of
   the encoder probe.
 
+### 16a. Worker limits and the worker memory report (issue #581)
+
+Opt-in limits on the media worker process of a movie or WAV output, applied through
+`ExportWorkerLimits` (`bloom/host/export_worker_limits.hpp`): a memory cap in bytes and an encoder
+thread count. Both default to none/automatic, and a run that sets neither is unchanged. They come
+from the user's Preferences (`ProjectHost::setExportWorkerLimits` -> `ExportQueueService::
+setWorkerLimits`, read at Start), and `export`, `export.start` and `export.start-all` can override
+them for one call (`ExportTransientJobRequest::workerLimits`, the `limits` argument of `start`).
+They are runtime state: never saved in the project and not part of any output's settings.
+
+The cap is enforced by `EncodeSessionV1` against the worker's resident memory as the operating
+system reports it for that process (`ProcessSupervisor::memory()`: `/proc` on Linux, the process
+resource usage on macOS and the working set on Windows). Before each product is sent, a worker at
+or above the cap holds the export: the session collects the acknowledgements of what the worker
+already holds, one at a time, and samples again. A worker still at the cap with nothing left to
+finish, after a short settle time, fails the output (`ResourceRefused`, code
+`export.worker.memory-cap`) with a sentence naming the memory and the cap; nothing is published.
+Where the platform cannot report a worker's memory, no cap is enforced and the report says so
+(`measured` is false). The thread count reaches the encoder as `EncodeSettingsV1::threads`; the
+platform media framework route chooses its own threads. The cap does not govern decode workers,
+Bloom's caches or the GPU.
+
+Every output that ran a worker reports `ExportOutputVerification::workerMemory` (measured, peak
+bytes, cap, waits, time waited), whether it published or failed. Image outputs have no worker and
+carry none. The peak is diagnostics only: it is never part of a cache or preservation identity.
+
 ### 17. Review requests declined or adjusted
 
 - **The pump is not owned by the panel.** The review asked which drain the panel hooks. The pump
