@@ -1433,6 +1433,8 @@ std::string mediaProfile(const document::ExportOutputSettings& settings) {
     case ExportFormat::ProResMov:
         return settings.codecProfile.empty() ? "hq" : settings.codecProfile;
     case ExportFormat::DnxhrMxf:
+        if (settings.codecProfile.starts_with("dnxhr_"))
+            return settings.codecProfile; // #619: the worker's own name is accepted too.
         return "dnxhr_" +
                (settings.codecProfile.empty() ? std::string("hq") : settings.codecProfile);
     case ExportFormat::H264Mov:

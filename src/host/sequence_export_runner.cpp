@@ -307,6 +307,14 @@ struct detail::SequenceExportWorkV1 {
         } else if (request.preset == output::OutputPresetV1::DnxhrMxfV1) {
             s.videoCodec = "dnxhd";
             s.container = "mxf";
+            // #619: the short names the Export panel uses (lb, sq, hq, hqx, 444) and the worker's
+            // full names (dnxhr_hq) both select a profile, and none selects DNxHR HQ.
+            if (request.profile.empty())
+                s.profile = "dnxhr_hq";
+            else if (request.profile == "lb" || request.profile == "sq" ||
+                     request.profile == "hq" || request.profile == "hqx" ||
+                     request.profile == "444")
+                s.profile = "dnxhr_" + request.profile;
         } else if (request.preset == output::OutputPresetV1::PcmWavV1) {
             s.videoCodec.clear();
             s.profile = request.pcmCodec;
