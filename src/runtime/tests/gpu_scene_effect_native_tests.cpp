@@ -2697,6 +2697,96 @@ void runMotionBlur(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #564 Frame Rate Hold against the CPU oracle, at frame 4: a regular hold and a seeded irregular
+// cadence. A time sample is the identity on its input, so the pass that runs is the plate's own
+// (a translation, not an OCIO effect): the frame has resident dispatches and no readback, matches the
+// CPU reference, is reused warm with zero dispatches, and another held rate re-runs.
+void runFrameRateHold(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::motion_test::MotionValues;
+    using bloom::motion_test::Scene;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        MotionValues values;
+        const char* name;
+    };
+    // Held to 5 fps, frame 4 shows the plate at frame 0, where it is displaced.
+    const std::vector<Case> cases{
+        {{.scene = Scene::FrameRate, .holdRate = 5000}, "regular"},
+        {{.scene = Scene::FrameRate, .cadenceChance = 500, .cadenceSeed = 3, .holdRate = 5000},
+         "irregular cadence"},
+    };
+    std::uint64_t id = 48200;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("frame rate hold (") + item.name + "): ";
+        const auto plan = bloom::motion_test::motionPlan(item.values, id).plan;
+        auto changedValues = item.values;
+        changedValues.holdRate = 8000;
+        const auto changedPlan = bloom::motion_test::motionPlan(changedValues, id).plan;
+        id += 200;
+        auto request = requestFor(*plan);
+        request.time = *RationalTime::create(4, 24);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.dispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        // Another frame of the same hold is the same source time: the same pixels, no dispatches.
+        auto sameHold = request;
+        sameHold.time = *RationalTime::create(3, 24);
+        const auto held = builder.build(plan, sameHold);
+        expectations.expect(static_cast<bool>(held), name + "a frame of the same hold prepares");
+        if (held) {
+            const auto again = runScene(*executor.executor, held.scene);
+            expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    again.pixels == cold.pixels &&
+                                    executor.executor->counters().dispatches ==
+                                        coldCounters.dispatches,
+                                name + "a frame holding the same source time reuses the result "
+                                       "with zero dispatches");
+        }
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "another rate prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, changed.scene);
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > coldCounters.dispatches,
+                            name + "another rate re-runs with CPU parity: " + detail);
+    }
+}
+
 // #486 Sharpen against the CPU oracle: the default, a strong and a wide one, a threshold, the blur's
 // half-resolution proxy with its blur's fractional radius and a region of interest; warm RAM reuse with
 // zero dispatches; a changed amount or threshold keeping the blur and a changed radius running its two
@@ -2832,6 +2922,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runFilmGrains(expectations, device, cache);
     runCodecDegrades(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
+    runFrameRateHold(expectations, device, cache);
     runSharpens(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);

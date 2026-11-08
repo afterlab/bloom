@@ -105,6 +105,32 @@ void testMotionBlurLowering(Expectations& expectations) {
         }
     }
 
+    // Frame Rate Hold: one time sample holding the rate; the irregular cadence is off until asked.
+    for (const bool irregular : {false, true}) {
+        auto fixture = recipeFixture(kFrameRateHoldNodeType,
+                                     {{"rate", 15.0},
+                                      {"irregular", irregular},
+                                      {"amount", 0.4},
+                                      {"seed", std::int64_t{7}}});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Frame Rate Hold compiles");
+        if (!result.plan)
+            continue;
+        const auto effects = effectsOf(*result.plan, node);
+        const auto* sample = effects.size() == 1
+                                 ? std::get_if<runtime::TimeSampleKernel>(&effects[0]->kernel)
+                                 : nullptr;
+        expectations.expect(
+            sample != nullptr && sample->posterizeNumerator == 15000 &&
+                sample->posterizeDenominator == 1000 && sample->offset == core::RationalTime{} &&
+                sample->cadenceChance == (irregular ? 200 : 0) &&
+                sample->cadenceSeed == (irregular ? 7 : 0),
+            std::string("Frame Rate Hold is one posterizing time sample") +
+                (irregular ? " with its seeded cadence" : " with a regular cadence"));
+        expectations.expect(evaluates(result), "Frame Rate Hold evaluates");
+    }
+
     // Motion Blur: the sub-frame samples hold footage; Draft takes four.
     {
         auto fixture = recipeFixture(kMotionBlurNodeType, {{"quality", kMotionQualityDraft}});

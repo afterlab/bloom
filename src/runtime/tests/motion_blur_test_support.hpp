@@ -43,6 +43,7 @@ enum class Scene : std::uint8_t {
     TransformBlur,
     SubFrame,
     Echo,
+    FrameRate,
     VectorGather,
     VectorSplat,
     VectorLayered,
@@ -69,6 +70,12 @@ struct MotionValues final {
     std::int64_t border = document::kFlowBorderExtend;
     runtime::AccumulateOperator op = runtime::AccumulateOperator::Add;
     bool posterize = false;
+    // Frame Rate: the cadence chance in thousandths (0 is regular) and its seed. The default rate is
+    // 6 fps, so the 24 fps composition holds each frame for four.
+    std::int64_t cadenceChance = 0;
+    std::int64_t cadenceSeed = 1;
+    // The held rate in thousandths of a frame a second.
+    std::int64_t holdRate = 6000;
     // The texture is still (no animated translate): every time sample is the same image.
     bool still = false;
     // Echo: the moving texture in a Layer active over these frames, so a time sample outside them
@@ -175,6 +182,7 @@ struct MotionPlan final {
 
     // The animated translate: 3 px right and 1 px down a frame, through frame 4 at (0, 0).
     const bool usesMoving = values.scene == Scene::SubFrame || values.scene == Scene::Echo ||
+                            values.scene == Scene::FrameRate ||
                             values.scene == Scene::VectorGather ||
                             values.scene == Scene::VectorSplat ||
                             values.scene == Scene::VectorLayered ||
@@ -313,6 +321,15 @@ struct MotionPlan final {
         if (!echoed)
             throw std::logic_error("echo samples are representable");
         result.effect = *echoed;
+        break;
+    }
+    case Scene::FrameRate: {
+        runtime::TimeSampleKernel held;
+        held.posterizeNumerator = values.holdRate;
+        held.posterizeDenominator = 1000;
+        held.cadenceChance = values.cadenceChance;
+        held.cadenceSeed = values.cadenceSeed;
+        result.effect = emitter.effect(moving, held);
         break;
     }
     case Scene::VectorGather:

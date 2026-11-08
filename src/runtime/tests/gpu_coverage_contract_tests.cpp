@@ -2104,6 +2104,11 @@ displayProofRunner(const bool customView) {
         const MotionValues flowBlur{.scene = Scene::FlowBlur, .quality = draft};
         const MotionValues flowMatte{.scene = Scene::FlowBlurMatte, .quality = draft};
         const MotionValues flowTemporal{.scene = Scene::FlowBlurTemporal, .quality = draft};
+        // Held to 5 fps, frame 4 shows the plate at frame 0, where it is displaced.
+        const MotionValues frameRate{.scene = Scene::FrameRate, .holdRate = 5000};
+        auto irregularRate = frameRate;
+        irregularRate.cadenceChance = 500;
+        irregularRate.cadenceSeed = 3;
         auto posterized = echo;
         posterized.posterize = true;
         auto over = echo;
@@ -2149,6 +2154,8 @@ displayProofRunner(const bool customView) {
         addMotion("feature.motion.time.sample", {echo}, 492400, "an upstream graph on Offset clocks");
         addMotion("feature.motion.time.posterize", {posterized}, 492600,
                   "Echo with Posterize Time on its Offset clocks");
+        addMotion("feature.motion.time.cadence", {irregularRate}, 492700,
+                  "Frame Rate Hold with a seeded irregular cadence on its Offset clock");
         addMotion("feature.motion.time.hold", {subFrame}, 492800,
                   "Motion Blur's held time samples");
         addMotion("feature.motion.accumulate.operators", {over, screen, maximum}, 493000,
@@ -2185,6 +2192,8 @@ displayProofRunner(const bool customView) {
                   "production Motion Blur (Optical Flow): no matte, matte, temporal fill");
         addMotion("node.bloom.echo", {echo, over, posterized}, 499400,
                   "production Echo: add, over and Posterize Time");
+        addMotion("node.bloom.frame-rate-hold", {frameRate, irregularRate}, 499600,
+                  "production Frame Rate Hold: a regular hold and a seeded irregular cadence");
         addMotion("node.bloom.directional-blur", {directional}, 499800, "production Directional");
         addMotion("node.bloom.spin-blur", {spin}, 500000, "production Spin");
         addMotion("node.bloom.zoom-blur", {zoom, jittered}, 500200, "production Zoom");

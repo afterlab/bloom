@@ -9,6 +9,7 @@
 // image); the one program whose values are data; the pixel budget and cancellation.
 
 #include "color_grade_image_effect.hpp"
+#include "cpu_composition_evaluator_support.hpp"
 #include "image_effect.hpp"
 #include "motion_blur_image_effect.hpp"
 #include "motion_blur_test_support.hpp"
@@ -653,6 +654,8 @@ void testChains() {
         {"echo screen", {.scene = Scene::Echo, .op = AccumulateOperator::Screen}},
         {"echo, early samples absent", {.scene = Scene::Echo, .layerIn = 3}},
         {"echo, the frame's sample absent", {.scene = Scene::Echo, .layerOut = 2}},
+        {"frame rate hold", {.scene = Scene::FrameRate}},
+        {"frame rate hold, irregular", {.scene = Scene::FrameRate, .cadenceChance = 300}},
         {"vector gather", {.scene = Scene::VectorGather}},
         {"vector gather curved depth", {.scene = Scene::VectorGather, .jitter = true, .curved = true, .depth = true}},
         {"vector splat", {.scene = Scene::VectorSplat, .depth = true}},
@@ -761,6 +764,111 @@ void testChains() {
     }
 }
 
+// --- Frame Rate Hold: the held time, the seeded cadence and the cache identity --------------------
+
+void testFrameRateHold() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    using motion_test::MotionValues;
+    using motion_test::Scene;
+    const auto frameAt = [&](const MotionValues& values, const std::int64_t frame,
+                             runtime::OperationCacheStatistics* statistics = nullptr) {
+        const auto plan = motion_test::motionPlan(values).plan;
+        auto held = request(plan->output(), frame);
+        return evaluator.evaluate(plan, held, {}, {}, nullptr, statistics);
+    };
+    const auto same = [](const runtime::EvaluationResult& a, const runtime::EvaluationResult& b) {
+        return frameOf(a) != nullptr && frameOf(b) != nullptr &&
+               std::ranges::equal(frameOf(a)->pixels(), frameOf(b)->pixels());
+    };
+    // Regular: every frame inside a hold is the held frame, and the next hold is another picture.
+    {
+        const MotionValues values{.scene = Scene::FrameRate};
+        const auto first = frameAt(values, 4);
+        expect(frameOf(first) != nullptr, "a held frame evaluates");
+        for (std::int64_t frame = 5; frame <= 7; ++frame)
+            expect(same(first, frameAt(values, frame)),
+                   "frame " + std::to_string(frame) + " holds the frame its hold started on");
+        expect(!same(first, frameAt(values, 8)), "the next hold shows a new frame");
+        expect(!same(first, frameAt(values, 3)), "the hold before it shows another frame");
+    }
+    // Irregular, on the time mapping itself over many holds: a held frame shows its own frame or the
+    // one before it, never two repeats in a row, the same for the same seed and not the same for
+    // another, and every composition frame inside a hold maps to the hold's time.
+    {
+        constexpr std::int64_t holds = 2000;
+        const auto sourceFrames = [](const std::int64_t seed, const std::int64_t chance,
+                                     const std::int64_t frameInHold) {
+            runtime::TimeSampleKernel held;
+            held.posterizeNumerator = 6000;
+            held.posterizeDenominator = 1000;
+            held.cadenceChance = chance;
+            held.cadenceSeed = seed;
+            std::vector<std::int64_t> frames;
+            for (std::int64_t hold = 0; hold < holds; ++hold) {
+                const auto parent = *core::RationalTime::create(4 * hold + frameInHold, 24);
+                const auto mapped = runtime::detail::offsetTime(parent, held);
+                // Time times the 6 fps rate is the source frame in held frames.
+                const auto scaled = mapped ? mapped->numerator() * 6 : -1;
+                frames.push_back(mapped && scaled % mapped->denominator() == 0
+                                     ? scaled / mapped->denominator()
+                                     : -1);
+            }
+            return frames;
+        };
+        const auto regular = sourceFrames(3, 0, 0);
+        bool identity = true;
+        for (std::int64_t hold = 0; hold < holds; ++hold)
+            identity = identity && regular[static_cast<std::size_t>(hold)] == hold;
+        expect(identity, "with no irregularity every hold shows its own frame");
+        const auto a = sourceFrames(3, 500, 0);
+        std::int64_t repeats = 0;
+        bool ordered = true;
+        bool twice = false;
+        for (std::int64_t hold = 0; hold < holds; ++hold) {
+            const auto shown = a[static_cast<std::size_t>(hold)];
+            ordered = ordered && (shown == hold || shown == hold - 1);
+            if (shown == hold - 1 && hold > 0) {
+                ++repeats;
+                twice = twice || a[static_cast<std::size_t>(hold - 1)] == hold - 2;
+            }
+        }
+        expect(ordered, "a hold shows its own frame or the one before it");
+        expect(!twice, "a frame is never repeated twice in a row");
+        expect(repeats > holds * 15 / 100 && repeats < holds * 35 / 100,
+               "the largest amount repeats about one frame in four (" + std::to_string(repeats) +
+                   " of " + std::to_string(holds) + ")");
+        expect(a == sourceFrames(3, 500, 0), "the same seed gives the same cadence");
+        expect(a != sourceFrames(4, 500, 0), "another seed gives another cadence");
+        expect(sourceFrames(3, 100, 0) != a, "a smaller amount gives a different cadence");
+        bool inside = true;
+        for (std::int64_t frame = 1; frame < 4; ++frame)
+            inside = inside && sourceFrames(3, 500, frame) == a;
+        expect(inside, "a frame inside a hold shows the hold's frame");
+    }
+    // Cache identity follows the held time: a second frame of the same hold re-evaluates nothing
+    // beyond what a repeat of the very same frame re-evaluates, and the next hold evaluates more.
+    {
+        const MotionValues values{.scene = Scene::FrameRate};
+        const auto plan = motion_test::motionPlan(values).plan;
+        runtime::OperationCacheStatistics warmup;
+        runtime::OperationCacheStatistics repeat;
+        runtime::OperationCacheStatistics sameHold;
+        runtime::OperationCacheStatistics nextHold;
+        const auto a = evaluator.evaluate(plan, request(plan->output(), 8), {}, {}, nullptr, &warmup);
+        const auto b = evaluator.evaluate(plan, request(plan->output(), 8), {}, {}, nullptr, &repeat);
+        const auto c = evaluator.evaluate(plan, request(plan->output(), 9), {}, {}, nullptr, &sameHold);
+        const auto d = evaluator.evaluate(plan, request(plan->output(), 12), {}, {}, nullptr, &nextHold);
+        expect(frameOf(a) && frameOf(b) && frameOf(c) && frameOf(d), "the cache frames evaluate");
+        expect(c.frame() && d.frame() && std::ranges::equal(frameOf(c)->pixels(), frameOf(a)->pixels()),
+               "a frame inside a hold has the hold's pixels");
+        expect(sameHold.misses == 0 && sameHold.hits > 0,
+               "a frame holding the same source time reuses the cached results (" +
+                   std::to_string(sameHold.hits) + " hits, " + std::to_string(sameHold.misses) +
+                   " misses)");
+        expect(nextHold.misses > 0, "the next hold's source time is evaluated anew");
+    }
+}
+
 // --- The program, budget and cancellation --------------------------------------------------------------
 
 void testPrograms() {
@@ -831,6 +939,7 @@ int main() {
         testVectors();
         testFlow();
         testChains();
+        testFrameRateHold();
         testPrograms();
         testBudgetAndCancellation();
     } catch (const std::exception& error) {
