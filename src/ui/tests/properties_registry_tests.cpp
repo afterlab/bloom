@@ -42,6 +42,9 @@
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
+#include <bloom/ui/test_card_widget.hpp>
+#include <bloom/ui/grading_controls.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <iostream>
 #include <limits>
 #include <string_view>
@@ -1184,6 +1187,49 @@ void cameraShakeRows() {
                "the output readouts are in readable text");
 }
 
+
+// #587: Properties shows only the chosen Test Card's rows, and a Patch's readout keeps the height
+// its text needs once the expected value arrives, so nothing under it is clipped or overlapped.
+void testCardRows() {
+    auto project = document::makeNewProject("Card", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    QWidget window;
+    auto* layout = new QVBoxLayout(&window);
+    auto* properties = new ui::PropertiesEditor(session, &window);
+    layout->addWidget(properties);
+    window.resize(420, 900);
+    window.show();
+    const auto shown = [&](const char* role) {
+        auto* found = row(*properties, role);
+        return found != nullptr && found->isVisibleTo(&window);
+    };
+    const auto node = addNode(session, "bloom.test-card");
+    session.selectNode(node);
+    QCoreApplication::processEvents();
+    expect(shown("card") && !shown("patchValue") && !shown("gridSpacing"),
+           "a Test Card shows only its card and size at first");
+    const auto card = ui::nodeRoleParameter(session, node, "card");
+    expect(card && session.setParameterValue(
+                       *card, std::int64_t{static_cast<std::int64_t>(document::TestCard::Patch)},
+                       QStringLiteral("Set")),
+           "the Test Card becomes a Patch");
+    auto* readout = properties->findChild<ui::TestCardCardWidget*>();
+    QElapsedTimer wait;
+    wait.start();
+    while ((readout == nullptr || readout->expectedText().startsWith(QStringLiteral("Expected display value: w")) ||
+            readout->expectedText().isEmpty()) &&
+           wait.elapsed() < 5'000) {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        readout = properties->findChild<ui::TestCardCardWidget*>();
+    }
+    QApplication::processEvents();
+    expect(readout != nullptr && shown("patchValue") && !shown("gridSpacing"),
+           "a Patch shows its own rows");
+    expect(readout != nullptr && readout->height() >= readout->heightAt(readout->width()),
+           "the Patch readout is as tall as its text needs");
+}
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
@@ -1208,6 +1254,7 @@ int main(int argc, char** argv) try {
     imageChannelRows();
     widthRule();
     videoRows();
+    testCardRows();
     QSettings().clear();
     return failures ? 1 : 0;
 }

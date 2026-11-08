@@ -96,9 +96,11 @@ TestCardCardWidget::TestCardCardWidget(CompositionSession& session, const docume
     signal_ = new kit::KLabel(QString{}, this);
     signal_->setObjectName(QStringLiteral("testCardSignal"));
     signal_->setWordWrap(true);
+    signal_->setTone(kit::Color::Foreground);
     expected_ = new kit::KLabel(QString{}, this);
     expected_->setObjectName(QStringLiteral("testCardExpected"));
     expected_->setWordWrap(true);
+    expected_->setTone(kit::Color::Foreground);
     note_ = new kit::KLabel(
         tr("Verifies composition, Viewer and monitor, not a display calibration. A mismatch can "
            "come from Bloom, the desktop compositor, the GPU output settings or the monitor's "
@@ -181,6 +183,8 @@ void TestCardCardWidget::expectationReady(const quint64 generation, QString expe
         return;
     expected_->setText(expected);
     swatch_ = swatch;
+    place();
+    updateGeometry();
     update();
     emit rowsChanged();
 }
@@ -293,6 +297,7 @@ void TestCardCardWidget::refresh() {
         state_->requested.clear();
     }
     place();
+    updateGeometry();
     if (changed)
         emit rowsChanged();
 }
