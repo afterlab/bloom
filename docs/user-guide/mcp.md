@@ -411,7 +411,12 @@ case, spaces, hyphens and underscores do not matter, so `"ping_pong"` names Ping
 `bloom.layer.add-shape` (`kind` `"path"`) and the mask operations take: `{"closed": bool,
 "anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or null, "mode":
 "corner" | "mirrored" | "aligned" | "free" | "auto"}]}`, where `mode` is optional and inferred from the
-handles. A Gradient parameter takes `{"stops": [{"position": p, "color": [r, g, b, a]}]}` with
+handles. A shape's outline and a Path node's value may also be compound (`docs/architecture/path-value.md`):
+`{"contours": [{"closed": bool, "anchors": [...]}, ...], "fillRule": "nonZero" | "evenOdd", "groups":
+[{"key": text, "firstContour": n, "contourCount": n, "color": [r, g, b, a]}]}`, with `fillRule`, `groups`
+and each group's `color` optional; Python takes the same mapping with `fill_rule`, `first_contour` and
+`contour_count`. A mask holds one contour. A value one contour can express is always read back in the
+first form. A Gradient parameter takes `{"stops": [{"position": p, "color": [r, g, b, a]}]}` with
 optional `"interpolation"` (`"constant"`, `"linear"`, `"ease"`, `"cardinal"`, `"b-spline"` or
 `"exponential"`), `"colorMode"` (`"rgb"`, `"hsv"` or `"hsl"`) and `"hueDirection"` (`"near"`,
 `"far"`, `"clockwise"` or `"counter-clockwise"`); one left out is Linear, RGB or Near. Python

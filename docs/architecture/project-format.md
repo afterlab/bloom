@@ -1,7 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.42. It lets a layer mask take its shape, and a track matte its
-coverage, from a node's Mask output (see "Matte Sources In Document 1.42"). Document 1.41 let a
+The current document schema is 1.43. It lets a path value hold several contours, a fill rule and keyed
+groups of contours (see "Compound Paths In Document 1.43"). Document 1.42 let a layer mask take its
+shape, and a track matte its coverage, from a node's Mask output (see "Matte Sources In Document
+1.42"). Document 1.41 let a
 gradient value carry its interpolation, colour mode and hue direction (see "Gradient Modes In
 Document 1.41"). Document 1.40 let a value node drive a
 gradient stop's colour or position through a stop link (see "Gradient Stop Links In Document
@@ -1765,6 +1767,29 @@ unsupported node version, and a document claiming 1.39 that carries a schema 1 g
 refused the same way. The `1.38` -> `1.39` DOM step `migrateGradientColorPairsV1_38` only advances
 the version. The schema artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`;
 the schema check restores the 1.38 artifacts from them exactly.
+
+## Compound Paths In Document 1.43
+
+A path constant, Path key or Path data block may hold several contours, a fill rule and keyed groups
+(issue #589, `docs/architecture/path-value.md`). A value a single contour can express keeps the
+original spelling, `{"kind": "path", "anchors": [...], "closed": ...}`, and re-encodes byte for byte
+apart from the document's minor. Any other value is written
+`{"kind": "path", "contours": [{"anchors": [...], "closed": ...}, ...], "fillRule"?, "groups"?}`:
+`fillRule` is `nonZero` or `evenOdd` and is written only when explicit, and each of `groups` is
+`{"key", "firstContour", "contourCount", "color"?}`, written only when there are some, ascending and
+not overlapping, with unique keys. A data block's path payload follows the same rule with its own
+existing member order (`closed` before `anchors`). One value has one spelling, so a `contours` form
+of a value the flat form can express is refused. A document claiming 1.42 or older that carries
+`contours`, `fillRule` or `groups` on a path is refused.
+
+Every older path is one contour, so the `1.42` -> `1.43` DOM step `migrateCompoundPathsV1_42` only
+advances the version, and decoding gives each flat path one contour (an empty open one gives none,
+the empty value). `tests/fixtures/paths` holds a project saved by the 1.42 writer, carrying a path on
+shapes, a mask with keys, a data block, a field remap curve and a Curves node;
+`bloom.runtime.path-value-migration` opens it, requires every frame's digest from the build that
+wrote it, and saves and reopens it. The schema artifacts are `document-1.43.schema.json` (the
+`compoundPathValue-1.43` arm of `parameterValue-1.4`) and `manifest-1.43.schema.json`; the schema check
+restores the 1.42 artifacts from them exactly.
 
 ## Matte Sources In Document 1.42
 

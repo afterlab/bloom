@@ -12,7 +12,7 @@ typed vocabulary. Authored data blocks are stored in `project.dataBlocks` and us
 `dataBlock` allocator namespace.
 
 Typed payloads include sampled scalar curves, color ramps, typed tables, 2D/3D point sets,
-document paths, and mask coverage references. Analysis and opaque blocks carry bounded bytes. The
+document paths (any valid path value, `path-value.md`), and mask coverage references. Analysis and opaque blocks carry bounded bytes. The
 per-block payload bound is 64 MiB and the project aggregate bound is 128 MiB. Provenance is
 persisted so a reader can explain where a value came from without performing media I/O.
 

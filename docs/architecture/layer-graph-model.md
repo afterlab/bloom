@@ -995,7 +995,8 @@ when the drag ends.
 
 #### Socket Kinds And Promotion
 
-`SocketValueKind` is `Image`, `Color`, `Scalar`, `Vector2`, `Vector3`, `Integer`, `Boolean`, `String`.
+`SocketValueKind` is `Image`, `Color`, `Scalar`, `Vector2`, `Vector3`, `Integer`, `Boolean`, `String`,
+and `Path` (`path-value.md`), besides the transports the other documents own.
 A connection is accepted when the kinds are equal, or when the source appears in this whitelist:
 
 | From | To | Meaning |
@@ -1006,7 +1007,7 @@ A connection is accepted when the kinds are equal, or when the source appears in
 | `Scalar` | `Vector2` | Splat: the one value in every component |
 | `Scalar` | `Vector3` | Splat |
 
-Nothing promotes into `Boolean`, `String` or `Image`, and no vector changes width: each of those would
+Nothing promotes into `Boolean`, `String`, `Path` or `Image`, and no vector changes width: each of those would
 have to invent information. Every promotion compiles to its own operation rather than being folded
 into whoever reads the value, so a widening is visible in a plan dump and diagnosable like any other
 step. One predicate -- `document::isAcceptedSocketConnection()` -- answers for the editor's drag
@@ -1045,7 +1046,7 @@ upstream of an operand -- and three of the kinds have no curve model at all.
 
 | Category | Node | Shape |
 | --- | --- | --- |
-| Values | Integer, Scalar, Vector 2, Vector 3, String, Color, Boolean | One authored value, one output. No input: a literal is where a value comes FROM, and a node whose value arrives from elsewhere is a Reroute |
+| Values | Integer, Scalar, Vector 2, Vector 3, String, Color, Boolean, Path | One authored value, one output. No input: a literal is where a value comes FROM, and a node whose value arrives from elsewhere is a Reroute |
 | Values | Time | No inputs and no parameters. Two outputs, `seconds` (Scalar) and `frame` (Integer), both filled from the same request time the plan's curves are sampled at |
 | Utilities | Math | Five operand sockets, one definition, the frozen 24-operation `ScalarPrimitive` vocabulary verbatim, plus a clamp toggle. Only the operands the live operation reads are lowered |
 | Utilities | Vector 2/3 Math | Componentwise Add/Subtract/Multiply/Divide, Scale, Normalize, and Cross at three components. Componentwise operations route through the scalar kernel per component |
@@ -1461,7 +1462,8 @@ with fill off and a white stroke on; closed paths retain the normal shape fill d
 Path anchors and handles edit through the session override channel, with one undo entry per drag
 or anchor deletion. The tool adjusts the Layer anchor offset as the path bounds center changes,
 keeping the existing local-to-world mapping stable during authoring. Path source data stays a
-constant; these gestures do not introduce path animation.
+constant or the value of a connected Path socket (`path-value.md`); these gestures do not introduce
+path animation, and they edit only a one-contour constant.
 
 Text clicks call `AddTextLayer` with the mapped composition position in the same creation command,
 select the result, and focus the existing Properties text field. Text box editing is independent

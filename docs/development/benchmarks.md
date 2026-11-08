@@ -431,6 +431,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `light-flicker-2k` | 1920×1080 | 24 | A PNG16 plate under an Exposure whose stops are driven by a seeded Light Flicker (#567), so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 
 | `test-card-2k` | 1920×1080 | 24 | A Zone Plate Test Card (#587), moving so every frame is new, drawn at the composition's size with 16 sub-samples per pixel; no media is read. Written, not yet run: it has no recorded numbers and no budget |
+| `path-value-compound-2k` | 1920×1080 | 24 | A Shape Source whose `path` comes from a Path node (#589): 64 contours, keyed so every frame flattens and covers a new shape; no media is read. Written, not yet run. |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -986,6 +987,11 @@ Light Flicker has no recorded numbers and no budget yet. The scenario `light-fli
 it end to end. Suspicion to check against it, not a finding: the flicker is one value per frame, so the
 scenario's cost should be the Exposure's own; each frame evaluates the dropout slots a dropout could reach
 (at most about 21), which should be negligible beside a frame.
+
+### Path value (#589)
+
+The Path node has no recorded numbers and no budget yet. The scenario `path-value-compound-2k` is written
+to measure a compound path through the Path socket on the isolated benchmarking hardware.
 
 ### Test Card (#587)
 
