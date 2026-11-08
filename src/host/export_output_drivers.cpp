@@ -1016,6 +1016,23 @@ class ImageDriver final : public DriverBase {
                     : "Bloom couldn't check frame " + frameText +
                           " before exporting, so the export stopped. This is a bug in Bloom; the "
                           "details are in the log.";
+            std::string diagnosticCode = "export.attempt.failed";
+            // A changed, moved or unreadable source file: name the asset and say what to do. The
+            // stage, codes and technical reason are in the log entry above.
+            if (attemptFailure &&
+                attemptFailure->stage() == OutputAnalysisAttemptStageV1::Evaluating)
+                if (const auto* evaluation =
+                        attemptFailure->payloadAs<runtime::EvaluationDiagnosticCode>();
+                    evaluation &&
+                    *evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable) {
+                    diagnosticCode = "export.media.unavailable";
+                    reason = "Bloom couldn't read " +
+                             (attemptFailure->subject().empty()
+                                  ? std::string("a source file")
+                                  : "\"" + attemptFailure->subject() + "\"") +
+                             ", which may have changed or moved since it was imported; reload or "
+                             "relink it in Assets, then render again.";
+                }
             if (attemptFailure &&
                 attemptFailure->stage() == OutputAnalysisAttemptStageV1::Resolving)
                 if (const auto* error = attemptFailure->payloadAs<platform::StagedArtifactError>();
@@ -1042,7 +1059,7 @@ class ImageDriver final : public DriverBase {
                     reason = "The export couldn't reserve enough memory, so it stopped.";
                 }
             }
-            return failNow(failure(code, "export.attempt.failed", std::move(reason), tailIndex_));
+            return failNow(failure(code, diagnosticCode, std::move(reason), tailIndex_));
         }
         if (stopRequested_)
             return stopAfterDrain();

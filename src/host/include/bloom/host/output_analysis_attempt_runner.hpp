@@ -240,11 +240,23 @@ class OutputAnalysisAttemptFailureV1 final {
     template <typename Payload> [[nodiscard]] const Payload* payloadAs() const noexcept {
         return std::get_if<Payload>(&payload_);
     }
+    // The evaluator's technical reason and, for a media source failure, the asset's display name.
+    // Empty when the failing stage reports only a code.
+    [[nodiscard]] const std::string& message() const noexcept { return message_; }
+    [[nodiscard]] const std::string& subject() const noexcept { return subject_; }
+    [[nodiscard]] OutputAnalysisAttemptFailureV1 withDiagnostic(std::string subject,
+                                                                std::string message) && {
+        subject_ = std::move(subject);
+        message_ = std::move(message);
+        return std::move(*this);
+    }
 
   private:
     OutputAnalysisAttemptStageV1 stage_ = OutputAnalysisAttemptStageV1::Resolving;
     bool cancelled_ = false;
     OutputAnalysisAttemptFailurePayloadV1 payload_;
+    std::string subject_;
+    std::string message_;
 };
 
 class [[nodiscard]] OutputAnalysisAttemptOutcomeV1 final {

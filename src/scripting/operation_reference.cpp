@@ -431,8 +431,10 @@ OperationReference OperationReference::build(const OperationRegistry& registry) 
                         "edits and undo persist; project.save writes it and project.close with "
                         "this argument releases it (discardChanges closes it with unsaved "
                         "edits). A file that is open in Bloom is refused. At most four files at "
-                        "once. Renders of such a file run on the CPU reference path unless the "
-                        "server owns a GPU provider.",
+                        "once. Renders of such a file use the server's GPU provider when it has "
+                        "one and a device is available, and the CPU reference path otherwise; "
+                        "the render result reports the route (provenance, gpuFrames and "
+                        "cpuReferenceFrames).",
              .required = false,
              .choices = {}});
     }

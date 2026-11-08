@@ -7,8 +7,12 @@
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
+#include <filesystem>
+#include <string>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -129,6 +133,31 @@ captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
          .ocioConfigUri = uri});
 }
 
+namespace {
+
+// A scratch folder this render created for itself. Removed when the render function returns.
+struct OwnedScratchDirectory final {
+    std::filesystem::path path;
+    OwnedScratchDirectory() = default;
+    OwnedScratchDirectory(const OwnedScratchDirectory&) = delete;
+    OwnedScratchDirectory& operator=(const OwnedScratchDirectory&) = delete;
+    ~OwnedScratchDirectory() {
+        if (path.empty())
+            return;
+        std::error_code ignored;
+        std::filesystem::remove_all(path, ignored);
+    }
+};
+
+[[nodiscard]] std::string uniqueScratchDirectoryName() {
+    static std::atomic<std::uint64_t> counter{0};
+    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+    return ".bloom-export-scratch-" + std::to_string(ticks) + "-" +
+           std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
+}
+
+} // namespace
+
 RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                          const runtime::SnapshotCompiler& compiler, RenderRequest request,
                          std::filesystem::path scratchDirectory,
@@ -200,14 +229,21 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (!resolved.issues.empty())
         return failed(resolved.issues.front().reason);
 
-    // The default scratch folder sits beside the destination. It is never created when the
-    // destination's folder is missing: that refusal belongs to the frame's target preflight.
+    // Without a caller folder the render makes its own scratch folder beside the destination. It
+    // is named for this run alone, so a concurrent render never shares it, and it is removed when
+    // the run ends on success, failure or cancellation. A folder the caller passes is left alone.
+    // It is never created when the destination's folder is missing: that refusal belongs to the
+    // frame's target preflight.
     std::error_code scratchError;
+    OwnedScratchDirectory ownedScratch;
     if (scratchDirectory.empty()) {
-        scratchDirectory = destination.parent_path() / ".bloom-export-scratch";
+        scratchDirectory = destination.parent_path() / uniqueScratchDirectoryName();
         std::error_code probe;
-        if (std::filesystem::is_directory(destination.parent_path(), probe))
+        if (std::filesystem::is_directory(destination.parent_path(), probe)) {
             std::filesystem::create_directories(scratchDirectory, scratchError);
+            if (!scratchError)
+                ownedScratch.path = scratchDirectory;
+        }
     } else {
         std::filesystem::create_directories(scratchDirectory, scratchError);
     }
@@ -327,7 +363,11 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             if (!runner.stopped() && failure && failure->diagnosticCode == "export.device.required")
                 result.diagnosticCode = RenderDiagnosticCode::DeviceRequired;
             collectLog();
-            if (!details.empty())
+            // A changed or missing source file already has a plain sentence that names the
+            // asset; the technical detail stays in the export log.
+            const bool plainReason =
+                failure && failure->diagnosticCode == "export.media.unavailable";
+            if (!details.empty() && !plainReason)
                 result.diagnostic += " Details: " + details;
         }
     }

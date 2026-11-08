@@ -83,6 +83,8 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
         return "bloom.runtime.evaluation.lut-transform-failed";
     case EvaluationDiagnosticCode::OcioConfigUnavailable:
         return "bloom.runtime.evaluation.ocio-config-unavailable";
+    case EvaluationDiagnosticCode::MediaSourceUnavailable:
+        return "bloom.runtime.evaluation.media-source-unavailable";
     case EvaluationDiagnosticCode::InternalInvariant:
         return "bloom.runtime.evaluation.internal-invariant";
     }

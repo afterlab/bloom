@@ -2627,10 +2627,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedImage->available)
                     return EvaluationResult::failed(diagnostic(
-                        EvaluationDiagnosticCode::InvalidParameter,
+                        EvaluationDiagnosticCode::MediaSourceUnavailable,
                         selectedImage->warning.empty() ? "Final image source is unavailable"
                                                        : selectedImage->warning,
-                        {}, operationSubject));
+                        source->asset ? source->asset->name : std::string{}, operationSubject));
                 if (!selectedImage->warning.empty())
                     imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                              DiagnosticSeverity::Warning,
@@ -2703,10 +2703,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedVideo->frame)
                     return EvaluationResult::failed(diagnostic(
-                        EvaluationDiagnosticCode::InvalidParameter,
+                        EvaluationDiagnosticCode::MediaSourceUnavailable,
                         selectedVideo->warning.empty() ? "Final video source is unavailable"
                                                        : selectedVideo->warning,
-                        {}, operationSubject));
+                        source->asset ? source->asset->name : std::string{}, operationSubject));
                 if (!selectedVideo->warning.empty())
                     imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                              DiagnosticSeverity::Warning,

@@ -176,6 +176,9 @@ enum class EvaluationDiagnosticCode : std::uint8_t {
     ColorTransformFailed,
     OcioConfigUnavailable,
     LutTransformFailed,
+    // A final render needs a source file that is missing, unreadable or changed since it was
+    // imported. `summary` is the technical reason; `detail` is the asset's display name.
+    MediaSourceUnavailable,
 };
 
 [[nodiscard]] std::string_view evaluationDiagnosticCodeId(EvaluationDiagnosticCode code) noexcept;

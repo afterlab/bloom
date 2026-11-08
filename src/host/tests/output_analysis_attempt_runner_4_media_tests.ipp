@@ -177,7 +177,8 @@ void testFinalRelativeMediaSourceContext(Expectations& expectations, const bool 
             failure ? failure->template payloadAs<runtime::EvaluationDiagnosticCode>() : nullptr;
         expectations.expect(
             failure && failure->stage() == host::OutputAnalysisAttemptStageV1::Evaluating &&
-                diagnostic && *diagnostic == runtime::EvaluationDiagnosticCode::InvalidParameter &&
+                diagnostic &&
+                *diagnostic == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable &&
                 ledger.chargedBytes() == 0,
             "relative media: unavailable/changed original fails final verification without charge");
     };

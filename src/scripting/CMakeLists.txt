@@ -160,6 +160,17 @@ if(BUILD_TESTING)
         LABELS unit scripting host output
         TIMEOUT 300
     )
+    # #588: scratch-folder cleanup and the changed-media failure of Render::run.
+    add_executable(bloom_scripting_render_cleanup_test tests/render_cleanup_tests.cpp)
+    target_link_libraries(bloom_scripting_render_cleanup_test PRIVATE bloom_scripting)
+    add_dependencies(bloom_scripting_render_cleanup_test bloom-media-worker)
+    bloom_enable_warnings(bloom_scripting_render_cleanup_test)
+    bloom_add_test(
+        NAME bloom.scripting.render-cleanup
+        COMMAND bloom_scripting_render_cleanup_test
+        LABELS unit scripting host output
+        TIMEOUT 300
+    )
     add_executable(bloom_scripting_facade_test tests/facade_tests.cpp)
     target_link_libraries(bloom_scripting_facade_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_facade_test)

@@ -64,6 +64,14 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
     expectations.expect(
         cpuChanged.status() == bloom::runtime::EvaluationStatus::Failed && !cpuChanged.frame(),
         "CPU final boundary rejects same-mtime source change despite explicit Retained request");
+    // A final render names the asset and classifies the failure as a source problem.
+    expectations.expect(
+        !cpuChanged.diagnostics().empty() &&
+            cpuChanged.diagnostics().front().code ==
+                bloom::runtime::EvaluationDiagnosticCode::MediaSourceUnavailable &&
+            cpuChanged.diagnostics().front().detail == asset.name &&
+            cpuChanged.diagnostics().front().summary.find("Video changed") != std::string::npos,
+        "a changed video fails the final boundary as an unavailable source naming the asset");
     std::filesystem::remove(path);
     const auto missing =
         bloom::runtime::detail::prepareExportScene(finalOptions, plan, request, {}, false);

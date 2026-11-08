@@ -118,6 +118,10 @@ enum class BuildFailureKindV1 : std::uint8_t {
 struct BuildProductV1 final {
     std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt;
     OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
+    // Set on a failed evaluation only (attempt is null): the evaluator's technical reason and
+    // subject (the asset's display name).
+    std::string failureMessage;
+    std::string failureSubject;
 };
 
 struct BuildOutcomeV1 final {
@@ -129,11 +133,14 @@ struct BuildOutcomeV1 final {
 static_assert(runtime::TaskResultValue<BuildOutcomeV1>);
 
 [[nodiscard]] OutputAnalysisAttemptFailureV1
-translateBuildFailure(const BuildOutcomeV1& outcome) noexcept {
+translateBuildFailure(const BuildOutcomeV1& outcome) {
     switch (outcome.failureKind) {
     case BuildFailureKindV1::Evaluation:
-        return {OutputAnalysisAttemptStageV1::Evaluating, false,
-                static_cast<runtime::EvaluationDiagnosticCode>(outcome.rawCode)};
+        return OutputAnalysisAttemptFailureV1{
+            OutputAnalysisAttemptStageV1::Evaluating, false,
+            static_cast<runtime::EvaluationDiagnosticCode>(outcome.rawCode)}
+            .withDiagnostic(outcome.product ? outcome.product->failureSubject : std::string{},
+                            outcome.product ? outcome.product->failureMessage : std::string{});
     case BuildFailureKindV1::ProcessingAdmission:
         return {OutputAnalysisAttemptStageV1::Evaluating, false,
                 static_cast<runtime::GpuProcessFrameDiagnosticCode>(outcome.rawCode)};
@@ -249,6 +256,10 @@ std::string describeOutputAnalysisAttemptV1(const OutputAnalysisAttemptOutcomeV1
                 }
             },
             failure->payload());
+        if (!failure->subject().empty())
+            append("asset=" + failure->subject());
+        if (!failure->message().empty())
+            append("reason=" + failure->message());
         if (failure->cancelled())
             append("cancelled");
     }
@@ -646,10 +657,17 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         const auto code = evalResult.diagnostics().empty()
                                               ? runtime::EvaluationDiagnosticCode::InternalInvariant
                                               : evalResult.diagnostics().front().code;
-                        return runtime::TaskResult<BuildOutcomeV1>::succeeded(
-                            {.succeeded = false,
-                             .failureKind = BuildFailureKindV1::Evaluation,
-                             .rawCode = static_cast<std::uint8_t>(code)});
+                        BuildOutcomeV1 failed{.succeeded = false,
+                                              .failureKind = BuildFailureKindV1::Evaluation,
+                                              .rawCode = static_cast<std::uint8_t>(code)};
+                        if (!evalResult.diagnostics().empty()) {
+                            auto detail = std::make_shared<BuildProductV1>();
+                            detail->failureMessage = evalResult.diagnostics().front().summary;
+                            if (code == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable)
+                                detail->failureSubject = evalResult.diagnostics().front().detail;
+                            failed.product = std::move(detail);
+                        }
+                        return runtime::TaskResult<BuildOutcomeV1>::succeeded(std::move(failed));
                     }
                     evaluatedFrame = evalResult.frame();
                 }
@@ -846,7 +864,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 return runtime::TaskResult<BuildOutcomeV1>::succeeded(
                     {.succeeded = true,
                      .product = std::make_shared<const BuildProductV1>(
-                         BuildProductV1{buildResult.attempt(), gpuProvenance})});
+                         BuildProductV1{buildResult.attempt(), gpuProvenance, {}, {}})});
             });
 
         if (!submission.accepted()) {
