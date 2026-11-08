@@ -58,7 +58,7 @@ constexpr std::array<std::string_view, 9> kColorCorrection{
 constexpr std::array<std::string_view, 2> kColorManagement{"bloom.ocio-colour-space-transform",
                                                            "bloom.ocio-file-transform"};
 // Planned: Time Offset, Frame Hold, Time Remap, Flow Retime.
-constexpr std::array<std::string_view, 1> kTime{"bloom.echo"};
+constexpr std::array<std::string_view, 2> kTime{"bloom.echo", "bloom.frame-rate-hold"};
 // Planned: SVG Vector Source, Text Layout, Text Animator, Text On Path, Text To Shape, Transform
 // Path, Trim Path, Offset Path, Boolean/Merge Paths, Round Corners, Path Stroke.
 constexpr std::array<std::string_view, 2> kTextPaths{"bloom.text-source", "bloom.shape-source"};

@@ -247,7 +247,7 @@ void everyNodeGroupIsNamed() {
     pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");
     pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},
            "light-shadow");
-    pinned({"bloom.echo"}, "time");
+    pinned({"bloom.echo", "bloom.frame-rate-hold"}, "time");
     pinned({"bloom.alpha-association", "bloom.layer-stack", "bloom.layer-output"}, "compositing");
     pinned({"bloom.frame-number"}, "time-values");
     // The node reference resource is headed by the same names the Add menu shows.

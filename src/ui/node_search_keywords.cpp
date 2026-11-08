@@ -145,6 +145,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
                               "lens dispersion red blue shift prism");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
+    if (typeId == document::kFrameRateHoldNodeType)
+        return QStringLiteral("frame rate hold fps stutter step stepped low frame rate phone "
+                              "camera irregular cadence dropped doubled frames retime");
     // #512.
     if (typeId == document::kCameraShakeNodeType)
         return QStringLiteral("camera shake handheld jitter wobble earthquake impact explosion "

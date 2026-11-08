@@ -15,6 +15,8 @@
 //                               and a cut detection diagnostic.
 //   Motion Blur (Optical Flow)  blur by the footage's own optical flow.
 //   Echo                        frame blend, echo and trails with Posterize Time.
+//   Frame Rate Hold             holds frames to a target rate, with an optional seeded irregular
+//                               cadence of doubled and dropped frames (Time group).
 //   Directional, Spin, Zoom     the path sampler along a line, an arc or a ray.
 // Transform 2D takes the same shutter as its own motion blur.
 //
@@ -37,6 +39,9 @@ inline constexpr std::string_view kVectorMotionBlurNodeType = "bloom.vector-moti
 inline constexpr std::string_view kOpticalFlowNodeType = "bloom.optical-flow";
 inline constexpr std::string_view kOpticalFlowMotionBlurNodeType = "bloom.optical-flow-motion-blur";
 inline constexpr std::string_view kEchoNodeType = "bloom.echo";
+// Frame Rate Hold's type id; the Time Values group already owns "bloom.frame-rate" (the composition's
+// rate as a number).
+inline constexpr std::string_view kFrameRateHoldNodeType = "bloom.frame-rate-hold";
 inline constexpr std::string_view kDirectionalBlurNodeType = "bloom.directional-blur";
 inline constexpr std::string_view kSpinBlurNodeType = "bloom.spin-blur";
 inline constexpr std::string_view kZoomBlurNodeType = "bloom.zoom-blur";
@@ -267,6 +272,16 @@ inline constexpr std::array kEchoParameters{
     constantScalar("posterizeRate", 12.0, 0.1, 240.0, "Posterize rate", 1.0, 60.0, 1.0, 2, "fps"),
 };
 
+// Frame Rate Hold: the rate its Posterize Time-style time mapping holds frames to and, when the
+// cadence is irregular, how often a held frame is a repeat of the one before it (so the source frame
+// that would have followed is dropped). The seed is per node, as Camera Shake's.
+inline constexpr std::array kFrameRateHoldParameters{
+    constantScalar("rate", 12.0, 0.1, 240.0, "Frame rate", 1.0, 60.0, 1.0, 2, "fps"),
+    boolean("irregular", "Irregular cadence"),
+    constantScalar("amount", 0.2, 0.0, 1.0, "Dropped and doubled frames", 0.0, 1.0, 0.01, 2),
+    integer("seed", 1, 0, 999999, "Seed"),
+};
+
 inline constexpr std::array kDirectionalBlurParameters{
     scalar("angle", 0.0, -1.0e6, 1.0e6, "Direction", -180.0, 180.0, 1.0, 1, "\xc2\xb0"),
     scalar("length", 32.0, 0.0, kMaximumMotionBlurPixels, "Length", 0.0, 256.0, 0.5, 1, "px"),
@@ -346,8 +361,8 @@ inline constexpr std::string_view kTransform2DNodeType = "bloom.transform-2d";
 [[nodiscard]] constexpr bool isMotionBlurNodeType(const std::string_view typeId) noexcept {
     return typeId == kMotionBlurNodeType || typeId == kVectorMotionBlurNodeType ||
            typeId == kOpticalFlowNodeType || typeId == kOpticalFlowMotionBlurNodeType ||
-           typeId == kEchoNodeType || typeId == kDirectionalBlurNodeType ||
-           typeId == kSpinBlurNodeType || typeId == kZoomBlurNodeType;
+           typeId == kEchoNodeType || typeId == kFrameRateHoldNodeType ||
+           typeId == kDirectionalBlurNodeType || typeId == kSpinBlurNodeType || typeId == kZoomBlurNodeType;
 }
 
 // The parameters of a motion-blur node in definition order (Transform 2D: its motion blur's),
@@ -364,6 +379,8 @@ motionBlurParameters(const std::string_view typeId) noexcept {
         return motion_parameters::kOpticalFlowMotionBlurParameters;
     if (typeId == kEchoNodeType)
         return motion_parameters::kEchoParameters;
+    if (typeId == kFrameRateHoldNodeType)
+        return motion_parameters::kFrameRateHoldParameters;
     if (typeId == kDirectionalBlurNodeType)
         return motion_parameters::kDirectionalBlurParameters;
     if (typeId == kSpinBlurNodeType)
@@ -382,8 +399,8 @@ motionBlurParameters(const std::string_view typeId) noexcept {
 motionParameterSpec(const std::string_view schemaKey) noexcept {
     for (const auto type :
          {kMotionBlurNodeType, kVectorMotionBlurNodeType, kOpticalFlowNodeType,
-          kOpticalFlowMotionBlurNodeType, kEchoNodeType, kDirectionalBlurNodeType,
-          kSpinBlurNodeType, kZoomBlurNodeType, kTransform2DNodeType, kCameraShakeNodeType}) {
+          kOpticalFlowMotionBlurNodeType, kEchoNodeType, kFrameRateHoldNodeType,
+          kDirectionalBlurNodeType, kSpinBlurNodeType, kZoomBlurNodeType, kTransform2DNodeType, kCameraShakeNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

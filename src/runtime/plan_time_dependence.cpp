@@ -95,6 +95,12 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         return source.asset && source.asset->kind == document::AssetKind::Sequence;
                     });
                 else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
+                    // #564: a time sample is its input's pixels (evaluated on its own clock), so it
+                    // never varies with the time it sits on. Its key carries its input's content,
+                    // which already carries the sampled time, so frames that hold the same source
+                    // time share one result, and so does everything built on it.
+                    if (std::holds_alternative<TimeSampleKernel>(step.kernel))
+                        return false;
                     if (input(step.input) ||
                         (step.secondaryInput && input(*step.secondaryInput)) ||
                         (step.maskInput && input(*step.maskInput)) ||

@@ -22,7 +22,8 @@ RowInline rowInlineFor(const std::string_view schemaKey) {
     for (const auto role : {"rollAmount", "shutterAngle", "shutterPhase"})
         if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, role))
             return RowInline::AngleDial;
-    if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, "seed"))
+    if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, "seed") ||
+        schemaKey == document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed"))
         return RowInline::RandomiseSeed;
     return RowInline::None;
 }

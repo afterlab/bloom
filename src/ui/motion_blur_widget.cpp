@@ -155,6 +155,11 @@ bool motionRoleRead(const CompositionSession& session, const document::NodeId no
             return liveInteger(session, node, "mode") == document::kEchoModeEcho;
         return true;
     }
+    if (typeId == document::kFrameRateHoldNodeType) {
+        if (role == "amount"sv || role == "seed"sv)
+            return liveBool(session, node, "irregular");
+        return true;
+    }
     return true;
 }
 
@@ -248,7 +253,7 @@ std::vector<bool> MotionBlurCardWidget::readState() const {
     std::vector<bool> state;
     for (const auto role : {"shutterPhase"sv, "shutterShape"sv, "minSamples"sv, "vectorLayer"sv,
                             "vectorScale"sv, "maxDisplace"sv, "depthChannel"sv, "cutThreshold"sv,
-                            "holeFill"sv, "posterizeRate"sv, "decay"sv})
+                            "holeFill"sv, "posterizeRate"sv, "decay"sv, "amount"sv})
         state.push_back(motionRoleRead(session_, node_, typeId_, role));
     return state;
 }

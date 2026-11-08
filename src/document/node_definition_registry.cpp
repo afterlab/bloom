@@ -1697,6 +1697,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         motionBlurDefinition(kOpticalFlowNodeType),
         motionBlurDefinition(kOpticalFlowMotionBlurNodeType),
         motionBlurDefinition(kEchoNodeType),
+        motionBlurDefinition(kFrameRateHoldNodeType),
         motionBlurDefinition(kDirectionalBlurNodeType),
         motionBlurDefinition(kSpinBlurNodeType),
         motionBlurDefinition(kZoomBlurNodeType),

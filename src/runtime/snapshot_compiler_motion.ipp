@@ -292,6 +292,28 @@ lowerMotionNode(const document::NodeRecord& node,
         return result;
     }
 
+    // --- Frame Rate Hold: the input on a time sample held to the rate, by Echo's Posterize Time
+    // mapping, with an optional seeded irregular cadence -------------------------------------
+    if (node.typeId == document::kFrameRateHoldNodeType) {
+        const auto rate = real("rate", 12.0);
+        const bool irregular = flag("irregular");
+        const auto amount = real("amount", 0.2);
+        const auto cadenceSeed = integer("seed", 1);
+        if (!lowered || !(rate >= 0.1) || !(amount >= 0.0))
+            return failed("Frame Rate Hold parameters could not be lowered.");
+        runtime::TimeSampleKernel sample;
+        sample.posterizeNumerator = static_cast<std::int64_t>(std::llround(rate * 1000.0));
+        sample.posterizeDenominator = 1000;
+        if (irregular) {
+            // The amount is the chance a held frame repeats the one before it, scaled so the
+            // most irregular setting repeats about one frame in four.
+            sample.cadenceChance = static_cast<std::int64_t>(
+                std::llround(std::min(amount, 1.0) * 500.0));
+            sample.cadenceSeed = cadenceSeed;
+        }
+        return emitter.effect(*input, sample);
+    }
+
     // --- Optical Flow: forward and backward flow, confidence, occlusion and cuts ---------------
     if (node.typeId == document::kOpticalFlowNodeType) {
         const auto method = integer("method");

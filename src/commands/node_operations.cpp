@@ -150,8 +150,11 @@ OperationResult AddNode::apply(document::Draft& draft) const {
                                           static_cast<double>(composition->format().height()) / 2.0}
                         : document::Vec2d{static_cast<double>(composition->format().width()), 0.0};
         // #512: a new Camera Shake gets a seed of its own, hashed from its node id, so two shakes
-        // added with default settings never move together. It is an ordinary stored constant.
-        else if (parameter.schemaKey == document::motionSchemaKey(document::kCameraShakeNodeType, "seed"))
+        // added with default settings never move together. It is an ordinary stored constant. A
+        // new Frame Rate Hold's cadence seed is the same.
+        else if (parameter.schemaKey == document::motionSchemaKey(document::kCameraShakeNodeType, "seed") ||
+                 parameter.schemaKey ==
+                     document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed"))
             value = static_cast<std::int64_t>(
                 core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
                 1'000'000ULL);

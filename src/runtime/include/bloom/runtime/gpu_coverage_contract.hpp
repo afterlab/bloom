@@ -363,6 +363,8 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     for (const auto& [id, label] : std::initializer_list<std::pair<const char*, const char*>>{
              {"feature.motion.time.sample", "an upstream graph evaluated on a time-sample clock"},
              {"feature.motion.time.posterize", "Posterize Time on a time-sample clock"},
+             {"feature.motion.time.cadence",
+              "a seeded irregular cadence of repeated frames on a posterized time-sample clock"},
              {"feature.motion.time.hold", "footage held at the frame's time under sub-frames"},
              {"feature.motion.accumulate.operators", "accumulator operators beyond Add"},
              {"feature.motion.shutter.curve", "a non-box shutter curve's sample weights"},

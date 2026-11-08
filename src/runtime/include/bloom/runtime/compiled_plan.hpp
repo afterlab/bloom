@@ -742,6 +742,13 @@ struct TimeSampleKernel final {
     std::int64_t gopLength = 0;
     std::int64_t gopStep = 0;
     std::int64_t gopLag = 0;
+    // Frame Rate Hold's irregular cadence: with `cadenceChance` positive (in thousandths) a held
+    // frame, counted on the posterize grid, is a repeat of the one before it when its seeded draw
+    // falls under the chance and the previous frame was not itself a repeat; the source frame that
+    // would have followed the repeated one is then dropped. The draw is a pure function of
+    // (`cadenceSeed`, held frame), so frames holding the same source time share one result.
+    std::int64_t cadenceChance = 0;
+    std::int64_t cadenceSeed = 0;
     friend bool operator==(const TimeSampleKernel&, const TimeSampleKernel&) = default;
 };
 // Two images combined over the union of their windows, premultiplied and HDR-safe: `input` (the

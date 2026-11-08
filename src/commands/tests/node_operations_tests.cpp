@@ -1158,8 +1158,11 @@ void testAddAndLayout(TestContext& test) {
             if (parameter.schemaKey == document::kPositionParameterSchemaKey)
                 expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
                                            static_cast<double>(comp.format().height()) / 2.0};
-            // #512: a new Camera Shake gets a seed of its own, an ordinary stored constant.
-            if (parameter.schemaKey == "bloom.camera-shake.seed" && record) {
+            // #512: a new Camera Shake (and #564 Frame Rate Hold) gets a seed of its own, an ordinary stored
+            // constant.
+            if ((parameter.schemaKey == "bloom.camera-shake.seed" ||
+                 parameter.schemaKey == "bloom.frame-rate-hold.seed") &&
+                record) {
                 const auto* constant = std::get_if<ConstantValueSource>(&record->source);
                 const auto* seed =
                     constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;

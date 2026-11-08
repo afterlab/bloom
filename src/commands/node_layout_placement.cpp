@@ -86,6 +86,8 @@ constexpr double kPadCardWidth = 336.0;
 // #525: the Noise card's long fractal-noise row labels ("Offset (Offset Turbulence)", "Sub Scaling
 // (lacunarity)") beside the dropdown field control.
 constexpr double kFieldNoiseCardWidth = 408.0;
+// #564: the motion cards (Frame Rate Hold has no dropdown) are never narrower than this.
+constexpr double kMotionCardWidth = 344.0;
 
 struct NodeControlsEstimate final {
     int angles = 0;
@@ -299,6 +301,8 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                                  ? std::max(width, kLevelsCardWidth)
                              : node->typeId == document::kChromaticAberrationNodeType
                                  ? std::max(width, kPadCardWidth)
+                             : node->typeId == document::kFrameRateHoldNodeType
+                                 ? std::max(width, kMotionCardWidth)
                              : wide ? std::max(width, kWideCardWidth)
                                     : width;
     // #490: an Image Preview draws its thumbnail below its rows at the composition's aspect, at

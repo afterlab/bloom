@@ -626,7 +626,7 @@ void testSearchKeyboardAndMenus() {
                  "Color Correction offers the image grades");
         hasGroup("Color Management", {"OCIO Color Space Transform", "OCIO File Transform"},
                  "Color Management offers only the OCIO transforms");
-        hasGroup("Time", {"Echo"}, "Time holds Echo until the retimers land");
+        hasGroup("Time", {"Echo", "Frame Rate Hold"}, "Time holds Echo and Frame Rate Hold until the retimers land");
         hasGroup(
             "Text & Paths",
             {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle"},

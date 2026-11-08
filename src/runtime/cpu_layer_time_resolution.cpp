@@ -9,6 +9,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 
+#include <bloom/core/value_primitives.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/composition_time.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
@@ -128,6 +129,19 @@ std::optional<core::RationalTime> offsetTime(const core::RationalTime parent,
         Wide frames = scaledNumerator / scaledDenominator;
         if (scaledNumerator % scaledDenominator != 0 && scaledNumerator < 0)
             frames -= 1;
+        if (sample.cadenceChance > 0) {
+            // Frame Rate Hold's irregular cadence: a held frame may show the one before it.
+            const auto stream = static_cast<std::int64_t>(
+                core::primitives::hashWord(sample.cadenceSeed));
+            const auto repeats = [&](const Wide index) {
+                const auto word = core::primitives::hashWord(
+                    static_cast<std::int64_t>(static_cast<std::uint64_t>(stream) +
+                                              static_cast<std::uint64_t>(index)));
+                return static_cast<std::int64_t>(word % 1000ULL) < sample.cadenceChance;
+            };
+            if (repeats(frames) && !repeats(frames - 1))
+                frames -= 1;
+        }
         numerator = frames * sample.posterizeDenominator;
         denominator = sample.posterizeNumerator;
     }

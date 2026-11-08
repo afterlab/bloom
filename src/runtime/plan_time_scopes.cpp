@@ -346,6 +346,12 @@ std::optional<TimeScopeFailure> scopeLayerTime(CompiledCompositionPlanDefinition
                 for (auto& operation : copy.operations)
                     if (footageLeaf(operation))
                         operation = CompiledSolid{};
+            // A time sample is the identity on its input's pixels: here it varies with time
+            // exactly when its input does, whatever the plan's cache analysis says of its key.
+            for (auto& operation : copy.operations)
+                if (auto* effect = std::get_if<CompiledImageEffect>(&operation);
+                    effect != nullptr && std::holds_alternative<TimeSampleKernel>(effect->kernel))
+                    effect->kernel = IdentityImageKernel{};
             const CompiledCompositionPlan plan(std::move(copy));
             std::vector<bool> dependent(operations.size(), true);
             for (std::size_t index = 0; index < operations.size(); ++index)
