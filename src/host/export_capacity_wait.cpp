@@ -28,12 +28,28 @@ std::string describeProcessingReservationsV1(const runtime::GpuProcessingPhasePo
            "; " +
            domain("device", held.deviceReady, held.deviceCapacityBytes, held.deviceReservedBytes,
                   held.totalDeviceClaimBytes) +
+           "; retainedPhases=" + std::to_string(held.retainedPhases) +
+           ", retainedNativeImageBytes=" + std::to_string(held.retainedNativeImageBytes) +
            "; budgetRefusals=" + std::to_string(held.budgetRefusals);
 }
 
 bool otherProcessingPhasesAdmittedV1(const runtime::GpuProcessingPhasePolicy* policy,
                                      const std::size_t ownPhases) noexcept {
     return policy != nullptr && policy->snapshot().reservations.admittedPhases > ownPhases;
+}
+
+bool processingCapacityHeldElsewhereV1(const runtime::GpuProcessingPhasePolicy* policy,
+                                       const std::size_t ownPhases) noexcept {
+    if (policy == nullptr)
+        return false;
+    const auto held = policy->snapshot().reservations;
+    // Admitted phases finish and release by themselves. Phases retired to retention, retained
+    // native images and (when the caller holds no phase of its own) any remaining claim belong to
+    // other work such as background caching or presentation; they give way to a waiting request,
+    // so a refusal while they exist is a wait, never proof that the frame cannot fit.
+    return held.admittedPhases > ownPhases || held.retainedPhases > 0 ||
+           held.retainedNativeImageBytes > 0 ||
+           (ownPhases == 0 && (held.totalHostClaimBytes > 0 || held.totalDeviceClaimBytes > 0));
 }
 
 OutputAnalysisCapacityRefusalV1
@@ -48,7 +64,7 @@ outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
             // Measured capacity with nothing admitted but the export's own reservations: no
             // release in this process can make room, so waiting would only wait on itself until
             // the stall rule. Unmeasured capacity (a sample still pending) keeps waiting.
-            if (policy != nullptr && !otherProcessingPhasesAdmittedV1(policy, ownPhases)) {
+            if (policy != nullptr && !processingCapacityHeldElsewhereV1(policy, ownPhases)) {
                 const auto reservations = policy->snapshot().reservations;
                 if (reservations.hostReady && reservations.hostCapacityBytes &&
                     (!reservations.deviceCapacityBytes || reservations.deviceReady))
@@ -57,7 +73,7 @@ outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
             return OutputAnalysisCapacityRefusalV1::Wait;
         }
         if (*code == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused)
-            return otherProcessingPhasesAdmittedV1(policy, ownPhases)
+            return processingCapacityHeldElsewhereV1(policy, ownPhases)
                        ? OutputAnalysisCapacityRefusalV1::Wait
                        : OutputAnalysisCapacityRefusalV1::NeverFits;
     }

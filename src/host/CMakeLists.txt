@@ -174,6 +174,17 @@ if(BUILD_TESTING)
         LABELS unit host
     )
 
+    add_executable(bloom_host_export_capacity_wait_test tests/export_capacity_wait_tests.cpp)
+    target_link_libraries(bloom_host_export_capacity_wait_test PRIVATE bloom_host)
+    target_include_directories(bloom_host_export_capacity_wait_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/render/include")
+    bloom_enable_warnings(bloom_host_export_capacity_wait_test)
+    bloom_add_test(
+        NAME bloom.host.export-capacity-wait
+        COMMAND bloom_host_export_capacity_wait_test
+        LABELS unit host rendering
+    )
+
     add_executable(bloom_host_frame_range_runner_test tests/frame_range_runner_tests.cpp)
     target_link_libraries(bloom_host_frame_range_runner_test PRIVATE bloom_host)
     bloom_enable_warnings(bloom_host_frame_range_runner_test)

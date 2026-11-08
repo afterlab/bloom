@@ -35,6 +35,11 @@ outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
 // True while the shared root admits more phases than the caller's own.
 [[nodiscard]] bool otherProcessingPhasesAdmittedV1(const runtime::GpuProcessingPhasePolicy* policy,
                                                    std::size_t ownPhases) noexcept;
+// True while anything other than the caller's own phases holds capacity in the shared root:
+// admitted phases, phases retired to retention, retained native images, or (with no own phase) any
+// remaining claim. A refusal during this is a wait, not NeverFits.
+[[nodiscard]] bool processingCapacityHeldElsewhereV1(const runtime::GpuProcessingPhasePolicy* policy,
+                                                     std::size_t ownPhases) noexcept;
 // The shared processing root's reservations (admitted phases, host and device claims against
 // capacity) for the export log.
 [[nodiscard]] std::string
