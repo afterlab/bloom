@@ -6,6 +6,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
@@ -149,6 +150,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
         return QStringLiteral("test card bars color bars grid zone plate "
                               "smpte ebu hdr hlg pq patch chart gray ramp pluge circle safe areas "
                               "uv siemens star moving bar countdown alpha ramp chart");
+    if (typeId == document::kLightRaysNodeType)
+        return QStringLiteral("light rays god rays shafts volumetric beams radial streaks burst "
+                              "sun glare crepuscular");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     if (typeId == document::kFrameRateHoldNodeType)

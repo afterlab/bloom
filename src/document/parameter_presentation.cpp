@@ -6,6 +6,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
@@ -588,6 +589,26 @@ std::optional<ParameterPresentation> testCardPresentation(const std::string_view
     return std::nullopt;
 }
 
+// #508 Light Rays: the length a percentage of the distance to the centre; the centre a pixel offset.
+std::optional<ParameterPresentation> lightRaysPresentation(const std::string_view schemaKey) {
+    if (schemaKey == kLightRaysSourceSchemaKey)
+        return choice();
+    if (schemaKey == kLightRaysColorSchemaKey)
+        return number(0.0, kMaximumLightRaysColor, 0.0, 1.0, 0.01, 3);
+    if (schemaKey == kLightRaysCenterSchemaKey)
+        return pixels(-kMaximumLightRaysCenter, kMaximumLightRaysCenter, 4096.0);
+    if (schemaKey == kLightRaysLengthSchemaKey)
+        return number(kMinimumLightRaysLength, kMaximumLightRaysLength, kMinimumLightRaysLength,
+                      kMaximumLightRaysLength, 0.01, 1, kPercent, 100.0);
+    if (schemaKey == kLightRaysFalloffSchemaKey)
+        return number(kMinimumLightRaysFalloff, kMaximumLightRaysFalloff, kMinimumLightRaysFalloff,
+                      kLightRaysFalloffSoftMaximum, 0.01, 2);
+    if (schemaKey == kLightRaysBoostSchemaKey)
+        return number(kMinimumLightRaysBoost, kMaximumLightRaysBoost, kMinimumLightRaysBoost,
+                      kLightRaysBoostSoftMaximum, 0.01, 2, kTimes);
+    return std::nullopt;
+}
+
 // #563 Codec Degrade: one presentation per parameter, from its table.
 std::optional<ParameterPresentation> codecDegradePresentation(const std::string_view schemaKey) {
     const auto* spec = codecDegradeParameterSpec(schemaKey);
@@ -622,6 +643,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *aberration;
     if (auto card = testCardPresentation(schemaKey))
         return *card;
+    if (auto rays = lightRaysPresentation(schemaKey))
+        return *rays;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
     for (const auto& entry : table())

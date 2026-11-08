@@ -156,8 +156,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
-    // Distortion and Chromatic Aberration; #587 adds Test Card.
-    expectations.expect(registry.definitions().size() == 193,
+    // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays.
+    expectations.expect(registry.definitions().size() == 194,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",

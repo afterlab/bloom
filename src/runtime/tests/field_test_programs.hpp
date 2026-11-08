@@ -238,6 +238,14 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     }
     case FieldOp::TestCard:
         return testCardProgram(idBase, variant % 16, variant % 3, variant % 4, variant % 2 == 0);
+    case FieldOp::Rays: {
+        // The rays gathered from an image's luma towards a centre
+        // off the middle, as a premultiplied raster.
+        const auto rays = b.add(FieldOp::Rays, {c}, {0}, {0.4, 1.0, 2.0},
+                                {Vec2d{1.5, -1.0}});
+        b.last().slot = 0;
+        return b.finish(rays, FieldResultKind::Premultiplied);
+    }
     case FieldOp::Ramp: {
         const auto n = noise(c, 3, 1);
         const auto ramp = b.add(FieldOp::Ramp, {n}, {}, {0.1, 0.9});
@@ -297,6 +305,23 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const auto alpha = b.add(FieldOp::Swizzle, {widest3}, {3, 4, 4, 4});
     const auto joined = b.add(FieldOp::Combine, {texelRed, green, blueChannel, alpha}, {},
                               {0.0, 0.0, 0.0, 0.0});
+    return b.finish(joined, FieldResultKind::Premultiplied);
+}
+
+// #508 Light Rays: the program its lowering builds over the 16 x 12 test composition, mirroring
+// snapshot_compiler_fields.ipp's lowerLightRays (the snapshot compiler test holds the two to the
+// same instruction sequence). `alpha` gathers the input's alpha instead of its luma.
+[[nodiscard]] inline FieldProgram lightRaysProgram(const std::uint64_t idBase,
+                                                   const bool alpha = false) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto rays = b.add(FieldOp::Rays, {c}, {alpha ? 1 : 0}, {0.4, 1.5, 2.0}, {Vec2d{1.5, -1.0}});
+    b.last().slot = 0;
+    const auto tint = b.add(FieldOp::Constant, {}, {}, {1.0, 0.8, 0.6, 1.0});
+    const auto tinted = b.add(FieldOp::Math, {rays, tint}, {2}, {0.1, 0.0});
+    const auto texel = b.add(FieldOp::Image, {c}, {0, 1, 3, 4, 0, 1});
+    b.last().slot = 0;
+    const auto joined = b.add(FieldOp::Math, {texel, tinted}, {0}, {0.1, 0.0});
     return b.finish(joined, FieldResultKind::Premultiplied);
 }
 

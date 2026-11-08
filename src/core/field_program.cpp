@@ -625,6 +625,18 @@ std::optional<std::vector<float>> encodeTestCard(const TestCardParameters& p) {
     return checked(std::move(out));
 }
 
+std::optional<std::vector<float>> encodeRays(const RaysParameters& p) {
+    if (!finite(p.centreX) || !finite(p.centreY) || !finite(p.length) || !finite(p.falloff) ||
+        !finite(p.boost) || p.length < 0.0 || p.length > 1.0 || p.falloff < 0.0 || p.boost < 0.0 ||
+        p.source > 1U)
+        return std::nullopt;
+    std::vector<float> out;
+    push(out, static_cast<double>(std::min<std::size_t>(p.slot, kMaxFieldImages - 1U)),
+         static_cast<double>(p.source), p.centreX, p.centreY);
+    push(out, p.length, p.falloff, p.boost, 0.0);
+    return checked(std::move(out));
+}
+
 std::vector<float> encodeSwizzle(const SwizzleParameters& p) {
     std::vector<float> out;
     push(out, std::min<int>(p.lanes[0], 5), std::min<int>(p.lanes[1], 5),
@@ -904,6 +916,8 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
         return 2;
     case FieldOp::TestCard:
         return 6;
+    case FieldOp::Rays:
+        return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages) ? 2U : 0U;
     case FieldOp::Ramp:
         return 1U + kFieldRampEntries;
     }
@@ -941,7 +955,7 @@ bool validFieldTable(const std::span<const float> table) noexcept {
         const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
         const auto* b = a + 4;
         const auto op = a[0];
-        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::TestCard) || op != std::floor(op))
+        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::Rays) || op != std::floor(op))
             return false;
         if (!(a[1] >= 0.0F) || a[1] >= static_cast<float>(kFieldRegisterCount))
             return false;

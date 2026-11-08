@@ -70,6 +70,7 @@ enum class FieldOp : std::uint8_t {
     Ramp = 20,
     LensWarp = 21,
     TestCard = 22,
+    Rays = 23,
 };
 inline constexpr std::array kFieldOps{
     FieldOp::Coordinate, FieldOp::Constant, FieldOp::Noise,      FieldOp::Voronoi,
@@ -77,7 +78,7 @@ inline constexpr std::array kFieldOps{
     FieldOp::Image,      FieldOp::Force,    FieldOp::Math,       FieldOp::Remap,
     FieldOp::Transform,  FieldOp::Swizzle,  FieldOp::Combine,    FieldOp::Offset,
     FieldOp::Derivative, FieldOp::CellCentre, FieldOp::Arrow,    FieldOp::Streak,
-    FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard};
+    FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard,   FieldOp::Rays};
 
 // Stable lower-case names (coverage ids, diagnostics). No default case: a new op is a -Wswitch
 // error until it is named.
@@ -129,6 +130,8 @@ inline constexpr std::array kFieldOps{
         return "lens-warp";
     case FieldOp::TestCard:
         return "test-card";
+    case FieldOp::Rays:
+        return "rays";
     }
     return {};
 }
@@ -389,6 +392,19 @@ struct TestCardParameters final {
     std::vector<std::uint8_t> text;
 };
 
+// Light rays seen from a pixel (field_kernel.glsl, "Light rays"): the weighted mean of an image slot
+// along the segment from the pixel towards the centre that covers `length` of the way, `source` 0
+// its luma and 1 its alpha, weights (1 - t)^falloff, times the boost.
+struct RaysParameters final {
+    std::uint8_t slot = 0;
+    std::uint8_t source = 0;
+    double centreX = 0.0;
+    double centreY = 0.0;
+    double length = 0.5;
+    double falloff = 1.0;
+    double boost = 1.0;
+};
+
 enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
 
 // A lane of a Swizzle: 0..3 a component of the input, 4 zero, 5 one.
@@ -448,6 +464,9 @@ class FieldProgramBuilder final {
 // Null when a value cannot be represented (non-finite, a frame not at least one pixel, a card or text
 // outside the kernel's tables).
 [[nodiscard]] std::optional<std::vector<float>> encodeTestCard(const TestCardParameters&);
+// Null when a value cannot be represented (non-finite, a length outside [0, 1], a negative falloff
+// or boost).
+[[nodiscard]] std::optional<std::vector<float>> encodeRays(const RaysParameters&);
 [[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);

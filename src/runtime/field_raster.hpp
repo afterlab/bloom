@@ -35,6 +35,7 @@
 //   Lens Warp choices [reverse]; scalars [k1, k2, p1, p2, scale]; vectors [centre, y down]
 //   Test Card choices [card, variant, option, flags (1 label, 2 animated), the label's glyph codes];
 //             scalars [width, height, center x, center y, four card values, frame rate]
+//   Rays      choices [source]; scalars [length, falloff, boost]; vectors [centre, y down]; slot
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
 #include "color_grade_image_effect.hpp"

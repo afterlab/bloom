@@ -10,6 +10,7 @@
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
+#include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -585,6 +586,9 @@ template <typename Definition>
         // #486 Chromatic Aberration: the exact generated shape.
         if (definition.key.typeId == kChromaticAberrationNodeType)
             return definition == chromaticAberrationDefinition();
+        // #508 Light Rays: the exact generated shape.
+        if (definition.key.typeId == kLightRaysNodeType)
+            return definition == lightRaysDefinition();
         // #563 Codec Degrade: the exact generated shape.
         if (definition.key.typeId == kCodecDegradeNodeType)
             return definition == codecDegradeDefinition();
@@ -1692,6 +1696,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         lensDistortionDefinition(),
         chromaticAberrationDefinition(),
         testCardDefinition(),
+        lightRaysDefinition(),
         sharpenDefinition(),
         cameraShakeDefinition(),
         depthEffectDefinition(kZDefocusNodeType),

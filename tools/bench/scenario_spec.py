@@ -404,6 +404,19 @@ SCENARIOS["test-card-2k"] = {
     ],
 }
 
+# #508: Light Rays over a plate, its length keyed so every frame is new.
+SCENARIOS["light-rays-2k"] = {
+    "description": "A PNG16 plate under Light Rays from its luminance, its length keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.light-rays",
+                      {"source": "Luminance"},
+                      {"keys": {"length": [[0, 0.4], [23, 0.9]]}}]]},
+    ],
+}
+
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
 # is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
 # the render's camera depth and read as data), the focus racking from the near pillars to the back;

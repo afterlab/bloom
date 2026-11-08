@@ -10,6 +10,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -217,6 +218,9 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                                static_cast<std::int64_t>(index)});
         return options;
     }
+    // #508 Light Rays.
+    if (schemaKey == kLightRaysSourceSchemaKey)
+        return {{"Luminance", kLightRaysFromLuminance}, {"Alpha", kLightRaysFromAlpha}};
     // #563 Codec Degrade.
     if (const auto* codec = codecDegradeParameterSpec(schemaKey);
         codec != nullptr && codec->kind == CodecDegradeParameterKind::Choice) {

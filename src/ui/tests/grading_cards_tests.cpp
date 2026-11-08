@@ -54,6 +54,7 @@
 #include <bloom/ui/chromatic_aberration_widget.hpp>
 #include <bloom/ui/test_card_widget.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/ui/light_rays_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -1147,6 +1148,67 @@ void testCardCard() {
     if (!cardContentFits(*fixture.item, "test-card-patch"))
         ++failures;
     capture(fixture, QStringLiteral("test-card-patch"));
+}
+
+// #508: the Light Rays card paints inside its card with no label cut short, writes nothing of its
+// own, draws the length, falloff and boost as sliders with a socket beside each and the centre on a
+// point pad; the source and the colour stay the node's own rows; a slider drag is one command.
+void lightRaysCard() {
+    CardFixture fixture(document::kLightRaysNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::LightRaysCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Light Rays draws its card widget");
+    if (card == nullptr)
+        return;
+    const auto value = stored(fixture.session, fixture.node, "length");
+    expect(value && *value == document::kLightRaysLengthDefault,
+           "a new Light Rays card writes no value of its own");
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "light-rays paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "light-rays"))
+        ++failures;
+    {
+        // The tint chip converts its reference color for display (a constant color key
+        // must not fall back to the unconverted gray).
+        QElapsedTimer converter;
+        converter.start();
+        while (!fixture.session.colorConverterReady() && converter.elapsed() < 5'000)
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+        const auto reference = ui::kit::KColor::fromRgba(1.0F, 1.0F, 1.0F, 1.0F,
+                                                         ui::kit::ColorSpace::Reference);
+        const auto display = reference.converted(
+            ui::kit::ColorSpace::Display,
+            fixture.session.colorConverter(document::kLightRaysColorSchemaKey));
+        expect(display.has_value(), "the Light Rays tint converts for display");
+    }
+    capture(fixture, QStringLiteral("light-rays"));
+    expect(card->showsRole("center") && card->showsRole("source") && !card->showsRole("tint") &&
+               !card->showsRole("length") && !card->showsRole("falloff") &&
+               !card->showsRole("boost") && card->padRow() != nullptr &&
+               card->colorRow() != nullptr && card->colorRow()->chip() != nullptr,
+           "the card shows the source and centre as the node's rows and draws the colour chip");
+    for (const auto* role : {"length", "falloff", "boost"})
+        expect(card->socketY(role).has_value() && card->valueRow(role) != nullptr,
+               "a socket sits beside each slider");
+    expect(card->valueRow("length")->name() == QStringLiteral("Length") &&
+               card->valueRow("falloff")->name() == QStringLiteral("Falloff") &&
+               card->valueRow("boost")->name() == QStringLiteral("Boost"),
+           "the rows are named in full");
+    // A slider drag is one command.
+    auto* slider = card->valueRow("boost")->slider();
+    const auto commands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    const auto boost = stored(fixture.session, fixture.node, "boost");
+    expect(fixture.stack.size() == commands + 1 && boost &&
+               *boost != document::kLightRaysBoostDefault,
+           "dragging the boost slider is one command");
+    capture(fixture, QStringLiteral("light-rays-boost"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -2252,6 +2314,7 @@ void motionBlurCards() {
     }
 }
 
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
@@ -2270,6 +2333,7 @@ int main(int argc, char** argv) {
     lensDistortionCard();
     chromaticAberrationCard();
     testCardCard();
+    lightRaysCard();
     cameraShakeCard();
     depthEffectCards();
     motionBlurCards();

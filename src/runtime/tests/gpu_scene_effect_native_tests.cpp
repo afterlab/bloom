@@ -1796,6 +1796,13 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                  4U});
         id += 100;
     }
+    // #508 Light Rays: the program its lowering builds, rays gathered from luma and from alpha.
+    for (const bool alpha : {false, true}) {
+        kernels.emplace_back(alpha ? "light rays alpha" : "light rays luminance",
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::lightRaysProgram(id, alpha), 1U});
+        id += 100;
+    }
     for (const auto& [name, kernel] : kernels) {
         cache.clear();
         auto definition =

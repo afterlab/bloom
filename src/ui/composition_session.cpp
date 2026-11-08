@@ -13,6 +13,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/utf8.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
@@ -106,8 +107,10 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
     // future colour parameter added to isColor4AnimatableSchemaKey() -- authors straight RGBA in
     // this one reference-linear-sRGB encoding, plus the constant-or-driven colour operand. A schema
     // key outside that set is genuinely unknown and fails closed, exactly as before.
+    // The Light Rays tint is a constant colour in the same encoding, not an animatable one.
     if (!document::isColor4AnimatableSchemaKey(schemaKey) &&
-        schemaKey != document::kColorOperandParameterSchemaKey)
+        schemaKey != document::kColorOperandParameterSchemaKey &&
+        schemaKey != document::kLightRaysColorSchemaKey)
         return {};
     auto settings = colorSettings_;
     if (const auto* currentComposition = composition();

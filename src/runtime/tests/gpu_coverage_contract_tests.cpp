@@ -1714,6 +1714,17 @@ displayProofRunner(const bool customView) {
                      "production Test Card lowering: all sixteen cards, full frame and ROI");
             base += 2000;
         }
+        // #508 Light Rays: the one program its lowering builds, rays gathered from the input's
+        // luma and from its alpha and added to the input's premultiplied texel.
+        addField("node.bloom.light-rays",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::lightRaysProgram(base, false), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::lightRaysProgram(base + 50, true), 1}},
+                 base + 100,
+                 "production Light Rays lowering: rays from luminance and from alpha, full frame "
+                 "and ROI");
+        base += 1000;
         for (const auto& [type, ops] : nodes) {
             std::vector<bloom::runtime::ImageEffectKernel> kernels;
             for (const auto op : ops) {

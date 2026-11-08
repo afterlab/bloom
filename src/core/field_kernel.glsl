@@ -3230,6 +3230,52 @@ BFK_FN vec4 bfk_op_test_card(BFK_CTX, int base, float qx, float qy) {
     return vec4(r, g, b, a);
 }
 
+// --- Light rays ----------------------------------------------------------------------------------
+// [slot, source, centre x, centre y] [length, falloff, boost, 0]: the rays seen from the position p
+// of a pixel. The pixel gathers slot `slot` along the segment from p towards the centre that covers
+// `length` of the way, in one sample per two pixels of it (at least one, at most 96), each sample the
+// filtered premultiplied texel's luma (source 0) or alpha (source 1), weighed (1 - t)^falloff at the
+// fraction t of the segment it lies at; the result is the weighted mean times the boost, as
+// [m, m, m, min(m, 1)]. A pixel at the centre, a zero length or a zero boost gathers nothing.
+
+BFK_FN vec4 bfk_op_rays(BFK_CTX, int base, vec4 p) {
+    vec4 h0 = bfk_data(BFK_CTXA, base);
+    vec4 h1 = bfk_data(BFK_CTXA, base + 1);
+    BFK_P float dx = h0.z - p.x;
+    BFK_P float dy = h0.w - p.y;
+    BFK_P float dist = bfk_length(dx, dy);
+    BFK_P float reach = dist * h1.x;
+    if (!(reach > 0.0f) || !(h1.z > 0.0f))
+        return vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    BFK_P float samples = reach * 0.5f;
+    int n = min(int(floor(samples)) + 1, 96);
+    BFK_P float invN = bfk_div(1.0f, float(n));
+    int slot = int(h0.x);
+    int source = int(h0.y);
+    BFK_P float sum = 0.0f;
+    BFK_P float weights = 0.0f;
+    for (int i = 0; i < 96; ++i) {
+        if (i >= n)
+            break;
+        BFK_P float t = (float(i) + 0.5f) * invN;
+        BFK_P float along = t * h1.x;
+        BFK_P float qx = fma(dx, along, p.x);
+        BFK_P float qy = fma(dy, along, p.y);
+        vec4 texel = bfk_sample(BFK_CTXA, slot, qx, qy, 0, 1);
+        BFK_P float value = source == 1 ? texel.w : bfk_channel(texel, 4);
+        BFK_P float rest = 1.0f - t;
+        BFK_P float w = bfk_pow(rest, h1.y);
+        sum = fma(value, w, sum);
+        weights = weights + w;
+    }
+    if (!(weights > 0.0f))
+        return vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    BFK_P float mean = bfk_div(sum, weights);
+    BFK_P float m = mean * h1.z;
+    BFK_P float a = min(m, 1.0f);
+    return vec4(m, m, m, a);
+}
+
 // --- Plumbing -----------------------------------------------------------------------------------------
 
 BFK_FN BFK_P float bfk_lane(vec4 v, float selector) {
@@ -3379,7 +3425,7 @@ BFK_FN vec4 bfk_op_ramp(BFK_CTX, int base, vec4 a) {
 //   8 Image  9 Force  10 Math (in0, in1, in2)  11 Remap  12 Transform (in0 coordinate, in1 warp)
 //   13 Swizzle  14 Combine (in0..in3 x; an absent input is the parameter's lane)  15 Offset [dx, dy]
 //   16 Derivative (in0..in3)  17 Cell Centre  18 Arrow (in0 p, in1 centre, in2 v)
-//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)  22 Test Card (in0 p)
+//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)  22 Test Card (in0 p)  23 Light Rays (in0 p)
 // Every register write is limited to [-1e30, 1e30], so no later operation can see an infinity.
 
 BFK_FN vec4 bfk_limit(vec4 v) {
@@ -3493,6 +3539,9 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             break;
         case 22:
             v = bfk_op_test_card(BFK_CTXA, base, x0.x, x0.y);
+            break;
+        case 23:
+            v = bfk_op_rays(BFK_CTXA, base, x0);
             break;
         default:
             v = zero;

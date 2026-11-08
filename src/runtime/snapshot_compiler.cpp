@@ -24,6 +24,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>

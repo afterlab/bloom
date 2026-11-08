@@ -592,6 +592,109 @@ void testLensWarp(Expectations& e) {
     e.expect(lost[0] == 0.0F && lost[3] == 0.0F, "the straight colour selector drops zero alpha");
 }
 
+// #508 Rays: the weighted gather along the segment towards the centre against an independent
+// double-precision reading, the identities (zero length, zero boost, the centre itself), the alpha
+// source, and the encoder's refusals.
+void testRays(Expectations& e) {
+    // A 64 x 1 image: the left half black, the right half white, opaque.
+    TestImage image{64, 1, {}};
+    for (int x = 0; x < 64; ++x) {
+        const float v = x >= 32 ? 1.0F : 0.0F;
+        image.texels.push_back({v, v, v, x >= 32 ? 1.0F : 0.5F});
+    }
+    const field::FieldImages images{&image, &fetchTest};
+    const auto build = [&](const double length, const double falloff, const double boost,
+                           const std::uint8_t source) {
+        field::RaysParameters p;
+        p.source = source;
+        p.centreX = 20.0;
+        p.centreY = 0.0;
+        p.length = length;
+        p.falloff = falloff;
+        p.boost = boost;
+        const auto block = field::encodeRays(p);
+        auto table = block ? single(FieldOp::Rays, *block, field::FieldResultKind::Vector)
+                           : std::vector<float>{};
+        auto geometry = field::fieldRasterGeometry(0, 0, 64, 1, 64.0, 1.0, 1.0, 1.0, 1);
+        geometry.slots[0] = field::fieldImageSlot(0, 0, 64, 1, 64.0, 1.0, 1.0, 1.0);
+        if (!table.empty())
+            e.expect(field::applyFieldRasterGeometry(table, geometry) &&
+                         field::validFieldTable(table),
+                     "a rays table is valid");
+        return table;
+    };
+    const auto reference = [&](const double length, const double falloff, const double boost,
+                               const bool alpha, const double x) {
+        const double dx = 20.0 - x;
+        const auto reach = std::fabs(dx) * length;
+        const int n = std::min(static_cast<int>(std::floor(static_cast<float>(reach) * 0.5F)) + 1, 96);
+        double sum = 0.0;
+        double weights = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double t = (i + 0.5) / n;
+            const double u = (x + dx * t * length + 32.0) - 0.5;
+            const int u0 = static_cast<int>(std::floor(u));
+            const double f = u - u0;
+            const auto tap = [&](const int k) {
+                if (k < 0 || k >= 64)
+                    return 0.0;
+                const auto& t4 = image.texels[static_cast<std::size_t>(k)];
+                const auto r = static_cast<double>(t4[0]);
+                const auto g = static_cast<double>(t4[1]);
+                const auto bl = static_cast<double>(t4[2]);
+                return alpha ? static_cast<double>(t4[3]) : r * 0.2126 + g * 0.7152 + bl * 0.0722;
+            };
+            const double value = tap(u0) + f * (tap(u0 + 1) - tap(u0));
+            const double w = std::pow(1.0 - t, falloff);
+            sum += value * w;
+            weights += w;
+        }
+        return weights > 0.0 ? sum / weights * boost : 0.0;
+    };
+    double worst = 0.0;
+    for (const auto falloff : {0.0, 1.0, 3.0})
+        for (const auto length : {0.25, 0.7, 1.0})
+            for (const std::uint8_t source : {std::uint8_t{0}, std::uint8_t{1}}) {
+                const auto table = build(length, falloff, 2.0, source);
+                for (const double x : {-28.5, -20.0, -3.25, 5.5, 14.0, 27.75}) {
+                    const auto v = field::evaluateField(table, images, static_cast<float>(x), 0.0F);
+                    const auto expected = reference(length, falloff, 2.0, source == 1, x);
+                    worst = std::max(worst, std::fabs(static_cast<double>(v[0]) - expected));
+                    worst = std::max(worst, std::fabs(static_cast<double>(v[3]) -
+                                                      std::min(expected, 1.0)));
+                    worst = std::max(worst, std::fabs(static_cast<double>(v[1]) -
+                                                      static_cast<double>(v[0])));
+                }
+            }
+    e.expect(worst < 2.0e-3, "the rays gather the image along the segment towards the centre");
+
+    // Even weights over a half dark, half bright segment are their mean.
+    const auto even = field::evaluateField(build(1.0, 0.0, 1.0, 0), images, -20.0F, 0.0F);
+    e.expect(std::fabs(even[0] - 0.5F) < 1.0e-3F, "an even gather of a half bright segment is a half");
+    // A steeper falloff weighs the near, dark side more.
+    const auto steep = field::evaluateField(build(1.0, 3.0, 1.0, 0), images, -20.0F, 0.0F);
+    e.expect(steep[0] < even[0], "a steeper falloff weighs the pixel's own side more");
+    const auto none = field::evaluateField(build(0.0, 1.0, 2.0, 0), images, -20.0F, 0.0F);
+    e.expect(none[0] == 0.0F && none[3] == 0.0F, "a zero length gathers nothing");
+    const auto dark = field::evaluateField(build(1.0, 1.0, 0.0, 0), images, -20.0F, 0.0F);
+    e.expect(dark[0] == 0.0F, "a zero boost gathers nothing");
+    const auto atCentre = field::evaluateField(build(1.0, 1.0, 2.0, 0), images, 20.0F, 0.0F);
+    e.expect(atCentre[0] == 0.0F, "the centre itself gathers nothing");
+
+    field::RaysParameters bad;
+    bad.length = 1.5;
+    e.expect(!field::encodeRays(bad), "a length beyond one cannot be encoded");
+    bad.length = 0.5;
+    bad.boost = -1.0;
+    e.expect(!field::encodeRays(bad), "a negative boost cannot be encoded");
+    bad.boost = 1.0;
+    bad.falloff = std::numeric_limits<double>::quiet_NaN();
+    e.expect(!field::encodeRays(bad), "a non-finite falloff cannot be encoded");
+    bad.falloff = 1.0;
+    bad.source = 2;
+    e.expect(!field::encodeRays(bad), "an unknown source cannot be encoded");
+}
+
 void testDistanceTransform(Expectations& e) {
     std::uint32_t state = 12345U;
     const auto next = [&state]() {
@@ -1010,6 +1113,7 @@ int main() {
     testImagesAndRaster(expectations);
     testLensWarp(expectations);
     testTestCard(expectations);
+    testRays(expectations);
     testDistanceTransform(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

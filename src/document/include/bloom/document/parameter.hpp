@@ -13,6 +13,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
@@ -385,6 +386,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
            schemaKey == kLensDistortionCenterSchemaKey ||
            schemaKey == kChromaticAberrationCenterSchemaKey ||
+           schemaKey == kLightRaysCenterSchemaKey ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }
@@ -422,7 +424,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
            isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) ||
            isLensDistortionScalarSchemaKey(schemaKey) ||
-           isChromaticAberrationScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
+           isChromaticAberrationScalarSchemaKey(schemaKey) ||
+           isLightRaysScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
@@ -544,6 +547,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #587 Test Card (test_card_nodes.hpp).
     if (testCardParameterSpec(schemaKey) != nullptr)
         return isTestCardScalarWithinDomain(schemaKey, value);
+    // #508 Light Rays (light_rays_nodes.hpp).
+    if (isLightRaysScalarSchemaKey(schemaKey))
+        return isLightRaysScalarWithinDomain(schemaKey, value);
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);

@@ -110,6 +110,19 @@ that reads an image through a position it computes is evaluated over the whole i
 interest, since the position can point anywhere. These change no existing operation, so
 `kFieldProgramSemanticsVersion` stays.
 
+### Rays
+
+Light Rays (`image-filters.md`) lowers to a field raster and adds one instruction to the vocabulary
+(`core::field::FieldOp::Rays`, a Required GPU coverage feature as every operation is). **Rays** takes a
+coordinate `p` and gathers one image slot along the segment from `p` towards a center, covering a
+`length` fraction of the way: `n = min(floor(reach / 2) + 1, 96)` samples, where `reach` is the segment's
+length in field pixels, so a short ray takes few samples; sample `i` lies at the fraction
+`t = (i + 1/2) / n`, is the bilinear premultiplied texel's Rec. 709 luma (source 0) or alpha (source 1),
+transparent outside the image, and is weighed `(1 - t)^falloff`. The result is the weighted mean times
+the boost, `[m, m, m, min(m, 1)]`. A pixel at the center, a zero length and a zero boost give zero. A raster
+that gathers an image is evaluated over the whole image in a region of interest, as Lens Warp's is. The
+op changes no existing operation, so `kFieldProgramSemanticsVersion` stays.
+
 ### Image slots
 
 An Image Field reads an image through a slot; a mask Shape Distance reads the **exact signed

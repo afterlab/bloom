@@ -379,6 +379,18 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         }
         return field::encodeTestCard(p);
     }
+    case FieldOp::Rays: {
+        field::RaysParameters p;
+        p.slot = static_cast<std::uint8_t>(std::max<int>(in.slot, 0));
+        p.source = static_cast<std::uint8_t>(choiceAt(in, 0));
+        p.length = scalar(0, 0.5);
+        p.falloff = scalar(1, 1.0);
+        p.boost = scalar(2, 1.0);
+        // The centre is authored as an offset from the composition's centre with y down.
+        p.centreX = vector(0).x;
+        p.centreY = -vector(0).y;
+        return field::encodeRays(p);
+    }
     case FieldOp::Combine:
         return field::encodeConstant({scalar(0), scalar(1), scalar(2), scalar(3)});
     case FieldOp::Offset: {
@@ -413,7 +425,7 @@ std::optional<std::vector<float>> buildTable(const FieldProgram& program,
     OperandReader reader(values.first(values.size() - 1U));
     field::FieldProgramBuilder builder;
     for (const auto& instruction : program.instructions) {
-        if (instruction.op > static_cast<std::uint8_t>(FieldOp::TestCard))
+        if (instruction.op > static_cast<std::uint8_t>(FieldOp::Rays))
             return std::nullopt;
         const auto block = encode(instruction, reader, seconds, program.compositionSeconds);
         if (!block)

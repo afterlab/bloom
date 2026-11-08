@@ -1061,3 +1061,86 @@ lowerChromaticAberration(const document::NodeRecord& node,
     indices.emplace(node.id, index);
     return true;
 }
+
+// #508 Light Rays: one field raster over the input's data window. The rays op gathers the input
+// along the segment from each pixel towards the centre (its luma or alpha, weighed by the falloff),
+// the gathered scalar is tinted by the colour, and the input's own premultiplied texel is added to
+// it: alpha is the input's plus the rays' (a raster clamps it to 1), the colour is added as light so
+// HDR values pass through. With a constant length or boost of zero the picture is the input itself;
+// a muted node is the same.
+[[nodiscard]] bool
+lowerLightRays(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+               std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    using core::field::FieldOutputMode;
+    using core::field::FieldResultKind;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    auto length = compiledScalarParameter(findParameterBinding(node, "length"));
+    auto falloff = compiledScalarParameter(findParameterBinding(node, "falloff"));
+    auto boost = compiledScalarParameter(findParameterBinding(node, "boost"));
+    auto centre = compiledVec2Parameter(findParameterBinding(node, "center"));
+    if (!length || !falloff || !boost || !centre) {
+        addTopologyFailure(node.id, "Light Rays parameters could not be lowered.");
+        return false;
+    }
+    const auto* sourceChoice = parameterConstant<std::int64_t>(findParameterBinding(node, "source"));
+    const auto* colour = parameterConstant<core::Color4d>(findParameterBinding(node, "tint"));
+    const auto source = sourceChoice == nullptr ? kLightRaysFromLuminance : *sourceChoice;
+    if (colour == nullptr || (source != kLightRaysFromLuminance && source != kLightRaysFromAlpha)) {
+        addTopologyFailure(node.id, "Light Rays parameters could not be lowered.");
+        return false;
+    }
+    if (isMuted(node.id))
+        length = fieldConstant(0.0);
+    const auto* constantLength = std::get_if<double>(&length->source);
+    const auto* constantBoost = std::get_if<double>(&boost->source);
+    if ((constantLength != nullptr && *constantLength == 0.0) ||
+        (constantBoost != nullptr && *constantBoost == 0.0)) {
+        portOperations_.insert_or_assign({node.id, "image"}, *input);
+        indices.emplace(node.id, *input);
+        return true;
+    }
+    FieldBuild build;
+    build.operations = &operations;
+    build.indices = &indices;
+    const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+    const auto slot = fieldSlot(build, node, *input);
+    if (slot < 0)
+        return false;
+    const auto rays = fieldEmit(build, FieldOp::Rays, {c, -1, -1, -1}, {source},
+                                {*length, *falloff, *boost}, {*centre});
+    build.steps.back().instruction.slot = slot;
+    const auto tint = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                {fieldConstant(colour->red), fieldConstant(colour->green),
+                                 fieldConstant(colour->blue), fieldConstant(1.0)});
+    // Multiply the rays [m, m, m, min(m, 1)] by the tint [r, g, b, 1].
+    const auto tinted = fieldEmit(build, FieldOp::Math, {rays, tint, -1, -1}, {2},
+                                  {fieldConstant(0.1), fieldConstant(0.0)});
+    // Bilinear, transparent outside the input, the texel as stored (premultiplied).
+    FieldBuild::Step step;
+    step.instruction.op = static_cast<std::uint8_t>(FieldOp::Image);
+    step.instruction.choices = {0, 1, 3, 4, 0, 1};
+    step.instruction.slot = slot;
+    step.output = build.nextRegister++;
+    step.inputs = {c, -1, -1, -1};
+    build.steps.push_back(std::move(step));
+    const auto texel = build.steps.back().output;
+    const auto joined = fieldEmit(build, FieldOp::Math, {texel, tinted, -1, -1}, {0},
+                                  {fieldConstant(0.1), fieldConstant(0.0)});
+    auto program = finishFieldProgram(build, joined, FieldResultKind::Premultiplied,
+                                      FieldOutputMode::Raw, node.id);
+    if (!program)
+        return false;
+    runtime::CompiledImageEffect effect{node.id, *input,
+                                        runtime::FieldRasterKernel{std::move(*program), 1}};
+    effect.fieldImages = std::move(build.images);
+    const auto index = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(std::move(effect));
+    portOperations_.insert_or_assign({node.id, "image"}, index);
+    indices.emplace(node.id, index);
+    return true;
+}

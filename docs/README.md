@@ -106,6 +106,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Test Card](user-guide/test-card.md) — sixteen procedural test patterns (bars, patch, ramps, geometry, sharpness,
   motion, countdown, alpha), the size rules, the Patch's expected display value, and the sources of every
   standard value.
+- [Light Rays](user-guide/light-rays.md) — volumetric rays that radiate from a point, driven by the
+  picture's luminance or alpha, with length, falloff, color and boost.
 - [Motion blur](user-guide/motion-blur.md) — which motion blur to use, the shared shutter, sub-frame
   Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
   Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of

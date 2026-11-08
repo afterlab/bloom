@@ -1800,6 +1800,66 @@ through the production builder at full frame and ROI, and the native harness hol
 oracle on a device. [Benchmarks](../development/benchmarks.md#chromatic-aberration-486) names the scenario
 and the suspected cost.
 
+## Light Rays
+
+`bloom.light-rays`, schema 1, under Light & Shadow (issue #508), has one Image in, `input`, and one Image
+output, `image`: the picture with volumetric rays added that radiate from a point. Bright (or opaque)
+parts of the picture streak away from the point, tinted and boosted, on top of the picture. It takes no
+effect mask.
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `source` | Luminance | Luminance, Alpha | What drives the rays: the picture's Rec. 709 luma, or its alpha. A constant with no socket |
+| `center` | 0, 0 | within 1e6 px | The point the rays radiate from, pixels from the composition's center with y down |
+| `length` | 50% | 0 to 100% | How far each pixel gathers towards the center, as a fraction of its distance to it; 100% reaches the center |
+| `falloff` | 1 | 0 to 8 | How fast a ray fades along its length; 0 weighs it evenly |
+| `boost` | 1.5 | 0 to 100 | A multiplier on the gathered rays |
+| `tint` | white | channels 0 to 100 | The color the rays are multiplied by; white leaves the source's own color. A constant with no socket |
+
+`center`, `length`, `falloff` and `boost` have a socket and can be keyed or driven. The source and the
+tint are constants: the field program takes scalar and vector operands, so a color is part of the
+program rather than an animated operand. Length 0 or boost 0 leaves the picture exactly as it is.
+
+**The model.** Each pixel `p` gathers the source along the segment from `p` towards the center `c`, the
+fraction `length` of the way. With `n = min(floor(reach / 2) + 1, 96)` samples, `reach` the segment's length
+in pixels, sample `i` lies at `q = p + (c - p) length t` for `t = (i + 1/2) / n`, reads the bilinear
+premultiplied texel's luma (or alpha, transparent outside the picture) and is weighed `(1 - t)^falloff`.
+The rays are the weighted mean of those reads times the boost, `m`. The pixel's result is the input's own
+premultiplied texel plus `m` times the tint in the color channels and `min(m, 1)` in alpha (alpha is
+then clamped to 1). A pixel that is not itself lit therefore receives the light of whatever lies between it
+and the center, which streaks it away from the center; the farther a source is along a pixel's segment the
+less it counts. The sample count follows the segment's length, one per two pixels, so a short ray takes few
+samples and the picture does not depend on the proxy except through the resolution of its reads. The
+center is in composition pixels, and `length` is a fraction, so both mean the same on a proxy as at full
+size.
+
+**HDR and alpha.** Nothing is clamped before the sum: luma above one gives rays above one, and the input's
+values pass through. The rays are added as light, so an area that is already opaque stays opaque and a
+transparent area with rays in front of it gains alpha up to `m`. The gather stays inside the input's data
+window: rays reach as far as the picture does and no further, and a source outside it is transparent.
+
+**Lowering.** One field raster (`docs/architecture/fields.md`, "Rays") over the input's data window: `Coordinate`,
+one `Rays` instruction (the source as its constant choice; the length, falloff, boost and center its
+operands), a `Constant` for the tint, a `Math` multiply, an `Image` read of the input at the pixel
+(selector 3, the texel as stored) and a `Math` add, into a Premultiplied result. With a constant length
+or boost of zero the output is the input itself and the node adds no operation; a muted node is the same.
+A raster that gathers an image is evaluated over the whole image behind a region of interest.
+
+**On the GPU.** The field raster's program with the new instruction: the input is moved beside the
+canvas in an atlas, one dispatch of the fixed field program marches the rays, and the canvas is cut back
+out. Nothing is read back. The kernel source is the CPU reference's, so the two take the same samples with
+the same arithmetic.
+
+**Evidence.** `src/core/tests/field_program_tests.cpp` holds the gather against an independent
+double-precision reading (both sources, falloffs, lengths) and the identities and refusals of the encoder;
+`src/runtime/tests/snapshot_compiler_light_rays_tests.ipp` holds the lowering (which operation, the
+program, the operands, mute, identities, time dependence) and, on the CPU reference over a checker grid,
+the whole picture against an independent gather, the input kept under the rays, a region of interest equal
+to the whole frame's pixels, the pixel budget and cancellation. `node.bloom.light-rays` prepares through
+the production builder at full frame and ROI for both sources, and the native harness holds the program to
+the CPU oracle on a device. [Benchmarks](../development/benchmarks.md#light-rays-508) names the scenario and
+the suspected cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,

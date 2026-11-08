@@ -426,6 +426,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `codec-degrade-2k` | 1920×1080 | 24 | A PNG16 plate under Codec Degrade (#563) with 16 px blocks, a 12-frame GOP and 75% P-frame persistence, its quality keyed from 60 to 15 so every frame is new and renders its chain from the last keyframe, optical flow included. Written, not yet run: it has no recorded numbers and no budget |
 | `lens-distortion-2k` | 1920×1080 | 24 | A PNG16 plate under Lens Distortion (#486) in Redistort mode, its radial `k1` keyed from -0.1 to -0.3 so every frame is new. Only the warped image is read, so the ST map is not built. Written, not yet run: it has no recorded numbers and no budget |
 | `chromatic-aberration-2k` | 1920×1080 | 24 | A PNG16 plate under Chromatic Aberration (#486), its amount keyed from 1% to 4% so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
+| `light-rays-2k` | 1920×1080 | 24 | A PNG16 plate under Light Rays (#508) from its luminance, its length keyed from 40% to 90% so every frame is new and each pixel gathers a different number of samples. Written, not yet run: it has no recorded numbers and no budget |
 
 | `test-card-2k` | 1920×1080 | 24 | A Zone Plate Test Card (#587), moving so every frame is new, drawn at the composition's size with 16 sub-samples per pixel; no media is read. Written, not yet run: it has no recorded numbers and no budget |
 
@@ -974,6 +975,15 @@ Test Card has no recorded numbers and no budget yet. The scenario `test-card-2k`
 most expensive card end to end. Suspicions to check against it, not findings: the Zone Plate and the Siemens
 Star run 16 sub-samples per pixel where the other cards run 4, so they should cost several times what the
 bars do; and the color space transform after the raster is one more full-frame pass per card.
+### Light Rays (#508)
+
+Light Rays has no recorded numbers and no budget yet. The scenario `light-rays-2k` is written to measure it
+end to end. Suspicions from reading the code, not findings: each pixel marches up to 96 bilinear reads
+of the input (one per two pixels of its ray, so a long ray at 1920 wide takes the most), which is far more
+reads than any other field node takes, and the reads are scattered rather than coherent across a
+neighborhood on a GPU; the gather runs at full resolution although a rays picture is soft and a lower
+resolution would look much the same; and on the GPU the input is moved beside the canvas in the field
+raster's atlas, one more full-frame copy and a larger dispatched image than the output alone.
 
 ## Platform notes
 
