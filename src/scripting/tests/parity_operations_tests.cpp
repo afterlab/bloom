@@ -392,11 +392,12 @@ void pathValues() {
             .point = {x, y}, .inHandle = in, .outHandle = out, .mode = mode};
     };
     document::PathValue outline;
-    outline.closed = true;
-    outline.anchors = {anchor(0, 0),
-                       anchor(100, 0, document::Vec2d{80, -20}, document::Vec2d{120, 20},
-                              document::PathAnchorMode::Mirrored),
-                       anchor(50, 80)};
+    outline.editableContour().closed = true;
+    outline.editableContour().anchors = {anchor(0, 0),
+                                         anchor(100, 0, document::Vec2d{80, -20},
+                                                document::Vec2d{120, 20},
+                                                document::PathAnchorMode::Mirrored),
+                                         anchor(50, 80)};
     auto shape = fixture.run("bloom.layer.add-shape",
                              {{"composition", Value(StableId{fixture.main.value()})},
                               {"kind", Value("path")},
@@ -422,9 +423,10 @@ void pathValues() {
     expect(stored() == outline, "the outline, handles and anchor mode are kept as authored");
 
     document::PathValue replacement;
-    replacement.closed = false;
-    replacement.anchors = {anchor(10, 10), anchor(200, 40, std::nullopt, std::nullopt,
-                                                  document::PathAnchorMode::Corner)};
+    replacement.editableContour().closed = false;
+    replacement.editableContour().anchors = {
+        anchor(10, 10),
+        anchor(200, 40, std::nullopt, std::nullopt, document::PathAnchorMode::Corner)};
     auto repointed = fixture.run("bloom.parameter.set-source",
                                  {{"composition", Value(StableId{fixture.main.value()})},
                                   {"parameter", Value(StableId{pathParameter.value()})},
@@ -943,10 +945,10 @@ void entryLayerEdits() {
         return result;
     };
     document::PathValue square;
-    square.closed = true;
-    square.anchors = {{{0, 0}, std::nullopt, std::nullopt},
-                      {{50, 0}, std::nullopt, std::nullopt},
-                      {{50, 50}, std::nullopt, std::nullopt}};
+    square.editableContour().closed = true;
+    square.editableContour().anchors = {{{0, 0}, std::nullopt, std::nullopt},
+                                        {{50, 0}, std::nullopt, std::nullopt},
+                                        {{50, 50}, std::nullopt, std::nullopt}};
     edit("bloom.layer.set-enabled", a, {{"enabled", Value(false)}});
     edit("bloom.layer.set-enabled", a, {{"enabled", Value(true)}});
     edit("bloom.layer.set-locked", a, {{"locked", Value(true)}});

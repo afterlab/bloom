@@ -90,7 +90,7 @@ bool near(const Vec2d a, const Vec2d b, const double tolerance = 0.02) {
 std::vector<Vec2d> pointsOf(const std::optional<document::PathValue>& value) {
     std::vector<Vec2d> points;
     if (value)
-        for (const auto& anchor : value->anchors)
+        for (const auto& anchor : value->firstContour().anchors)
             points.push_back(anchor.point);
     return points;
 }
@@ -233,7 +233,7 @@ void cardGestures() {
         std::get<document::ConstantValueSource>(recordOf(session, *parameter)->source);
     expect(pointsOf(canvas.value()).size() == 3 && near(pointsOf(canvas.value())[2], {0.5, 0.7}) &&
                stack.size() == commands &&
-               std::get<document::PathValue>(stored.value).anchors.size() == 2,
+               std::get<document::PathValue>(stored.value).firstContour().anchors.size() == 2,
            "the drag is live through the session and commits nothing yet");
     expect(pointsOf(panel->canvas()->value()).size() == 3,
            "Properties follows the card's drag before it commits");
@@ -520,7 +520,9 @@ void presets() {
         }
         // Past 1 a channel curve continues in a straight line.
         expect(std::isfinite(y(2.0)), "a preset extends past 1");
-        expect(document::gradeCurvePreset(GradeCurve::HueVsLuma, preset).anchors.empty(),
+        expect(document::gradeCurvePreset(GradeCurve::HueVsLuma, preset)
+                   .firstContour()
+                   .anchors.empty(),
                "a hue curve's only preset is its empty default");
     }
 }

@@ -80,6 +80,10 @@ QString valueText(const runtime::CompiledValue& value) {
                 return held ? QObject::tr("True") : QObject::tr("False");
             else if constexpr (std::is_same_v<T, double>)
                 return QString::number(held, 'g', 12);
+            else if constexpr (std::is_same_v<T, runtime::CompiledPathValue>)
+                return QObject::tr("%1 contours, %2 anchors")
+                    .arg(held.value->contours.size())
+                    .arg(held.value->anchorCount());
             else
                 return QString::number(static_cast<qlonglong>(held));
         },

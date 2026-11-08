@@ -120,6 +120,13 @@ Path fromPoints(const std::vector<PathPoint>& points) {
         path.anchors.push_back({point, {}, {}});
     return path;
 }
+// A non-centered stroke needs an inside everywhere, so any open contour centers the whole stroke.
+[[nodiscard]] PathStroke compoundStroke(const std::span<const Path> contours, PathStroke stroke) {
+    if (contours.size() > 1 &&
+        !std::ranges::all_of(contours, [](const Path& contour) { return contour.closed; }))
+        stroke.align = PathStrokeAlign::Center;
+    return stroke;
+}
 void fitBox(Path& path, double width, double height) {
     if (path.anchors.empty())
         return;
@@ -137,6 +144,71 @@ void fitBox(Path& path, double width, double height) {
 }
 } // namespace
 
+double pathFlatteningTolerance(const double scaleX, const double scaleY) noexcept {
+    return 1.0 / (32.0 * std::max(scaleX, scaleY));
+}
+
+std::optional<std::vector<PathPoint>> flattenPathContour(const Path& path, const double tolerance,
+                                                         const PathCancellation& cancelled) {
+    std::vector<PathPoint> points;
+    if (path.anchors.empty())
+        return points;
+    if (!append(points, path.anchors.front().point))
+        return std::nullopt;
+    const auto count = path.anchors.size();
+    for (std::size_t i = 0; i < count - (path.closed ? 0 : 1); ++i) {
+        const auto& a = path.anchors[i];
+        const auto& b = path.anchors[(i + 1) % count];
+        if (!flatten(a.point, a.outHandle.value_or(a.point), b.inHandle.value_or(b.point), b.point,
+                     tolerance, 0, points, cancelled))
+            return std::nullopt;
+    }
+    if (path.closed && points.size() > 1 && points.front() == points.back())
+        points.pop_back();
+    return points;
+}
+
+std::optional<PathArcLength> PathArcLength::create(const Path& path, const double scaleX,
+                                                   const double scaleY,
+                                                   const PathCancellation& cancelled) {
+    if (!std::isfinite(scaleX) || !std::isfinite(scaleY) || scaleX <= 0 || scaleY <= 0)
+        return std::nullopt;
+    auto points = flattenPathContour(path, pathFlatteningTolerance(scaleX, scaleY), cancelled);
+    if (!points)
+        return std::nullopt;
+    PathArcLength result;
+    result.points_ = std::move(*points);
+    if (path.closed && result.points_.size() > 1)
+        result.points_.push_back(result.points_.front());
+    result.cumulative_.reserve(std::max<std::size_t>(result.points_.size(), 1));
+    result.cumulative_.push_back(0.0);
+    for (std::size_t i = 1; i < result.points_.size(); ++i) {
+        const auto step = sub(result.points_[i], result.points_[i - 1]);
+        // sqrt of IEEE products: correctly rounded, where hypot is only faithful per platform.
+        result.cumulative_.push_back(result.cumulative_.back() +
+                                     std::sqrt(step.x * step.x + step.y * step.y));
+    }
+    if (!std::isfinite(result.cumulative_.back()))
+        return std::nullopt;
+    return result;
+}
+
+PathPoint PathArcLength::pointAt(const double distance) const noexcept {
+    if (points_.empty())
+        return {};
+    if (!(distance > 0.0))
+        return points_.front();
+    if (distance >= cumulative_.back())
+        return points_.back();
+    const auto after = std::ranges::upper_bound(cumulative_, distance);
+    const auto index = static_cast<std::size_t>(after - cumulative_.begin());
+    const double before = cumulative_[index - 1];
+    const double span = cumulative_[index] - before;
+    const double t = span > 0.0 ? (distance - before) / span : 0.0;
+    const auto a = points_[index - 1], b = points_[index];
+    return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t};
+}
+
 ImageResult<PathRaster> PathRaster::create(const Path& path, const PathStroke stroke,
                                            const double scaleX, const double scaleY,
                                            PathCancellation cancelled) {
@@ -151,25 +223,17 @@ ImageResult<PathRaster> PathRaster::create(const Path& path, const PathStroke st
     raster.scaleX_ = scaleX;
     raster.scaleY_ = scaleY;
     raster.align_ = path.closed ? stroke.align : PathStrokeAlign::Center;
-    const double tolerance = 1.0 / (32.0 * std::max(scaleX, scaleY));
+    const double tolerance = pathFlatteningTolerance(scaleX, scaleY);
     for (const auto& a : path.anchors)
         if (!finite(a.point) || (a.inHandle && !finite(*a.inHandle)) ||
             (a.outHandle && !finite(*a.outHandle)))
             return failure();
     if (path.anchors.empty())
         return ImageResult<PathRaster>::success(std::move(raster));
-    if (!append(raster.fill_, path.anchors.front().point))
+    auto flattened = flattenPathContour(path, tolerance, cancelled);
+    if (!flattened)
         return failure();
-    const auto count = path.anchors.size();
-    for (std::size_t i = 0; i < count - (path.closed ? 0 : 1); ++i) {
-        const auto& a = path.anchors[i];
-        const auto& b = path.anchors[(i + 1) % count];
-        if (!flatten(a.point, a.outHandle.value_or(a.point), b.inHandle.value_or(b.point), b.point,
-                     tolerance, 0, raster.fill_, cancelled))
-            return failure();
-    }
-    if (path.closed && raster.fill_.size() > 1 && raster.fill_.front() == raster.fill_.back())
-        raster.fill_.pop_back();
+    raster.fill_ = std::move(*flattened);
     if (stroke.width == 0 || raster.fill_.size() < 2)
         return ImageResult<PathRaster>::success(std::move(raster));
     const double half = stroke.width * (raster.align_ == PathStrokeAlign::Center ? 0.5 : 1.0);
@@ -246,6 +310,41 @@ ImageResult<PathRaster> PathRaster::create(const Path& path, const PathStroke st
         return failure();
     return ImageResult<PathRaster>::success(std::move(raster));
 }
+ImageResult<PathRaster> PathRaster::create(const std::span<const Path> contours,
+                                           const PathStroke stroke, const double scaleX,
+                                           const double scaleY, const PathCancellation& cancelled) {
+    if (contours.size() == 1)
+        return create(contours.front(), stroke, scaleX, scaleY, cancelled);
+    const auto failure = [] {
+        return ImageResult<PathRaster>::failure(
+            ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+    };
+    if (!std::isfinite(scaleX) || !std::isfinite(scaleY) || scaleX <= 0 || scaleY <= 0)
+        return failure();
+    PathRaster result;
+    result.scaleX_ = scaleX;
+    result.scaleY_ = scaleY;
+    const auto compound = compoundStroke(contours, stroke);
+    result.align_ = compound.align;
+    std::size_t total = 0;
+    for (const auto& contour : contours) {
+        auto single = create(contour, compound, scaleX, scaleY, cancelled);
+        if (!single)
+            return single;
+        auto& raster = *single.value();
+        total += raster.fill_.size();
+        if (total > kMaximumSegments)
+            return failure();
+        result.contours_.push_back(std::move(raster.fill_));
+        for (auto& outline : raster.outlines_) {
+            total += outline.size();
+            if (total > kMaximumSegments)
+                return failure();
+            result.outlines_.push_back(std::move(outline));
+        }
+    }
+    return ImageResult<PathRaster>::success(std::move(result));
+}
 ImageResult<PathRaster> PathRaster::transformed(std::span<const Path> paths, PathStroke stroke,
                                                 PathMatrix matrix, double scaleX, double scaleY,
                                                 const PathCancellation& cancelled,
@@ -268,6 +367,7 @@ ImageResult<PathRaster> PathRaster::transformed(std::span<const Path> paths, Pat
         return true;
     };
     std::size_t total = 0;
+    stroke = compoundStroke(paths, stroke);
     for (const auto& path : paths) {
         auto native = create(path, stroke, scaleX * norm, scaleY * norm, cancelled);
         if (!native)

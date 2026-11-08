@@ -46,10 +46,12 @@ maskPathAt(const document::Composition& composition, const document::LayerMask& 
            core::RationalTime keyTime);
 
 [[nodiscard]] QPainterPath outline(const document::PathValue& path);
+[[nodiscard]] QPainterPath outline(const document::PathContour& contour);
 
 // The outline displaced outward by `distance` pixels (negative inward); used for the feather
 // bounds at expansion +/- feather / 2. An open or degenerate path yields an empty path.
 [[nodiscard]] QPainterPath offsetOutline(const document::PathValue& path, double distance);
+[[nodiscard]] QPainterPath offsetOutline(const document::PathContour& contour, double distance);
 
 [[nodiscard]] QString modeText(document::LayerMaskMode mode);
 [[nodiscard]] QString channelText(document::TrackMatteChannel channel);

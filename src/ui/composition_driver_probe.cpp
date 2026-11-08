@@ -96,6 +96,11 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
             type = document::kTextSourceNodeType;
             valueKind = document::ParameterValueKind::String;
         }
+        // #589: a Path output is read by the one node with a Path operand.
+        if (*kind == document::SocketValueKind::Path) {
+            type = document::kShapeSourceNodeType;
+            valueKind = document::ParameterValueKind::Path;
+        }
         if (*kind == document::SocketValueKind::Vector2) {
             type = document::kLayerOutputNodeType;
             valueKind = document::ParameterValueKind::Vec2d;

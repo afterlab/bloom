@@ -216,6 +216,14 @@ class Evaluator final {
                     }
                     retainedStringBytes_ += string->size();
                 }
+                if (const auto* path = std::get_if<runtime::CompiledPathValue>(&value)) {
+                    const auto anchors = path->value->anchorCount();
+                    if (anchors > memoization_.maxRetainedPathAnchors - retainedPathAnchors_) {
+                        initialBudgetFailures_.push_back(index);
+                        continue;
+                    }
+                    retainedPathAnchors_ += anchors;
+                }
                 outputs_[index] = value;
             }
         }
@@ -415,8 +423,27 @@ class Evaluator final {
                 return;
             }
         }
+        // #589: a shared path is charged once per output that holds it, against the same kind of
+        // retained allowance strings have; a frame that exceeds it reads the empty path and says
+        // so.
+        const auto anchorsOf = [](const CompiledValue& held) -> std::size_t {
+            const auto* path = std::get_if<runtime::CompiledPathValue>(&held);
+            return path == nullptr ? 0 : path->value->anchorCount();
+        };
+        const auto oldAnchors = anchorsOf(outputs_[index]);
+        const auto newAnchors = anchorsOf(value);
+        if (newAnchors >
+            memoization_.maxRetainedPathAnchors - (retainedPathAnchors_ - oldAnchors)) {
+            fail(operation, {}, "Value graph path budget exceeded",
+                 "The path output exceeds the retained-output anchor limit.");
+            outputs_[index] = runtime::CompiledPathValue{};
+            retainedPathAnchors_ -= oldAnchors;
+            retainedStringBytes_ -= oldBytes;
+            return;
+        }
         const auto* newString = std::get_if<std::string>(&value);
         outputs_[index] = value;
+        retainedPathAnchors_ = retainedPathAnchors_ - oldAnchors + newAnchors;
         retainedStringBytes_ = retainedStringBytes_ - oldBytes +
                                (newString == nullptr ? std::size_t{0} : newString->size());
     }
@@ -468,6 +495,8 @@ class Evaluator final {
                                 const runtime::CompiledValueGradientSample& kernel);
     void evaluateFieldSample(const runtime::CompiledValueOperation& operation,
                              const runtime::CompiledValueFieldSample& kernel);
+    void evaluatePathCurve(const runtime::CompiledValueOperation& operation,
+                           const runtime::CompiledValuePathCurve& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -480,6 +509,7 @@ class Evaluator final {
     std::vector<std::uint8_t> available_;
     std::vector<ValueGraphDiagnostic> diagnostics_;
     std::size_t retainedStringBytes_ = 0;
+    std::size_t retainedPathAnchors_ = 0;
     std::vector<std::size_t> initialBudgetFailures_;
 };
 
@@ -523,6 +553,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateGradientSample(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFieldSample>) {
                 evaluateFieldSample(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValuePathCurve>) {
+                evaluatePathCurve(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -568,6 +600,21 @@ void Evaluator::evaluateGradientSample(const runtime::CompiledValueOperation& op
     write(operation, 0, runtime::detail::gradientValueTintAt(*sampled, kernel.position));
 }
 
+// #589: a keyed Path literal at this frame. A curve that cannot sample falls back to the empty
+// path.
+void Evaluator::evaluatePathCurve(const runtime::CompiledValueOperation& operation,
+                                  const runtime::CompiledValuePathCurve& kernel) {
+    auto sampled = runtime::samplePathCurve(kernel.curve, time_);
+    if (!sampled) {
+        fail(operation, {}, "Path is not evaluable at this time",
+             "The path's keys could not be sampled; it falls back to the empty path.");
+        write(operation, 0, runtime::CompiledPathValue{});
+        return;
+    }
+    write(operation, 0,
+          runtime::CompiledPathValue{std::make_shared<document::PathValue>(std::move(*sampled))});
+}
+
 // #525: the field program at this frame, read at the kernel's position. Its Scalar and Vector 2
 // operands are the kernel's operands in program order; its curves are sampled here.
 void Evaluator::evaluateFieldSample(const runtime::CompiledValueOperation& operation,
@@ -597,8 +644,8 @@ void Evaluator::evaluateFieldSample(const runtime::CompiledValueOperation& opera
                     evaluable = false;
                     return;
                 }
-                values.push_back(static_cast<double>(sampled->anchors.size()));
-                for (const auto& anchor : sampled->anchors) {
+                values.push_back(static_cast<double>(sampled->firstContour().anchors.size()));
+                for (const auto& anchor : sampled->firstContour().anchors) {
                     values.push_back(anchor.point.x);
                     values.push_back(anchor.point.y);
                 }

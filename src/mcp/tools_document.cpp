@@ -125,15 +125,15 @@ document::Vec2d pathPoint(yyjson_val* item) {
     return point;
 }
 
-// ADR 0028: a path argument has the shape the parameter projection publishes: {"closed": bool,
+// ADR 0028: one contour has the shape the parameter projection publishes: {"closed": bool,
 // "anchors": [{"point": [x, y], "inHandle": [x, y] | null, "outHandle": [x, y] | null}]}.
-document::PathValue pathValue(yyjson_val* item) {
+document::PathContour pathContour(yyjson_val* item) {
     auto* closed = yyjson_obj_get(item, "closed");
     auto* anchors = yyjson_obj_get(item, "anchors");
     if (yyjson_obj_size(item) != 2 || !yyjson_is_bool(closed) || !yyjson_is_arr(anchors) ||
         yyjson_arr_size(anchors) > document::kMaximumPathAnchors)
-        throw InvalidInput("A path is {closed, anchors}");
-    document::PathValue path;
+        throw InvalidInput("A path contour is {closed, anchors}");
+    document::PathContour path;
     path.closed = yyjson_get_bool(closed);
     yyjson_arr_iter rows = yyjson_arr_iter_with(anchors);
     while (auto* row = yyjson_arr_iter_next(&rows)) {
@@ -168,6 +168,73 @@ document::PathValue pathValue(yyjson_val* item) {
         anchor.mode = mode.value_or(document::inferPathAnchorMode(anchor));
         path.anchors.push_back(anchor);
     }
+    return path;
+}
+
+// #589: one group of a compound path: {"key": text, "firstContour": n, "contourCount": n, "color":
+// [r, g, b, a] (optional)}.
+document::PathGroup pathGroup(yyjson_val* item) {
+    auto* key = yyjson_obj_get(item, "key");
+    auto* first = yyjson_obj_get(item, "firstContour");
+    auto* count = yyjson_obj_get(item, "contourCount");
+    auto* color = yyjson_obj_get(item, "color");
+    if (yyjson_obj_size(item) != (color != nullptr ? 4U : 3U) || !yyjson_is_str(key) ||
+        !yyjson_is_uint(first) || !yyjson_is_uint(count) ||
+        yyjson_get_uint(first) > std::numeric_limits<std::uint32_t>::max() ||
+        yyjson_get_uint(count) > std::numeric_limits<std::uint32_t>::max())
+        throw InvalidInput("A path group is {key, firstContour, contourCount, color}");
+    document::PathGroup group;
+    group.key.assign(yyjson_get_str(key), yyjson_get_len(key));
+    group.firstContour = static_cast<std::uint32_t>(yyjson_get_uint(first));
+    group.contourCount = static_cast<std::uint32_t>(yyjson_get_uint(count));
+    if (color != nullptr) {
+        if (!yyjson_is_arr(color) || yyjson_arr_size(color) != 4)
+            throw InvalidInput("A path group color is four numbers");
+        const auto channel = [&](const std::size_t index) {
+            auto* value = yyjson_arr_get(color, index);
+            if (!yyjson_is_num(value))
+                throw InvalidInput("A path group color is four numbers");
+            return yyjson_get_num(value);
+        };
+        group.color = core::Color4d{channel(0), channel(1), channel(2), channel(3)};
+    }
+    return group;
+}
+
+// #589: a path argument is one contour, or {"contours": [contour...], "fillRule": "nonZero" or
+// "evenOdd" (optional), "groups": [group...] (optional)}.
+document::PathValue pathValue(yyjson_val* item) {
+    auto* contours = yyjson_obj_get(item, "contours");
+    if (contours == nullptr)
+        return document::PathValue::fromContour(pathContour(item));
+    auto* fillRule = yyjson_obj_get(item, "fillRule");
+    auto* groups = yyjson_obj_get(item, "groups");
+    if (yyjson_obj_size(item) != 1U + static_cast<std::size_t>(fillRule != nullptr) +
+                                     static_cast<std::size_t>(groups != nullptr) ||
+        !yyjson_is_arr(contours) || yyjson_arr_size(contours) > document::kMaximumPathContours ||
+        (groups != nullptr && !yyjson_is_arr(groups)))
+        throw InvalidInput("A compound path is {contours, fillRule, groups}");
+    document::PathValue path;
+    yyjson_arr_iter rows = yyjson_arr_iter_with(contours);
+    while (auto* row = yyjson_arr_iter_next(&rows))
+        path.contours.push_back(pathContour(row));
+    if (fillRule != nullptr) {
+        const auto rule = yyjson_is_str(fillRule)
+                              ? document::pathFillRuleFromName(std::string_view(
+                                    yyjson_get_str(fillRule), yyjson_get_len(fillRule)))
+                              : std::nullopt;
+        if (!rule)
+            throw InvalidInput("A path fill rule is inherit, nonZero or evenOdd");
+        path.fillRule = *rule;
+    }
+    if (groups != nullptr) {
+        yyjson_arr_iter members = yyjson_arr_iter_with(groups);
+        while (auto* member = yyjson_arr_iter_next(&members))
+            path.groups.push_back(pathGroup(member));
+    }
+    if (!path.isValid())
+        throw InvalidInput("A compound path holds at most 65536 contours and 262144 anchors, and "
+                           "its groups have unique keys and ascending, unshared contours");
     return path;
 }
 

@@ -1,5 +1,7 @@
 #include <bloom/ui/path_editing.hpp>
 
+#include <bloom/document/path_value.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -10,7 +12,7 @@ namespace {
 
 using document::PathAnchor;
 using document::PathAnchorMode;
-using document::PathValue;
+using document::PathContour;
 using document::Vec2d;
 
 [[nodiscard]] Vec2d add(const Vec2d a, const Vec2d b) noexcept { return {a.x + b.x, a.y + b.y}; }
@@ -24,7 +26,8 @@ using document::Vec2d;
     return sub(scale(point, 2.0), handle);
 }
 
-[[nodiscard]] std::optional<std::size_t> previous(const PathValue& path, const std::size_t index) {
+[[nodiscard]] std::optional<std::size_t> previous(const PathContour& path,
+                                                  const std::size_t index) {
     if (index > 0)
         return index - 1;
     if (path.closed && path.anchors.size() > 1)
@@ -32,7 +35,7 @@ using document::Vec2d;
     return std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::size_t> next(const PathValue& path, const std::size_t index) {
+[[nodiscard]] std::optional<std::size_t> next(const PathContour& path, const std::size_t index) {
     if (index + 1 < path.anchors.size())
         return index + 1;
     if (path.closed && path.anchors.size() > 1)
@@ -42,7 +45,7 @@ using document::Vec2d;
 
 // Gives a handle-less or one-handled anchor both handles: neighbour-sized symmetric ones when it
 // has none, the mirror of the one it has otherwise.
-void ensureHandles(PathValue& path, const std::size_t index) {
+void ensureHandles(PathContour& path, const std::size_t index) {
     auto& anchor = path.anchors[index];
     if (!anchor.inHandle && !anchor.outHandle) {
         if (const auto handles = autoHandles(path, index)) {
@@ -80,7 +83,7 @@ PathAnchorMode modeOf(const PathAnchor& anchor) noexcept {
     return anchor.mode;
 }
 
-std::optional<PathAnchorMode> commonMode(const PathValue& path, const AnchorSet& anchors) {
+std::optional<PathAnchorMode> commonMode(const PathContour& path, const AnchorSet& anchors) {
     std::optional<PathAnchorMode> common;
     for (const auto index : anchors) {
         if (index >= path.anchors.size())
@@ -93,7 +96,8 @@ std::optional<PathAnchorMode> commonMode(const PathValue& path, const AnchorSet&
     return common;
 }
 
-std::optional<std::pair<Vec2d, Vec2d>> autoHandles(const PathValue& path, const std::size_t index) {
+std::optional<std::pair<Vec2d, Vec2d>> autoHandles(const PathContour& path,
+                                                   const std::size_t index) {
     if (index >= path.anchors.size())
         return std::nullopt;
     const auto point = path.anchors[index].point;
@@ -111,7 +115,7 @@ std::optional<std::pair<Vec2d, Vec2d>> autoHandles(const PathValue& path, const 
     return std::pair{sub(point, step), add(point, step)};
 }
 
-void refreshAuto(PathValue& path) {
+void refreshAuto(PathContour& path) {
     for (std::size_t index = 0; index < path.anchors.size(); ++index) {
         auto& anchor = path.anchors[index];
         if (anchor.mode != PathAnchorMode::Auto)
@@ -126,7 +130,7 @@ void refreshAuto(PathValue& path) {
     }
 }
 
-void setMode(PathValue& path, const AnchorSet& anchors, const PathAnchorMode mode) {
+void setMode(PathContour& path, const AnchorSet& anchors, const PathAnchorMode mode) {
     for (const auto index : anchors) {
         if (index >= path.anchors.size())
             continue;
@@ -157,7 +161,7 @@ void setMode(PathValue& path, const AnchorSet& anchors, const PathAnchorMode mod
     refreshAuto(path);
 }
 
-void moveAnchors(PathValue& path, const AnchorSet& anchors, const Vec2d delta) {
+void moveAnchors(PathContour& path, const AnchorSet& anchors, const Vec2d delta) {
     for (const auto index : anchors) {
         if (index >= path.anchors.size())
             continue;
@@ -171,7 +175,7 @@ void moveAnchors(PathValue& path, const AnchorSet& anchors, const Vec2d delta) {
     refreshAuto(path);
 }
 
-void dragHandle(PathValue& path, const std::size_t index, const HandleSide side,
+void dragHandle(PathContour& path, const std::size_t index, const HandleSide side,
                 const Vec2d position, const bool free) {
     if (index >= path.anchors.size())
         return;
@@ -197,7 +201,7 @@ void dragHandle(PathValue& path, const std::size_t index, const HandleSide side,
     anchor.mode = mode;
 }
 
-void pullHandles(PathValue& path, const std::size_t index, const Vec2d outgoing) {
+void pullHandles(PathContour& path, const std::size_t index, const Vec2d outgoing) {
     if (index >= path.anchors.size())
         return;
     auto& anchor = path.anchors[index];
@@ -206,7 +210,7 @@ void pullHandles(PathValue& path, const std::size_t index, const Vec2d outgoing)
     anchor.mode = PathAnchorMode::Mirrored;
 }
 
-void toggleCorner(PathValue& path, const std::size_t index, const PathAnchorMode curved) {
+void toggleCorner(PathContour& path, const std::size_t index, const PathAnchorMode curved) {
     if (index >= path.anchors.size())
         return;
     const bool corner = modeOf(path.anchors[index]) == PathAnchorMode::Corner;
@@ -215,13 +219,11 @@ void toggleCorner(PathValue& path, const std::size_t index, const PathAnchorMode
                    : PathAnchorMode::Corner);
 }
 
-std::size_t segmentCount(const PathValue& path) noexcept {
-    if (path.anchors.size() < 2)
-        return 0;
-    return path.closed ? path.anchors.size() : path.anchors.size() - 1;
+std::size_t segmentCount(const PathContour& path) noexcept {
+    return document::contourSegmentCount(path);
 }
 
-std::array<Vec2d, 4> segmentControls(const PathValue& path, const std::size_t segment) {
+std::array<Vec2d, 4> segmentControls(const PathContour& path, const std::size_t segment) {
     const auto& a = path.anchors[segment];
     const auto& b = path.anchors[(segment + 1) % path.anchors.size()];
     return {a.point, a.outHandle.value_or(a.point), b.inHandle.value_or(b.point), b.point};
@@ -234,7 +236,7 @@ Vec2d segmentPoint(const std::array<Vec2d, 4>& controls, const double t) noexcep
     return lerp(lerp(p01, p12, t), lerp(p12, p23, t), t);
 }
 
-std::optional<SegmentHit> nearestSegmentPoint(const PathValue& path,
+std::optional<SegmentHit> nearestSegmentPoint(const PathContour& path,
                                               const std::function<Vec2d(Vec2d)>& toScreen,
                                               const Vec2d target) {
     constexpr int kSamples = 32;
@@ -273,53 +275,11 @@ std::optional<SegmentHit> nearestSegmentPoint(const PathValue& path,
     return best;
 }
 
-std::optional<std::size_t> insertAnchor(PathValue& path, const SegmentHit& hit) {
-    if (hit.segment >= segmentCount(path) || path.anchors.size() >= document::kMaximumPathAnchors)
-        return std::nullopt;
-    const auto t = std::clamp(hit.t, 0.0, 1.0);
-    const auto first = hit.segment;
-    const auto second = (hit.segment + 1) % path.anchors.size();
-    auto& a = path.anchors[first];
-    auto& b = path.anchors[second];
-    PathAnchor inserted;
-    if (!a.outHandle && !b.inHandle) {
-        inserted.point = lerp(a.point, b.point, t);
-        inserted.mode = PathAnchorMode::Corner;
-    } else {
-        const auto controls = segmentControls(path, hit.segment);
-        const auto p01 = lerp(controls[0], controls[1], t);
-        const auto p12 = lerp(controls[1], controls[2], t);
-        const auto p23 = lerp(controls[2], controls[3], t);
-        const auto p012 = lerp(p01, p12, t);
-        const auto p123 = lerp(p12, p23, t);
-        inserted.point = lerp(p012, p123, t);
-        inserted.inHandle = p012;
-        inserted.outHandle = p123;
-        inserted.mode = PathAnchorMode::Aligned;
-        // The neighbours' handles shorten along their own direction: they stay collinear but no
-        // longer symmetric, and an Auto neighbour must keep exactly this geometry.
-        const auto settle = [](PathAnchor& anchor) {
-            const auto mode = modeOf(anchor);
-            if (mode == PathAnchorMode::Mirrored || mode == PathAnchorMode::Auto)
-                anchor.mode = PathAnchorMode::Aligned;
-            else
-                anchor.mode = mode;
-        };
-        if (a.outHandle) {
-            a.outHandle = p01;
-            settle(a);
-        }
-        if (b.inHandle) {
-            b.inHandle = p23;
-            settle(b);
-        }
-    }
-    const auto at = first + 1;
-    path.anchors.insert(path.anchors.begin() + static_cast<std::ptrdiff_t>(at), inserted);
-    return at;
+std::optional<std::size_t> insertAnchor(PathContour& path, const SegmentHit& hit) {
+    return document::subdivideContourSegment(path, hit.segment, hit.t);
 }
 
-bool deleteAnchors(PathValue& path, const AnchorSet& anchors, const std::size_t minimum) {
+bool deleteAnchors(PathContour& path, const AnchorSet& anchors, const std::size_t minimum) {
     std::size_t removing = 0;
     for (const auto index : anchors)
         if (index < path.anchors.size())
@@ -335,7 +295,7 @@ bool deleteAnchors(PathValue& path, const AnchorSet& anchors, const std::size_t 
     return true;
 }
 
-bool setClosed(PathValue& path, const bool closed) {
+bool setClosed(PathContour& path, const bool closed) {
     if (closed && path.anchors.size() < 3)
         return false;
     path.closed = closed;
@@ -343,7 +303,7 @@ bool setClosed(PathValue& path, const bool closed) {
     return true;
 }
 
-void reverse(PathValue& path) {
+void reverse(PathContour& path) {
     std::ranges::reverse(path.anchors);
     for (auto& anchor : path.anchors)
         std::swap(anchor.inHandle, anchor.outHandle);

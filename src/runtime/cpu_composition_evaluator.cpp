@@ -1,22 +1,23 @@
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
+#include "codec_degrade_image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
 #include "depth_effect_image_effect.hpp"
-#include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
-#include "motion_blur_image_effect.hpp"
-#include "sharpen_image_effect.hpp"
-#include "codec_degrade_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
 #include "layer_mask_sampling.hpp"
 #include "layer_parent_transform.hpp"
+#include "lens_flare_image_effect.hpp"
+#include "motion_blur_image_effect.hpp"
 #include "operation_key.hpp"
 #include "plan_time_scopes.hpp"
 #include "resize_fit_geometry.hpp"
+#include "shape_geometry.hpp"
+#include "sharpen_image_effect.hpp"
 #include "transform_2d_geometry.hpp"
 #include "video_source.hpp"
 #include <bloom/media/video/colour.hpp>
@@ -743,6 +744,7 @@ enum class ScalarDomain : std::uint8_t {
                        valid("bloom.shape.inner-ratio", shape.innerRatio) &&
                        valid("bloom.shape.line-start", shape.lineStart) &&
                        valid("bloom.shape.line-end", shape.lineEnd) && shape.path.isValid() &&
+                       (!shape.drivenPath || shape.path == document::PathValue{}) &&
                        valid("bloom.shape.stroke-align",
                              static_cast<std::int64_t>(shape.strokeAlign)) &&
                        valid("bloom.shape.stroke-join",
@@ -2104,8 +2106,6 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
     return description;
 }
 
-#include "vector_geometry.ipp"
-
 EvaluationPixelStoragePlan CpuCompositionEvaluator::planPreflightPixelStorage(
     const std::shared_ptr<const CompiledCompositionPlan>& plan, const EvaluationRequest& request,
     const CancellationToken& cancellation) const {
@@ -2877,7 +2877,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(step.innerRatio);
                             key.add(step.lineStart);
                             key.add(step.lineEnd);
-                            key.add(step.path);
+                            // #589: the path this frame resolves to, so a driven shape cannot serve
+                            // the image of an earlier frame's path. A malformed driver keys as
+                            // such.
+                            const auto* framePath = detail::resolvedShapePath(step, resolved);
+                            key.add(framePath != nullptr);
+                            key.add(step.kind == document::ShapeKind::Path && framePath != nullptr
+                                        ? *framePath
+                                        : step.path);
                             authored(step.fillEnabledParameterId, step.fillEnabled,
                                      step.drivenFillEnabled);
                             parameter(step.fillColor);

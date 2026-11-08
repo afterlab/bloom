@@ -165,8 +165,8 @@ void roundTrip() {
     const auto snapshot = fixture.document.snapshot();
     const auto archive = save(snapshot);
     const auto text = documentText(archive);
-    expect(text.find("\"minor\": 42") != std::string::npos,
-           "the document is written at the current minor (1.42)");
+    expect(text.find("\"minor\": 43") != std::string::npos,
+           "the document is written at the current minor (1.43)");
     expect(occurrences(text, "\"handleMode\": \"auto\"") == 2 &&
                occurrences(text, "\"handleMode\": \"aligned\"") == 1,
            "each non-Free key carries its mode");
@@ -199,7 +199,7 @@ void oldFilesAreBitIdentical() {
     expect(text.find("handleMode") == std::string::npos, "a project without modes has no member");
 
     // The same document labelled 1.30 is exactly what a 1.30 writer produced.
-    const auto older = withMinor(text, 42, 30);
+    const auto older = withMinor(text, 43, 30);
     const auto decoded = decode(older);
     expect(static_cast<bool>(decoded), "a 1.30 document decodes");
     const project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 30}};
@@ -230,7 +230,7 @@ void oldFilesAreBitIdentical() {
 
 void migration() {
     Fixture fixture(false);
-    const auto older = withMinor(documentText(save(fixture.document.snapshot())), 42, 30);
+    const auto older = withMinor(documentText(save(fixture.document.snapshot())), 43, 30);
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     if (!parsed)
@@ -240,13 +240,14 @@ void migration() {
         project::kProductionDocumentMigrationSteps, {}, operation);
     expect(
         migrated.outcome() == project::MigrationOutcome::Migrated &&
-            migrated.stepsApplied() == 12 && migrated.migratedRoot() != nullptr && decode(older) &&
+            migrated.stepsApplied() == 13 && migrated.migratedRoot() != nullptr && decode(older) &&
             static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
         "1.30 reaches the current minor through the reserved 1.31 step, the handle-mode step "
         "the 1.33 export-format step, the 1.34 Interpret Footage step, the 1.35 sequence "
         "member stamp step, the 1.36 verified member digest step, the 1.37 entry layer step, "
         "the 1.38 gradient step, the 1.39 gradient colour pair step, the 1.40 gradient stop link "
-        "step, the 1.41 gradient mode step and the 1.42 matte source step");
+        "step, the 1.41 gradient mode step, the 1.42 matte source step and the 1.43 compound path "
+        "step");
 }
 
 void refusals() {
@@ -255,7 +256,7 @@ void refusals() {
     expect(static_cast<bool>(decode(text)), "the 1.32 document decodes");
 
     // A 1.31 file cannot carry the member.
-    expect(!decode(withMinor(text, 42, 31)),
+    expect(!decode(withMinor(text, 43, 31)),
            "a document claiming 1.31 with a handleMode is refused");
     // "free" is the default and the writer never spells it.
     auto spelled = text;

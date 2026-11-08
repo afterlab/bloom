@@ -54,13 +54,14 @@ project::ProjectIoOperationMemory memory() {
 }
 document::PathValue rectangle(const double size, const bool curved) {
     document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
-                    {{size, 0.0},
-                     std::nullopt,
-                     curved ? std::optional{document::Vec2d{size, 5.0}} : std::nullopt},
-                    {{size, size}, std::nullopt, std::nullopt},
-                    {{0.0, size}, std::nullopt, std::nullopt}};
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {
+        {{0.0, 0.0}, std::nullopt, std::nullopt},
+        {{size, 0.0},
+         std::nullopt,
+         curved ? std::optional{document::Vec2d{size, 5.0}} : std::nullopt},
+        {{size, size}, std::nullopt, std::nullopt},
+        {{0.0, size}, std::nullopt, std::nullopt}};
     return path;
 }
 
@@ -177,7 +178,7 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                                                  document::FrameRate::framesPerSecond24()))
             .project};
     auto text = encode(plain);
-    replaceOnce(text, "\"minor\": 42", "\"minor\": 23");
+    replaceOnce(text, "\"minor\": 43", "\"minor\": 23");
     stripExportQueueV1_29(text);
     expect(static_cast<bool>(decodeText(text)), "a 1.23 document without masks decodes");
     auto operation = memory();
@@ -199,7 +200,7 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
 
     Fixture fixture;
     auto masked = encode(fixture.document);
-    replaceOnce(masked, "\"minor\": 42", "\"minor\": 23");
+    replaceOnce(masked, "\"minor\": 43", "\"minor\": 23");
     stripExportQueueV1_29(masked);
     expect(!static_cast<bool>(decodeText(masked)), "a 1.23 document carrying masks is refused");
 }
@@ -262,7 +263,7 @@ void matteSourcesPersist() {
         }
     }
     auto older = text;
-    replaceOnce(older, "\"minor\": 42", "\"minor\": 41");
+    replaceOnce(older, "\"minor\": 43", "\"minor\": 41");
     expect(!static_cast<bool>(decodeText(older)), "a 1.41 document carrying a node matte is refused");
 }
 
@@ -271,29 +272,30 @@ document::PathValue modedPath(const double shift) {
     using document::PathAnchorMode;
     using document::Vec2d;
     document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{0.0 + shift, 0.0}, std::nullopt, std::nullopt, PathAnchorMode::Corner},
-                    {{20.0 + shift, 0.0},
-                     Vec2d{15.0 + shift, -5.0},
-                     Vec2d{25.0 + shift, 5.0},
-                     PathAnchorMode::Mirrored},
-                    {{40.0 + shift, 0.0},
-                     Vec2d{35.0 + shift, -5.0},
-                     Vec2d{50.0 + shift, 10.0},
-                     PathAnchorMode::Aligned},
-                    {{40.0 + shift, 30.0},
-                     Vec2d{45.0 + shift, 25.0},
-                     Vec2d{30.0 + shift, 35.0},
-                     PathAnchorMode::Free},
-                    // Explicit: Free with collinear equal handles, and Auto.
-                    {{20.0 + shift, 40.0},
-                     Vec2d{25.0 + shift, 40.0},
-                     Vec2d{15.0 + shift, 40.0},
-                     PathAnchorMode::Free},
-                    {{0.0 + shift, 30.0},
-                     Vec2d{0.0 + shift, 36.0},
-                     Vec2d{0.0 + shift, 24.0},
-                     PathAnchorMode::Auto}};
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {
+        {{0.0 + shift, 0.0}, std::nullopt, std::nullopt, PathAnchorMode::Corner},
+        {{20.0 + shift, 0.0},
+         Vec2d{15.0 + shift, -5.0},
+         Vec2d{25.0 + shift, 5.0},
+         PathAnchorMode::Mirrored},
+        {{40.0 + shift, 0.0},
+         Vec2d{35.0 + shift, -5.0},
+         Vec2d{50.0 + shift, 10.0},
+         PathAnchorMode::Aligned},
+        {{40.0 + shift, 30.0},
+         Vec2d{45.0 + shift, 25.0},
+         Vec2d{30.0 + shift, 35.0},
+         PathAnchorMode::Free},
+        // Explicit: Free with collinear equal handles, and Auto.
+        {{20.0 + shift, 40.0},
+         Vec2d{25.0 + shift, 40.0},
+         Vec2d{15.0 + shift, 40.0},
+         PathAnchorMode::Free},
+        {{0.0 + shift, 30.0},
+         Vec2d{0.0 + shift, 36.0},
+         Vec2d{0.0 + shift, 24.0},
+         PathAnchorMode::Auto}};
     return path;
 }
 
@@ -309,7 +311,7 @@ void anchorModesPersistAndMigrate() {
     fixture.run<commands::AnimateLayerMaskPath>(fixture.composition, target, mask,
                                                 core::RationalTime{});
     auto keyed = modedPath(5);
-    keyed.anchors[1].mode = document::PathAnchorMode::Auto;
+    keyed.editableContour().anchors[1].mode = document::PathAnchorMode::Auto;
     fixture.run<commands::SetLayerMaskPath>(fixture.composition, target, mask,
                                             core::RationalTime::fromInteger(2), keyed);
     const auto text = encode(fixture.document);
@@ -359,7 +361,7 @@ void anchorModesPersistAndMigrate() {
         if (composition != compositions.end())
             for (const auto& record : composition->animationCurves)
                 if (const auto* curve = std::get_if<document::PathAnimationCurve>(&record)) {
-                    const auto& anchors = curve->keyframes.front().value.anchors;
+                    const auto& anchors = curve->keyframes.front().value.firstContour().anchors;
                     if (anchors.size() != 6)
                         continue;
                     using document::PathAnchorMode;
@@ -387,7 +389,7 @@ void anchorModesPersistAndMigrate() {
                                          document::ShapeKind::Path, geometry);
     expect(shapedCommands.execute(std::move(add)).succeeded(), "a moded shape path is added");
     auto shapeText = encode(shaped);
-    replaceOnce(shapeText, "\"minor\": 42", "\"minor\": 23");
+    replaceOnce(shapeText, "\"minor\": 43", "\"minor\": 23");
     stripExportQueueV1_29(shapeText);
     expect(!static_cast<bool>(decodeText(shapeText)),
            "a pre-1.24 file carrying an anchor mode is refused");
@@ -426,7 +428,7 @@ void compositionTimecodePersists() {
         }
     }
     auto older = text;
-    replaceOnce(older, "\"minor\": 42", "\"minor\": 25");
+    replaceOnce(older, "\"minor\": 43", "\"minor\": 25");
     stripExportQueueV1_29(older);
     expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
 }

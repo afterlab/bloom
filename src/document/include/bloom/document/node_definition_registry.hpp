@@ -42,6 +42,9 @@ enum class SocketValueKind {
     ScalarField,
     Vector2Field,
     ColorField,
+    // #589: a whole path value (document::PathValue), evaluated per frame like the other value
+    // kinds and read by any number of consumers. Connects only to its own kind.
+    Path,
 };
 
 enum class ParameterValueKind {
@@ -95,6 +98,8 @@ enum class ParameterValueKind {
         return "vector2-field";
     case SocketValueKind::ColorField:
         return "color-field";
+    case SocketValueKind::Path:
+        return "path";
     }
     return "image";
 }
@@ -131,8 +136,9 @@ parameterValueKindName(const ParameterValueKind kind) noexcept {
 socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
     switch (kind) {
     case ParameterValueKind::Path:
+        return SocketValueKind::Path; // #589.
     case ParameterValueKind::Gradient:
-        return std::nullopt; // Path v1 and gradients (#541) are inline: no socket carries them.
+        return std::nullopt; // Gradients (#541) are inline: no socket carries them.
     case ParameterValueKind::Color4d:
         return SocketValueKind::Color;
     case ParameterValueKind::Vec2d:
@@ -192,6 +198,7 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Path:
         return false;
     }
     return false;

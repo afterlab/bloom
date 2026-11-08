@@ -28,7 +28,7 @@ namespace {
     }
     case document::kShutterCurveCustom: {
         // Linear between the points (x the open time, y the weight), held past the ends.
-        const auto& anchors = shutter.customCurve.anchors;
+        const auto& anchors = shutter.customCurve.firstContour().anchors;
         if (anchors.empty())
             return 1.0;
         if (u <= anchors.front().point.x)

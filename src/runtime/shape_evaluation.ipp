@@ -5,10 +5,10 @@
     const auto width = detail::resolveParameter(shape.strokeWidth, *plan, resolved);
     const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
     const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
-    if (!size || !fill || !stroke || !width || !fillSwitch || !strokeSwitch ||
-        !std::isfinite(size->value.x) ||
-        !std::isfinite(size->value.y) || size->value.x < 0 || size->value.y < 0 ||
-        !std::isfinite(width->value) || width->value < 0) {
+    const auto* shapePath = detail::resolvedShapePath(shape, resolved);
+    if (!size || !fill || !stroke || !width || !fillSwitch || !strokeSwitch || !shapePath ||
+        !std::isfinite(size->value.x) || !std::isfinite(size->value.y) || size->value.x < 0 ||
+        size->value.y < 0 || !std::isfinite(width->value) || width->value < 0) {
         operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
                                       "Shape parameters are invalid", {}, operationSubject);
         return;
@@ -24,10 +24,10 @@
                                       "Shape color is invalid", {}, operationSubject);
         return;
     }
-    const auto path = shapePath(shape, size->value);
+    const auto paths = detail::shapeRenderPaths(shape, size->value, *shapePath);
     const auto cancelled = [&] { return cancellation.isCancellationRequested(); };
     const auto raster = render::PathRaster::create(
-        path,
+        std::span<const render::Path>(paths),
         {strokeEnabled ? width->value : 0, static_cast<render::PathStrokeAlign>(shape.strokeAlign),
          static_cast<render::PathStrokeJoin>(shape.strokeJoin),
          static_cast<render::PathStrokeCap>(shape.strokeCap)},
@@ -109,7 +109,7 @@
                 return imageDiagnostic(*output.error(), operationSubject, "Shape row is invalid");
             auto pixels = *output.value();
             std::vector<std::uint8_t> coverage(pixels.size());
-            const auto rule = static_cast<render::PathFillRule>(shape.fillRule);
+            const auto rule = detail::shapeFillRule(shape, *shapePath);
             if (fillEnabled) {
                 if (!raster.value()->coverageRow(clipped->originX(), y, coverage, rule,
                                                  false, cancelled))

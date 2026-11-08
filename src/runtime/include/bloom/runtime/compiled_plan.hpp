@@ -1317,6 +1317,9 @@ struct CompiledShape {
     std::optional<ValueOutputIndex> drivenFillEnabled{};
     document::ParameterId strokeEnabledParameterId{};
     std::optional<ValueOutputIndex> drivenStrokeEnabled{};
+    // #589: the path a Path output hands this shape per frame, in place of `path`. Resolve it with
+    // detail::resolvedShapePath(), never by reading `path` directly.
+    std::optional<ValueOutputIndex> drivenPath{};
     friend bool operator==(const CompiledShape&, const CompiledShape&) = default;
 };
 

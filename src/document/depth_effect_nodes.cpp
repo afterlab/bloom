@@ -138,7 +138,7 @@ bool isDepthParameterValueValid(const std::string_view schemaKey,
     }
     case Kind::Curve: {
         const auto* v = std::get_if<PathValue>(&value);
-        return v != nullptr && v->anchors.size() <= kMaximumDepthCurvePoints &&
+        return v != nullptr && v->anchorCount() <= kMaximumDepthCurvePoints &&
                isGradeCurveValueValid(GradeCurve::Master, *v);
     }
     case Kind::Text: {

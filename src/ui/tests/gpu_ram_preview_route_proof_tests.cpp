@@ -167,8 +167,8 @@ struct HarnessOptions final {
     const double left = 820.0 + shift;
     const double top = 420.0 + shift * 0.5;
     document::PathValue path;
-    path.closed = true;
-    path.anchors = {
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {
         document::PathAnchor{document::Vec2d{left, top}, std::nullopt, std::nullopt},
         document::PathAnchor{document::Vec2d{left + 240.0, top}, std::nullopt,
                              document::Vec2d{left + 300.0 + shift, top + 60.0}},

@@ -210,8 +210,8 @@ void refreshGroup(CompositionSession& session, const document::LayerOutputBounda
     if (const auto path = masks::maskPathAt(*composition, mask, keyTime))
         group.pathSummary->setText(
             QObject::tr("%1 anchors · %2")
-                .arg(path->anchors.size())
-                .arg(path->closed ? QObject::tr("Closed") : QObject::tr("Open")));
+                .arg(path->anchorCount())
+                .arg(path->firstContour().closed ? QObject::tr("Closed") : QObject::tr("Open")));
     const std::pair<MaskGroup::Scalar&, document::ParameterId> scalars[]{
         {group.feather, mask.feather},
         {group.expansion, mask.expansion},

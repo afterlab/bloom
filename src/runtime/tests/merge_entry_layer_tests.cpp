@@ -257,10 +257,10 @@ void entryLayerParentMatteAndMasksMatchLayerNodes() {
         mask.name = "Mask";
         mask.mode = document::LayerMaskMode::Add;
         document::PathValue path;
-        path.closed = true;
+        path.editableContour().closed = true;
         for (const auto& [x, y] :
              {std::pair{1.0, 0.5}, std::pair{5.0, 0.5}, std::pair{5.0, 3.5}, std::pair{1.0, 3.5}})
-            path.anchors.push_back({{x, y}, std::nullopt, std::nullopt});
+            path.editableContour().anchors.push_back({{x, y}, std::nullopt, std::nullopt});
         mask.path = builder.constant(document::kLayerMaskPathSchemaKey, path);
         mask.feather = builder.constant(document::kLayerMaskFeatherSchemaKey, 0.0);
         mask.expansion = builder.constant(document::kLayerMaskExpansionSchemaKey, 0.0);

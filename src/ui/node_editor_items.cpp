@@ -52,6 +52,8 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
         return kit::Color::SocketVectorField;
     case runtime::SocketValueKind::ColorField:
         return kit::Color::SocketColorField;
+    case runtime::SocketValueKind::Path:
+        return kit::Color::SocketPath;
     }
     return kit::Color::SocketImage;
 }
@@ -258,6 +260,7 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kStringValueNodeType, "String"},
         LibraryName{document::kColorValueNodeType, "Color"},
         LibraryName{document::kBooleanValueNodeType, "Boolean"},
+        LibraryName{document::kPathValueNodeType, "Path"},
         LibraryName{document::kTimeValueNodeType, "Time"},
         LibraryName{document::kScalarMathNodeType, "Math"},
         LibraryName{document::kVector2MathNodeType, "Vector 2 Math"},
@@ -377,7 +380,7 @@ QString parameterText(const document::ParameterRecord& parameter) {
                 return QString::fromStdString(value).left(24);
             } else if constexpr (std::is_same_v<Value, document::PathValue>) {
                 return QCoreApplication::translate("node_editor", "%1 anchors")
-                    .arg(value.anchors.size());
+                    .arg(value.anchorCount());
             } else if constexpr (std::is_same_v<Value, document::GradientValue>) {
                 return QCoreApplication::translate("node_editor", "%1 stops")
                     .arg(value.stops.size());
@@ -636,6 +639,8 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Vector Field");
     case document::SocketValueKind::ColorField:
         return QStringLiteral("Color Field");
+    case document::SocketValueKind::Path:
+        return QStringLiteral("Path");
     }
     return {};
 }
@@ -971,6 +976,11 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                                      parameter->source);
                       }()
                     : links.edgeInto(input);
+            // #589: Shape Source reads its Path socket only as a Path shape, so the other kinds do
+            // not grow a row for it. A link it already has still shows, so it cannot dangle.
+            if (!linked && shapeSource_ && port.name == "path" &&
+                shapeKind_ != document::ShapeKind::Path)
+                continue;
             if (linked)
                 linkedInputs_.insert(QString::fromStdString(port.name));
             specs.push_back({QString::fromStdString(port.name),

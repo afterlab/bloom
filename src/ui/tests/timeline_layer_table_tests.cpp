@@ -500,8 +500,8 @@ void testKeys() {
            "UU shows what differs from a new layer, never an untouched default");
     commands::Transaction mask("Add Mask", table.session.snapshot().revision());
     document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{0, 0}, {}, {}}, {{10, 0}, {}, {}}, {{10, 10}, {}, {}}};
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {{{0, 0}, {}, {}}, {{10, 0}, {}, {}}, {{10, 10}, {}, {}}};
     mask.emplace<commands::AddLayerMask>(table.session.compositionId(), first, path);
     table.execute(std::move(mask));
     table.key(Qt::Key_M);

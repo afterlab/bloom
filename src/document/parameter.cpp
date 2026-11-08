@@ -204,6 +204,11 @@ constantMatchesSchema(const std::string_view schemaKey,
     // ADR 0028 mask schemas (layer masks and the Mask node).
     if (schemaKey == kLayerMaskPathSchemaKey) {
         const auto* path = std::get_if<PathValue>(&constant.value);
+        return path != nullptr && path->isValid() && path->isSimple();
+    }
+    // #589: the literal Path node holds any valid path value.
+    if (schemaKey == kPathValueParameterSchemaKey) {
+        const auto* path = std::get_if<PathValue>(&constant.value);
         return path != nullptr && path->isValid();
     }
     if (schemaKey == kLayerMaskInvertedSchemaKey)
@@ -607,7 +612,6 @@ constantMatchesSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
     if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
          schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter" ||
-         schemaKey == "bloom.shape.path" ||
          schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey ||
          bloom::document::isRecipeIntegerSchemaKey(schemaKey) ||
          schemaKey == bloom::document::kAlphaAssociationModeSchemaKey ||
@@ -626,6 +630,11 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
+        return false;
+    // #589: a shape's own path is a constant, or the Path socket's driver. Keys live on the Path
+    // node.
+    if (schemaKey == "bloom.shape.path" &&
+        std::holds_alternative<bloom::document::AnimationCurveSource>(source))
         return false;
     // #543: a stop link holds its driver and nothing else.
     if (bloom::document::isGradientStopSchemaKey(schemaKey))
@@ -862,15 +871,103 @@ std::optional<PathAnchorMode> pathAnchorModeFromName(const std::string_view name
     return std::nullopt;
 }
 
+std::string_view pathFillRuleName(const PathFillRule rule) noexcept {
+    switch (rule) {
+    case PathFillRule::Inherit:
+        return "inherit";
+    case PathFillRule::NonZero:
+        return "nonZero";
+    case PathFillRule::EvenOdd:
+        return "evenOdd";
+    }
+    return "inherit";
+}
+
+std::optional<PathFillRule> pathFillRuleFromName(const std::string_view name) noexcept {
+    for (const auto rule : {PathFillRule::Inherit, PathFillRule::NonZero, PathFillRule::EvenOdd})
+        if (pathFillRuleName(rule) == name)
+            return rule;
+    return std::nullopt;
+}
+
+PathValue PathValue::fromContour(PathContour contour) {
+    PathValue value;
+    if (!contour.anchors.empty() || contour.closed)
+        value.contours.push_back(std::move(contour));
+    return value;
+}
+
+PathValue PathValue::fromContour(std::vector<PathAnchor> anchors, const bool closed) {
+    return fromContour(PathContour{std::move(anchors), closed});
+}
+
+const PathContour& PathValue::firstContour() const noexcept {
+    static const PathContour kEmpty;
+    return contours.empty() ? kEmpty : contours.front();
+}
+
+PathContour& PathValue::editableContour() {
+    if (contours.empty())
+        contours.emplace_back();
+    return contours.front();
+}
+
+bool PathValue::isSimple() const noexcept {
+    return contours.size() <= 1 && fillRule == PathFillRule::Inherit && groups.empty();
+}
+
+std::size_t PathValue::anchorCount() const noexcept {
+    std::size_t count = 0;
+    for (const auto& contour : contours)
+        count += contour.anchors.size();
+    return count;
+}
+
 bool PathValue::isValid() const noexcept {
     const auto finite = [](const Vec2d point) {
         return std::isfinite(point.x) && std::isfinite(point.y);
     };
-    return anchors.size() <= kMaximumPathAnchors &&
-           std::ranges::all_of(anchors, [&](const PathAnchor& anchor) {
-               return finite(anchor.point) && (!anchor.inHandle || finite(*anchor.inHandle)) &&
-                      (!anchor.outHandle || finite(*anchor.outHandle));
-           });
+    if (contours.size() > kMaximumPathContours || groups.size() > kMaximumPathGroups ||
+        (fillRule != PathFillRule::Inherit && fillRule != PathFillRule::NonZero &&
+         fillRule != PathFillRule::EvenOdd))
+        return false;
+    std::size_t total = 0;
+    for (const auto& contour : contours) {
+        total += contour.anchors.size();
+        if (contour.anchors.size() > kMaximumPathAnchors || total > kMaximumPathValueAnchors ||
+            !std::ranges::all_of(contour.anchors, [&](const PathAnchor& anchor) {
+                return finite(anchor.point) && (!anchor.inHandle || finite(*anchor.inHandle)) &&
+                       (!anchor.outHandle || finite(*anchor.outHandle));
+            }))
+            return false;
+    }
+    // Ascending, in range and not overlapping; keys present, bounded, well formed and unique.
+    std::uint64_t next = 0;
+    for (std::size_t index = 0; index < groups.size(); ++index) {
+        const auto& group = groups[index];
+        if (group.key.empty() || group.key.size() > kMaximumPathGroupKeyBytes ||
+            !core::isValidUtf8(group.key) || group.contourCount == 0 || group.firstContour < next ||
+            static_cast<std::uint64_t>(group.firstContour) + group.contourCount > contours.size() ||
+            (group.color && !group.color->isValid()))
+            return false;
+        next = static_cast<std::uint64_t>(group.firstContour) + group.contourCount;
+    }
+    if (groups.size() < 2)
+        return true;
+    try {
+        std::vector<std::string_view> keys;
+        keys.reserve(groups.size());
+        for (const auto& group : groups)
+            keys.emplace_back(group.key);
+        std::ranges::sort(keys);
+        return std::ranges::adjacent_find(keys) == keys.end();
+    } catch (...) {
+        return false;
+    }
+}
+
+std::string pathGroupKeyFromSpan(const std::uint64_t begin, const std::uint64_t end) {
+    return "span:" + std::to_string(begin) + ":" + std::to_string(end);
 }
 
 bool GradientValue::isValid() const noexcept {

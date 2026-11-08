@@ -72,12 +72,13 @@ void expect(const bool condition, const std::string& message) {
     for (std::int64_t frame = 0; frame < kFrames; ++frame) {
         auto path = base;
         const double shift = 0.0625 * static_cast<double>(frame);
-        for (auto& anchor : path.anchors) {
+        for (auto& anchor : path.editableContour().anchors) {
             anchor.point.x += shift;
             anchor.point.y += shift * 0.5;
         }
-        path.anchors[1].outHandle =
-            Vec2d{path.anchors[1].point.x + 1.0 + shift, path.anchors[1].point.y + 1.0};
+        path.editableContour().anchors[1].outHandle =
+            Vec2d{path.firstContour().anchors[1].point.x + 1.0 + shift,
+                  path.firstContour().anchors[1].point.y + 1.0};
         curve.keyframes.push_back(bloom::runtime::CompiledPathKeyframe{
             bloom::document::KeyframeId::fromRaw(kIdBase + 100 + static_cast<std::uint64_t>(frame)),
             RationalTime::fromInteger(frame), std::move(path),

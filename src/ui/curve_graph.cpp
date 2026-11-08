@@ -259,7 +259,7 @@ CurveGraphRange curveGraphRange(const GradeCurve curve,
                 ? CurveGraphRange{0.0, 1.0, -document::kMaximumHueShift, document::kMaximumHueShift}
                 : CurveGraphRange{0.0, 1.0, 0.0, 2.0};
         for (const auto& value : values)
-            for (const auto& anchor : value.anchors)
+            for (const auto& anchor : value.firstContour().anchors)
                 range.top = std::max(range.top, anchor.point.y);
         return range;
     }
@@ -268,7 +268,7 @@ CurveGraphRange curveGraphRange(const GradeCurve curve,
     double lowY = 0.0;
     double highY = curve == GradeCurve::LumaVsSaturation ? 2.0 : 1.0;
     for (const auto& value : values)
-        for (const auto& anchor : value.anchors) {
+        for (const auto& anchor : value.firstContour().anchors) {
             low = std::min(low, anchor.point.x);
             high = std::max(high, anchor.point.x);
             lowY = std::min(lowY, anchor.point.y);
@@ -403,8 +403,9 @@ void paintCurveGraph(QPainter& painter, const QRectF& rect, const CurveGraphPict
     const auto& value = picture.curves[document::gradeCurveIndex(active)];
     if (value) {
         paintCurve(painter, rect, range, active, *value, curveInk(active), 2.0);
-        for (std::size_t index = 0; index < value->anchors.size(); ++index) {
-            const auto centre = curveGraphPoint(rect, range, value->anchors[index].point);
+        for (std::size_t index = 0; index < value->firstContour().anchors.size(); ++index) {
+            const auto centre =
+                curveGraphPoint(rect, range, value->firstContour().anchors[index].point);
             const bool selected = picture.selected == index;
             painter.setPen(QPen(selected ? kit::color(kit::Color::Accent) : curveInk(active),
                                 picture.hovered == index ? 2.0 : 1.5));
@@ -531,8 +532,9 @@ std::optional<std::size_t> CurveGraphCanvas::pointAt(const QPointF position) con
     const auto shown = range();
     std::optional<std::size_t> nearest;
     qreal best = kHitRadius * kHitRadius;
-    for (std::size_t index = 0; index < current->anchors.size(); ++index) {
-        const auto delta = curveGraphPoint(plot, shown, current->anchors[index].point) - position;
+    for (std::size_t index = 0; index < current->firstContour().anchors.size(); ++index) {
+        const auto delta =
+            curveGraphPoint(plot, shown, current->firstContour().anchors[index].point) - position;
         const qreal distance = QPointF::dotProduct(delta, delta);
         if (distance <= best) {
             best = distance;
@@ -595,7 +597,7 @@ void CurveGraphCanvas::mousePressEvent(QMouseEvent* event) {
         return;
     const auto shown = range();
     auto hit = pointAt(event->position());
-    if (!hit && current->anchors.size() >= document::kMaximumCurvePoints)
+    if (!hit && current->firstContour().anchors.size() >= document::kMaximumCurvePoints)
         return;
     if (!session_.beginValueEdit(*id))
         return;
@@ -607,9 +609,9 @@ void CurveGraphCanvas::mousePressEvent(QMouseEvent* event) {
         // A click on the graph adds a point there; the drag that follows moves it, and the release
         // commits the two as one command.
         const auto point = clamped(curveGraphValue(plotRect(), shown, event->position()), shown);
-        current->anchors.push_back(
+        current->editableContour().anchors.push_back(
             {point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
-        hit = current->anchors.size() - 1;
+        hit = current->firstContour().anchors.size() - 1;
         drag.added = true;
         if (!session_.updateValueEdit(*current)) {
             session_.cancelValueEdit();
@@ -618,7 +620,7 @@ void CurveGraphCanvas::mousePressEvent(QMouseEvent* event) {
     }
     drag.point = *hit;
     drag.base = *current;
-    drag.origin = current->anchors[*hit].point;
+    drag.origin = current->editableContour().anchors[*hit].point;
     drag.at = drag.origin;
     drag_ = std::move(drag);
     setSelected(hit);
@@ -642,11 +644,12 @@ void CurveGraphCanvas::dragTo(const QPointF position, const bool fine) {
         clamped({drag.origin.x + (to.x - from.x) * scale, drag.origin.y + (to.y - from.y) * scale},
                 drag.range);
     auto next = drag.base;
-    drag.off = offGraph(position) && next.anchors.size() > minimumPoints();
+    drag.off = offGraph(position) && next.firstContour().anchors.size() > minimumPoints();
     if (drag.off)
-        next.anchors.erase(next.anchors.begin() + static_cast<std::ptrdiff_t>(drag.point));
+        next.editableContour().anchors.erase(next.editableContour().anchors.begin() +
+                                             static_cast<std::ptrdiff_t>(drag.point));
     else
-        next.anchors[drag.point].point = drag.at;
+        next.editableContour().anchors[drag.point].point = drag.at;
     if (!session_.updateValueEdit(std::move(next)))
         cancelDrag();
 }
@@ -709,7 +712,8 @@ QMenu* CurveGraphCanvas::makeContextMenu(const QPointF position) {
     const auto hit = pointAt(position);
     auto* remove = menu->addAction(tr("Delete Point"));
     remove->setObjectName(QStringLiteral("curveGraphDeletePoint"));
-    remove->setEnabled(hit.has_value() && current && current->anchors.size() > minimumPoints());
+    remove->setEnabled(hit.has_value() && current &&
+                       current->firstContour().anchors.size() > minimumPoints());
     if (hit)
         connect(remove, &QAction::triggered, this,
                 [this, point = *hit] { static_cast<void>(removePoint(point)); });
@@ -790,10 +794,11 @@ bool CurveGraphCanvas::removeSelected() { return selected_ && removePoint(*selec
 bool CurveGraphCanvas::removePoint(const std::size_t point) {
     const auto id = parameter();
     auto current = value();
-    if (!id || !current || point >= current->anchors.size() ||
-        current->anchors.size() <= minimumPoints())
+    if (!id || !current || point >= current->firstContour().anchors.size() ||
+        current->firstContour().anchors.size() <= minimumPoints())
         return false;
-    current->anchors.erase(current->anchors.begin() + static_cast<std::ptrdiff_t>(point));
+    current->editableContour().anchors.erase(current->editableContour().anchors.begin() +
+                                             static_cast<std::ptrdiff_t>(point));
     setSelected(std::nullopt);
     return session_.setParameterValue(*id, std::move(*current), tr("Remove Curve Point"));
 }
@@ -1036,7 +1041,8 @@ void CurvesCardWidget::refresh() {
     }
     const auto value = canvas_->value();
     const auto selected = canvas_->selected();
-    const bool point = !locked && value && selected && *selected < value->anchors.size();
+    const bool point =
+        !locked && value && selected && *selected < value->firstContour().anchors.size();
     const auto active = curve();
     for (const bool input : {true, false}) {
         auto* field = input ? input_ : output_;
@@ -1046,7 +1052,7 @@ void CurvesCardWidget::refresh() {
         const QSignalBlocker blocker(field);
         const auto format = input ? inputFormat(active) : outputFormat(active);
         if (point) {
-            const auto at = value->anchors[*selected].point;
+            const auto at = value->firstContour().anchors[*selected].point;
             field->setSpecialValueText({});
             field->setValue((input ? at.x : at.y) * format.scale);
         } else {
@@ -1068,11 +1074,11 @@ void CurvesCardWidget::updatePointEdit(const bool input, const double shown) {
         return;
     auto current = canvas_->value();
     const auto selected = canvas_->selected();
-    if (!current || !selected || *selected >= current->anchors.size())
+    if (!current || !selected || *selected >= current->firstContour().anchors.size())
         return;
     const auto active = curve();
     const double scale = (input ? inputFormat(active) : outputFormat(active)).scale;
-    auto& point = current->anchors[*selected].point;
+    auto& point = current->editableContour().anchors[*selected].point;
     (input ? point.x : point.y) = shown / scale;
     static_cast<void>(session_.updateValueEdit(std::move(*current)));
 }

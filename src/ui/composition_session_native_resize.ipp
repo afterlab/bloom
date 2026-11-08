@@ -72,13 +72,14 @@ if (state.nativeKind == Native::PointText) {
                                      y + (start.y <= end.y ? next.y() : 0)});
     } else {
         auto path = std::get<document::PathValue>(state.native[0].second);
-        for (auto& anchor : path.anchors) {
-            anchor.point = map(anchor.point);
-            if (anchor.inHandle)
-                anchor.inHandle = map(*anchor.inHandle);
-            if (anchor.outHandle)
-                anchor.outHandle = map(*anchor.outHandle);
-        }
+        for (auto& contour : path.contours)
+            for (auto& anchor : contour.anchors) {
+                anchor.point = map(anchor.point);
+                if (anchor.inHandle)
+                    anchor.inHandle = map(*anchor.inHandle);
+                if (anchor.outHandle)
+                    anchor.outHandle = map(*anchor.outHandle);
+            }
         putNative(0, path);
     }
 }

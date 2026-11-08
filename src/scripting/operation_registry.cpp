@@ -339,19 +339,24 @@ path(const Arguments& arguments, const std::string& operationId, const std::stri
 
 // The one path object every path argument takes and shows (shape outlines, masks, Path
 // parameters), described once so its anchor modes are visible before a call is refused.
-const std::string kPathObject =
+const std::string kContourObject =
     "A path object {\"closed\": bool, \"anchors\": [{\"point\": [x, y], \"inHandle\": [x, y] "
     "or null, \"outHandle\": [x, y] or null, \"mode\": \"corner\", \"mirrored\", "
     "\"aligned\", \"free\" or \"auto\" (optional; inferred from the handles)}, ...]}.";
+// #589: a shape's path may also be compound; a mask holds one contour.
+const std::string kPathObject =
+    kContourObject +
+    " Or a compound path {\"contours\": [{\"closed\": bool, \"anchors\": [...]}, ...], "
+    "\"fillRule\": "
+    "\"nonZero\" or \"evenOdd\" (optional), \"groups\": [{\"key\": text, \"firstContour\": n, "
+    "\"contourCount\": n, \"color\": [r, g, b, a] (optional)}, ...] (optional)}.";
 
 [[nodiscard]] document::PathValue examplePath() {
-    document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
-                    {{100.0, 0.0}, std::nullopt, std::nullopt},
-                    {{100.0, 100.0}, std::nullopt, std::nullopt},
-                    {{0.0, 100.0}, std::nullopt, std::nullopt}};
-    return path;
+    return document::PathValue::fromContour({{{0.0, 0.0}, std::nullopt, std::nullopt},
+                                             {{100.0, 0.0}, std::nullopt, std::nullopt},
+                                             {{100.0, 100.0}, std::nullopt, std::nullopt},
+                                             {{0.0, 100.0}, std::nullopt, std::nullopt}},
+                                            true);
 }
 
 [[nodiscard]] std::optional<document::Vec3d>
@@ -1032,10 +1037,12 @@ std::string pythonLiteral(const Value& value) {
                 const auto handle = [](const std::optional<document::Vec2d>& point) {
                     return point ? pythonLiteral(Value(*point)) : std::string("None");
                 };
-                std::string text = std::string("{\"closed\": ") + (held.closed ? "True" : "False") +
-                                   ", \"anchors\": [";
-                for (std::size_t index = 0; index < held.anchors.size(); ++index) {
-                    const auto& anchor = held.anchors[index];
+                // Reference examples are one contour; a compound example is not published.
+                const auto& contour = held.firstContour();
+                std::string text = std::string("{\"closed\": ") +
+                                   (contour.closed ? "True" : "False") + ", \"anchors\": [";
+                for (std::size_t index = 0; index < contour.anchors.size(); ++index) {
+                    const auto& anchor = contour.anchors[index];
                     text += (index == 0 ? std::string() : std::string(", ")) +
                             "{\"point\": " + pythonLiteral(Value(anchor.point)) +
                             ", \"in_handle\": " + handle(anchor.inHandle) +
@@ -2737,7 +2744,7 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("lineEnd", ValueKind::Vec2, document::Vec2d{100.0, 0.0},
                "Second point of a line shape."),
          maybe("path", ValueKind::Path, examplePath(),
-               "The outline of a \"path\" shape, in the same form masks take. " + kPathObject)},
+               "The outline of a \"path\" shape. " + kPathObject)},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -3082,7 +3089,7 @@ OperationRegistry OperationRegistry::builtIn() {
         {compositionArgument(), layerArgument(),
          need("path", ValueKind::Path, examplePath(),
               "The mask outline in the layer's content space (closed to cover an area). " +
-                  kPathObject),
+                  kContourObject),
          maybe("mode", ValueKind::Integer, std::int64_t{1},
                "0 None, 1 Add, 2 Subtract, 3 Intersect, 4 Difference. Defaults to Add."),
          maybe("name", ValueKind::String, "Mask 1", "The mask name. Defaults to Mask N.")},
@@ -3111,7 +3118,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.set-mask-path",
         {compositionArgument(), layerArgument(), maskArgument(),
          need("path", ValueKind::Path, examplePath(),
-              "The new outline in the layer's content space. " + kPathObject),
+              "The new outline in the layer's content space. " + kContourObject),
          timeArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -3148,7 +3155,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.stop-animating-mask-path",
         {compositionArgument(), layerArgument(), maskArgument(),
          need("path", ValueKind::Path, examplePath(),
-              "The constant outline the mask keeps once its keys are removed. " + kPathObject)},
+              "The constant outline the mask keeps once its keys are removed. " + kContourObject)},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);

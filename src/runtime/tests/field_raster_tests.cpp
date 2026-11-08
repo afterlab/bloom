@@ -74,8 +74,8 @@ std::vector<double> operands(const FieldProgram& program, const double seconds =
         using Operand = std::decay_t<decltype(operand)>;
         if constexpr (std::is_same_v<Operand, runtime::CompiledPathParameter>) {
             const auto& path = std::get<document::PathValue>(operand.source);
-            values.push_back(static_cast<double>(path.anchors.size()));
-            for (const auto& anchor : path.anchors) {
+            values.push_back(static_cast<double>(path.firstContour().anchors.size()));
+            for (const auto& anchor : path.firstContour().anchors) {
                 values.push_back(anchor.point.x);
                 values.push_back(anchor.point.y);
             }

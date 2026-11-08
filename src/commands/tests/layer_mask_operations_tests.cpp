@@ -20,15 +20,15 @@ using document::PathValue;
 
 [[nodiscard]] PathValue square(const double size) {
     PathValue path;
-    path.closed = true;
-    path.anchors = {
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {
         {{0, 0}, {}, {}}, {{size, 0}, {}, {}}, {{size, size}, {}, {}}, {{0, size}, {}, {}}};
     return path;
 }
 
 [[nodiscard]] PathValue nonFinitePath() {
     auto path = square(1);
-    path.anchors[0].point.x = std::numeric_limits<double>::quiet_NaN();
+    path.editableContour().anchors[0].point.x = std::numeric_limits<double>::quiet_NaN();
     return path;
 }
 

@@ -459,6 +459,7 @@ struct KindVocabulary final {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Path:
     case SocketValueKind::Scalar:
         break;
     }
@@ -491,6 +492,7 @@ struct KindVocabulary final {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Path:
     case SocketValueKind::Scalar:
         break;
     }
@@ -520,6 +522,7 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Path:
     case SocketValueKind::Scalar:
         break;
     }
@@ -868,6 +871,9 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
     definitions.push_back(
         valueConstantDefinition(kBooleanValueNodeType, kBooleanValueParameterSchemaKey,
                                 SocketValueKind::Boolean, ParameterValueKind::Boolean, false));
+    definitions.push_back(valueConstantDefinition(kPathValueNodeType, kPathValueParameterSchemaKey,
+                                                  SocketValueKind::Path, ParameterValueKind::Path,
+                                                  PathValue{}));
     definitions.push_back(timeDefinition());
 
     definitions.push_back(scalarMathDefinition());

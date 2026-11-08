@@ -77,12 +77,13 @@ constexpr std::array<std::string_view, 16> kFields{
     "bloom.field-rasterize",  "bloom.field-remap",          "bloom.field-sample",
     "bloom.field-separate",   "bloom.field-shape-distance", "bloom.field-transform",
     "bloom.field-voronoi"};
-constexpr std::array<std::string_view, 15> kValues{
-    "bloom.composition-duration", "bloom.composition-size",  "bloom.data-sample",
-    "bloom.point-set-read",       "bloom.ramp-sample",       "bloom.table-lookup",
-    "bloom.value-boolean",        "bloom.value-color",       "bloom.value-integer",
-    "bloom.value-scalar",         "bloom.value-string",      "bloom.value-vector2",
-    "bloom.value-vector3",        "bloom.value.layer-bounds", "bloom.light-flicker"};
+constexpr std::array<std::string_view, 16> kValues{
+    "bloom.composition-duration", "bloom.composition-size", "bloom.data-sample",
+    "bloom.point-set-read",       "bloom.ramp-sample",      "bloom.table-lookup",
+    "bloom.value-boolean",        "bloom.value-color",      "bloom.value-integer",
+    "bloom.value-path",           "bloom.value-scalar",     "bloom.value-string",
+    "bloom.value-vector2",        "bloom.value-vector3",    "bloom.value.layer-bounds",
+    "bloom.light-flicker"};
 // Planned: Oscillator, Wiggle, Loop Value.
 constexpr std::array<std::string_view, 14> kMath{"bloom.clamp",        "bloom.degrees-to-radians",
                                                  "bloom.integer-math", "bloom.map-range",

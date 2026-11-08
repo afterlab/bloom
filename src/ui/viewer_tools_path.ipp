@@ -17,6 +17,11 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     const auto value = session_.liveValue(parameter->id);
     if (!value || !std::holds_alternative<document::PathValue>(*value))
         return {};
+    // #589: the Viewer edits one contour; a compound value is shown, not edited, so no edit here
+    // can drop another contour, a fill rule or a group.
+    const auto& held = std::get<document::PathValue>(*value);
+    if (!held.isSimple())
+        return {};
     const auto selected = previewController_->selectedLayerBounds();
     const auto layer = session_.selection().contextualLayer;
     const auto bounds = std::ranges::find(selected, layer.value_or(document::LayerId{}),
@@ -32,7 +37,7 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     const QTransform world(x.x(), x.y(), y.x(), y.y(), origin.x(), origin.y());
     if (!world.isInvertible())
         return {};
-    return PathSelection{parameter->id, std::get<document::PathValue>(*value), world};
+    return PathSelection{parameter->id, held.firstContour(), world};
 }
 
 document::Vec2d ViewerEditor::penPoint(const ViewerMapping& mapping, const QPointF screen) const {
@@ -151,11 +156,11 @@ bool ViewerEditor::finishPen(bool closed) {
         if (drawn.anchors.size() < 3)
             return false;
         drawn.closed = true;
-        return addMaskFromPath(*maskTarget, drawn);
+        return addMaskFromPath(*maskTarget, document::PathValue::fromContour(std::move(drawn)));
     }
     penPath_.closed = closed;
     commands::ShapeLayerGeometry geometry;
-    geometry.path = penPath_;
+    geometry.path = document::PathValue::fromContour(penPath_);
     geometry.position = toolValue(toolOutline(toolRenderPath(penPath_)).boundingRect().center());
     cancelCreation();
     return session_.addShapeLayer(document::ShapeKind::Path, std::move(geometry),

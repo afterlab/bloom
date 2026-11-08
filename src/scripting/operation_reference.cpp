@@ -331,10 +331,12 @@ std::string valueJson(const Value& value) {
                 const auto point = [](const document::Vec2d& p) {
                     return "[" + numberText(p.x) + "," + numberText(p.y) + "]";
                 };
-                std::string text = std::string("{\"closed\":") + (held.closed ? "true" : "false") +
-                                   ",\"anchors\":[";
-                for (std::size_t index = 0; index < held.anchors.size(); ++index) {
-                    const auto& anchor = held.anchors[index];
+                // Reference examples are one contour; a compound example is not published.
+                const auto& contour = held.firstContour();
+                std::string text = std::string("{\"closed\":") +
+                                   (contour.closed ? "true" : "false") + ",\"anchors\":[";
+                for (std::size_t index = 0; index < contour.anchors.size(); ++index) {
+                    const auto& anchor = contour.anchors[index];
                     text += (index == 0 ? "" : ",") + std::string("{\"point\":") +
                             point(anchor.point) + ",\"inHandle\":" +
                             (anchor.inHandle ? point(*anchor.inHandle) : std::string("null")) +

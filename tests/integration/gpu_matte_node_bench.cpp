@@ -130,13 +130,13 @@ struct Doc {
     }
     document::PathValue ellipseish(const double inset) const {
         document::PathValue path;
-        path.closed = true;
+        path.editableContour().closed = true;
         const double w = width;
         const double h = height;
-        path.anchors = {{{w * inset, h * 0.5}, std::nullopt, std::nullopt},
-                        {{w * 0.5, h * inset}, std::nullopt, std::nullopt},
-                        {{w * (1 - inset), h * 0.5}, std::nullopt, std::nullopt},
-                        {{w * 0.5, h * (1 - inset)}, std::nullopt, std::nullopt}};
+        path.editableContour().anchors = {{{w * inset, h * 0.5}, std::nullopt, std::nullopt},
+                                          {{w * 0.5, h * inset}, std::nullopt, std::nullopt},
+                                          {{w * (1 - inset), h * 0.5}, std::nullopt, std::nullopt},
+                                          {{w * 0.5, h * (1 - inset)}, std::nullopt, std::nullopt}};
         return path;
     }
     document::NodeId mask(const double inset) {

@@ -145,6 +145,8 @@ inline constexpr std::string_view kVector3ValueParameterSchemaKey = "bloom.value
 inline constexpr std::string_view kStringValueParameterSchemaKey = "bloom.value.string";
 inline constexpr std::string_view kColorValueParameterSchemaKey = "bloom.value.color";
 inline constexpr std::string_view kBooleanValueParameterSchemaKey = "bloom.value.boolean";
+// #589: the literal Path node's value.
+inline constexpr std::string_view kPathValueParameterSchemaKey = "bloom.value.path";
 
 // Generic operands, shared by every node in the library that reads a value of that kind. One schema
 // per KIND rather than one per node-and-role: a Math node's "a" and a Mix node's "a" mean exactly
@@ -225,6 +227,8 @@ struct Vec2d {
 };
 
 // Handles are absolute author-space coordinates. Empty and open paths are valid.
+// #589: the cap on one contour. A whole value is bounded by kMaximumPathValueAnchors below, so a
+// compound value holding a long equation or a paragraph is not limited to one contour's worth.
 inline constexpr std::size_t kMaximumPathAnchors = 4096;
 // How an anchor's handles respond to editing (document schema 1.24). It is authoring intent only:
 // the rendered curve is always the stored point and handles, so the mode never changes a frame.
@@ -248,12 +252,61 @@ struct PathAnchor {
 [[nodiscard]] PathAnchorMode inferPathAnchorMode(const PathAnchor& anchor) noexcept;
 [[nodiscard]] std::string_view pathAnchorModeName(PathAnchorMode mode) noexcept;
 [[nodiscard]] std::optional<PathAnchorMode> pathAnchorModeFromName(std::string_view name) noexcept;
-struct PathValue {
+// #589: one run of anchors with its own closed flag (docs/architecture/path-value.md).
+struct PathContour {
     std::vector<PathAnchor> anchors;
     bool closed = false;
+    friend bool operator==(const PathContour&, const PathContour&) = default;
+};
+// The value's own fill rule. Inherit leaves the choice to whoever reads the value: Shape Source's
+// `fillRule` parameter. An explicit rule wins over that parameter. Every path saved before #589
+// loads as Inherit, so its Shape keeps the rule it was saved with.
+enum class PathFillRule : std::uint8_t { Inherit, NonZero, EvenOdd };
+[[nodiscard]] std::string_view pathFillRuleName(PathFillRule rule) noexcept;
+[[nodiscard]] std::optional<PathFillRule> pathFillRuleFromName(std::string_view name) noexcept;
+// A whole value's bounds. The anchor total is the raster's own segment bound (one anchor is at
+// least one flattened point), so a value that cannot rasterize is refused where it is authored.
+inline constexpr std::size_t kMaximumPathValueAnchors = 262144;
+inline constexpr std::size_t kMaximumPathContours = 65536;
+inline constexpr std::size_t kMaximumPathGroups = 65536;
+inline constexpr std::size_t kMaximumPathGroupKeyBytes = 256;
+// #589: a keyed run of consecutive contours. `key` names the same part across two different paths:
+// it is author-chosen, or derived from a source span with pathGroupKeyFromSpan, and it is compared
+// as bytes. Groups do not overlap, ascend by first contour, and need not cover every contour.
+// `color` is the first per-group attribute; a group that omits it says nothing about color.
+struct PathGroup {
+    std::string key;
+    std::uint32_t firstContour = 0;
+    std::uint32_t contourCount = 0;
+    std::optional<core::Color4d> color;
+    friend bool operator==(const PathGroup&, const PathGroup&) = default;
+};
+// #589: a path value is ordered contours, a fill rule and keyed groups. A value with no contours is
+// the empty path. Fill and stroke read the contours together, in order.
+struct PathValue {
+    std::vector<PathContour> contours;
+    PathFillRule fillRule = PathFillRule::Inherit;
+    std::vector<PathGroup> groups;
+
+    // The value holding one contour. An open contour with no anchors is the empty path, which holds
+    // none, so an empty open path has one spelling.
+    [[nodiscard]] static PathValue fromContour(PathContour contour);
+    [[nodiscard]] static PathValue fromContour(std::vector<PathAnchor> anchors, bool closed);
+    // The first contour; an empty open one when the value holds none. For readers that have already
+    // refused a compound value (isSimple) or that take only the first contour on purpose.
+    [[nodiscard]] const PathContour& firstContour() const noexcept;
+    // The first contour to edit in place, added when the value holds none.
+    [[nodiscard]] PathContour& editableContour();
+    // True when at most one contour is held and neither a fill rule nor a group is: the shape every
+    // path had before #589, and the only one a mask or a curve accepts.
+    [[nodiscard]] bool isSimple() const noexcept;
+    [[nodiscard]] std::size_t anchorCount() const noexcept;
     [[nodiscard]] bool isValid() const noexcept;
     friend bool operator==(const PathValue&, const PathValue&) = default;
 };
+// The key for a group derived from the source span [begin, end) (a run of glyphs, an element's byte
+// range): the same span always answers the same key, so two paths built from one source match.
+[[nodiscard]] std::string pathGroupKeyFromSpan(std::uint64_t begin, std::uint64_t end);
 
 // #541: a colour gradient, the value of a gradient parameter (Colorize's Gradient Map). Any number
 // of stops, each a position in [0, 1] and a straight colour; the stops need not be sorted (a reader
@@ -386,8 +439,9 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
 // ADR 0028: Path parameters animate through whole-value Path curves. #493: so does each Curves
 // curve, a Path used as a point list (grade_curves.hpp).
 [[nodiscard]] constexpr bool isPathAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kLayerMaskPathSchemaKey || isGradeCurveSchemaKey(schemaKey) ||
-           isFieldPathAnimatableSchemaKey(schemaKey) || isDepthPathAnimatableSchemaKey(schemaKey);
+    return schemaKey == kLayerMaskPathSchemaKey || schemaKey == kPathValueParameterSchemaKey ||
+           isGradeCurveSchemaKey(schemaKey) || isFieldPathAnimatableSchemaKey(schemaKey) ||
+           isDepthPathAnimatableSchemaKey(schemaKey);
 }
 
 // #541: a gradient parameter animates through whole-value Gradient curves.

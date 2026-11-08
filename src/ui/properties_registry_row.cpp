@@ -643,9 +643,14 @@ void PropertiesRegistryRow::refresh() {
             value = *live;
         if (const auto* path = std::get_if<document::PathValue>(&value))
             if (auto* summary = findChild<kit::KLabel*>("propertiesPathSummary"))
-                summary->setText(tr("%1 anchors · %2")
-                                     .arg(path->anchors.size())
-                                     .arg(path->closed ? tr("Closed") : tr("Open")));
+                summary->setText(
+                    path->contours.size() > 1
+                        ? tr("%1 contours · %2 anchors")
+                              .arg(path->contours.size())
+                              .arg(path->anchorCount())
+                        : tr("%1 anchors · %2")
+                              .arg(path->anchorCount())
+                              .arg(path->firstContour().closed ? tr("Closed") : tr("Open")));
         if (const auto scalar = session_.effectiveScalarValue(parameter_))
             value = *scalar;
         if (const auto vector = session_.effectiveVec2Value(parameter_))

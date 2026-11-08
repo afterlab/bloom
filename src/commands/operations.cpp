@@ -28,6 +28,12 @@
 namespace bloom::commands {
 namespace {
 
+// #589: a path with no closed contour has no area to fill: every contour is an outline.
+[[nodiscard]] bool hasNoClosedContour(const document::PathValue& path) noexcept {
+    return std::ranges::none_of(
+        path.contours, [](const document::PathContour& contour) { return contour.closed; });
+}
+
 OperationResult invalidComposition(const document::CompositionId compositionId) {
     return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                      "Composition " + std::to_string(compositionId.value()) +
@@ -696,7 +702,8 @@ OperationResult AddShapeLayer::apply(document::Draft& draft) const {
             value = static_cast<std::int64_t>(kind_);
         // An open outline is visible by default: a white stroke where a closed shape has black.
         if ((kind_ == document::ShapeKind::Line ||
-             (kind_ == document::ShapeKind::Path && geometry_.path && !geometry_.path->closed)) &&
+             (kind_ == document::ShapeKind::Path && geometry_.path &&
+              hasNoClosedContour(*geometry_.path))) &&
             parameter.role == "strokeColor")
             value = core::Color4d{1, 1, 1, 1};
         // The style applies first, so a Line's or open path's fixed fill and stroke still win.
@@ -710,9 +717,9 @@ OperationResult AddShapeLayer::apply(document::Draft& draft) const {
             value = *style_.strokeColor;
         if (parameter.role == "strokeWidth" && style_.strokeWidth)
             value = *style_.strokeWidth;
-        const bool openOutline =
-            kind_ == document::ShapeKind::Line ||
-            (kind_ == document::ShapeKind::Path && geometry_.path && !geometry_.path->closed);
+        const bool openOutline = kind_ == document::ShapeKind::Line ||
+                                 (kind_ == document::ShapeKind::Path && geometry_.path &&
+                                  hasNoClosedContour(*geometry_.path));
         if (openOutline && parameter.role == "fillEnabled")
             value = false;
         if (openOutline && parameter.role == "strokeEnabled")

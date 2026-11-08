@@ -221,7 +221,7 @@ bool isFieldParameterValueValid(const std::string_view schemaKey,
     }
     case Kind::Curve: {
         const auto* v = std::get_if<PathValue>(&value);
-        return v != nullptr && v->anchors.size() <= kMaximumFieldCurvePoints &&
+        return v != nullptr && v->anchorCount() <= kMaximumFieldCurvePoints &&
                isGradeCurveValueValid(GradeCurve::Master, *v);
     }
     case Kind::Gradient: {

@@ -60,8 +60,6 @@ void addTextFontToKey(OperationKey& key, const render::TextFont& font) {
     return layout;
 }
 
-// Mirrors the evaluator's shapePath (src/runtime/vector_geometry.ipp); duplicated under a distinct
-// name because that definition has external linkage in the evaluator translation unit.
 } // namespace
 
 std::optional<GpuSceneLeafFailure> buildCoverageSolidLeaf(

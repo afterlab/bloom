@@ -34,8 +34,9 @@ void expect(const bool condition, const char* message) {
 }
 document::PathValue square() {
     document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{0, 0}, {}, {}}, {{10, 0}, {}, {}}, {{10, 10}, {}, {}}, {{0, 10}, {}, {}}};
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {
+        {{0, 0}, {}, {}}, {{10, 0}, {}, {}}, {{10, 10}, {}, {}}, {{0, 10}, {}, {}}};
     return path;
 }
 const document::LayerOutputBoundary* layerOf(ui::CompositionSession& s, document::LayerId id) {

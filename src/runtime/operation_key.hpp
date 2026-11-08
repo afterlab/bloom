@@ -34,18 +34,29 @@ class OperationKey final {
             add(value.y);
             if constexpr (requires { value.z; })
                 add(value.z);
-        } else if constexpr (requires { value.anchors; }) {
-            add(value.closed);
-            add(value.anchors.size());
-            for (const auto& anchor : value.anchors) {
-                add(anchor.point);
-                add(anchor.inHandle.has_value());
-                if (anchor.inHandle)
-                    add(*anchor.inHandle);
-                add(anchor.outHandle.has_value());
-                if (anchor.outHandle)
-                    add(*anchor.outHandle);
+        } else if constexpr (std::is_same_v<T, document::PathValue>) {
+            // #589: one contour keys exactly as it did before compound values, so its cached work
+            // keeps its identity. A compound value starts with 2, which `closed` never is.
+            if (value.isSimple()) {
+                addContour(value.firstContour());
+            } else {
+                add(std::uint64_t{2});
+                add(value.contours.size());
+                for (const auto& contour : value.contours)
+                    addContour(contour);
+                add(value.fillRule);
+                add(value.groups.size());
+                for (const auto& group : value.groups) {
+                    add(group.key);
+                    add(group.firstContour);
+                    add(group.contourCount);
+                    add(group.color.has_value());
+                    if (group.color)
+                        add(*group.color);
+                }
             }
+        } else if constexpr (std::is_same_v<T, CompiledPathValue>) {
+            add(*value.value);
         } else if constexpr (std::is_same_v<T, std::string>) {
             add(value.size());
             bytes_ += value;
@@ -64,6 +75,20 @@ class OperationKey final {
     }
 
   private:
+    void addContour(const document::PathContour& contour) {
+        add(contour.closed);
+        add(contour.anchors.size());
+        for (const auto& anchor : contour.anchors) {
+            add(anchor.point);
+            add(anchor.inHandle.has_value());
+            if (anchor.inHandle)
+                add(*anchor.inHandle);
+            add(anchor.outHandle.has_value());
+            if (anchor.outHandle)
+                add(*anchor.outHandle);
+        }
+    }
+
     std::string bytes_;
 };
 } // namespace bloom::runtime::detail

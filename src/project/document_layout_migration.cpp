@@ -165,7 +165,8 @@ enum class Step {
     GradientColorPairs,
     GradientStopLinks,
     GradientModes,
-    MatteSources
+    MatteSources,
+    CompoundPaths
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -235,6 +236,9 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         return false;
     // Matte sources (1.41 -> 1.42, #383) are version-only: no older mask or matte names a node.
     if (step == Step::MatteSources)
+        return false;
+    // Compound paths (1.42 -> 1.43, #589) are version-only: no older path is compound.
+    if (step == Step::CompoundPaths)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -430,6 +434,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::GradientStopLinks     ? "{\"major\":1,\"minor\":40}"
                            : step == Step::GradientModes         ? "{\"major\":1,\"minor\":41}"
                            : step == Step::MatteSources          ? "{\"major\":1,\"minor\":42}"
+                           : step == Step::CompoundPaths         ? "{\"major\":1,\"minor\":43}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -1048,6 +1053,12 @@ MigrationStepOutcome migrateGradientModesV1_40(const JsonValue& root, std::pmr::
 MigrationStepOutcome migrateMatteSourcesV1_41(const JsonValue& root, std::pmr::memory_resource*,
                                               Buffer& output) {
     if (!sourceVersionIs(root, "41") || !transform(root, Scope::Root, Step::MatteSources, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateCompoundPathsV1_42(const JsonValue& root, std::pmr::memory_resource*,
+                                               Buffer& output) {
+    if (!sourceVersionIs(root, "42") || !transform(root, Scope::Root, Step::CompoundPaths, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

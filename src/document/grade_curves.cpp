@@ -13,9 +13,10 @@ PathValue defaultGradeCurve(const GradeCurve curve) {
 
 PathValue gradeCurvePath(const std::span<const Vec2d> points) {
     PathValue path;
-    path.anchors.reserve(points.size());
+    auto& contour = path.contours.emplace_back();
+    contour.anchors.reserve(points.size());
     for (const auto point : points)
-        path.anchors.push_back({point, std::nullopt, std::nullopt, PathAnchorMode::Corner});
+        contour.anchors.push_back({point, std::nullopt, std::nullopt, PathAnchorMode::Corner});
     return path;
 }
 
@@ -60,11 +61,13 @@ GradeCurveRange gradeCurveOutputDomain(const GradeCurve curve) noexcept {
 }
 
 bool isGradeCurveValueValid(const GradeCurve curve, const PathValue& value) noexcept {
-    if (value.closed || value.anchors.size() > kMaximumCurvePoints)
+    // A point list is one open contour: never compound, and no fill rule or group means anything.
+    const auto& points = value.firstContour();
+    if (!value.isSimple() || points.closed || points.anchors.size() > kMaximumCurvePoints)
         return false;
     const auto input = gradeCurveInputDomain(curve);
     const auto output = gradeCurveOutputDomain(curve);
-    for (const auto& anchor : value.anchors) {
+    for (const auto& anchor : points.anchors) {
         const auto [x, y] = anchor.point;
         if (anchor.inHandle || anchor.outHandle || anchor.mode != PathAnchorMode::Corner ||
             !std::isfinite(x) || !std::isfinite(y) || x < input.minimum || x > input.maximum ||

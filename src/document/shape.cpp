@@ -15,7 +15,7 @@ NodeDefinition shapeDefinition() {
                          ParameterValue value, bool animated = false) {
         node.parameters.push_back(
             {std::move(role), "bloom.shape." + key, kind, true, animated, std::move(value)});
-        // Discrete selectors and the path are compile-time, inline operands.
+        // Discrete selectors are compile-time, inline operands; the path has its own socket below.
         if (animated)
             node.inputs.push_back(
                 {node.parameters.back().role, *socketKindForParameterValueKind(kind), false});
@@ -42,6 +42,9 @@ NodeDefinition shapeDefinition() {
     // value node may drive them, so each has an optional Boolean socket.
     node.inputs.push_back({"fillEnabled", SocketValueKind::Boolean, false});
     node.inputs.push_back({"strokeEnabled", SocketValueKind::Boolean, false});
+    // #589: the inline path is authored on the node; a Path node's output may drive it instead,
+    // and then the path changes per frame.
+    node.inputs.push_back({"path", SocketValueKind::Path, false});
     return node;
 }
 bool shapeConstantMatchesSchema(std::string_view schema, const ParameterValue& value) {

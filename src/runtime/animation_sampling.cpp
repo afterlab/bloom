@@ -1,6 +1,8 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/keyframe_easing.hpp>
 
+#include <bloom/document/path_value.hpp>
+
 #include <bloom/core/floating_point.hpp>
 #include <bloom/core/rational_interval.hpp>
 #include <bloom/core/scalar_primitives.hpp>
@@ -532,9 +534,10 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
         ++index;
     const auto& from = keys[index];
     const auto& to = keys[index + 1];
+    // #589: two keys interpolate only when their contour count, anchor counts and closed flags all
+    // match; otherwise the earlier key holds. Morphing beyond that is not interpolation.
     if (from.outgoingInterpolation == CompiledKeyframeInterpolation::Hold ||
-        from.value.anchors.size() != to.value.anchors.size() ||
-        from.value.closed != to.value.closed)
+        !document::pathKeysInterpolate(from.value, to.value))
         return from.value;
     // The factor is the scalar curve 0 -> 1 over the segment, so every ease and handle rule is the
     // scalar sampler's own.
@@ -551,20 +554,30 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
         return document::Vec2d{a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u};
     };
     document::PathValue result;
-    result.closed = from.value.closed;
-    result.anchors.reserve(from.value.anchors.size());
-    for (std::size_t anchor = 0; anchor < from.value.anchors.size(); ++anchor) {
-        const auto& a = from.value.anchors[anchor];
-        const auto& b = to.value.anchors[anchor];
-        document::PathAnchor out;
-        out.point = mix(a.point, b.point);
-        if (a.inHandle || b.inHandle)
-            out.inHandle = mix(a.inHandle.value_or(a.point), b.inHandle.value_or(b.point));
-        if (a.outHandle || b.outHandle)
-            out.outHandle = mix(a.outHandle.value_or(a.point), b.outHandle.value_or(b.point));
-        // The editing mode follows the earlier key, like the closed flag.
-        out.mode = a.mode;
-        result.anchors.push_back(out);
+    // The fill rule, the groups and their attributes are discrete: the earlier key's, like the
+    // closed flags and the anchor modes.
+    result.fillRule = from.value.fillRule;
+    result.groups = from.value.groups;
+    result.contours.reserve(from.value.contours.size());
+    for (std::size_t contour = 0; contour < from.value.contours.size(); ++contour) {
+        const auto& fromContour = from.value.contours[contour];
+        const auto& toContour = to.value.contours[contour];
+        auto& out = result.contours.emplace_back();
+        out.closed = fromContour.closed;
+        out.anchors.reserve(fromContour.anchors.size());
+        for (std::size_t anchor = 0; anchor < fromContour.anchors.size(); ++anchor) {
+            const auto& a = fromContour.anchors[anchor];
+            const auto& b = toContour.anchors[anchor];
+            document::PathAnchor mixed;
+            mixed.point = mix(a.point, b.point);
+            if (a.inHandle || b.inHandle)
+                mixed.inHandle = mix(a.inHandle.value_or(a.point), b.inHandle.value_or(b.point));
+            if (a.outHandle || b.outHandle)
+                mixed.outHandle = mix(a.outHandle.value_or(a.point), b.outHandle.value_or(b.point));
+            // The editing mode follows the earlier key, like the closed flag.
+            mixed.mode = a.mode;
+            out.anchors.push_back(mixed);
+        }
     }
     return result;
 }

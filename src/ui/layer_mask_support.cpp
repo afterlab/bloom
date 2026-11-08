@@ -20,7 +20,7 @@ Vec2d mapPoint(const QTransform& transform, const Vec2d point) {
     return {mapped.x(), mapped.y()};
 }
 
-std::vector<QPointF> flatten(const document::PathValue& path) {
+std::vector<QPointF> flatten(const document::PathContour& path) {
     std::vector<QPointF> points;
     const auto count = path.anchors.size();
     if (count < 2)
@@ -65,48 +65,45 @@ std::optional<QTransform> contentToComposition(const runtime::EvaluatedOperation
 
 document::PathValue mappedPath(const document::PathValue& path, const QTransform& transform) {
     auto result = path;
-    for (auto& anchor : result.anchors) {
-        anchor.point = mapPoint(transform, anchor.point);
-        if (anchor.inHandle)
-            anchor.inHandle = mapPoint(transform, *anchor.inHandle);
-        if (anchor.outHandle)
-            anchor.outHandle = mapPoint(transform, *anchor.outHandle);
-    }
+    for (auto& contour : result.contours)
+        for (auto& anchor : contour.anchors) {
+            anchor.point = mapPoint(transform, anchor.point);
+            if (anchor.inHandle)
+                anchor.inHandle = mapPoint(transform, *anchor.inHandle);
+            if (anchor.outHandle)
+                anchor.outHandle = mapPoint(transform, *anchor.outHandle);
+        }
     return result;
 }
 
 document::PathValue rectanglePath(const QRectF& rect) {
-    document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{rect.left(), rect.top()}, {}, {}},
-                    {{rect.right(), rect.top()}, {}, {}},
-                    {{rect.right(), rect.bottom()}, {}, {}},
-                    {{rect.left(), rect.bottom()}, {}, {}}};
-    return path;
+    return document::PathValue::fromContour({{{rect.left(), rect.top()}, {}, {}},
+                                             {{rect.right(), rect.top()}, {}, {}},
+                                             {{rect.right(), rect.bottom()}, {}, {}},
+                                             {{rect.left(), rect.bottom()}, {}, {}}},
+                                            true);
 }
 
 document::PathValue ellipsePath(const QRectF& rect) {
     const auto centre = rect.center();
     const double rx = rect.width() / 2.0, ry = rect.height() / 2.0;
     const double kx = rx * kEllipseKappa, ky = ry * kEllipseKappa;
-    document::PathValue path;
-    path.closed = true;
     // Top, right, bottom, left, clockwise on screen.
-    path.anchors = {{{centre.x(), centre.y() - ry},
-                     Vec2d{centre.x() - kx, centre.y() - ry},
-                     Vec2d{centre.x() + kx, centre.y() - ry}},
-                    {{centre.x() + rx, centre.y()},
-                     Vec2d{centre.x() + rx, centre.y() - ky},
-                     Vec2d{centre.x() + rx, centre.y() + ky}},
-                    {{centre.x(), centre.y() + ry},
-                     Vec2d{centre.x() + kx, centre.y() + ry},
-                     Vec2d{centre.x() - kx, centre.y() + ry}},
-                    {{centre.x() - rx, centre.y()},
-                     Vec2d{centre.x() - rx, centre.y() + ky},
-                     Vec2d{centre.x() - rx, centre.y() - ky}}};
-    for (auto& anchor : path.anchors)
+    std::vector<document::PathAnchor> anchors{{{centre.x(), centre.y() - ry},
+                                               Vec2d{centre.x() - kx, centre.y() - ry},
+                                               Vec2d{centre.x() + kx, centre.y() - ry}},
+                                              {{centre.x() + rx, centre.y()},
+                                               Vec2d{centre.x() + rx, centre.y() - ky},
+                                               Vec2d{centre.x() + rx, centre.y() + ky}},
+                                              {{centre.x(), centre.y() + ry},
+                                               Vec2d{centre.x() + kx, centre.y() + ry},
+                                               Vec2d{centre.x() - kx, centre.y() + ry}},
+                                              {{centre.x() - rx, centre.y()},
+                                               Vec2d{centre.x() - rx, centre.y() + ky},
+                                               Vec2d{centre.x() - rx, centre.y() - ky}}};
+    for (auto& anchor : anchors)
         anchor.mode = document::PathAnchorMode::Mirrored;
-    return path;
+    return document::PathValue::fromContour(std::move(anchors), true);
 }
 
 std::optional<document::PathValue> maskPathAt(const document::Composition& composition,
@@ -135,28 +132,39 @@ std::optional<document::PathValue> pathParameterAt(const document::Composition& 
 
 QPainterPath outline(const document::PathValue& path) {
     QPainterPath result;
-    if (path.anchors.empty())
-        return result;
     const auto point = [](const Vec2d p) { return QPointF(p.x, p.y); };
-    result.moveTo(point(path.anchors.front().point));
-    const auto count = path.anchors.size();
-    const auto segments = path.closed ? count : count - 1;
-    for (std::size_t i = 0; i < segments; ++i) {
-        const auto& a = path.anchors[i];
-        const auto& b = path.anchors[(i + 1) % count];
-        result.cubicTo(point(a.outHandle.value_or(a.point)), point(b.inHandle.value_or(b.point)),
-                       point(b.point));
+    for (const auto& contour : path.contours) {
+        if (contour.anchors.empty())
+            continue;
+        result.moveTo(point(contour.anchors.front().point));
+        const auto count = contour.anchors.size();
+        const auto segments = contour.closed ? count : count - 1;
+        for (std::size_t i = 0; i < segments; ++i) {
+            const auto& a = contour.anchors[i];
+            const auto& b = contour.anchors[(i + 1) % count];
+            result.cubicTo(point(a.outHandle.value_or(a.point)),
+                           point(b.inHandle.value_or(b.point)), point(b.point));
+        }
+        if (contour.closed)
+            result.closeSubpath();
     }
-    if (path.closed)
-        result.closeSubpath();
     return result;
 }
 
+QPainterPath outline(const document::PathContour& contour) {
+    return outline(document::PathValue::fromContour(contour));
+}
+
 QPainterPath offsetOutline(const document::PathValue& path, const double distance) {
+    // A mask holds one contour.
+    return offsetOutline(path.firstContour(), distance);
+}
+
+QPainterPath offsetOutline(const document::PathContour& contour, const double distance) {
     QPainterPath result;
-    if (!path.closed)
+    if (!contour.closed)
         return result;
-    const auto points = flatten(path);
+    const auto points = flatten(contour);
     const auto n = points.size();
     if (n < 3)
         return result;

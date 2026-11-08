@@ -130,9 +130,11 @@ compiledValueFrom(const document::ParameterValue& value) {
         [](const auto& held) -> std::optional<runtime::CompiledValue> {
             using Held = std::decay_t<decltype(held)>;
             if constexpr (std::is_same_v<Held, core::RationalTime> ||
-                          std::is_same_v<Held, document::PathValue> ||
                           std::is_same_v<Held, document::GradientValue>) {
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Held, document::PathValue>) {
+                return runtime::CompiledValue{
+                    runtime::CompiledPathValue{std::make_shared<document::PathValue>(held)}};
             } else {
                 return runtime::CompiledValue{held};
             }
@@ -441,6 +443,14 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         // ten frames drives a layer's opacity per frame, exactly as a Time node already could.
         if (auto curve = curveOperand(*parameter)) {
             return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{*curve}};
+        }
+        // #589: a keyed Path literal samples its whole-value curve per frame.
+        if (const auto* source = std::get_if<AnimationCurveSource>(&parameter->source)) {
+            const auto* path = composition_->animationCurves().findPath(source->curveId);
+            if (path == nullptr)
+                return std::nullopt;
+            return runtime::CompiledValueKernel{
+                runtime::CompiledValuePathCurve{runtime::compileAnimationCurve(*path)}};
         }
         const auto* constant = std::get_if<ConstantValueSource>(&parameter->source);
         if (constant == nullptr) {

@@ -54,10 +54,10 @@ void mask(Builder& builder, const bloom::document::LayerId layer) {
     value.id = builder.id<bloom::document::LayerMaskId>();
     value.name = "Mask";
     bloom::document::PathValue path;
-    path.closed = true;
+    path.editableContour().closed = true;
     for (const auto& [x, y] :
          {std::pair{2.0, 1.5}, std::pair{13.0, 2.5}, std::pair{12.0, 10.5}, std::pair{3.0, 9.5}})
-        path.anchors.push_back({{x, y}, std::nullopt, std::nullopt});
+        path.editableContour().anchors.push_back({{x, y}, std::nullopt, std::nullopt});
     value.path = builder.constant(bloom::document::kLayerMaskPathSchemaKey, path);
     value.feather = builder.constant(bloom::document::kLayerMaskFeatherSchemaKey, 1.5);
     value.expansion = builder.constant(bloom::document::kLayerMaskExpansionSchemaKey, 0.0);

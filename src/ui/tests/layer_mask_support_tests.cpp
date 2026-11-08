@@ -52,17 +52,23 @@ int main(int argc, char** argv) {
 
     // Primitives and path mapping.
     const auto rect = ui::masks::rectanglePath(QRectF(10, 20, 30, 40));
-    expect(rect.closed && rect.anchors.size() == 4 && rect.isValid(), "rectangle: four anchors");
-    expect(rect.anchors[2].point.x == 40 && rect.anchors[2].point.y == 60, "rectangle corners");
+    expect(rect.firstContour().closed && rect.firstContour().anchors.size() == 4 && rect.isValid(),
+           "rectangle: four anchors");
+    expect(rect.firstContour().anchors[2].point.x == 40 &&
+               rect.firstContour().anchors[2].point.y == 60,
+           "rectangle corners");
     const auto ellipse = ui::masks::ellipsePath(QRectF(0, 0, 100, 60));
-    expect(ellipse.closed && ellipse.anchors.size() == 4 && ellipse.anchors[1].outHandle &&
-               near(ellipse.anchors[1].point.x, 100) &&
-               near(ellipse.anchors[1].outHandle->y, 30 + 30 * ui::masks::kEllipseKappa),
+    expect(ellipse.firstContour().closed && ellipse.firstContour().anchors.size() == 4 &&
+               ellipse.firstContour().anchors[1].outHandle &&
+               near(ellipse.firstContour().anchors[1].point.x, 100) &&
+               near(ellipse.firstContour().anchors[1].outHandle->y,
+                    30 + 30 * ui::masks::kEllipseKappa),
            "ellipse: four anchors with kappa handles");
     const QTransform scale = QTransform::fromScale(2, 3);
     const auto mapped = ui::masks::mappedPath(ellipse, scale);
-    expect(near(mapped.anchors[1].point.x, 200) &&
-               near(mapped.anchors[1].outHandle->y, 3 * ellipse.anchors[1].outHandle->y),
+    expect(near(mapped.firstContour().anchors[1].point.x, 200) &&
+               near(mapped.firstContour().anchors[1].outHandle->y,
+                    3 * ellipse.firstContour().anchors[1].outHandle->y),
            "mapping transforms points and handles");
 
     // Outline geometry: an offset square grows and shrinks.
@@ -73,7 +79,7 @@ int main(int argc, char** argv) {
     expect(ui::masks::offsetOutline(document::PathValue{}, 5).isEmpty(),
            "empty path: empty bounds");
     auto open = square;
-    open.closed = false;
+    open.editableContour().closed = false;
     expect(ui::masks::offsetOutline(open, 5).isEmpty(), "an open path has no feather bounds");
 
     return failures == 0 ? 0 : 1;

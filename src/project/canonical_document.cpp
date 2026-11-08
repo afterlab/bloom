@@ -4,6 +4,7 @@
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/path_value.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
@@ -628,6 +629,40 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     return state.ok(state.writer.endObject());
 }
 
+// Document 1.43 (#589): what follows a compound path's contours, each only when it says something.
+[[nodiscard]] bool emitPathValueTrailer(EmitState& state,
+                                        const bloom::document::PathValue& path) noexcept {
+    auto& writer = state.writer;
+    if (path.fillRule != bloom::document::PathFillRule::Inherit &&
+        (!state.ok(writer.memberName("fillRule")) ||
+         !state.ok(writer.stringValue(bloom::document::pathFillRuleName(path.fillRule)))))
+        return false;
+    if (path.groups.empty())
+        return true;
+    if (!state.ok(writer.memberName("groups")) || !state.ok(writer.beginArray()))
+        return false;
+    for (const auto& group : path.groups) {
+        if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("key")) ||
+            !state.ok(writer.stringValue(group.key)) ||
+            !state.ok(writer.memberName("firstContour")) ||
+            !state.ok(writer.integerValue(group.firstContour)) ||
+            !state.ok(writer.memberName("contourCount")) ||
+            !state.ok(writer.integerValue(group.contourCount)))
+            return false;
+        if (group.color &&
+            (!state.ok(writer.memberName("color")) || !state.ok(writer.beginObject()) ||
+             !emitFloat64Member(state, "red", group.color->red) ||
+             !emitFloat64Member(state, "green", group.color->green) ||
+             !emitFloat64Member(state, "blue", group.color->blue) ||
+             !emitFloat64Member(state, "alpha", group.color->alpha) ||
+             !state.ok(writer.endObject())))
+            return false;
+        if (!state.ok(writer.endObject()))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitConstantValue(EmitState& state,
                                      const bloom::document::ParameterValue& value) noexcept {
     using namespace bloom::document;
@@ -682,8 +717,7 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     }
     if (const auto* path = std::get_if<PathValue>(&value)) {
         if (!path->isValid() || !state.ok(writer.memberName("kind")) ||
-            !state.ok(writer.stringValue("path")) || !state.ok(writer.memberName("anchors")) ||
-            !state.ok(writer.beginArray()))
+            !state.ok(writer.stringValue("path")))
             return false;
         const auto point = [&](const std::string_view name, const Vec2d p) {
             const PathScope pointScope(state, name);
@@ -691,22 +725,39 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                    emitFloat64Member(state, "x", p.x) && emitFloat64Member(state, "y", p.y) &&
                    state.ok(writer.endObject());
         };
-        for (const auto& anchor : path->anchors) {
-            // Schema 1.24: the editing mode, written only when it differs from the mode the
-            // geometry implies, so the decoder's inference reproduces every omitted value.
-            const bool explicitMode = anchor.mode != bloom::document::inferPathAnchorMode(anchor);
-            if (!state.ok(writer.beginObject()) || !point("point", anchor.point) ||
-                (anchor.inHandle && !point("inHandle", *anchor.inHandle)) ||
-                (anchor.outHandle && !point("outHandle", *anchor.outHandle)) ||
-                (explicitMode && (!state.ok(writer.memberName("mode")) ||
-                                  !state.ok(writer.stringValue(
-                                      bloom::document::pathAnchorModeName(anchor.mode))))) ||
+        const auto contourMembers = [&](const PathContour& contour) {
+            if (!state.ok(writer.memberName("anchors")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto& anchor : contour.anchors) {
+                // Schema 1.24: the editing mode, written only when it differs from the mode the
+                // geometry implies, so the decoder's inference reproduces every omitted value.
+                const bool explicitMode =
+                    anchor.mode != bloom::document::inferPathAnchorMode(anchor);
+                if (!state.ok(writer.beginObject()) || !point("point", anchor.point) ||
+                    (anchor.inHandle && !point("inHandle", *anchor.inHandle)) ||
+                    (anchor.outHandle && !point("outHandle", *anchor.outHandle)) ||
+                    (explicitMode && (!state.ok(writer.memberName("mode")) ||
+                                      !state.ok(writer.stringValue(
+                                          bloom::document::pathAnchorModeName(anchor.mode))))) ||
+                    !state.ok(writer.endObject()))
+                    return false;
+            }
+            return state.ok(writer.endArray()) && state.ok(writer.memberName("closed")) &&
+                   state.ok(writer.booleanValue(contour.closed));
+        };
+        // Document 1.43 (#589): a value the original shape can say keeps that shape, so a document
+        // with one-contour paths re-encodes byte-identically apart from its schema minor.
+        if (bloom::document::pathValueHasFlatForm(*path))
+            return contourMembers(path->firstContour()) && emitRetainedTrailing(state) &&
+                   state.ok(writer.endObject());
+        if (!state.ok(writer.memberName("contours")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& contour : path->contours)
+            if (!state.ok(writer.beginObject()) || !contourMembers(contour) ||
                 !state.ok(writer.endObject()))
                 return false;
-        }
-        return state.ok(writer.endArray()) && state.ok(writer.memberName("closed")) &&
-               state.ok(writer.booleanValue(path->closed)) && emitRetainedTrailing(state) &&
-               state.ok(writer.endObject());
+        return state.ok(writer.endArray()) && emitPathValueTrailer(state, *path) &&
+               emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
     // Document 1.38 (#541): a gradient, its stops in stored order, each a flat object.
     if (const auto* gradient = std::get_if<GradientValue>(&value)) {
@@ -2298,33 +2349,49 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
         if (!state.ok(writer.endArray()))
             return false;
     } else if (const auto* path = std::get_if<PathValue>(&block.payload)) {
-        if (!state.ok(writer.memberName("closed")) ||
-            !state.ok(writer.booleanValue(path->closed)) ||
-            !state.ok(writer.memberName("anchors")) || !state.ok(writer.beginArray()))
-            return false;
-        for (const auto& anchor : path->anchors) {
-            if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("point")) ||
-                !state.ok(writer.beginObject()) || !emitFloat64Member(state, "x", anchor.point.x) ||
-                !emitFloat64Member(state, "y", anchor.point.y) || !state.ok(writer.endObject()))
+        const auto contourMembers = [&](const PathContour& contour) {
+            if (!state.ok(writer.memberName("closed")) ||
+                !state.ok(writer.booleanValue(contour.closed)) ||
+                !state.ok(writer.memberName("anchors")) || !state.ok(writer.beginArray()))
                 return false;
-            for (const auto* handle : {&anchor.inHandle, &anchor.outHandle}) {
-                const auto* name = handle == &anchor.inHandle ? "inHandle" : "outHandle";
-                if (!state.ok(writer.memberName(name)))
+            for (const auto& anchor : contour.anchors) {
+                if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("point")) ||
+                    !state.ok(writer.beginObject()) ||
+                    !emitFloat64Member(state, "x", anchor.point.x) ||
+                    !emitFloat64Member(state, "y", anchor.point.y) || !state.ok(writer.endObject()))
                     return false;
-                if (!handle->has_value()) {
-                    if (!state.ok(writer.nullValue()))
+                for (const auto* handle : {&anchor.inHandle, &anchor.outHandle}) {
+                    const auto* name = handle == &anchor.inHandle ? "inHandle" : "outHandle";
+                    if (!state.ok(writer.memberName(name)))
                         return false;
-                } else if (!state.ok(writer.beginObject()) ||
-                           !emitFloat64Member(state, "x", (**handle).x) ||
-                           !emitFloat64Member(state, "y", (**handle).y) ||
-                           !state.ok(writer.endObject()))
+                    if (!handle->has_value()) {
+                        if (!state.ok(writer.nullValue()))
+                            return false;
+                    } else if (!state.ok(writer.beginObject()) ||
+                               !emitFloat64Member(state, "x", (**handle).x) ||
+                               !emitFloat64Member(state, "y", (**handle).y) ||
+                               !state.ok(writer.endObject()))
+                        return false;
+                }
+                if (!state.ok(writer.endObject()))
                     return false;
             }
-            if (!state.ok(writer.endObject()))
+            return state.ok(writer.endArray());
+        };
+        // Document 1.43 (#589): the same choice of shape a path constant makes.
+        if (bloom::document::pathValueHasFlatForm(*path)) {
+            if (!contourMembers(path->firstContour()))
+                return false;
+        } else {
+            if (!state.ok(writer.memberName("contours")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto& contour : path->contours)
+                if (!state.ok(writer.beginObject()) || !contourMembers(contour) ||
+                    !state.ok(writer.endObject()))
+                    return false;
+            if (!state.ok(writer.endArray()) || !emitPathValueTrailer(state, *path))
                 return false;
         }
-        if (!state.ok(writer.endArray()))
-            return false;
     } else if (const auto* mask = std::get_if<DataBlockMask>(&block.payload)) {
         if (!emitNamedId(state, "coverageAsset", mask->coverageAsset.value()))
             return false;

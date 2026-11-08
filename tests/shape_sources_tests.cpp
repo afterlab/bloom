@@ -125,11 +125,11 @@ void pixelsAndBounds() {
     expect(alpha(stroked, 2, 3) == 1 && alpha(stroked, 2, 2) == 0, "stroked line pixel pins");
     Fixture path(document::ShapeKind::Path);
     document::PathValue twice;
-    twice.closed = true;
+    twice.editableContour().closed = true;
     for (int loop = 0; loop < 2; ++loop)
         for (auto p : {document::Vec2d{0, 0}, document::Vec2d{4, 0}, document::Vec2d{4, 4},
                        document::Vec2d{0, 4}})
-            twice.anchors.push_back({p, {}, {}});
+            twice.editableContour().anchors.push_back({p, {}, {}});
     path.set("path", twice);
     expect(alpha(path.evaluate(), 3, 3) == 1, "nonzero path pixel pin");
     path.set("fillRule", std::int64_t{1});
@@ -162,8 +162,8 @@ void creationAndPathOverrides() {
                                             testFormat());
     document::Document document(std::move(initial.project));
     commands::CommandStack stack(document);
-    const document::PathValue triangle{{{{2, 2}, {}, {}}, {{6, 2}, {}, {}}, {{4, 6}, {}, {}}},
-                                       true};
+    const auto triangle = document::PathValue::fromContour(
+        {{{2, 2}, {}, {}}, {{6, 2}, {}, {}}, {{4, 6}, {}, {}}}, true);
     commands::ShapeLayerGeometry geometry;
     geometry.position = document::Vec2d{4, 4};
     geometry.path = triangle;
@@ -183,7 +183,7 @@ void creationAndPathOverrides() {
            "creation stores complete path value");
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     auto edited = triangle;
-    edited.anchors.front().point = {1, 2};
+    edited.editableContour().anchors.front().point = {1, 2};
     const auto preview = compiler.compile(
         {snapshot, initial.initialCompositionId, {{snapshot.revision(), *pathId, edited}}}, {});
     expect(preview.plan != nullptr, "Path override admitted on reachable shape source");
@@ -191,7 +191,7 @@ void creationAndPathOverrides() {
                    .value == document::ParameterValue(triangle),
            "Path override does not mutate snapshot");
     auto invalid = edited;
-    invalid.anchors.front().point.x = std::numeric_limits<double>::infinity();
+    invalid.editableContour().anchors.front().point.x = std::numeric_limits<double>::infinity();
     expect(!compiler
                 .compile({snapshot,
                           initial.initialCompositionId,

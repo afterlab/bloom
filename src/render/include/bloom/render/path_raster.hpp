@@ -75,12 +75,22 @@ class PathRaster final {
     [[nodiscard]] static ImageResult<PathRaster> create(const Path& path, PathStroke stroke,
                                                         double scaleX, double scaleY,
                                                         PathCancellation cancelled = {});
+    // #589: the contours of one compound path, in order. Fill and stroke read them together, so a
+    // contour inside another is a hole under the even-odd rule or when it winds the other way. A
+    // non-centered stroke needs an inside everywhere: any open contour centers the whole stroke.
+    // One contour is exactly create(path, ...).
+    [[nodiscard]] static ImageResult<PathRaster> create(std::span<const Path> contours,
+                                                        PathStroke stroke, double scaleX,
+                                                        double scaleY,
+                                                        const PathCancellation& cancelled = {});
     // Flatten and construct strokes in native units, then transform their geometry before coverage.
     [[nodiscard]] static ImageResult<PathRaster>
     transformed(std::span<const Path> paths, PathStroke stroke, PathMatrix matrix, double scaleX,
                 double scaleY, const PathCancellation& cancelled = {},
                 std::optional<PathBounds> clip = std::nullopt);
     [[nodiscard]] PathBounds bounds(bool fill, bool stroke) const noexcept;
+    // The polyline create() stroked and filled, for a raster of one contour.
+    [[nodiscard]] std::span<const PathPoint> flattenedContour() const noexcept { return fill_; }
     [[nodiscard]] bool coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint8_t> row,
                                    PathFillRule rule, bool stroke,
                                    const PathCancellation& cancelled = {}) const;
@@ -98,6 +108,30 @@ class PathRaster final {
     std::vector<std::vector<PathPoint>> outlines_;
     PathStrokeAlign align_ = PathStrokeAlign::Center;
     double scaleX_ = 1, scaleY_ = 1;
+};
+// #589: the one flattening every route shares. A contour flattens to at most 1/32 output pixel of
+// error at the larger proxy scale; fill and stroke read this polyline, so anything measured along
+// it (below) is measured along exactly what is drawn. A closed contour's repeated last point is
+// dropped. Nullopt when a coordinate is not finite, the segment bound is exceeded, or cancelled.
+[[nodiscard]] double pathFlatteningTolerance(double scaleX, double scaleY) noexcept;
+[[nodiscard]] std::optional<std::vector<PathPoint>>
+flattenPathContour(const Path& path, double tolerance, const PathCancellation& cancelled = {});
+// #589: the deterministic arc-length parameterization of one contour: distance along
+// flattenPathContour's polyline at the same scales, the polyline stroking uses. The same contour
+// and scales always answer the same values, whatever thread or frame asks.
+class PathArcLength final {
+  public:
+    [[nodiscard]] static std::optional<PathArcLength>
+    create(const Path& path, double scaleX, double scaleY, const PathCancellation& cancelled = {});
+    // Total length; a closed contour includes its closing segment.
+    [[nodiscard]] double length() const noexcept { return cumulative_.back(); }
+    [[nodiscard]] std::span<const PathPoint> points() const noexcept { return points_; }
+    // The point `distance` along the contour, clamped to [0, length()].
+    [[nodiscard]] PathPoint pointAt(double distance) const noexcept;
+
+  private:
+    std::vector<PathPoint> points_;
+    std::vector<double> cumulative_;
 };
 [[nodiscard]] Path rectanglePath(double width, double height, double radius = 0);
 [[nodiscard]] Path ellipsePath(double width, double height);

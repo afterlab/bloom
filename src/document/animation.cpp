@@ -929,6 +929,15 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                                "animationCurves[" + std::to_string(path->id.value()) +
                                    "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
                                "Curve key is outside the domain its schema declares");
+        } else if (const auto* maskPath = std::get_if<PathAnimationCurve>(curve);
+                   maskPath != nullptr && parameter.schemaKey == kLayerMaskPathSchemaKey) {
+            // #589: a mask holds one contour, keyed or not.
+            for (const auto& keyframe : maskPath->keyframes)
+                if (!keyframe.value.isSimple())
+                    result.add(ValidationCode::InvalidValue,
+                               "animationCurves[" + std::to_string(maskPath->id.value()) +
+                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                               "A mask path key holds one contour");
         } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(curve)) {
             // #541: a Gradient key satisfies its schema like a constant.
             for (const auto& keyframe : gradient->keyframes) {

@@ -6,6 +6,7 @@
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/merge_entries.hpp>
+#include <bloom/document/path_value.hpp>
 #include <bloom/scripting/merge_entry_view.hpp>
 
 #include <string>
@@ -28,22 +29,50 @@ nb::object parameterValue(const document::ParameterValue& value) {
             } else if constexpr (std::is_same_v<T, core::RationalTime>) {
                 return nb::make_tuple(item.numerator(), item.denominator());
             } else if constexpr (std::is_same_v<T, document::PathValue>) {
+                const auto contourOf = [](const document::PathContour& contour) {
+                    nb::dict path;
+                    path["closed"] = contour.closed;
+                    nb::list anchors;
+                    for (const auto& anchor : contour.anchors) {
+                        nb::dict row;
+                        row["point"] = nb::make_tuple(anchor.point.x, anchor.point.y);
+                        row["in_handle"] =
+                            anchor.inHandle ? nb::make_tuple(anchor.inHandle->x, anchor.inHandle->y)
+                                            : nb::object(nb::none());
+                        row["out_handle"] = anchor.outHandle ? nb::make_tuple(anchor.outHandle->x,
+                                                                              anchor.outHandle->y)
+                                                             : nb::object(nb::none());
+                        row["mode"] = std::string(document::pathAnchorModeName(anchor.mode));
+                        anchors.append(row);
+                    }
+                    path["anchors"] = anchors;
+                    return path;
+                };
+                if (document::pathValueHasFlatForm(item))
+                    return contourOf(item.firstContour());
+                // #589: {"contours": [...], "fill_rule": ..., "groups": [...]}, as a path argument
+                // accepts. Each of the last two appears only when it says something.
                 nb::dict path;
-                path["closed"] = item.closed;
-                nb::list anchors;
-                for (const auto& anchor : item.anchors) {
-                    nb::dict row;
-                    row["point"] = nb::make_tuple(anchor.point.x, anchor.point.y);
-                    row["in_handle"] = anchor.inHandle
-                                           ? nb::make_tuple(anchor.inHandle->x, anchor.inHandle->y)
-                                           : nb::object(nb::none());
-                    row["out_handle"] =
-                        anchor.outHandle ? nb::make_tuple(anchor.outHandle->x, anchor.outHandle->y)
-                                         : nb::object(nb::none());
-                    row["mode"] = std::string(document::pathAnchorModeName(anchor.mode));
-                    anchors.append(row);
+                nb::list contours;
+                for (const auto& contour : item.contours)
+                    contours.append(contourOf(contour));
+                path["contours"] = contours;
+                if (item.fillRule != document::PathFillRule::Inherit)
+                    path["fill_rule"] = std::string(document::pathFillRuleName(item.fillRule));
+                if (!item.groups.empty()) {
+                    nb::list groups;
+                    for (const auto& group : item.groups) {
+                        nb::dict row;
+                        row["key"] = group.key;
+                        row["first_contour"] = group.firstContour;
+                        row["contour_count"] = group.contourCount;
+                        if (group.color)
+                            row["color"] = nb::make_tuple(group.color->red, group.color->green,
+                                                          group.color->blue, group.color->alpha);
+                        groups.append(row);
+                    }
+                    path["groups"] = groups;
                 }
-                path["anchors"] = anchors;
                 return path;
             } else if constexpr (std::is_same_v<T, document::GradientValue>) {
                 // #541: {"stops": [{"position": p, "color": (r, g, b, a)}]}.

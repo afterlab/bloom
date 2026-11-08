@@ -51,8 +51,18 @@ namespace bloom::runtime {
 // RationalTime: a rational is how Bloom names an INSTANT, and a value graph carries quantities. A
 // Time node's seconds output is a Scalar for exactly that reason -- it is a number an artist does
 // arithmetic on, not a timeline address.
+//
+// #589: a Path output is shared, never copied: several consumers read one frame's immutable value,
+// and a reroute hands on a pointer. `value` is never null; two values compare by what they hold.
+struct CompiledPathValue final {
+    std::shared_ptr<const document::PathValue> value = std::make_shared<document::PathValue>();
+    friend bool operator==(const CompiledPathValue& left, const CompiledPathValue& right) {
+        return left.value == right.value || *left.value == *right.value;
+    }
+};
+
 using CompiledValue = std::variant<bool, std::int64_t, double, document::Vec2d, document::Vec3d,
-                                   core::Color4d, std::string>;
+                                   core::Color4d, std::string, CompiledPathValue>;
 
 // Where one value lands. The plan's value outputs are a flat table: every operation claims a
 // consecutive run of entries in it, so a Separate RGBA's four channels and a Time node's two units
@@ -295,6 +305,13 @@ struct CompiledValueGradientSample final {
                            const CompiledValueGradientSample&) = default;
 };
 
+// #589: a literal Path node whose value is keyed. Path curves are whole-value and inline, so this
+// sits beside the literal's Passthrough rather than in the plan's curve tables.
+struct CompiledValuePathCurve final {
+    CompiledPathCurve curve;
+    friend bool operator==(const CompiledValuePathCurve&, const CompiledValuePathCurve&) = default;
+};
+
 // #525 Field Sample: a field program (compiled_plan.hpp, FieldProgram) read at one position,
 // three outputs: its result's first lane (Scalar), its first two (Vector 2) and all four as a
 // straight colour (Colour). `operands` are the program's Scalar and Vector 2 operands in
@@ -346,7 +363,8 @@ using CompiledValueKernel =
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
-                 CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake>;
+                 CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
+                 CompiledValuePathCurve>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -357,7 +375,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
         [&visit](const auto& step) {
             using Step = std::decay_t<decltype(step)>;
             if constexpr (std::is_same_v<Step, CompiledValueTime> ||
-                          std::is_same_v<Step, CompiledBoundsReadout>) {
+                          std::is_same_v<Step, CompiledBoundsReadout> ||
+                          std::is_same_v<Step, CompiledValuePathCurve>) {
                 // The one kernel with no operands: its value is the frame being rendered.
             } else if constexpr (std::is_same_v<Step, CompiledValueGradientSample>) {
                 for (const auto& driver : step.drivers)

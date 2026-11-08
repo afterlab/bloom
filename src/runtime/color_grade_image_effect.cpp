@@ -994,8 +994,8 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
                 evaluable = false;
                 return;
             }
-            values.push_back(static_cast<double>(sampled->anchors.size()));
-            for (const auto& anchor : sampled->anchors) {
+            values.push_back(static_cast<double>(sampled->firstContour().anchors.size()));
+            for (const auto& anchor : sampled->firstContour().anchors) {
                 values.push_back(anchor.point.x);
                 values.push_back(anchor.point.y);
             }

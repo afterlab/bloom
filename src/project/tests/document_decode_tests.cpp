@@ -93,7 +93,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":42})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":43})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -227,7 +227,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":43})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":44})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -542,11 +542,11 @@ void testComposedRoundTrip(Expectations& expectations) {
         "the composed fixture parameters insert out of numeric ID order");
 
     expectations.expect(
-        composition.parameters().insert(
-            {ParameterId::fromRaw(14), "bloom.shape.path",
-             ConstantValueSource{PathValue{{PathAnchor{{1, 2}, Vec2d{0, 2}, Vec2d{2, 3}},
-                                            PathAnchor{{4, 5}, std::nullopt, std::nullopt}},
-                                           true}}}),
+        composition.parameters().insert({ParameterId::fromRaw(14), "bloom.shape.path",
+                                         ConstantValueSource{PathValue::fromContour(
+                                             {PathAnchor{{1, 2}, Vec2d{0, 2}, Vec2d{2, 3}},
+                                              PathAnchor{{4, 5}, std::nullopt, std::nullopt}},
+                                             true)}}),
         "path inserted for canonical round trip");
     ScalarAnimationCurve curve;
     curve.id = AnimationCurveId::fromRaw(9);
@@ -1133,13 +1133,13 @@ void testPathValues(Expectations& expectations) {
         R"({"kind":"path","anchors":[{"point":{"x":1,"y":2},"inHandle":{"x":0,"y":2},"outHandle":{"x":2,"y":3}}],"closed":true})");
     const auto decoded = decodeText(json);
     expectations.expect(static_cast<bool>(decoded), "path anchors and absolute handles decode");
-    PathValue path{{PathAnchor{{1, 2}, Vec2d{0, 2}, Vec2d{2, 3}}}, true};
+    auto path = PathValue::fromContour({PathAnchor{{1, 2}, Vec2d{0, 2}, Vec2d{2, 3}}}, true);
     expectations.expect(path.isValid() && !isAnimatableSchemaKey("bloom.shape.path"),
                         "path is valid and not animatable");
-    path.anchors.resize(kMaximumPathAnchors + 1);
+    path.editableContour().anchors.resize(kMaximumPathAnchors + 1);
     expectations.expect(!path.isValid(), "anchor count is bounded");
-    path.anchors.resize(1);
-    path.anchors.front().point.x = std::numeric_limits<double>::infinity();
+    path.editableContour().anchors.resize(1);
+    path.editableContour().anchors.front().point.x = std::numeric_limits<double>::infinity();
     expectations.expect(!path.isValid(), "nonfinite path coordinates are rejected");
     expectConstantValueRejected(
         expectations,

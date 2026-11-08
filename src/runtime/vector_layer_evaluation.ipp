@@ -19,16 +19,17 @@ if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     const auto width = detail::resolveParameter(shape->strokeWidth, *plan, sourceResolved);
     const auto fillSwitch = detail::resolvedFillEnabled(*shape, sourceResolved);
     const auto strokeSwitch = detail::resolvedStrokeEnabled(*shape, sourceResolved);
-    if (!size || !fill || !color || !width || !fillSwitch || !strokeSwitch)
+    const auto* shapePath = detail::resolvedShapePath(*shape, sourceResolved);
+    if (!size || !fill || !color || !width || !fillSwitch || !strokeSwitch || !shapePath)
         return;
-    paths.push_back(shapePath(*shape, size->value));
+    paths = detail::shapeRenderPaths(*shape, size->value, *shapePath);
     vectorHasFill = *fillSwitch && shape->kind != document::ShapeKind::Line;
     vectorHasStroke = *strokeSwitch && width->value > 0;
     stroke = {vectorHasStroke ? width->value : 0,
               static_cast<render::PathStrokeAlign>(shape->strokeAlign),
               static_cast<render::PathStrokeJoin>(shape->strokeJoin),
               static_cast<render::PathStrokeCap>(shape->strokeCap)};
-    vectorRule = static_cast<render::PathFillRule>(shape->fillRule);
+    vectorRule = detail::shapeFillRule(*shape, *shapePath);
     vectorFill = pixel(fill->value);
     vectorStroke = pixel(color->value);
 } else if (const auto* solid = std::get_if<CompiledSolid>(&sourceOperation)) {

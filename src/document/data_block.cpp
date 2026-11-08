@@ -235,7 +235,9 @@ std::size_t DataBlockRecord::payloadBytes() const {
                     bytes += column.values.size() * sizeof(ParameterValue);
                 return bytes;
             } else if constexpr (std::is_same_v<Payload, PathValue>) {
-                return payload.anchors.size() * sizeof(PathAnchor);
+                return payload.anchorCount() * sizeof(PathAnchor) +
+                       payload.contours.size() * sizeof(PathContour) +
+                       payload.groups.size() * sizeof(PathGroup);
             } else {
                 return sizeof(AssetId);
             }

@@ -23,12 +23,13 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     fieldAnimated = fieldAnimated ||
                                     std::holds_alternative<CompiledPathCurve>(operand.source);
             });
-        bool dependent = fieldAnimated ||
-            std::holds_alternative<CompiledValueTime>(operation.kernel) ||
+        bool dependent =
+            fieldAnimated || std::holds_alternative<CompiledValueTime>(operation.kernel) ||
             std::holds_alternative<CompiledValueShake>(operation.kernel) ||
             (sample != nullptr &&
              std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
             std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||
+            std::holds_alternative<CompiledValuePathCurve>(operation.kernel) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
               utility->operation == document::ValueUtilityKernel::LightFlicker));
@@ -85,7 +86,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledShape>)
                     return parameter(step.size) || parameter(step.fillColor) ||
                            parameter(step.strokeColor) || parameter(step.strokeWidth) ||
-                           driven(step.drivenFillEnabled) || driven(step.drivenStrokeEnabled);
+                           driven(step.drivenFillEnabled) || driven(step.drivenStrokeEnabled) ||
+                           (step.kind == document::ShapeKind::Path && driven(step.drivenPath));
                 else if constexpr (std::is_same_v<Step, CompiledCompositionSource> ||
                                    std::is_same_v<Step, CompiledVideoSource>)
                     return true;

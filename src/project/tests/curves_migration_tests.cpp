@@ -242,9 +242,8 @@ void openMigratesConstantPoints() {
                    "each channel's points become its curve exactly, on its first point's id");
         } else {
             expect(record &&
-                       record->id ==
-                           fixture.ids[0][index - document::kGradeChannelCount + 1] &&
-                       value && value->anchors.empty(),
+                       record->id == fixture.ids[0][index - document::kGradeChannelCount + 1] &&
+                       value && value->firstContour().anchors.empty(),
                    "each hue curve starts empty on a reused id");
         }
     }

@@ -37,10 +37,10 @@ bool near(const float value, const float expected, const float tolerance = 1e-4F
 document::PathValue rectangle(const double left, const double top, const double right,
                               const double bottom) {
     document::PathValue path;
-    path.closed = true;
+    path.editableContour().closed = true;
     for (const auto& [x, y] : {std::pair{left, top}, std::pair{right, top},
                                std::pair{right, bottom}, std::pair{left, bottom}})
-        path.anchors.push_back({{x, y}, std::nullopt, std::nullopt});
+        path.editableContour().anchors.push_back({{x, y}, std::nullopt, std::nullopt});
     return path;
 }
 

@@ -174,8 +174,9 @@ void appendShutter(std::vector<float>& data, const CompiledShutter& shutter) {
     data.push_back(static_cast<float>(shutter.offset));
     appendDouble(data, shutter.phase);
     data.push_back(static_cast<float>(shutter.curve));
-    data.push_back(static_cast<float>(shutter.customCurve.anchors.size()));
-    for (const auto& anchor : shutter.customCurve.anchors) {
+    const auto& customPoints = shutter.customCurve.firstContour().anchors;
+    data.push_back(static_cast<float>(customPoints.size()));
+    for (const auto& anchor : customPoints) {
         appendDouble(data, anchor.point.x);
         appendDouble(data, anchor.point.y);
     }

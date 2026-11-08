@@ -174,6 +174,17 @@ resolvedStrokeEnabled(const CompiledShape& shape, const ResolvedEvaluation& reso
     return value ? std::optional(value->value) : std::nullopt;
 }
 
+// #589: the path a Path shape reads this frame: the inline value, or the driving Path output's
+// value, which the output keeps alive for the frame. Null when a driver produced no path (a
+// malformed plan).
+[[nodiscard]] inline const document::PathValue*
+resolvedShapePath(const CompiledShape& shape, const ResolvedEvaluation& resolved) noexcept {
+    if (!shape.drivenPath)
+        return &shape.path;
+    const auto* value = resolvedValue<CompiledPathValue>(*shape.drivenPath, resolved);
+    return value == nullptr ? nullptr : value->value.get();
+}
+
 template <typename Value>
 [[nodiscard]] EvaluationSubject parameterSubject(EvaluationSubject subject,
                                                  const ResolvedParameter<Value>& parameter,

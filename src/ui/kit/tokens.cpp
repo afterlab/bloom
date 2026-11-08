@@ -90,6 +90,9 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::SocketScalarField, 0xC7DC3CU},
     {Color::SocketVectorField, 0xE05AD2U},
     {Color::SocketColorField, 0x5A7CF0U},
+    // #589: a pale steel blue, in the one free hue gap, and far lighter than Accent at the same
+    // hue.
+    {Color::SocketPath, 0x8FC0E3U},
     // GRAPH-1 component curves: red, green, a light sky blue clearly lighter than Accent
     // (0x0C8CE9) and AccentHover (0x3AA5F0), and a neutral for the fourth channel.
     {Color::ComponentX, 0xE06C75U},

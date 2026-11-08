@@ -265,16 +265,16 @@ Value gradientValue(const nb::dict& mapping) {
 
 // ADR 0028: a path argument is the mapping bloom.data projects for a path value: {"closed": bool,
 // "anchors": [{"point": (x, y), "in_handle": (x, y) or None, "out_handle": (x, y) or None}]}.
-Value pathValue(const nb::dict& mapping) {
+document::PathContour pathContour(const nb::dict& mapping) {
     if (nb::len(mapping) != 2 || !mapping.contains("closed") || !mapping.contains("anchors") ||
         !nb::isinstance<nb::bool_>(mapping["closed"])) {
-        throw nb::type_error("A path is {'closed': bool, 'anchors': [...]}");
+        throw nb::type_error("A path contour is {'closed': bool, 'anchors': [...]}");
     }
     const auto anchors = nb::borrow<nb::sequence>(mapping["anchors"]);
     if (nb::len(anchors) > document::kMaximumPathAnchors) {
         throw nb::value_error("A path has at most 4096 anchors");
     }
-    document::PathValue path;
+    document::PathContour path;
     path.closed = nb::cast<bool>(mapping["closed"]);
     for (const auto item : anchors) {
         if (!nb::isinstance<nb::dict>(item)) {
@@ -313,6 +313,61 @@ Value pathValue(const nb::dict& mapping) {
         anchor.mode = mode.value_or(document::inferPathAnchorMode(anchor));
         path.anchors.push_back(anchor);
     }
+    return path;
+}
+
+// #589: one contour, or {'contours': [contour...], 'fill_rule': 'nonZero' or 'evenOdd' (optional),
+// 'groups': [{'key': text, 'first_contour': n, 'contour_count': n, 'color': (r, g, b, a)
+// (optional)}] (optional)}.
+Value pathValue(const nb::dict& mapping) {
+    if (!mapping.contains("contours"))
+        return Value(document::PathValue::fromContour(pathContour(mapping)));
+    if (nb::len(mapping) != 1U + static_cast<std::size_t>(mapping.contains("fill_rule")) +
+                                static_cast<std::size_t>(mapping.contains("groups")))
+        throw nb::type_error("A compound path is {'contours': [...], 'fill_rule': text, "
+                             "'groups': [...]}");
+    document::PathValue path;
+    for (const auto item : nb::borrow<nb::sequence>(mapping["contours"])) {
+        if (!nb::isinstance<nb::dict>(item))
+            throw nb::type_error("A path contour is {'closed': bool, 'anchors': [...]}");
+        path.contours.push_back(pathContour(nb::borrow<nb::dict>(item)));
+    }
+    if (mapping.contains("fill_rule")) {
+        const auto rule =
+            nb::isinstance<nb::str>(mapping["fill_rule"])
+                ? document::pathFillRuleFromName(nb::cast<std::string>(mapping["fill_rule"]))
+                : std::nullopt;
+        if (!rule)
+            throw nb::value_error("A path fill rule is inherit, nonZero or evenOdd");
+        path.fillRule = *rule;
+    }
+    if (mapping.contains("groups")) {
+        for (const auto item : nb::borrow<nb::sequence>(mapping["groups"])) {
+            if (!nb::isinstance<nb::dict>(item))
+                throw nb::type_error("A path group is {'key': text, 'first_contour': n, "
+                                     "'contour_count': n, 'color': (r, g, b, a)}");
+            const auto row = nb::borrow<nb::dict>(item);
+            if (!row.contains("key") || !row.contains("first_contour") ||
+                !row.contains("contour_count") || nb::len(row) != (row.contains("color") ? 4U : 3U))
+                throw nb::type_error("A path group is {'key': text, 'first_contour': n, "
+                                     "'contour_count': n, 'color': (r, g, b, a)}");
+            document::PathGroup group;
+            group.key = nb::cast<std::string>(row["key"]);
+            group.firstContour = nb::cast<std::uint32_t>(row["first_contour"]);
+            group.contourCount = nb::cast<std::uint32_t>(row["contour_count"]);
+            if (row.contains("color")) {
+                const auto color = nb::borrow<nb::sequence>(row["color"]);
+                if (nb::len(color) != 4)
+                    throw nb::type_error("A path group color is four numbers");
+                group.color = core::Color4d{nb::cast<double>(color[0]), nb::cast<double>(color[1]),
+                                            nb::cast<double>(color[2]), nb::cast<double>(color[3])};
+            }
+            path.groups.push_back(std::move(group));
+        }
+    }
+    if (!path.isValid())
+        throw nb::value_error("A compound path holds at most 65536 contours and 262144 anchors, "
+                              "and its groups have unique keys and ascending, unshared contours");
     return Value(std::move(path));
 }
 

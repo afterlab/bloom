@@ -19,7 +19,7 @@ namespace {
                                    const ParameterValue& value) noexcept {
     if (schemaKey == kLayerMaskPathSchemaKey) {
         const auto* path = std::get_if<PathValue>(&value);
-        return path != nullptr && path->isValid();
+        return path != nullptr && path->isValid() && path->isSimple();
     }
     const auto* number = std::get_if<double>(&value);
     return number != nullptr && std::isfinite(*number) &&

@@ -195,7 +195,7 @@ void testPenTools(Expectations& expectations) {
                         "pen anchors are session-only before finish");
     toolDrag(fixture, {80, 80}, {80, 80});
     const auto path = std::get<document::PathValue>(toolParameter(fixture, "path"));
-    expectations.expect(path.closed && path.anchors.size() == 3 &&
+    expectations.expect(path.firstContour().closed && path.firstContour().anchors.size() == 3 &&
                             fixture.commands.size() == before + 1,
                         "closing pen triangle commits three anchors in one transaction");
     expectations.expect(selectToolActive(fixture), "closing a Pen path returns to Select");
@@ -243,14 +243,14 @@ void testPenTools(Expectations& expectations) {
     expectations.expect(fixture.commands.size() == dragBefore + 1,
                         "anchor drag commits exactly one transaction");
     const auto moved = std::get<document::PathValue>(toolParameter(fixture, "path"));
-    expectations.expect(near(moved.anchors.front().point.x, 90) &&
-                            near(moved.anchors.front().point.y, 90),
+    expectations.expect(near(moved.firstContour().anchors.front().point.x, 90) &&
+                            near(moved.firstContour().anchors.front().point.y, 90),
                         "anchor moves through inverse mapping");
     toolReady(fixture, expectations);
     const auto bounds = fixture.controller.selectedLayerBounds();
     if (!bounds.empty()) {
         const auto& b = bounds.front();
-        const auto p = moved.anchors[1].point;
+        const auto p = moved.firstContour().anchors[1].point;
         const double x = (p.x - b.local.left) / (b.local.right - b.local.left);
         const double y = (p.y - b.local.top) / (b.local.bottom - b.local.top);
         expectations.expect(near(b.polygon[0].x + x * (b.polygon[1].x - b.polygon[0].x) +
@@ -272,10 +272,11 @@ void testPenTools(Expectations& expectations) {
         toolKey(fixture, Qt::Key_Escape);
         toolMouse(fixture, QEvent::MouseButtonRelease, {95, 95});
         const auto kept = std::get<document::PathValue>(toolParameter(fixture, "path"));
-        expectations.expect(
-            near(kept.anchors.front().point.x, 95) && near(kept.anchors.front().point.y, 95) &&
-                !fixture.session.valueEditActive() && fixture.session.undoLabel() != undoLabel,
-            "Escape keeps an anchor drag as a command");
+        expectations.expect(near(kept.firstContour().anchors.front().point.x, 95) &&
+                                near(kept.firstContour().anchors.front().point.y, 95) &&
+                                !fixture.session.valueEditActive() &&
+                                fixture.session.undoLabel() != undoLabel,
+                            "Escape keeps an anchor drag as a command");
         expectations.expect(fixture.session.undo() && std::get<document::PathValue>(
                                                           toolParameter(fixture, "path")) == path,
                             "exactly one undo discards the kept anchor drag");
@@ -283,9 +284,10 @@ void testPenTools(Expectations& expectations) {
     }
     toolDrag(fixture, {80, 80}, {80, 80});
     toolKey(fixture, Qt::Key_Delete);
-    expectations.expect(
-        std::get<document::PathValue>(toolParameter(fixture, "path")).anchors.size() == 2,
-        "Delete removes selected anchor instead of layer");
+    expectations.expect(std::get<document::PathValue>(toolParameter(fixture, "path"))
+                                .firstContour()
+                                .anchors.size() == 2,
+                        "Delete removes selected anchor instead of layer");
     toolReady(fixture, expectations);
     fixture.session.clearSelection();
     toolKey(fixture, Qt::Key_P);
@@ -293,11 +295,12 @@ void testPenTools(Expectations& expectations) {
     toolDrag(fixture, {180, 160}, {180, 160});
     toolKey(fixture, Qt::Key_Return);
     auto curve = std::get<document::PathValue>(toolParameter(fixture, "path"));
-    const auto inHandle = curve.anchors.front().inHandle;
-    const auto outHandle = curve.anchors.front().outHandle;
-    expectations.expect(!curve.closed && curve.anchors.size() == 2 && inHandle && outHandle &&
-                            near(inHandle->x, 10) && near(inHandle->y, 160) &&
-                            near(outHandle->x, 70) && near(outHandle->y, 160),
+    const auto inHandle = curve.firstContour().anchors.front().inHandle;
+    const auto outHandle = curve.firstContour().anchors.front().outHandle;
+    expectations.expect(!curve.firstContour().closed && curve.firstContour().anchors.size() == 2 &&
+                            inHandle && outHandle && near(inHandle->x, 10) &&
+                            near(inHandle->y, 160) && near(outHandle->x, 70) &&
+                            near(outHandle->y, 160),
                         "dragged pen anchor has symmetric handles and Enter finishes open path");
     expectations.expect(selectToolActive(fixture), "Enter finishing a Pen path returns to Select");
     toolReady(fixture, expectations);
@@ -306,8 +309,10 @@ void testPenTools(Expectations& expectations) {
     toolKey(fixture, Qt::Key_V);
     toolDrag(fixture, {70, 160}, {70, 190}, Qt::AltModifier);
     const auto broken = std::get<document::PathValue>(toolParameter(fixture, "path"));
-    expectations.expect(broken.anchors.front().inHandle == curve.anchors.front().inHandle &&
-                            broken.anchors.front().outHandle != curve.anchors.front().outHandle,
+    expectations.expect(broken.firstContour().anchors.front().inHandle ==
+                                curve.firstContour().anchors.front().inHandle &&
+                            broken.firstContour().anchors.front().outHandle !=
+                                curve.firstContour().anchors.front().outHandle,
                         "Alt handle drag leaves opposite handle unchanged");
     toolReady(fixture, expectations);
     fixture.session.clearSelection();
@@ -329,7 +334,8 @@ void testPenTools(Expectations& expectations) {
         toolDrag(fixture, {90, 120}, {90, 120});
         toolKey(fixture, Qt::Key_Escape);
         const auto kept = std::get<document::PathValue>(toolParameter(fixture, "path"));
-        expectations.expect(!kept.closed && kept.anchors.size() == 3 &&
+        expectations.expect(!kept.firstContour().closed &&
+                                kept.firstContour().anchors.size() == 3 &&
                                 fixture.commands.size() == history + 1 && selectToolActive(fixture),
                             "Escape finishes a three-anchor Pen path open, in one command");
         const auto layers = layerCount(fixture);
@@ -567,11 +573,12 @@ void testMaskTools(Expectations& expectations) {
     const auto* constant =
         record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
     const auto* path = constant ? std::get_if<document::PathValue>(&constant->value) : nullptr;
-    expectations.expect(path && path->closed && path->anchors.size() == 4,
+    expectations.expect(path && path->firstContour().closed &&
+                            path->firstContour().anchors.size() == 4,
                         "a closed rectangle path");
-    if (path && path->anchors.size() == 4) {
-        const auto first = contentPoint(path->anchors[0].point);
-        const auto third = contentPoint(path->anchors[2].point);
+    if (path && path->firstContour().anchors.size() == 4) {
+        const auto first = contentPoint(path->firstContour().anchors[0].point);
+        const auto third = contentPoint(path->firstContour().anchors[2].point);
         expectations.expect(near(first.x(), 50) && near(first.y(), 60) && near(third.x(), 150) &&
                                 near(third.y(), 110),
                             "the mask path is in content space: it maps back to the drawn corners");
@@ -594,8 +601,10 @@ void testMaskTools(Expectations& expectations) {
         const auto* ellipseConstant =
             std::get_if<document::ConstantValueSource>(&ellipseRecord->source);
         const auto& ellipse = std::get<document::PathValue>(ellipseConstant->value);
-        expectations.expect(ellipse.closed && ellipse.anchors.size() == 4 &&
-                                ellipse.anchors[0].inHandle && ellipse.anchors[0].outHandle,
+        expectations.expect(ellipse.firstContour().closed &&
+                                ellipse.firstContour().anchors.size() == 4 &&
+                                ellipse.firstContour().anchors[0].inHandle &&
+                                ellipse.firstContour().anchors[0].outHandle,
                             "an ellipse is four anchors with cubic handles");
     }
 
@@ -650,7 +659,7 @@ void testMaskTools(Expectations& expectations) {
         const auto* moved = fixture.session.composition()->parameters().find(mask.path);
         const auto& value = std::get<document::PathValue>(
             std::get<document::ConstantValueSource>(moved->source).value);
-        const auto corner = contentPoint(value.anchors[0].point);
+        const auto corner = contentPoint(value.firstContour().anchors[0].point);
         expectations.expect(near(corner.x(), 70) && near(corner.y(), 80),
                             "the dragged anchor lands where it was released");
     }
@@ -686,7 +695,7 @@ void testMaskTools(Expectations& expectations) {
             fixture.session.composition()->parameters().find(boundary->masks[3].path);
         const auto& value = std::get<document::PathValue>(
             std::get<document::ConstantValueSource>(escaped->source).value);
-        expectations.expect(value.closed && value.anchors.size() == 3,
+        expectations.expect(value.firstContour().closed && value.firstContour().anchors.size() == 3,
                             "the Escape-finished mask path is closed");
     }
     toolReady(fixture, expectations);
@@ -736,12 +745,12 @@ std::optional<Target> target(ViewerFixture& fixture) {
     const auto value = fixture.viewer.anchorEditTargetForTest();
     if (!value)
         return std::nullopt;
-    return Target{value->first, value->second};
+    return Target{PathValue::fromContour(value->first), value->second};
 }
 // Composition-space position of a path-space point.
 QPointF at(const Target& t, const Vec2d point) { return t.world.map(QPointF(point.x, point.y)); }
 QPointF anchorAt(const Target& t, const std::size_t index) {
-    return at(t, t.path.anchors[index].point);
+    return at(t, t.path.firstContour().anchors[index].point);
 }
 bool collinear(const bloom::document::PathAnchor& anchor) {
     if (!anchor.inHandle || !anchor.outHandle)
@@ -795,7 +804,8 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     const auto name = [&](const char* text) { return label + ": " + text; };
     toolReady(fixture, expectations);
     auto t = target(fixture);
-    expectations.expect(t && t->path.anchors.size() == 4, name("a four-anchor path is editable"));
+    expectations.expect(t && t->path.firstContour().anchors.size() == 4,
+                        name("a four-anchor path is editable"));
     expectations.expect(
         contextBar(fixture).findChild<QWidget*>("contextBarAnchorOptions") != nullptr &&
             !contextBar(fixture)
@@ -819,7 +829,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
         grabBar("pen-path");
         fixture.session.tools().setTool(bloom::ui::ViewerTool::Select);
     }
-    if (!t || t->path.anchors.size() != 4)
+    if (!t || t->path.firstContour().anchors.size() != 4)
         return;
 
     // Selection: click, Shift-click, and the switcher reflects it.
@@ -836,9 +846,10 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     const auto revision = fixture.session.snapshot().revision();
     clickSwitcher(fixture, 1);
     t = target(fixture);
-    expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Mirrored &&
-                            t->path.anchors[2].mode == PathAnchorMode::Mirrored &&
-                            collinear(t->path.anchors[1]) && collinear(t->path.anchors[2]),
+    expectations.expect(t->path.firstContour().anchors[1].mode == PathAnchorMode::Mirrored &&
+                            t->path.firstContour().anchors[2].mode == PathAnchorMode::Mirrored &&
+                            collinear(t->path.firstContour().anchors[1]) &&
+                            collinear(t->path.firstContour().anchors[2]),
                         name("the switcher converts the selection to Mirrored"));
     expectations.expect(switcherIndex(fixture) == 1, name("the switcher shows Mirrored"));
     expectations.expect(fixture.session.snapshot().revision() != revision &&
@@ -853,7 +864,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     click(fixture, anchorAt(*t, 2));
     triggerMenu(fixture, "viewerAnchorModeFree");
     t = target(fixture);
-    expectations.expect(t->path.anchors[2].mode == PathAnchorMode::Free,
+    expectations.expect(t->path.firstContour().anchors[2].mode == PathAnchorMode::Free,
                         name("the context menu sets Free"));
     toolReady(fixture, expectations);
     click(fixture, anchorAt(*t, 1), Qt::ShiftModifier);
@@ -863,7 +874,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     // Mirrored drag: the opposite handle mirrors.
     toolReady(fixture, expectations);
     t = target(fixture);
-    const auto out1 = at(*t, *t->path.anchors[1].outHandle);
+    const auto out1 = at(*t, *t->path.firstContour().anchors[1].outHandle);
     const auto historyBeforeDrag = fixture.session.snapshot().revision();
     toolMouse(fixture, QEvent::MouseButtonPress, out1);
     toolMouse(fixture, QEvent::MouseMove, out1 + QPointF(12, 18));
@@ -873,7 +884,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     toolMouse(fixture, QEvent::MouseButtonRelease, out1 + QPointF(12, 18));
     t = target(fixture);
     {
-        const auto& a = t->path.anchors[1];
+        const auto& a = t->path.firstContour().anchors[1];
         expectations.expect(collinear(a) &&
                                 std::abs(handleLength(a, true) - handleLength(a, false)) < 1e-6,
                             name("a Mirrored handle drag mirrors the opposite handle"));
@@ -886,11 +897,11 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     toolReady(fixture, expectations);
     t = target(fixture);
     {
-        const auto inLength = handleLength(t->path.anchors[1], false);
-        const auto out = at(*t, *t->path.anchors[1].outHandle);
+        const auto inLength = handleLength(t->path.firstContour().anchors[1], false);
+        const auto out = at(*t, *t->path.firstContour().anchors[1].outHandle);
         toolDrag(fixture, out, out + QPointF(-15, 25));
         t = target(fixture);
-        const auto& a = t->path.anchors[1];
+        const auto& a = t->path.firstContour().anchors[1];
         expectations.expect(
             a.mode == PathAnchorMode::Aligned && collinear(a) &&
                 std::abs(handleLength(a, false) - inLength) < 1e-6,
@@ -901,11 +912,11 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     toolReady(fixture, expectations);
     t = target(fixture);
     {
-        const auto in = *t->path.anchors[2].inHandle;
-        const auto out = at(*t, *t->path.anchors[2].outHandle);
+        const auto in = *t->path.firstContour().anchors[2].inHandle;
+        const auto out = at(*t, *t->path.firstContour().anchors[2].outHandle);
         toolDrag(fixture, out, out + QPointF(20, -10));
         t = target(fixture);
-        expectations.expect(*t->path.anchors[2].inHandle == in,
+        expectations.expect(*t->path.firstContour().anchors[2].inHandle == in,
                             name("a Free handle drag leaves the opposite handle"));
     }
 
@@ -913,12 +924,12 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     toolReady(fixture, expectations);
     t = target(fixture);
     {
-        const auto in = *t->path.anchors[1].inHandle;
-        const auto out = at(*t, *t->path.anchors[1].outHandle);
+        const auto in = *t->path.firstContour().anchors[1].inHandle;
+        const auto out = at(*t, *t->path.firstContour().anchors[1].outHandle);
         toolDrag(fixture, out, out + QPointF(10, 30), Qt::AltModifier);
         t = target(fixture);
-        expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Free &&
-                                *t->path.anchors[1].inHandle == in,
+        expectations.expect(t->path.firstContour().anchors[1].mode == PathAnchorMode::Free &&
+                                *t->path.firstContour().anchors[1].inHandle == in,
                             name("an Alt handle drag makes the anchor Free"));
     }
 
@@ -932,9 +943,10 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
         const auto point = anchorAt(*t, 2);
         toolDrag(fixture, point, point + QPointF(0, 30));
         t = target(fixture);
-        const auto expected = pe::autoHandles(t->path, 1);
-        expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Auto && expected &&
-                                *t->path.anchors[1].outHandle == expected->second,
+        const auto expected = pe::autoHandles(t->path.firstContour(), 1);
+        expectations.expect(t->path.firstContour().anchors[1].mode == PathAnchorMode::Auto &&
+                                expected &&
+                                *t->path.firstContour().anchors[1].outHandle == expected->second,
                             name("moving a neighbor recomputes the Auto anchor"));
     }
 
@@ -943,13 +955,13 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     t = target(fixture);
     click(fixture, anchorAt(*t, 1), Qt::AltModifier);
     t = target(fixture);
-    expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Corner &&
-                            !t->path.anchors[1].outHandle,
+    expectations.expect(t->path.firstContour().anchors[1].mode == PathAnchorMode::Corner &&
+                            !t->path.firstContour().anchors[1].outHandle,
                         name("Alt-click makes a curved anchor a Corner"));
     toolReady(fixture, expectations);
     click(fixture, anchorAt(*t, 1), Qt::AltModifier);
     t = target(fixture);
-    expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Auto,
+    expectations.expect(t->path.firstContour().anchors[1].mode == PathAnchorMode::Auto,
                         name("Alt-click returns the Corner to its previous curved mode"));
 
     // Pen on a segment adds a point without changing the shape, then returns to Select.
@@ -957,15 +969,15 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     t = target(fixture);
     {
         const auto before = t->path;
-        const auto controls = pe::segmentControls(before, 0);
+        const auto controls = pe::segmentControls(before.firstContour(), 0);
         const auto middle = pe::segmentPoint(controls, 0.5);
         toolKey(fixture, Qt::Key_P);
         click(fixture, at(*t, middle));
         t = target(fixture);
-        bool onShape = t && t->path.anchors.size() == 5;
+        bool onShape = t && t->path.firstContour().anchors.size() == 5;
         if (onShape) {
-            const auto first = pe::segmentControls(t->path, 0);
-            const auto second = pe::segmentControls(t->path, 1);
+            const auto first = pe::segmentControls(t->path.firstContour(), 0);
+            const auto second = pe::segmentControls(t->path.firstContour(), 1);
             for (int step = 0; step <= 8 && onShape; ++step) {
                 const double u = step / 8.0;
                 const auto a = pe::segmentPoint(first, u);
@@ -994,7 +1006,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     click(fixture, anchorAt(*t, 1));
     toolKey(fixture, Qt::Key_Delete);
     t = target(fixture);
-    expectations.expect(t && t->path.anchors.size() == 3 &&
+    expectations.expect(t && t->path.firstContour().anchors.size() == 3 &&
                             !fixture.session.selectedNodes().empty(),
                         name("Delete removes the anchor, not the layer"));
     if (mask) {
@@ -1002,13 +1014,13 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
         click(fixture, anchorAt(*t, 0));
         toolKey(fixture, Qt::Key_Backspace);
         t = target(fixture);
-        expectations.expect(t && t->path.anchors.size() == 3,
+        expectations.expect(t && t->path.firstContour().anchors.size() == 3,
                             name("a mask keeps three anchors: Backspace is refused"));
         toolReady(fixture, expectations);
         toolKey(fixture, Qt::Key_P);
         click(fixture, anchorAt(*t, 2));
         t = target(fixture);
-        expectations.expect(t && t->path.anchors.size() == 3,
+        expectations.expect(t && t->path.firstContour().anchors.size() == 3,
                             name("the Pen on a three-anchor mask's point is refused"));
         toolKey(fixture, Qt::Key_V);
     } else {
@@ -1016,12 +1028,13 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
         click(fixture, anchorAt(*t, 1));
         toolKey(fixture, Qt::Key_Backspace);
         t = target(fixture);
-        expectations.expect(t && t->path.anchors.size() == 2, name("Backspace removes an anchor"));
+        expectations.expect(t && t->path.firstContour().anchors.size() == 2,
+                            name("Backspace removes an anchor"));
         toolReady(fixture, expectations);
         click(fixture, anchorAt(*t, 0));
         toolKey(fixture, Qt::Key_Delete);
         t = target(fixture);
-        expectations.expect(t && t->path.anchors.size() == 2,
+        expectations.expect(t && t->path.firstContour().anchors.size() == 2,
                             name("a shape path keeps two anchors: Delete is refused"));
     }
 
@@ -1030,7 +1043,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     t = target(fixture);
     {
         double minX = 1e300, minY = 1e300, maxX = -1e300, maxY = -1e300;
-        for (std::size_t index = 0; index < t->path.anchors.size(); ++index) {
+        for (std::size_t index = 0; index < t->path.firstContour().anchors.size(); ++index) {
             const auto point = anchorAt(*t, index);
             minX = std::min(minX, point.x());
             minY = std::min(minY, point.y());
@@ -1046,7 +1059,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
         toolReady(fixture, expectations);
         toolDrag(fixture, {minX - 5, -10}, {maxX + 5, maxY + 5});
         expectations.expect(fixture.viewer.selectedAnchorsForTest().size() ==
-                                t->path.anchors.size(),
+                                t->path.firstContour().anchors.size(),
                             name("a marquee from empty canvas selects every anchor inside it"));
     }
 }
@@ -1072,17 +1085,17 @@ void testAnchorEditing(Expectations& expectations) {
         toolReady(fixture, expectations);
         auto t = target(fixture);
         if (t) {
-            const auto count = t->path.anchors.size();
+            const auto count = t->path.firstContour().anchors.size();
             toolKey(fixture, Qt::Key_P);
             anchor_test::click(fixture, anchor_test::anchorAt(*t, count - 1));
             anchor_test::click(fixture, {320, 240});
             toolKey(fixture, Qt::Key_Return);
             t = target(fixture);
-            expectations.expect(t && t->path.anchors.size() == count + 1 && !t->path.closed &&
-                                    selectToolActive(fixture),
+            expectations.expect(t && t->path.firstContour().anchors.size() == count + 1 &&
+                                    !t->path.firstContour().closed && selectToolActive(fixture),
                                 "shape path: the Pen continues from an open end, one edit");
             expectations.expect(fixture.session.undo() && target(fixture) &&
-                                    target(fixture)->path.anchors.size() == count,
+                                    target(fixture)->path.firstContour().anchors.size() == count,
                                 "shape path: one undo removes the continued segment");
             toolReady(fixture, expectations);
             t = target(fixture);
@@ -1091,13 +1104,15 @@ void testAnchorEditing(Expectations& expectations) {
             anchor_test::click(fixture, {320, 240});
             anchor_test::click(fixture, anchor_test::anchorAt(*t, 0));
             t = target(fixture);
-            expectations.expect(t && t->path.closed && t->path.anchors.size() == count + 1,
+            expectations.expect(t && t->path.firstContour().closed &&
+                                    t->path.firstContour().anchors.size() == count + 1,
                                 "shape path: clicking the first point closes the continued path");
             toolReady(fixture, expectations);
             anchor_test::click(fixture, anchor_test::anchorAt(*t, 0));
             anchor_test::triggerMenu(fixture, "viewerPathClosedToggle");
             t = target(fixture);
-            expectations.expect(t && !t->path.closed, "shape path: the menu opens the path");
+            expectations.expect(t && !t->path.firstContour().closed,
+                                "shape path: the menu opens the path");
         }
         toolShutdown(fixture, expectations);
     }

@@ -496,6 +496,8 @@ inline constexpr std::uint32_t kGradientModesMinor = 41;
 // #383: the first document minor whose layer masks may take their shape from a Mask output
 // (`matte`) and whose track mattes may name one (`node`); an older one carrying either is refused.
 inline constexpr std::uint32_t kMatteSourcesMinor = 42;
+// Document 1.43 (#589): compound path values: contours, a fill rule and keyed groups.
+inline constexpr std::uint32_t kCompoundPathsMinor = 43;
 [[nodiscard]] bool isLegacyGradientColorPairNode(std::string_view typeId,
                                                  std::uint32_t schemaVersion) noexcept;
 // #541: opening a document older than 1.39 turns each schema 1 colour pair that makes up a ramp

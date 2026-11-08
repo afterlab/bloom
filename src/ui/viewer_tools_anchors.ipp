@@ -26,7 +26,7 @@ QString anchorModeText(const document::PathAnchorMode mode) {
     return {};
 }
 
-QPointF pathCentre(const document::PathValue& path) {
+QPointF pathCentre(const document::PathContour& path) {
     return viewer_tool_geometry::toolOutline(viewer_tool_geometry::toolRenderPath(path))
         .boundingRect()
         .center();
@@ -49,7 +49,7 @@ std::optional<ViewerEditor::EditablePath> ViewerEditor::editablePath() const {
     return {};
 }
 
-std::optional<std::pair<document::PathValue, QTransform>>
+std::optional<std::pair<document::PathContour, QTransform>>
 ViewerEditor::anchorEditTargetForTest() const {
     const auto target = editablePath();
     if (!target)
@@ -98,21 +98,24 @@ std::optional<ViewerEditor::AnchorHit> ViewerEditor::hitAnchor(const EditablePat
     return std::nullopt;
 }
 
-void ViewerEditor::previewPathEdit(AnchorGesture& gesture, const document::PathValue& next) {
+void ViewerEditor::previewPathEdit(AnchorGesture& gesture, const document::PathContour& next) {
     auto& target = gesture.target;
     if (!gesture.previewing) {
-        const bool started = target.owner == EditablePath::Owner::Shape
-                                 ? session_.beginPathEdit(target.parameter)
-                                 : session_.beginMaskPathEdit(target.parameter, gesture.base);
+        const bool started =
+            target.owner == EditablePath::Owner::Shape
+                ? session_.beginPathEdit(target.parameter)
+                : session_.beginMaskPathEdit(target.parameter,
+                                             document::PathValue::fromContour(gesture.base));
         if (!started)
             return;
         gesture.previewing = true;
         previewController_->beginInteractiveScrub();
     }
     if (target.owner == EditablePath::Owner::Shape)
-        (void)session_.updatePathEdit(next, toolValue(pathCentre(next) - pathCentre(gesture.base)));
+        (void)session_.updatePathEdit(document::PathValue::fromContour(next),
+                                      toolValue(pathCentre(next) - pathCentre(gesture.base)));
     else
-        (void)session_.updateValueEdit(next);
+        (void)session_.updateValueEdit(document::PathValue::fromContour(next));
 }
 
 void ViewerEditor::endPathPreview(AnchorGesture& gesture) {
@@ -124,16 +127,17 @@ void ViewerEditor::endPathPreview(AnchorGesture& gesture) {
     gesture.previewing = false;
 }
 
-bool ViewerEditor::commitPathEdit(const EditablePath& target, document::PathValue next) {
-    if (next == target.path || !next.isValid())
+bool ViewerEditor::commitPathEdit(const EditablePath& target, document::PathContour next) {
+    const auto whole = document::PathValue::fromContour(next);
+    if (next == target.path || !whole.isValid())
         return false;
     if (target.owner == EditablePath::Owner::Mask)
         return target.layer && target.mask &&
-               session_.commitMaskPath(*target.layer, *target.mask, std::move(next));
+               session_.commitMaskPath(*target.layer, *target.mask, whole);
     if (!session_.beginPathEdit(target.parameter))
         return false;
     const auto delta = toolValue(pathCentre(next) - pathCentre(target.path));
-    if (!session_.updatePathEdit(std::move(next), delta)) {
+    if (!session_.updatePathEdit(whole, delta)) {
         session_.cancelValueEdit();
         return false;
     }

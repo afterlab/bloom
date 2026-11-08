@@ -172,6 +172,13 @@ class AttachmentScope final {
 // Reads an object's first member, requires it to be literally named "kind", and decodes its
 // string value as the discriminator for a branch the caller resolves afterward (constant value,
 // parameter source, edge destination, OCIO locator).
+// Document 1.43 (#589): a compound path's optional fill rule and keyed groups, shared by a path
+// constant and a Path data block. Only an explicit rule is written, so "inherit" is refused.
+[[nodiscard]] bool decodePathFillRule(const JsonValue& value, DecodeState& state,
+                                      const std::string& path, document::PathFillRule& out);
+[[nodiscard]] bool decodePathGroups(const JsonValue& value, DecodeState& state,
+                                    const std::string& path, std::vector<document::PathGroup>& out);
+
 [[nodiscard]] bool decodeKindDiscriminator(const JsonValue& node, DecodeState& state,
                                            const std::string& path, std::string_view& kindText);
 

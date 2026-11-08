@@ -99,6 +99,24 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
     return publish(std::move(definition));
 }
 
+// #589: a framed square as one Path value: two contours and the value's own even-odd rule.
+[[nodiscard]] inline bloom::document::PathValue compoundPath(const double inner = 2.0) {
+    using bloom::document::PathAnchor;
+    const auto square = [](const double left, const double top, const double size) {
+        bloom::document::PathContour contour;
+        contour.closed = true;
+        contour.anchors = {PathAnchor{Vec2d{left, top}, std::nullopt, std::nullopt},
+                           PathAnchor{Vec2d{left + size, top}, std::nullopt, std::nullopt},
+                           PathAnchor{Vec2d{left + size, top + size}, std::nullopt, std::nullopt},
+                           PathAnchor{Vec2d{left, top + size}, std::nullopt, std::nullopt}};
+        return contour;
+    };
+    bloom::document::PathValue value;
+    value.contours = {square(0.0, 0.0, 5.0), square(inner, inner, 1.0)};
+    value.fillRule = bloom::document::PathFillRule::EvenOdd;
+    return value;
+}
+
 // A strict, kind-valid shape: a Line has no fill so it must carry a nonzero stroke, and a Path must
 // carry real anchors. Non-Line kinds may additionally request a stroke so the native CPU oracle
 // parity exercises the vector stroke/opacity arm rather than fill alone.
@@ -123,8 +141,8 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
         value.lineStart = Vec2d{0.0, 0.0};
         value.lineEnd = Vec2d{6.0, 5.0};
     } else if (kind == ShapeKind::Path) {
-        value.path.closed = true;
-        value.path.anchors = {
+        value.path.editableContour().closed = true;
+        value.path.editableContour().anchors = {
             bloom::document::PathAnchor{Vec2d{0.0, 0.0}, std::nullopt, std::nullopt},
             bloom::document::PathAnchor{Vec2d{6.0, 0.0}, std::nullopt, std::nullopt},
             bloom::document::PathAnchor{Vec2d{3.0, 5.0}, std::nullopt, std::nullopt}};
@@ -509,12 +527,12 @@ struct NestedBranchReusePlans final {
     const auto rectangle = [](const double left, const double top, const double right,
                               const double bottom) {
         PathValue path;
-        path.closed = true;
-        path.anchors = {PathAnchor{Vec2d{left, top}, std::nullopt, std::nullopt},
-                        PathAnchor{Vec2d{right, top}, std::nullopt, Vec2d{right + 1.0, top + 1.0}},
-                        PathAnchor{Vec2d{right, bottom}, Vec2d{right + 0.5, bottom - 1.0},
-                                   std::nullopt},
-                        PathAnchor{Vec2d{left, bottom}, std::nullopt, std::nullopt}};
+        path.editableContour().closed = true;
+        path.editableContour().anchors = {
+            PathAnchor{Vec2d{left, top}, std::nullopt, std::nullopt},
+            PathAnchor{Vec2d{right, top}, std::nullopt, Vec2d{right + 1.0, top + 1.0}},
+            PathAnchor{Vec2d{right, bottom}, Vec2d{right + 0.5, bottom - 1.0}, std::nullopt},
+            PathAnchor{Vec2d{left, bottom}, std::nullopt, std::nullopt}};
         return path;
     };
     const auto mask = [&](const std::uint64_t offset, const LayerMaskMode mode,
@@ -539,7 +557,7 @@ struct NestedBranchReusePlans final {
         auto& first = kernel.masks.front().path;
         const auto start = std::get<PathValue>(first.source);
         auto end = start;
-        for (auto& anchor : end.anchors)
+        for (auto& anchor : end.editableContour().anchors)
             anchor.point.x += 0.75;
         first.source = bloom::runtime::CompiledPathCurve{
             bloom::document::AnimationCurveId::fromRaw(idBase + 90),

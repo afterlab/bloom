@@ -417,10 +417,10 @@ void layerCommandsWorkOnEntryLayers() {
     fixture.connect(nested, main);
     fixture.edit(nested, slot, [&](const LayerId id) {
         PathValue path;
-        path.closed = true;
-        path.anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
-                        {{8.0, 0.0}, std::nullopt, std::nullopt},
-                        {{8.0, 8.0}, std::nullopt, std::nullopt}};
+        path.editableContour().closed = true;
+        path.editableContour().anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
+                                          {{8.0, 0.0}, std::nullopt, std::nullopt},
+                                          {{8.0, 8.0}, std::nullopt, std::nullopt}};
         return std::make_unique<AddLayerMask>(fixture.composition, id, std::move(path));
     });
     const auto entry = entryLayer(fixture.comp(), nested, slot)->layerId;

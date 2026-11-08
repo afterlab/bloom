@@ -35,7 +35,9 @@ _EXPECTED = {
     "value": "a number, True/False, text, (x, y), (x, y, z), (r, g, b, a), a path or a gradient",
     "path": "a path {'closed': bool, 'anchors': [{'point': (x, y), 'in_handle': (x, y) or None, "
             "'out_handle': (x, y) or None, 'mode': 'corner' | 'mirrored' | 'aligned' | 'free' | "
-            "'auto'}, ...]} (mode optional)",
+            "'auto'}, ...]} (mode optional), or {'contours': [...], 'fill_rule': 'nonZero' | "
+            "'evenOdd', 'groups': [{'key': text, 'first_contour': n, 'contour_count': n, 'color': "
+            "(r, g, b, a)}, ...]} (fill_rule, groups and color optional)",
 }
 
 _HANDLES = ("in_handle", "out_handle", "inHandle", "outHandle")
@@ -131,10 +133,21 @@ def _valid(value, kind):
                 or any(_sequence(value, size) for size in (2, 3, 4)) or _valid(value, "path")
                 or _gradient(value))
     if kind == "path":
-        return (isinstance(value, dict) and set(value) == {"closed", "anchors"}
-                and type(value["closed"]) is bool and isinstance(value["anchors"], tuple)
-                and all(_anchor(anchor) for anchor in value["anchors"]))
+        if isinstance(value, dict) and "contours" in value:
+            # #589: a compound path; the host validates its groups and refuses it where it does not
+            # belong, such as on a mask.
+            return (set(value) <= {"contours", "fill_rule", "fillRule", "groups"}
+                    and isinstance(value["contours"], tuple)
+                    and all(_contour(contour) for contour in value["contours"])
+                    and isinstance(value.get("groups", ()), tuple))
+        return _contour(value)
     return True
+
+
+def _contour(value):
+    return (isinstance(value, dict) and set(value) == {"closed", "anchors"}
+            and type(value["closed"]) is bool and isinstance(value["anchors"], tuple)
+            and all(_anchor(anchor) for anchor in value["anchors"]))
 
 
 _MODES = ("corner", "mirrored", "aligned", "free", "auto")

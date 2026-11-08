@@ -108,12 +108,14 @@ std::vector<std::array<float, 4>> flattenMaskPath(const document::PathValue& pat
                                                   const double horizontalScale,
                                                   const double verticalScale) {
     std::vector<std::array<float, 4>> segments;
-    if (!path.closed || path.anchors.size() < 2)
+    // #589: a mask holds one contour; validation refuses more.
+    const auto& contour = path.firstContour();
+    if (!contour.closed || contour.anchors.size() < 2)
         return segments;
-    const auto count = path.anchors.size();
+    const auto count = contour.anchors.size();
     for (std::size_t index = 0; index < count; ++index) {
-        const auto& from = path.anchors[index];
-        const auto& to = path.anchors[(index + 1) % count];
+        const auto& from = contour.anchors[index];
+        const auto& to = contour.anchors[(index + 1) % count];
         const auto p0 = scaled(from.point, horizontalScale, verticalScale);
         const auto p3 = scaled(to.point, horizontalScale, verticalScale);
         const auto p1 = scaled(from.outHandle.value_or(from.point), horizontalScale, verticalScale);
@@ -137,7 +139,7 @@ std::optional<PreparedLayerMasks> prepareLayerMasks(const std::span<const Sample
             !std::isfinite(mask.expansion) ||
             std::fabs(mask.expansion) > document::kMaximumLayerMaskExpansionPixels ||
             !std::isfinite(mask.opacity) || mask.opacity < 0.0 || mask.opacity > 1.0 ||
-            !mask.path.isValid())
+            !mask.path.isValid() || !mask.path.isSimple())
             return std::nullopt;
         if (mask.mode == document::LayerMaskMode::None)
             continue;

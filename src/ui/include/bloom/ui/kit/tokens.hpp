@@ -59,7 +59,8 @@ enum class Color : std::uint8_t {
     ViewerCheckerLight,
     ViewerCheckerDark,
     // The Viewer's Black, Grey and White surrounds: exactly black, a neutral mid grey and exactly
-    // white, because judging an edge or a colour against a known value is the point of choosing them.
+    // white, because judging an edge or a colour against a known value is the point of choosing
+    // them.
     CanvasBlack,
     CanvasGrey,
     CanvasWhite,
@@ -100,6 +101,9 @@ enum class Color : std::uint8_t {
     SocketScalarField,
     SocketVectorField,
     SocketColorField,
+    // #589: the Path value transport (docs/architecture/path-value.md). Pale steel blue, drawn as
+    // an ordinary circular value socket.
+    SocketPath,
     // GRAPH-1: the graph editor's per-component curve strokes. X/Y/Z/W is the axis vocabulary and
     // R/G/B/A borrows it unchanged, so one colour always means "the first component" whatever the
     // parameter is. A scalar curve takes Keyframe; selection takes Accent; none of these four is
@@ -108,10 +112,10 @@ enum class Color : std::uint8_t {
     ComponentY,
     ComponentZ,
     ComponentW,
-    // T1: the graph editor's single-value curve strokes. Each single-value curve on the canvas takes
-    // the next of these in curve order (cycling), so opacity beside rotation reads as two curves
-    // rather than one gold line twice. Gold, orchid, teal, orange, lavender: none is a component
-    // hue (red, green, sky blue), Accent, or another's neighbour.
+    // T1: the graph editor's single-value curve strokes. Each single-value curve on the canvas
+    // takes the next of these in curve order (cycling), so opacity beside rotation reads as two
+    // curves rather than one gold line twice. Gold, orchid, teal, orange, lavender: none is a
+    // component hue (red, green, sky blue), Accent, or another's neighbour.
     GraphCurve1,
     GraphCurve2,
     GraphCurve3,

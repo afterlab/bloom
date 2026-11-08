@@ -2688,7 +2688,14 @@ lowerShape(const document::NodeRecord& node) {
     const auto* ratio = parameterConstant<double>(findParameterBinding(node, "innerRatio"));
     const auto* start = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineStart"));
     const auto* end = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineEnd"));
-    const auto* path = parameterConstant<document::PathValue>(findParameterBinding(node, "path"));
+    // #589: the path is an authored constant, or a Path output read per frame.
+    const auto* pathBinding = findParameterBinding(node, "path");
+    const auto drivenPath = drivenOutput(pathBinding, runtime::SocketValueKind::Path);
+    const auto* storedPath = parameterConstant<document::PathValue>(pathBinding);
+    if (unreadableDriver(node, pathBinding, runtime::SocketValueKind::Path, drivenPath))
+        return std::nullopt;
+    const document::PathValue emptyPath;
+    const auto* path = storedPath != nullptr ? storedPath : drivenPath ? &emptyPath : nullptr;
     // The switches lower like a Layer Output's blend mode: a constant, or a Boolean driver with
     // the registry default carried beside it.
     const auto* fillBinding = findParameterBinding(node, "fillEnabled");
@@ -2739,6 +2746,7 @@ lowerShape(const document::NodeRecord& node) {
     shape.drivenFillEnabled = drivenFill;
     shape.strokeEnabledParameterId = strokeBinding->parameterId;
     shape.drivenStrokeEnabled = drivenStroke;
+    shape.drivenPath = drivenPath;
     return shape;
 }
 

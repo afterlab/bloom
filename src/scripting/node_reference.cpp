@@ -9,6 +9,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/path_value.hpp>
 #include <bloom/scripting/node_reference.hpp>
 
 #include <algorithm>
@@ -39,7 +40,7 @@ std::string vector(const std::initializer_list<double> values) {
     return text + "]";
 }
 
-std::string pathJson(const document::PathValue& path) {
+std::string contourJson(const document::PathContour& path) {
     std::string text =
         std::string("{\"closed\":") + (path.closed ? "true" : "false") + ",\"anchors\":[";
     for (std::size_t index = 0; index < path.anchors.size(); ++index) {
@@ -54,6 +55,35 @@ std::string pathJson(const document::PathValue& path) {
                 ",\"mode\":" + detail::jsonQuote(document::pathAnchorModeName(anchor.mode)) + "}";
     }
     return text + "]}";
+}
+
+// #589: a node definition's default path is always flat; a compound one is spelled out anyway so
+// this stays the published shape for every value.
+std::string pathJson(const document::PathValue& path) {
+    if (document::pathValueHasFlatForm(path))
+        return contourJson(path.firstContour());
+    std::string text = "{\"contours\":[";
+    for (std::size_t index = 0; index < path.contours.size(); ++index)
+        text += (index == 0 ? "" : ",") + contourJson(path.contours[index]);
+    text += "]";
+    if (path.fillRule != document::PathFillRule::Inherit)
+        text += ",\"fillRule\":" + detail::jsonQuote(document::pathFillRuleName(path.fillRule));
+    if (!path.groups.empty()) {
+        text += ",\"groups\":[";
+        for (std::size_t index = 0; index < path.groups.size(); ++index) {
+            const auto& group = path.groups[index];
+            text += (index == 0 ? "" : ",") + std::string("{\"key\":") +
+                    detail::jsonQuote(group.key) +
+                    ",\"firstContour\":" + std::to_string(group.firstContour) +
+                    ",\"contourCount\":" + std::to_string(group.contourCount);
+            if (group.color)
+                text += ",\"color\":" + vector({group.color->red, group.color->green,
+                                                group.color->blue, group.color->alpha});
+            text += "}";
+        }
+        text += "]";
+    }
+    return text + "}";
 }
 
 // #546: the gradient's modes that are not their defaults, as JSON members after its stops.

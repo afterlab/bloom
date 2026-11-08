@@ -135,8 +135,8 @@ shapePlan(const CompositionFormat compositionFormat, const LayerValues values,
     shape.strokeCap = shapeValues.strokeCap;
     shape.fillRule = shapeValues.fillRule;
     if (shapeValues.kind == bloom::document::ShapeKind::Path) {
-        shape.path.closed = true;
-        shape.path.anchors = {
+        shape.path.editableContour().closed = true;
+        shape.path.editableContour().anchors = {
             bloom::document::PathAnchor{bloom::document::Vec2d{0.0, 0.0}, {}, {}},
             bloom::document::PathAnchor{bloom::document::Vec2d{shapeValues.size.x, 0.0}, {}, {}},
             bloom::document::PathAnchor{

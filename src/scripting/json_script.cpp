@@ -327,7 +327,7 @@ class Parser final {
 // "anchors": [{"point": [x, y], "inHandle": [x, y] | null, "outHandle": [x, y] | null,
 // "mode": "corner" | "mirrored" | "aligned" | "free" | "auto"}]}; an omitted mode is inferred from
 // the handles. The Python spelling (in_handle / out_handle) is accepted too.
-[[nodiscard]] std::optional<Value> pathOf(const JsonObject& object) {
+[[nodiscard]] std::optional<document::PathContour> contourOf(const JsonObject& object) {
     const auto closed = object.find("closed");
     const auto anchors = object.find("anchors");
     if (object.size() != 2 || closed == object.end() || anchors == object.end())
@@ -336,7 +336,7 @@ class Parser final {
     const auto* rows = std::get_if<JsonArray>(&anchors->second.storage);
     if (isClosed == nullptr || rows == nullptr || rows->size() > document::kMaximumPathAnchors)
         return std::nullopt;
-    document::PathValue path;
+    document::PathContour path;
     path.closed = *isClosed;
     for (const auto& row : *rows) {
         const auto* fields = std::get_if<JsonObject>(&row.storage);
@@ -376,6 +376,101 @@ class Parser final {
         anchor.mode = mode.value_or(document::inferPathAnchorMode(anchor));
         path.anchors.push_back(anchor);
     }
+    return path;
+}
+
+[[nodiscard]] std::optional<double> pathNumberOf(const JsonValue& value) {
+    if (const auto* number = std::get_if<double>(&value.storage))
+        return *number;
+    if (const auto* whole = std::get_if<std::int64_t>(&value.storage))
+        return static_cast<double>(*whole);
+    return std::nullopt;
+}
+
+// #589: one group of a compound path: {"key": text, "firstContour": n, "contourCount": n, "color":
+// [r, g, b, a] (optional)}.
+[[nodiscard]] std::optional<document::PathGroup> pathGroupOf(const JsonObject& object) {
+    const auto key = object.find("key");
+    const auto first = object.find("firstContour");
+    const auto count = object.find("contourCount");
+    const auto color = object.find("color");
+    if (key == object.end() || first == object.end() || count == object.end() ||
+        object.size() != (color == object.end() ? 3U : 4U))
+        return std::nullopt;
+    const auto index = [](const JsonValue& json) -> std::optional<std::uint32_t> {
+        const auto number = pathNumberOf(json);
+        if (!number || !(*number >= 0.0) || *number > 4294967295.0 ||
+            *number != std::floor(*number))
+            return std::nullopt;
+        return static_cast<std::uint32_t>(*number);
+    };
+    const auto* text = std::get_if<std::string>(&key->second.storage);
+    const auto firstContour = index(first->second);
+    const auto contourCount = index(count->second);
+    if (text == nullptr || !firstContour || !contourCount)
+        return std::nullopt;
+    document::PathGroup group{*text, *firstContour, *contourCount, std::nullopt};
+    if (color != object.end()) {
+        const auto* channels = std::get_if<JsonArray>(&color->second.storage);
+        if (channels == nullptr || channels->size() != 4)
+            return std::nullopt;
+        std::array<double, 4> values{};
+        for (std::size_t channel = 0; channel < 4; ++channel) {
+            const auto number = pathNumberOf((*channels)[channel]);
+            if (!number)
+                return std::nullopt;
+            values[channel] = *number;
+        }
+        group.color = core::Color4d{values[0], values[1], values[2], values[3]};
+    }
+    return group;
+}
+
+// #589: a path argument is one contour, or {"contours": [contour...], "fillRule": "nonZero" or
+// "evenOdd" (optional), "groups": [group...] (optional)}.
+[[nodiscard]] std::optional<Value> pathOf(const JsonObject& object) {
+    const auto contours = object.find("contours");
+    if (contours == object.end()) {
+        auto contour = contourOf(object);
+        return contour ? std::optional<Value>(Value{document::PathValue::fromContour(*contour)})
+                       : std::nullopt;
+    }
+    const auto fillRule = object.find("fillRule");
+    const auto groups = object.find("groups");
+    const auto* rows = std::get_if<JsonArray>(&contours->second.storage);
+    if (rows == nullptr || rows->size() > document::kMaximumPathContours ||
+        object.size() != 1U + static_cast<std::size_t>(fillRule != object.end()) +
+                             static_cast<std::size_t>(groups != object.end()))
+        return std::nullopt;
+    document::PathValue path;
+    for (const auto& row : *rows) {
+        const auto* fields = std::get_if<JsonObject>(&row.storage);
+        auto contour = fields ? contourOf(*fields) : std::nullopt;
+        if (!contour)
+            return std::nullopt;
+        path.contours.push_back(std::move(*contour));
+    }
+    if (fillRule != object.end()) {
+        const auto* text = std::get_if<std::string>(&fillRule->second.storage);
+        const auto rule = text ? document::pathFillRuleFromName(*text) : std::nullopt;
+        if (!rule)
+            return std::nullopt;
+        path.fillRule = *rule;
+    }
+    if (groups != object.end()) {
+        const auto* members = std::get_if<JsonArray>(&groups->second.storage);
+        if (members == nullptr)
+            return std::nullopt;
+        for (const auto& member : *members) {
+            const auto* fields = std::get_if<JsonObject>(&member.storage);
+            auto group = fields ? pathGroupOf(*fields) : std::nullopt;
+            if (!group)
+                return std::nullopt;
+            path.groups.push_back(std::move(*group));
+        }
+    }
+    if (!path.isValid())
+        return std::nullopt;
     return Value{std::move(path)};
 }
 

@@ -308,6 +308,12 @@ migrateGradientStopLinksV1_39(const JsonValue& root, std::pmr::memory_resource* 
 [[nodiscard]] MigrationStepOutcome migrateMatteSourcesV1_41(const JsonValue& root,
                                                             std::pmr::memory_resource* resource,
                                                             std::pmr::vector<char>& output);
+// Compound paths, document 1.42 -> 1.43 (#589): version-only. A path value's `contours`, `fillRule`
+// and `groups` are new members no older document carries; the flat {anchors, closed} shape stays
+// the spelling of a one-contour path, and decoding it gives a value of one contour.
+[[nodiscard]] MigrationStepOutcome migrateCompoundPathsV1_42(const JsonValue& root,
+                                                             std::pmr::memory_resource* resource,
+                                                             std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -350,7 +356,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 38}, {1, 39}, migrateGradientColorPairsV1_38},
     MigrationStepDescriptor{{1, 39}, {1, 40}, migrateGradientStopLinksV1_39},
     MigrationStepDescriptor{{1, 40}, {1, 41}, migrateGradientModesV1_40},
-    MigrationStepDescriptor{{1, 41}, {1, 42}, migrateMatteSourcesV1_41}};
+    MigrationStepDescriptor{{1, 41}, {1, 42}, migrateMatteSourcesV1_41},
+    MigrationStepDescriptor{{1, 42}, {1, 43}, migrateCompoundPathsV1_42}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

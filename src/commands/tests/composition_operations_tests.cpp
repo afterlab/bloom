@@ -625,8 +625,8 @@ void testDuplicateCompositionRemapsEveryReference(TestContext& test) {
                                                     document::TrackMatte{kSecondLayerId})),
                 "fixture sets a track matte");
     document::PathValue path;
-    path.closed = true;
-    path.anchors = {{{0, 0}, {}, {}}, {{4, 0}, {}, {}}, {{4, 4}, {}, {}}};
+    path.editableContour().closed = true;
+    path.editableContour().anchors = {{{0, 0}, {}, {}}, {{4, 0}, {}, {}}, {{4, 4}, {}, {}}};
     test.expect(run(std::make_unique<AddLayerMask>(kCompositionId, kFirstLayerId, path)),
                 "fixture adds a mask");
 

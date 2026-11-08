@@ -39,7 +39,7 @@ namespace bloom::ui::viewer_tool_geometry {
     return outline;
 }
 
-[[nodiscard]] inline render::Path toolRenderPath(const document::PathValue& path) {
+[[nodiscard]] inline render::Path toolRenderPath(const document::PathContour& path) {
     render::Path result;
     result.closed = path.closed;
     for (const auto& anchor : path.anchors) {

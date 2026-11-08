@@ -10,7 +10,7 @@
 using namespace bloom;
 using document::PathAnchor;
 using document::PathAnchorMode;
-using document::PathValue;
+using document::PathContour;
 using document::Vec2d;
 namespace pe = bloom::ui::path_editing;
 
@@ -40,8 +40,8 @@ bool collinear(const PathAnchor& anchor) {
 }
 
 // An open four-anchor S: a corner, a mirrored, an aligned and a free anchor.
-PathValue sample() {
-    PathValue path;
+PathContour sample() {
+    PathContour path;
     path.anchors = {{{0, 0}, std::nullopt, std::nullopt, PathAnchorMode::Corner},
                     {{100, 0}, Vec2d{80, -20}, Vec2d{120, 20}, PathAnchorMode::Mirrored},
                     {{200, 0}, Vec2d{190, -10}, Vec2d{230, 30}, PathAnchorMode::Aligned},
@@ -49,7 +49,7 @@ PathValue sample() {
     return path;
 }
 
-std::vector<Vec2d> outlineSamples(const PathValue& path) {
+std::vector<Vec2d> outlineSamples(const PathContour& path) {
     std::vector<Vec2d> result;
     for (std::size_t segment = 0; segment < pe::segmentCount(path); ++segment) {
         const auto controls = pe::segmentControls(path, segment);
@@ -59,8 +59,8 @@ std::vector<Vec2d> outlineSamples(const PathValue& path) {
     return result;
 }
 // Every point of `a` lies on `b` (dense nearest sample), so the drawn shape is unchanged.
-bool sameShape(const PathValue& a, const PathValue& b) {
-    const auto dense = [](const PathValue& path) {
+bool sameShape(const PathContour& a, const PathContour& b) {
+    const auto dense = [](const PathContour& path) {
         std::vector<Vec2d> result;
         for (std::size_t segment = 0; segment < pe::segmentCount(path); ++segment) {
             const auto controls = pe::segmentControls(path, segment);
@@ -201,7 +201,7 @@ int main() {
         expect(added == 2 && path.anchors.size() == 5, "the split inserts after the segment start");
         expect(sameShape(original, path) && sameShape(path, original),
                "a curved split leaves the drawn shape unchanged");
-        auto straight = PathValue{};
+        auto straight = PathContour{};
         straight.closed = true;
         straight.anchors = {{{0, 0}, std::nullopt, std::nullopt},
                             {{100, 0}, std::nullopt, std::nullopt},
@@ -226,7 +226,7 @@ int main() {
                "a shape path keeps two anchors");
         expect(!pe::deleteAnchors(path, {0}, 2) && path.anchors.size() == 2,
                "below the shape minimum is refused");
-        PathValue mask;
+        PathContour mask;
         mask.closed = true;
         mask.anchors = {{{0, 0}, std::nullopt, std::nullopt},
                         {{10, 0}, std::nullopt, std::nullopt},
@@ -237,7 +237,7 @@ int main() {
                "a closed mask keeps three anchors");
         expect(!pe::deleteAnchors(mask, {0}, pe::minimumAnchors(true)) && mask.anchors.size() == 3,
                "a mask below three anchors is refused");
-        PathValue closedShape = mask;
+        PathContour closedShape = mask;
         expect(pe::deleteAnchors(closedShape, {0}, pe::minimumAnchors(false)) &&
                    !closedShape.closed,
                "a closed shape path left with two anchors opens");
@@ -248,7 +248,7 @@ int main() {
         auto path = sample();
         expect(pe::setClosed(path, true) && path.closed, "an open path closes");
         expect(pe::setClosed(path, false) && !path.closed, "and opens again");
-        PathValue pair;
+        PathContour pair;
         pair.anchors = {{{0, 0}, std::nullopt, std::nullopt}, {{1, 1}, std::nullopt, std::nullopt}};
         expect(!pe::setClosed(pair, true), "two anchors cannot close");
         auto reversed = sample();

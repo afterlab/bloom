@@ -25,6 +25,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_time.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/path_value.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/round_trip_state.hpp>
 
@@ -229,16 +230,6 @@ using document::Vec3d;
         return false;
     }
     if (kindText == "path") {
-        static constexpr std::array<std::string_view, 3> keys{"kind", "anchors", "closed"};
-        std::vector<const JsonValue*> members;
-        if (!matchOrderedMembers(node, keys, true, state, path, members))
-            return false;
-        document::PathValue value;
-        if (members[1]->kind() != JsonValueKind::Array ||
-            members[1]->arrayElements().size() > document::kMaximumPathAnchors) {
-            state.fail(DocumentDecodeError::InvalidConstantValueKind, joinPath(path, "anchors"));
-            return false;
-        }
         const auto point = [&](const JsonValue& object, const std::string& where, Vec2d& outPoint) {
             static constexpr std::array<std::string_view, 2> xy{"x", "y"};
             std::vector<const JsonValue*> coordinates;
@@ -252,56 +243,128 @@ using document::Vec3d;
                    decodeFloat64Member(*coordinates[0], state, joinPath(where, "x"), outPoint.x) &&
                    decodeFloat64Member(*coordinates[1], state, joinPath(where, "y"), outPoint.y);
         };
-        for (const auto& anchor : members[1]->arrayElements()) {
-            std::vector<std::string_view> anchorKeys{"point"};
-            if (anchor.findMember("inHandle"))
-                anchorKeys.push_back("inHandle");
-            if (anchor.findMember("outHandle"))
-                anchorKeys.push_back("outHandle");
-            // The anchor mode is a 1.24 member: an older file carrying one is malformed.
-            if (anchor.findMember("mode") && state.documentMinor >= 24)
-                anchorKeys.push_back("mode");
-            std::vector<const JsonValue*> parts;
-            const auto where =
-                joinPath(path, "anchors") + "/" + std::to_string(value.anchors.size());
-            if (anchor.kind() == JsonValueKind::Object &&
-                anchor.objectMembers().size() > anchorKeys.size()) {
-                state.fail(DocumentDecodeError::UnknownMember,
-                           joinPath(where, anchor.objectMembers()[anchorKeys.size()].key()));
+        const auto anchorsOf = [&](const JsonValue& array, const std::string& arrayPath,
+                                   std::vector<document::PathAnchor>& anchors) {
+            if (array.kind() != JsonValueKind::Array ||
+                array.arrayElements().size() > document::kMaximumPathAnchors) {
+                state.fail(DocumentDecodeError::InvalidConstantValueKind, arrayPath);
                 return false;
             }
-            if (!matchOrderedMembers(anchor, anchorKeys, false, state, where, parts))
-                return false;
-            document::PathAnchor decoded;
-            if (!point(*parts[0], joinPath(where, "point"), decoded.point))
-                return false;
-            bool explicitMode = false;
-            for (std::size_t index = 1; index < parts.size(); ++index) {
-                if (anchorKeys[index] == "mode") {
-                    const auto text = parts[index]->asString();
-                    const auto mode = text ? document::pathAnchorModeFromName(*text) : std::nullopt;
-                    if (!mode) {
-                        state.fail(DocumentDecodeError::DomainViolation, joinPath(where, "mode"));
-                        return false;
-                    }
-                    decoded.mode = *mode;
-                    explicitMode = true;
-                    continue;
-                }
-                Vec2d handle;
-                if (!point(*parts[index], joinPath(where, anchorKeys[index]), handle))
+            for (const auto& anchor : array.arrayElements()) {
+                std::vector<std::string_view> anchorKeys{"point"};
+                if (anchor.findMember("inHandle"))
+                    anchorKeys.push_back("inHandle");
+                if (anchor.findMember("outHandle"))
+                    anchorKeys.push_back("outHandle");
+                // The anchor mode is a 1.24 member: an older file carrying one is malformed.
+                if (anchor.findMember("mode") && state.documentMinor >= 24)
+                    anchorKeys.push_back("mode");
+                std::vector<const JsonValue*> parts;
+                const auto where = arrayPath + "/" + std::to_string(anchors.size());
+                if (anchor.kind() == JsonValueKind::Object &&
+                    anchor.objectMembers().size() > anchorKeys.size()) {
+                    state.fail(DocumentDecodeError::UnknownMember,
+                               joinPath(where, anchor.objectMembers()[anchorKeys.size()].key()));
                     return false;
-                (anchorKeys[index] == "inHandle" ? decoded.inHandle : decoded.outHandle) = handle;
+                }
+                if (!matchOrderedMembers(anchor, anchorKeys, false, state, where, parts))
+                    return false;
+                document::PathAnchor decoded;
+                if (!point(*parts[0], joinPath(where, "point"), decoded.point))
+                    return false;
+                bool explicitMode = false;
+                for (std::size_t index = 1; index < parts.size(); ++index) {
+                    if (anchorKeys[index] == "mode") {
+                        const auto text = parts[index]->asString();
+                        const auto mode =
+                            text ? document::pathAnchorModeFromName(*text) : std::nullopt;
+                        if (!mode) {
+                            state.fail(DocumentDecodeError::DomainViolation,
+                                       joinPath(where, "mode"));
+                            return false;
+                        }
+                        decoded.mode = *mode;
+                        explicitMode = true;
+                        continue;
+                    }
+                    Vec2d handle;
+                    if (!point(*parts[index], joinPath(where, anchorKeys[index]), handle))
+                        return false;
+                    (anchorKeys[index] == "inHandle" ? decoded.inHandle : decoded.outHandle) =
+                        handle;
+                }
+                // An omitted mode is the one the geometry implies: documents written before schema
+                // 1.24 migrate as Corner, Mirrored, Aligned or Free.
+                if (!explicitMode)
+                    decoded.mode = document::inferPathAnchorMode(decoded);
+                anchors.push_back(decoded);
             }
-            // An omitted mode is the one the geometry implies: documents written before schema
-            // 1.24 migrate as Corner, Mirrored, Aligned or Free.
-            if (!explicitMode)
-                decoded.mode = document::inferPathAnchorMode(decoded);
-            value.anchors.push_back(decoded);
+            return true;
+        };
+        // Document 1.43 (#589): a compound value's contours, then its fill rule and groups, each
+        // only when it says something. An older document carrying one is refused, and so is a
+        // compound spelling of a value the flat shape can say: every value has one spelling.
+        if (node.findMember("contours") != nullptr) {
+            if (state.documentMinor < kCompoundPathsMinor) {
+                state.fail(DocumentDecodeError::UnknownMember, joinPath(path, "contours"));
+                return false;
+            }
+            std::vector<std::string_view> keys{"kind", "contours"};
+            for (const std::string_view optional : {"fillRule", "groups"})
+                if (node.findMember(optional) != nullptr)
+                    keys.push_back(optional);
+            std::vector<const JsonValue*> members;
+            if (!matchOrderedMembers(node, keys, true, state, path, members))
+                return false;
+            const auto contoursPath = joinPath(path, "contours");
+            if (members[1]->kind() != JsonValueKind::Array ||
+                members[1]->arrayElements().size() > document::kMaximumPathContours) {
+                state.fail(DocumentDecodeError::InvalidConstantValueKind, contoursPath);
+                return false;
+            }
+            document::PathValue value;
+            value.contours.reserve(members[1]->arrayElements().size());
+            for (const auto& element : members[1]->arrayElements()) {
+                const auto where = contoursPath + "/" + std::to_string(value.contours.size());
+                static constexpr std::array<std::string_view, 2> contourKeys{"anchors", "closed"};
+                std::vector<const JsonValue*> parts;
+                if (!matchOrderedMembers(element, contourKeys, false, state, where, parts))
+                    return false;
+                if (element.objectMembers().size() > contourKeys.size()) {
+                    state.fail(DocumentDecodeError::UnknownMember,
+                               joinPath(where, element.objectMembers()[contourKeys.size()].key()));
+                    return false;
+                }
+                auto& contour = value.contours.emplace_back();
+                if (!anchorsOf(*parts[0], joinPath(where, "anchors"), contour.anchors) ||
+                    !decodeBooleanMember(*parts[1], state, joinPath(where, "closed"),
+                                         contour.closed))
+                    return false;
+            }
+            for (std::size_t index = 2; index < keys.size(); ++index)
+                if (keys[index] == "fillRule"
+                        ? !decodePathFillRule(*members[index], state, joinPath(path, "fillRule"),
+                                              value.fillRule)
+                        : !decodePathGroups(*members[index], state, joinPath(path, "groups"),
+                                            value.groups))
+                    return false;
+            if (!value.isValid() || document::pathValueHasFlatForm(value)) {
+                state.fail(DocumentDecodeError::DomainViolation, contoursPath);
+                return false;
+            }
+            out = std::move(value);
+            return true;
         }
-        if (!decodeBooleanMember(*members[2], state, joinPath(path, "closed"), value.closed))
+        // The original shape: a value of one contour, or the empty path.
+        static constexpr std::array<std::string_view, 3> keys{"kind", "anchors", "closed"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
             return false;
-        out = std::move(value);
+        document::PathContour contour;
+        if (!anchorsOf(*members[1], joinPath(path, "anchors"), contour.anchors) ||
+            !decodeBooleanMember(*members[2], state, joinPath(path, "closed"), contour.closed))
+            return false;
+        out = document::PathValue::fromContour(std::move(contour));
         return true;
     }
     // Document 1.38 (#541): a gradient's stops, each {position, red, green, blue, alpha}.
@@ -567,6 +630,12 @@ using document::Vec3d;
         if (!decodeParameterSource(*members[2], state, joinPath(path, "source"), source)) {
             return false;
         }
+    }
+    // #589: Shape Source's path takes a Path driver from document 1.43; it was a constant before.
+    if (schemaKeyText == "bloom.shape.path" && state.documentMinor < kCompoundPathsMinor &&
+        std::holds_alternative<document::DriverBindingSource>(source)) {
+        state.fail(DocumentDecodeError::UnsupportedParameterSource, joinPath(path, "source"));
+        return false;
     }
 
     out.id = id;

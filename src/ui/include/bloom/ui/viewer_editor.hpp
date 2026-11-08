@@ -326,7 +326,7 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
     // The path anchor editing would act on (its own space and the map to composition space), the
     // selected anchors, and the anchor context menu, without exec.
-    [[nodiscard]] std::optional<std::pair<document::PathValue, QTransform>>
+    [[nodiscard]] std::optional<std::pair<document::PathContour, QTransform>>
     anchorEditTargetForTest() const;
     [[nodiscard]] path_editing::AnchorSet selectedAnchorsForTest() const;
     [[nodiscard]] std::unique_ptr<QMenu> anchorContextMenuForTest();
@@ -834,11 +834,11 @@ class ViewerEditor final : public QWidget,
     // The ROI's own state, shared by the footer toggle, View and the overflow menu.
     QAction* roiAction_ = nullptr;
     QAction* clearRoiAction_ = nullptr;
-    document::PathValue penPath_;
+    document::PathContour penPath_;
     bool penDown_ = false;
     struct PathSelection {
         document::ParameterId parameter;
-        document::PathValue path;
+        document::PathContour path;
         QTransform toWorld;
     };
     [[nodiscard]] std::optional<PathSelection> selectedPath() const;
@@ -848,7 +848,7 @@ class ViewerEditor final : public QWidget,
         enum class Owner : std::uint8_t { Shape, Mask };
         Owner owner = Owner::Shape;
         document::ParameterId parameter;
-        document::PathValue path;
+        document::PathContour path;
         QTransform toWorld;
         std::optional<document::LayerId> layer;    // Mask only
         std::optional<document::LayerMaskId> mask; // Mask only
@@ -866,7 +866,7 @@ class ViewerEditor final : public QWidget,
         Kind kind = Kind::Move;
         CreationGesture gesture;
         EditablePath target; // its path is the live result
-        document::PathValue base;
+        document::PathContour base;
         path_editing::AnchorSet anchors;
         std::size_t index = 0;
         path_editing::HandleSide side = path_editing::HandleSide::Out;
@@ -884,11 +884,11 @@ class ViewerEditor final : public QWidget,
     void setAnchorSelection(const EditablePath& target, path_editing::AnchorSet anchors);
     [[nodiscard]] std::optional<AnchorHit>
     hitAnchor(const EditablePath& target, const QTransform& screen, QPointF position) const;
-    void previewPathEdit(AnchorGesture& gesture, const document::PathValue& next);
+    void previewPathEdit(AnchorGesture& gesture, const document::PathContour& next);
     void endPathPreview(AnchorGesture& gesture);
     // One command: a path value edit for a shape layer, SetLayerMaskPath for a mask (keyed at the
     // playhead when the path is animated). False when nothing changed or the edit was refused.
-    bool commitPathEdit(const EditablePath& target, document::PathValue next);
+    bool commitPathEdit(const EditablePath& target, document::PathContour next);
     void cancelAnchorGesture();
     // Release and Escape alike: keeps the gesture's edit as one command.
     void commitAnchorGesture();

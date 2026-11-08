@@ -954,10 +954,10 @@ void testColorGradeLowering(Expectations& expectations) {
                     &curves->curves[gradeCurveIndex(GradeCurve::HueVsHue)].source);
                 expectations.expect(
                     curves->clamp && blue &&
-                        *blue == gradeCurvePath({{0.0, 0.0}, {0.5, 0.8}, {1.0, 1.0}}) &&
-                        hueLuma && *hueLuma == gradeCurvePath({{0.25, 1.5}}) && master &&
+                        *blue == gradeCurvePath({{0.0, 0.0}, {0.5, 0.8}, {1.0, 1.0}}) && hueLuma &&
+                        *hueLuma == gradeCurvePath({{0.25, 1.5}}) && master &&
                         *master == defaultGradeCurve(GradeCurve::Master) && hueHue &&
-                        hueHue->anchors.empty(),
+                        hueHue->firstContour().anchors.empty(),
                     "Curves lowers its point lists, hue curves and clamp");
                 const auto* red = std::get_if<runtime::CompiledPathCurve>(
                     &curves->curves[gradeCurveIndex(GradeCurve::Red)].source);

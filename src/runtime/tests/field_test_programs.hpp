@@ -118,7 +118,8 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
 [[nodiscard]] inline document::PathValue curvePoints(std::initializer_list<Vec2d> points) {
     document::PathValue path;
     for (const auto point : points)
-        path.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+        path.editableContour().anchors.push_back(
+            document::PathAnchor{point, std::nullopt, std::nullopt});
     return path;
 }
 

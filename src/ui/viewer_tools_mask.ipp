@@ -41,7 +41,7 @@ std::optional<ViewerEditor::EditablePath> ViewerEditor::selectedMaskTarget() con
     EditablePath target;
     target.owner = EditablePath::Owner::Mask;
     target.parameter = mask->path;
-    target.path = *path;
+    target.path = path->firstContour();
     target.toWorld = *world;
     target.layer = selection->layer;
     target.mask = selection->mask;

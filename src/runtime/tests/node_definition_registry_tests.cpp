@@ -157,8 +157,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter.
-    expectations.expect(registry.definitions().size() == 196,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path.
+    expectations.expect(registry.definitions().size() == 197,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -543,7 +543,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     const auto pathPoints = [](const document::ParameterValue& value) {
         std::vector<document::Vec2d> points;
         if (const auto* path = std::get_if<document::PathValue>(&value))
-            for (const auto& anchor : path->anchors)
+            for (const auto& anchor : path->firstContour().anchors)
                 points.push_back(anchor.point);
         return points;
     };

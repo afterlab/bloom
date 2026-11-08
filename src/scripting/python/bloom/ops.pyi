@@ -4648,10 +4648,12 @@ class LayerOps:
               Second point of a line shape.
               Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
           path  path  optional
-              The outline of a "path" shape, in the same form masks take. A path object {"closed": bool,
-              "anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or null,
-              "mode": "corner", "mirrored", "aligned", "free" or "auto" (optional; inferred from the
-              handles)}, ...]}.
+              The outline of a "path" shape. A path object {"closed": bool, "anchors": [{"point": [x,
+              y], "inHandle": [x, y] or null, "outHandle": [x, y] or null, "mode": "corner", "mirrored",
+              "aligned", "free" or "auto" (optional; inferred from the handles)}, ...]}. Or a compound
+              path {"contours": [{"closed": bool, "anchors": [...]}, ...], "fillRule": "nonZero" or
+              "evenOdd" (optional), "groups": [{"key": text, "firstContour": n, "contourCount": n,
+              "color": [r, g, b, a] (optional)}, ...] (optional)}.
               Unit: {closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, y]|null,
               mode?}]} in the layer's content-space pixels; handles are relative to their anchor point
 

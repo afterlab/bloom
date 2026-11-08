@@ -8,6 +8,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/path_value.hpp>
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_document.hpp>
@@ -1674,6 +1675,82 @@ namespace {
     return true;
 }
 
+} // namespace
+
+namespace detail {
+
+bool decodePathFillRule(const JsonValue& value, DecodeState& state, const std::string& path,
+                        document::PathFillRule& out) {
+    const auto text = value.asString();
+    const auto rule = text ? document::pathFillRuleFromName(*text) : std::nullopt;
+    if (!rule || *rule == document::PathFillRule::Inherit) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    out = *rule;
+    return true;
+}
+
+bool decodePathGroups(const JsonValue& value, DecodeState& state, const std::string& path,
+                      std::vector<document::PathGroup>& out) {
+    if (value.kind() != JsonValueKind::Array || value.arrayElements().empty() ||
+        value.arrayElements().size() > document::kMaximumPathGroups) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    out.reserve(value.arrayElements().size());
+    for (std::size_t index = 0; index < value.arrayElements().size(); ++index) {
+        const auto where = joinPathIndex(path, index);
+        const auto& element = value.arrayElements()[index];
+        std::vector<std::string_view> keys{"key", "firstContour", "contourCount"};
+        if (element.findMember("color") != nullptr)
+            keys.push_back("color");
+        std::vector<const JsonValue*> parts;
+        if (!matchOrderedMembers(element, keys, false, state, where, parts))
+            return false;
+        if (element.objectMembers().size() > keys.size()) {
+            state.fail(DocumentDecodeError::UnknownMember,
+                       joinPath(where, element.objectMembers()[keys.size()].key()));
+            return false;
+        }
+        auto& group = out.emplace_back();
+        std::string_view key;
+        if (!decodeStringMember(*parts[0], state, joinPath(where, "key"), key))
+            return false;
+        group.key = std::string(key);
+        if (!decodeUInt32Member(*parts[1], state, joinPath(where, "firstContour"),
+                                std::numeric_limits<std::uint32_t>::max(), group.firstContour) ||
+            !decodeUInt32Member(*parts[2], state, joinPath(where, "contourCount"),
+                                std::numeric_limits<std::uint32_t>::max(), group.contourCount))
+            return false;
+        if (parts.size() > 3) {
+            static constexpr std::array<std::string_view, 4> channels{"red", "green", "blue",
+                                                                      "alpha"};
+            std::vector<const JsonValue*> color;
+            const auto colorPath = joinPath(where, "color");
+            if (!matchOrderedMembers(*parts[3], channels, false, state, colorPath, color))
+                return false;
+            if (parts[3]->objectMembers().size() > channels.size()) {
+                state.fail(DocumentDecodeError::UnknownMember,
+                           joinPath(colorPath, parts[3]->objectMembers()[channels.size()].key()));
+                return false;
+            }
+            core::Color4d decoded;
+            if (!decodeBlockDouble(*color[0], state, joinPath(colorPath, "red"), decoded.red) ||
+                !decodeBlockDouble(*color[1], state, joinPath(colorPath, "green"), decoded.green) ||
+                !decodeBlockDouble(*color[2], state, joinPath(colorPath, "blue"), decoded.blue) ||
+                !decodeBlockDouble(*color[3], state, joinPath(colorPath, "alpha"), decoded.alpha))
+                return false;
+            group.color = decoded;
+        }
+    }
+    return true;
+}
+
+} // namespace detail
+
+namespace {
+
 [[nodiscard]] bool decodeBlockDigest(const JsonValue& node, DecodeState& state,
                                      const std::string& path, core::Sha256Digest& out) {
     std::string_view text;
@@ -1967,6 +2044,93 @@ namespace {
         return true;
     }
     if (kind == document::DataBlockKind::Path) {
+        const auto anchorsOf = [&](const JsonValue& array, const std::string& arrayPath,
+                                   document::PathContour& contour) {
+            for (std::size_t i = 0; i < array.arrayElements().size(); ++i) {
+                static constexpr std::array<std::string_view, 3> anchorKeys{"point", "inHandle",
+                                                                            "outHandle"};
+                std::vector<const JsonValue*> anchor;
+                if (!matchOrderedMembers(array.arrayElements()[i], anchorKeys, true, state,
+                                         joinPathIndex(arrayPath, i), anchor))
+                    return false;
+                auto decodePoint = [&](const JsonValue& point, document::Vec2d& result) {
+                    static constexpr std::array<std::string_view, 2> xy{"x", "y"};
+                    std::vector<const JsonValue*> coords;
+                    if (!matchOrderedMembers(point, xy, true, state, "", coords))
+                        return false;
+                    return decodeBlockDouble(*coords[0], state, "", result.x) &&
+                           decodeBlockDouble(*coords[1], state, "", result.y);
+                };
+                document::PathAnchor a;
+                if (!decodePoint(*anchor[0], a.point))
+                    return false;
+                for (std::size_t h = 0; h < 2; ++h)
+                    if (!anchor[h + 1]->isNull()) {
+                        document::Vec2d handle;
+                        if (!decodePoint(*anchor[h + 1], handle))
+                            return false;
+                        if (h == 0)
+                            a.inHandle = handle;
+                        else
+                            a.outHandle = handle;
+                    }
+                contour.anchors.push_back(a);
+            }
+            return true;
+        };
+        // Document 1.43 (#589): a compound block, as a path constant spells it. An older document
+        // carrying one is refused, and so is a compound spelling of a flat value.
+        if (node.findMember("contours") != nullptr) {
+            if (state.documentMinor < kCompoundPathsMinor) {
+                state.fail(DocumentDecodeError::UnknownMember, joinPath(path, "contours"));
+                return false;
+            }
+            std::vector<std::string_view> keys{"kind", "contours"};
+            for (const std::string_view optional : {"fillRule", "groups"})
+                if (node.findMember(optional) != nullptr)
+                    keys.push_back(optional);
+            std::vector<const JsonValue*> members;
+            if (!matchOrderedMembers(node, keys, true, state, path, members))
+                return false;
+            const auto contoursPath = joinPath(path, "contours");
+            if (members[1]->kind() != JsonValueKind::Array ||
+                members[1]->arrayElements().size() > document::kMaximumPathContours) {
+                state.fail(DocumentDecodeError::WrongValueKind, contoursPath);
+                return false;
+            }
+            document::PathValue value;
+            value.contours.reserve(members[1]->arrayElements().size());
+            for (std::size_t i = 0; i < members[1]->arrayElements().size(); ++i) {
+                static constexpr std::array<std::string_view, 2> contourKeys{"closed", "anchors"};
+                std::vector<const JsonValue*> parts;
+                const auto where = joinPathIndex(contoursPath, i);
+                if (!matchOrderedMembers(members[1]->arrayElements()[i], contourKeys, true, state,
+                                         where, parts))
+                    return false;
+                if (parts[0]->kind() != JsonValueKind::Boolean ||
+                    parts[1]->kind() != JsonValueKind::Array) {
+                    state.fail(DocumentDecodeError::WrongValueKind, where);
+                    return false;
+                }
+                auto& contour = value.contours.emplace_back();
+                contour.closed = parts[0]->asBoolean().value_or(false);
+                if (!anchorsOf(*parts[1], joinPath(where, "anchors"), contour))
+                    return false;
+            }
+            for (std::size_t index = 2; index < keys.size(); ++index)
+                if (keys[index] == "fillRule"
+                        ? !decodePathFillRule(*members[index], state, joinPath(path, "fillRule"),
+                                              value.fillRule)
+                        : !decodePathGroups(*members[index], state, joinPath(path, "groups"),
+                                            value.groups))
+                    return false;
+            if (!value.isValid() || document::pathValueHasFlatForm(value)) {
+                state.fail(DocumentDecodeError::DomainViolation, contoursPath);
+                return false;
+            }
+            out = std::move(value);
+            return true;
+        }
         static constexpr std::array<std::string_view, 3> keys{"kind", "closed", "anchors"};
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members))
@@ -1975,39 +2139,11 @@ namespace {
             members[1]->kind() != JsonValueKind::Boolean ||
             members[2]->kind() != JsonValueKind::Array)
             return false;
-        document::PathValue value;
-        value.closed = members[1]->asBoolean().value_or(false);
-        for (std::size_t i = 0; i < members[2]->arrayElements().size(); ++i) {
-            static constexpr std::array<std::string_view, 3> anchorKeys{"point", "inHandle",
-                                                                        "outHandle"};
-            std::vector<const JsonValue*> anchor;
-            if (!matchOrderedMembers(members[2]->arrayElements()[i], anchorKeys, true, state,
-                                     joinPathIndex(joinPath(path, "anchors"), i), anchor))
-                return false;
-            auto decodePoint = [&](const JsonValue& point, document::Vec2d& result) {
-                static constexpr std::array<std::string_view, 2> xy{"x", "y"};
-                std::vector<const JsonValue*> coords;
-                if (!matchOrderedMembers(point, xy, true, state, "", coords))
-                    return false;
-                return decodeBlockDouble(*coords[0], state, "", result.x) &&
-                       decodeBlockDouble(*coords[1], state, "", result.y);
-            };
-            document::PathAnchor a;
-            if (!decodePoint(*anchor[0], a.point))
-                return false;
-            for (std::size_t h = 0; h < 2; ++h)
-                if (!anchor[h + 1]->isNull()) {
-                    document::Vec2d handle;
-                    if (!decodePoint(*anchor[h + 1], handle))
-                        return false;
-                    if (h == 0)
-                        a.inHandle = handle;
-                    else
-                        a.outHandle = handle;
-                }
-            value.anchors.push_back(a);
-        }
-        out = value;
+        document::PathContour contour;
+        contour.closed = members[1]->asBoolean().value_or(false);
+        if (!anchorsOf(*members[2], joinPath(path, "anchors"), contour))
+            return false;
+        out = document::PathValue::fromContour(std::move(contour));
         return true;
     }
     if (kind == document::DataBlockKind::Analysis || kind == document::DataBlockKind::Opaque ||

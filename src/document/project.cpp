@@ -59,6 +59,15 @@ template <typename T> void chargeRecords(std::size_t& total, const std::size_t c
                       : count * sizeof(T));
 }
 
+// #589: every contour, anchor and group a path value owns, group keys included.
+void chargePath(std::size_t& total, const PathValue& path) {
+    chargeRecords<PathContour>(total, path.contours.size());
+    chargeRecords<PathAnchor>(total, path.anchorCount());
+    chargeRecords<PathGroup>(total, path.groups.size());
+    for (const auto& group : path.groups)
+        charge(total, group.key.size());
+}
+
 void chargeValue(std::size_t& total, const ParameterValue& value) {
     std::visit(
         [&](const auto& item) {
@@ -66,7 +75,7 @@ void chargeValue(std::size_t& total, const ParameterValue& value) {
             if constexpr (std::is_same_v<Value, std::string>)
                 charge(total, item.size());
             else if constexpr (std::is_same_v<Value, PathValue>)
-                chargeRecords<PathAnchor>(total, item.anchors.size());
+                chargePath(total, item);
             else if constexpr (std::is_same_v<Value, GradientValue>)
                 chargeRecords<GradientStop>(total, item.stops.size());
         },
@@ -218,7 +227,7 @@ std::size_t Composition::calculateContentByteCharge(const Content& authored) {
                 } else if constexpr (std::is_same_v<Record, PathAnimationCurve>) {
                     chargeRecords<PathKeyframe>(bytes, record.keyframes.size());
                     for (const auto& keyframe : record.keyframes)
-                        chargeRecords<PathAnchor>(bytes, keyframe.value.anchors.size());
+                        chargePath(bytes, keyframe.value);
                 } else if constexpr (std::is_same_v<Record, GradientAnimationCurve>) {
                     chargeRecords<GradientKeyframe>(bytes, record.keyframes.size());
                     for (const auto& keyframe : record.keyframes)
@@ -334,7 +343,7 @@ std::size_t Project::rootByteCharge() const {
                     for (const auto& column : payload.attributes)
                         chargeColumn(bytes, column);
                 } else if constexpr (std::is_same_v<Payload, PathValue>)
-                    chargeRecords<PathAnchor>(bytes, payload.anchors.size());
+                    chargePath(bytes, payload);
                 // Opaque payload bytes have shared immutable storage. HistoryCharge accounts for
                 // that storage separately, by identity, across all retained roots.
             },

@@ -4,6 +4,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/path_value.hpp>
 #include <bloom/document/project.hpp>
 
 #include <array>
@@ -67,23 +68,58 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
                         out.text(document::gradientHueDirectionName(item.modes.hueDirection)));
                 return gradient;
             } else {
+                const auto contourMembers = [&](yyjson_mut_val* path,
+                                                const document::PathContour& contour) {
+                    out.set(path, "closed", out.boolean(contour.closed));
+                    auto* anchors = out.array();
+                    for (const auto& anchor : contour.anchors) {
+                        auto* row = out.object();
+                        out.set(row, "point", vector(out, {anchor.point.x, anchor.point.y}));
+                        out.set(row, "inHandle",
+                                anchor.inHandle
+                                    ? vector(out, {anchor.inHandle->x, anchor.inHandle->y})
+                                    : out.null());
+                        out.set(row, "outHandle",
+                                anchor.outHandle
+                                    ? vector(out, {anchor.outHandle->x, anchor.outHandle->y})
+                                    : out.null());
+                        out.set(row, "mode", out.text(document::pathAnchorModeName(anchor.mode)));
+                        out.append(anchors, row);
+                    }
+                    out.set(path, "anchors", anchors);
+                };
                 auto* path = out.object();
-                out.set(path, "closed", out.boolean(item.closed));
-                auto* anchors = out.array();
-                for (const auto& anchor : item.anchors) {
-                    auto* row = out.object();
-                    out.set(row, "point", vector(out, {anchor.point.x, anchor.point.y}));
-                    out.set(row, "inHandle",
-                            anchor.inHandle ? vector(out, {anchor.inHandle->x, anchor.inHandle->y})
-                                            : out.null());
-                    out.set(row, "outHandle",
-                            anchor.outHandle
-                                ? vector(out, {anchor.outHandle->x, anchor.outHandle->y})
-                                : out.null());
-                    out.set(row, "mode", out.text(document::pathAnchorModeName(anchor.mode)));
-                    out.append(anchors, row);
+                if (document::pathValueHasFlatForm(item)) {
+                    contourMembers(path, item.firstContour());
+                    return path;
                 }
-                out.set(path, "anchors", anchors);
+                // #589: {"contours": [{closed, anchors}...], "fillRule": ..., "groups": [...]}, as
+                // a path argument accepts. Each of the last two appears only when it says
+                // something.
+                auto* contours = out.array();
+                for (const auto& contour : item.contours) {
+                    auto* row = out.object();
+                    contourMembers(row, contour);
+                    out.append(contours, row);
+                }
+                out.set(path, "contours", contours);
+                if (item.fillRule != document::PathFillRule::Inherit)
+                    out.set(path, "fillRule", out.text(document::pathFillRuleName(item.fillRule)));
+                if (!item.groups.empty()) {
+                    auto* groups = out.array();
+                    for (const auto& group : item.groups) {
+                        auto* row = out.object();
+                        out.set(row, "key", out.text(group.key));
+                        out.set(row, "firstContour", out.number(group.firstContour));
+                        out.set(row, "contourCount", out.number(group.contourCount));
+                        if (group.color)
+                            out.set(row, "color",
+                                    vector(out, {group.color->red, group.color->green,
+                                                 group.color->blue, group.color->alpha}));
+                        out.append(groups, row);
+                    }
+                    out.set(path, "groups", groups);
+                }
                 return path;
             }
         },

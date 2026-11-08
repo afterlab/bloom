@@ -128,6 +128,8 @@ class ValueUtilityReader final {
     case document::SocketValueKind::ColorField:
     case document::SocketValueKind::Scalar:
         break;
+    case document::SocketValueKind::Path:
+        return CompiledPathValue{};
     }
     return 0.0;
 }

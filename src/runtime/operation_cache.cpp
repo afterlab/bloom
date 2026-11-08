@@ -403,6 +403,16 @@ void OperationCache::store(std::string content, const document::Revision revisio
     }
     entry->metadataBytes =
         addCharge(entry->metadataBytes, entry->value.values.capacity() * sizeof(CompiledValue));
+    // #589: a retained Path output pays for what it holds. (Other value kinds fit their slot, or,
+    // for a string, were already bounded where they were written.)
+    for (const auto& held : entry->value.values)
+        if (const auto* path = std::get_if<CompiledPathValue>(&held))
+            entry->metadataBytes =
+                addCharge(entry->metadataBytes,
+                          sizeof(document::PathValue) +
+                              path->value->contours.size() * sizeof(document::PathContour) +
+                              path->value->anchorCount() * sizeof(document::PathAnchor) +
+                              path->value->groups.size() * sizeof(document::PathGroup));
     if (entry->value.sourceRevision)
         entry->storage[1] = {entry->value.sourceRevision.get(),
                              entry->value.sourceRevision->retainedBytes()};

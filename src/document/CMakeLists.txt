@@ -37,6 +37,7 @@ target_sources(
         new_project.cpp
         gradient_interpolation.cpp
         parameter.cpp
+        path_value.cpp
         parameter_enums.cpp
         parameter_presentation.cpp
         shape.cpp

@@ -97,11 +97,11 @@ void testLayoutSelectionAndSockets() {
     // deliberately -- they read as one family, and a cross-width link is refused by the kind check
     // regardless.
     const std::array mapping{
-        kit::Color::SocketImage,   kit::Color::SocketAudio,   kit::Color::SocketColor,
-        kit::Color::SocketScalar,  kit::Color::SocketVector,  kit::Color::SocketString,
-        kit::Color::SocketInteger, kit::Color::SocketBoolean, kit::Color::SocketVector,
-        kit::Color::SocketImage,   kit::Color::SocketChannelSet, kit::Color::SocketScalarField,
-        kit::Color::SocketVectorField, kit::Color::SocketColorField};
+        kit::Color::SocketImage,       kit::Color::SocketAudio,      kit::Color::SocketColor,
+        kit::Color::SocketScalar,      kit::Color::SocketVector,     kit::Color::SocketString,
+        kit::Color::SocketInteger,     kit::Color::SocketBoolean,    kit::Color::SocketVector,
+        kit::Color::SocketImage,       kit::Color::SocketChannelSet, kit::Color::SocketScalarField,
+        kit::Color::SocketVectorField, kit::Color::SocketColorField, kit::Color::SocketPath};
     for (std::size_t i = 0; i < mapping.size(); ++i)
         expect(socketColorToken(static_cast<document::SocketValueKind>(i)) == mapping[i],
                "all socket palette mappings use the socket roles");

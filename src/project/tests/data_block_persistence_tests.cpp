@@ -66,7 +66,8 @@ int run() {
     auto points = block(4, document::DataBlockKind::PointSet);
     points.payload = document::DataBlockPointSet{2, {{1.0, 2.0, 0.0}, {3.0, 4.0, 0.0}}, {}};
     auto path = block(5, document::DataBlockKind::Path);
-    path.payload = document::PathValue{{{{{0.0, 0.0}, std::nullopt, std::nullopt}}}, false};
+    path.payload =
+        document::PathValue::fromContour({{{0.0, 0.0}, std::nullopt, std::nullopt}}, false);
     auto mask = block(6, document::DataBlockKind::Mask);
     mask.payload = document::DataBlockMask{coverage.id};
     auto analysis = block(7, document::DataBlockKind::Analysis);
@@ -122,7 +123,7 @@ int run() {
     }
     auto openedArchive = std::move(opened).takeOpened();
     const auto restored = openedArchive.document->snapshot();
-    if (openedArchive.schemaMinor != 42 ||
+    if (openedArchive.schemaMinor != 43 ||
         restored.project().typedDataBlocks().size() != expected.size())
         return 1;
     for (std::size_t index = 0; index < expected.size(); ++index)

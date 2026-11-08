@@ -107,8 +107,8 @@ std::optional<GradeCurveShape> prepareGradeCurveShape(const GradeCurve curve,
     shape.ends = gradeCurveEnds(curve);
     const bool periodic = shape.ends == GradeCurveEnds::Periodic;
     std::vector<std::pair<float, float>> points;
-    points.reserve(value.anchors.size());
-    for (const auto& anchor : value.anchors) {
+    points.reserve(value.firstContour().anchors.size());
+    for (const auto& anchor : value.firstContour().anchors) {
         auto x = static_cast<float>(anchor.point.x);
         // A hue of one is the hue of zero.
         if (periodic && x >= 1.0F)

@@ -1,6 +1,7 @@
 #include "gpu_scene_coverage.hpp"
 
 #include "gpu_scene_preparation_private.hpp"
+#include "shape_geometry.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image.hpp>
@@ -18,49 +19,8 @@
 namespace bloom::runtime::detail {
 namespace {
 
-[[nodiscard]] render::Path gpuShapePath(const CompiledShape& shape, const document::Vec2d size) {
-    render::Path path;
-    const auto w = size.x, h = size.y;
-    switch (shape.kind) {
-    case document::ShapeKind::Rectangle:
-        path = render::rectanglePath(w, h, shape.cornerRadius);
-        break;
-    case document::ShapeKind::Ellipse:
-        path = render::ellipsePath(w, h);
-        break;
-    case document::ShapeKind::Triangle:
-        path = render::polygonPath(w, h, 3);
-        break;
-    case document::ShapeKind::Polygon:
-        path =
-            render::polygonPath(w, h, static_cast<std::uint32_t>(shape.points), shape.cornerRadius);
-        break;
-    case document::ShapeKind::Star:
-        path = render::starPath(w, h, static_cast<std::uint32_t>(shape.points), shape.innerRatio);
-        break;
-    case document::ShapeKind::Line:
-        path = render::linePath({shape.lineStart.x, shape.lineStart.y},
-                                {shape.lineEnd.x, shape.lineEnd.y});
-        break;
-    case document::ShapeKind::Path:
-        path.closed = shape.path.closed;
-        for (const auto& anchor : shape.path.anchors) {
-            render::PathAnchor a{{anchor.point.x, anchor.point.y}, {}, {}};
-            if (anchor.inHandle) {
-                a.inHandle = render::PathPoint{anchor.inHandle->x, anchor.inHandle->y};
-            }
-            if (anchor.outHandle) {
-                a.outHandle = render::PathPoint{anchor.outHandle->x, anchor.outHandle->y};
-            }
-            path.anchors.push_back(a);
-        }
-        break;
-    }
-    return path;
-}
-
 void addShapeGeometryToKey(OperationKey& key, const CompiledShape& shape,
-                           const document::Vec2d size) {
+                           const document::Vec2d size, const document::PathValue& path) {
     key.add(shape.kind);
     key.add(size.x);
     key.add(size.y);
@@ -69,7 +29,8 @@ void addShapeGeometryToKey(OperationKey& key, const CompiledShape& shape,
     key.add(shape.innerRatio);
     key.add(shape.lineStart);
     key.add(shape.lineEnd);
-    key.add(shape.path);
+    // #589: the path this frame resolves to; another kind never reads it.
+    key.add(shape.kind == document::ShapeKind::Path ? path : shape.path);
     key.add(shape.fillRule);
 }
 
@@ -88,7 +49,8 @@ resolveShapeLeafWindow(const CompiledShape& shape, const CompiledCompositionPlan
     const auto width = resolveParameter(shape.strokeWidth, plan, resolved);
     const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
     const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
-    if (!size || !fill || !strokeColor || !width || !fillSwitch || !strokeSwitch ||
+    const auto* shapePath = detail::resolvedShapePath(shape, resolved);
+    if (!size || !fill || !strokeColor || !width || !fillSwitch || !strokeSwitch || !shapePath ||
         !std::isfinite(size->value.x) || !std::isfinite(size->value.y) || size->value.x < 0.0 ||
         size->value.y < 0.0 || !std::isfinite(width->value) || width->value < 0.0) {
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Shape parameters are invalid");
@@ -100,8 +62,9 @@ resolveShapeLeafWindow(const CompiledShape& shape, const CompiledCompositionPlan
         return std::nullopt;
     }
     const auto cancel = [&cancellation]() { return cancellation.isCancellationRequested(); };
+    const auto paths = shapeRenderPaths(shape, size->value, *shapePath);
     const auto raster =
-        render::PathRaster::create(gpuShapePath(shape, size->value),
+        render::PathRaster::create(std::span<const render::Path>(paths),
                                    {strokeEnabled ? width->value : 0.0,
                                     static_cast<render::PathStrokeAlign>(shape.strokeAlign),
                                     static_cast<render::PathStrokeJoin>(shape.strokeJoin),
@@ -160,7 +123,9 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
     const auto strokeWidth = resolveParameter(shape.strokeWidth, plan, resolved);
     const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
     const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
-    if (!size || !fillColor || !strokeColor || !strokeWidth || !fillSwitch || !strokeSwitch) {
+    const auto* shapePath = detail::resolvedShapePath(shape, resolved);
+    if (!size || !fillColor || !strokeColor || !strokeWidth || !fillSwitch || !strokeSwitch ||
+        !shapePath) {
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                     "Shape parameters are not evaluable");
     }
@@ -172,7 +137,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         return std::nullopt;
     }
     const auto cancel = [&cancellation]() { return cancellation.isCancellationRequested(); };
-    const std::array<render::Path, 1> paths{gpuShapePath(shape, size->value)};
+    const auto paths = shapeRenderPaths(shape, size->value, *shapePath);
     const render::PathStroke stroke{strokeEnabled ? strokeWidth->value : 0.0,
                                     static_cast<render::PathStrokeAlign>(shape.strokeAlign),
                                     static_cast<render::PathStrokeJoin>(shape.strokeJoin),
@@ -191,7 +156,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
     }
     const auto windowWidth = layerWindow.extent().width();
     const auto windowHeight = layerWindow.extent().height();
-    const auto rule = static_cast<render::PathFillRule>(shape.fillRule);
+    const auto rule = shapeFillRule(shape, *shapePath);
     const auto rasterize = [&](const bool strokePass, const std::string& geometryKeyDigest,
                                std::shared_ptr<const render::PathRasterCoverageGeometry>& geometry)
         -> std::optional<GpuSceneLeafFailure> {
@@ -228,7 +193,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         }
         OperationKey geometryKey;
         geometryKey.add(std::string{"gpu-shape-fill-coverage-v1"});
-        addShapeGeometryToKey(geometryKey, shape, size->value);
+        addShapeGeometryToKey(geometryKey, shape, size->value, *shapePath);
         geometryKey.add(matrix.a);
         geometryKey.add(matrix.b);
         geometryKey.add(matrix.c);
@@ -278,7 +243,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         }
         OperationKey geometryKey;
         geometryKey.add(std::string{"gpu-shape-stroke-coverage-v1"});
-        addShapeGeometryToKey(geometryKey, shape, size->value);
+        addShapeGeometryToKey(geometryKey, shape, size->value, *shapePath);
         geometryKey.add(shape.strokeAlign);
         geometryKey.add(shape.strokeJoin);
         geometryKey.add(shape.strokeCap);

@@ -93,6 +93,8 @@ inline constexpr std::string_view kVector3ValueNodeType = "bloom.value-vector3";
 inline constexpr std::string_view kStringValueNodeType = "bloom.value-string";
 inline constexpr std::string_view kColorValueNodeType = "bloom.value-color";
 inline constexpr std::string_view kBooleanValueNodeType = "bloom.value-boolean";
+// #589: an authored path value, keyed like any literal, on a Path output.
+inline constexpr std::string_view kPathValueNodeType = "bloom.value-path";
 inline constexpr std::string_view kTimeValueNodeType = "bloom.value-time";
 
 inline constexpr std::string_view kScalarMathNodeType = "bloom.math";

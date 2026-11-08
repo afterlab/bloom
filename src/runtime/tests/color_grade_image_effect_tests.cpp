@@ -533,8 +533,8 @@ void curvesTests() {
     std::vector<double> defaultValues;
     for (const auto& curve : defaults.curves) {
         const auto& path = std::get<document::PathValue>(curve.source);
-        defaultValues.push_back(static_cast<double>(path.anchors.size()));
-        for (const auto& anchor : path.anchors) {
+        defaultValues.push_back(static_cast<double>(path.firstContour().anchors.size()));
+        for (const auto& anchor : path.firstContour().anchors) {
             defaultValues.push_back(anchor.point.x);
             defaultValues.push_back(anchor.point.y);
         }
