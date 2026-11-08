@@ -18,6 +18,7 @@
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_operations.hpp>

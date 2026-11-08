@@ -7,6 +7,8 @@
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/rolling_shutter_definition.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
+#include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
@@ -652,6 +654,165 @@ constantMatchesSchema(const std::string_view schemaKey,
 } // namespace
 
 namespace bloom::document {
+
+bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == "bloom.shape.size" || schemaKey == kPositionParameterSchemaKey ||
+           schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey ||
+           schemaKey == kGradientStartParameterSchemaKey ||
+           schemaKey == kGradientEndParameterSchemaKey ||
+           schemaKey == kVector2ValueParameterSchemaKey ||
+           schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
+           schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
+           schemaKey == kLensDistortionCenterSchemaKey ||
+           schemaKey == kChromaticAberrationCenterSchemaKey ||
+           schemaKey == kLightRaysCenterSchemaKey ||
+           schemaKey == kRollingShutterCameraOffsetSchemaKey ||
+           isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
+           isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
+}
+
+bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == "bloom.shape.stroke-width" || schemaKey == kOpacityParameterSchemaKey ||
+           schemaKey == kRotationParameterSchemaKey || schemaKey == kTextSizeParameterSchemaKey ||
+           schemaKey == kTimeRemapParameterSchemaKey ||
+           schemaKey == kScalarValueParameterSchemaKey ||
+           schemaKey == kSolidWidthParameterSchemaKey ||
+           schemaKey == kSolidHeightParameterSchemaKey ||
+           schemaKey == kTextLineHeightParameterSchemaKey ||
+           schemaKey == kTextLetterSpacingParameterSchemaKey ||
+           schemaKey == kAudioLevelParameterSchemaKey ||
+           schemaKey == "bloom.composition-source.time-offset" ||
+           schemaKey == "bloom.composition-source.time-scale" ||
+           schemaKey == "bloom.exposure.stops" || schemaKey == "bloom.offset.amount" ||
+           schemaKey == "bloom.multiply.factor" || schemaKey == "bloom.image-mix.factor" ||
+           schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
+           schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
+           schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
+           schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
+           schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
+           schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.luma-key.low" ||
+           schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
+           schemaKey == kHueSaturationHueSchemaKey ||
+           schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
+           isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
+           isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
+           isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
+           isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) ||
+           isLensDistortionScalarSchemaKey(schemaKey) ||
+           isChromaticAberrationScalarSchemaKey(schemaKey) ||
+           isLightRaysScalarSchemaKey(schemaKey) ||
+           isRollingShutterScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
+           isMotionScalarAnimatableSchemaKey(schemaKey) ||
+           schemaKey == kLayerMaskFeatherSchemaKey ||
+           schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
+}
+
+bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == "bloom.shape.fill-color" || schemaKey == "bloom.shape.stroke-color" ||
+           schemaKey == kSolidColorParameterSchemaKey ||
+           schemaKey == kGradientStartColorParameterSchemaKey ||
+           schemaKey == kGradientEndColorParameterSchemaKey ||
+           schemaKey == kTextColorParameterSchemaKey ||
+           schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
+           isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||
+           isLensFlareColorSchemaKey(schemaKey);
+}
+
+bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return isVec2AnimatableSchemaKey(schemaKey) || isVec3AnimatableSchemaKey(schemaKey) ||
+           isScalarAnimatableSchemaKey(schemaKey) || isColor4AnimatableSchemaKey(schemaKey) ||
+           isPathAnimatableSchemaKey(schemaKey) || isGradientAnimatableSchemaKey(schemaKey);
+}
+
+bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
+                                                        const double value) noexcept {
+    if (isCanvasMarginSchemaKey(schemaKey))
+        return value >= 0.0 && value <= 16777216.0;
+    if (schemaKey == "bloom.blur.radius")
+        return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
+    if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high")
+        return value >= -kMaximumLumaKeyThreshold && value <= kMaximumLumaKeyThreshold;
+    if (isLevelsGammaSchemaKey(schemaKey))
+        return value >= kMinimumLevelsGamma && value <= kMaximumLevelsGamma;
+    if (isLevelsValueSchemaKey(schemaKey) || schemaKey == kHueSaturationHueSchemaKey)
+        return value >= -kMaximumGradeValue && value <= kMaximumGradeValue;
+    if (schemaKey == kHueSaturationSaturationSchemaKey)
+        return value >= 0.0 && value <= kMaximumGradeSaturation;
+    // #494 Grade: each wheel value and primary within its own domain (color_grade_nodes.hpp).
+    if (const auto grade = gradeValueDomain(schemaKey))
+        return value >= grade->minimum && value <= grade->maximum;
+    // #339 Drop Shadow, Glow and Light Wrap (compositing_recipe_nodes.hpp).
+    if (const auto recipe = recipeScalarDomain(schemaKey))
+        return value >= recipe->minimum && value <= recipe->maximum;
+    // #504 Colorize (colorize_nodes.hpp).
+    if (const auto colorize = colorizeScalarDomain(schemaKey))
+        return value >= colorize->minimum && value <= colorize->maximum;
+    // #505 Vignette (vignette_nodes.hpp).
+    if (const auto vignette = vignetteScalarDomain(schemaKey))
+        return value >= vignette->minimum && value <= vignette->maximum;
+    // #525 Fields (field_parameters.hpp).
+    if (fieldParameterSpec(schemaKey) != nullptr)
+        return isFieldScalarWithinDomain(schemaKey, value);
+    // #483 Z Defocus and Depth Fog (depth_effect_parameters.hpp).
+    if (depthParameterSpec(schemaKey) != nullptr)
+        return isDepthScalarWithinDomain(schemaKey, value);
+    // #507 Lens Flare (lens_flare_nodes.hpp).
+    if (lensFlareParameterSpec(schemaKey) != nullptr)
+        return isLensFlareScalarWithinDomain(schemaKey, value);
+    // #486 Film Grain (film_grain_nodes.hpp).
+    if (filmGrainParameterSpec(schemaKey) != nullptr)
+        return isFilmGrainScalarWithinDomain(schemaKey, value);
+    // #486 Lens Distortion (lens_distortion_nodes.hpp).
+    if (lensDistortionParameterSpec(schemaKey) != nullptr)
+        return isLensDistortionScalarWithinDomain(schemaKey, value);
+    // #486 Chromatic Aberration (chromatic_aberration_nodes.hpp).
+    if (isChromaticAberrationScalarSchemaKey(schemaKey))
+        return isChromaticAberrationScalarWithinDomain(schemaKey, value);
+    // #587 Test Card (test_card_nodes.hpp).
+    if (testCardParameterSpec(schemaKey) != nullptr)
+        return isTestCardScalarWithinDomain(schemaKey, value);
+    // #508 Light Rays (light_rays_nodes.hpp).
+    if (isLightRaysScalarSchemaKey(schemaKey))
+        return isLightRaysScalarWithinDomain(schemaKey, value);
+    // #568 Rolling Shutter (rolling_shutter_nodes.hpp).
+    if (rollingShutterParameterSpec(schemaKey) != nullptr ||
+        schemaKey == kRollingShutterCameraRollSchemaKey)
+        return isRollingShutterScalarWithinDomain(schemaKey, value);
+    // #563 Codec Degrade (codec_degrade_nodes.hpp).
+    if (codecDegradeParameterSpec(schemaKey) != nullptr)
+        return isCodecDegradeScalarWithinDomain(schemaKey, value);
+    // #484 the motion-blur nodes (motion_blur_parameters.hpp).
+    if (motionParameterSpec(schemaKey) != nullptr)
+        return isMotionScalarWithinDomain(schemaKey, value);
+    // #486 Sharpen (sharpen_nodes.hpp).
+    if (sharpenParameterSpec(schemaKey) != nullptr)
+        return isSharpenScalarWithinDomain(schemaKey, value);
+    if (schemaKey == kLayerMaskFeatherSchemaKey)
+        return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
+    if (schemaKey == kLayerMaskExpansionSchemaKey)
+        return value >= -kMaximumLayerMaskExpansionPixels &&
+               value <= kMaximumLayerMaskExpansionPixels;
+    if (schemaKey == "bloom.shape.stroke-width")
+        return value >= 0.0;
+    if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)
+        return value >= 1.0;
+    if (schemaKey == kAudioLevelParameterSchemaKey)
+        return value >= 0.0 && value <= 2.0;
+    // #480: a Shuffle's or Pass's non-finite substitute lands in a Float32 sample.
+    if (schemaKey == "bloom.channel-shuffle.non-finite" ||
+        schemaKey == "bloom.channel-pass.non-finite")
+        return value >= -3.4028234663852886e38 && value <= 3.4028234663852886e38;
+    if (schemaKey == kTextLineHeightParameterSchemaKey)
+        return value > 0.0;
+    if (hasUnitDomainSchemaKey(schemaKey)) {
+        return value >= 0.0 && value <= 1.0;
+    }
+    if (hasTextSizeDomainSchemaKey(schemaKey)) {
+        return value > 0.0 && value <= kMaximumTextSizePixels;
+    }
+    return true;
+}
+
 
 PathAnchorMode inferPathAnchorMode(const PathAnchor& anchor) noexcept {
     if (!anchor.inHandle && !anchor.outHandle)
