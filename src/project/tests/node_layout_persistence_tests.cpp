@@ -180,7 +180,7 @@ void blurNodeReopen() {
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
           "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade",
-          "bloom.lens-distortion"}) {
+          "bloom.lens-distortion", "bloom.chromatic-aberration"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -298,6 +298,10 @@ void blurNodeReopen() {
                     ? document::ParameterValue{std::int64_t{1}}
                 : parameter.schemaKey == "bloom.lens-distortion.center"
                     ? document::ParameterValue{document::Vec2d{-12.5, 30.25}}
+                : parameter.schemaKey == "bloom.chromatic-aberration.center"
+                    ? document::ParameterValue{document::Vec2d{14.5, -22.75}}
+                : parameter.schemaKey.starts_with("bloom.chromatic-aberration.")
+                    ? document::ParameterValue{0.0625}
                 : parameter.schemaKey.starts_with("bloom.lens-distortion.")
                     ? document::ParameterValue{0.125}
                 // #486 Sharpen: moved values.

@@ -12,6 +12,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -353,6 +354,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // slider.
     if (node->typeId == document::kLensDistortionNodeType)
         thumbnail = kPadMaxHeight + kSmall + 4.0 * (kControl + kSmall) + kPadding;
+    // #486: the Chromatic Aberration card's centre pad and its one slider row.
+    if (node->typeId == document::kChromaticAberrationNodeType)
+        thumbnail = kPadMaxHeight + kSmall + (kControl + kSmall) + kPadding;
     // #563: the Codec Degrade card's two slider rows, each a value over a slider.
     if (node->typeId == document::kCodecDegradeNodeType)
         thumbnail = 2.0 * (kControl + kSmall) + kPadding;

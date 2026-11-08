@@ -4,6 +4,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
@@ -139,6 +140,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kLensDistortionNodeType)
         return QStringLiteral("lens distortion undistort redistort distort barrel pincushion radial "
                               "tangential brown conrady calibration st map stmap warp fisheye");
+    if (typeId == document::kChromaticAberrationNodeType)
+        return QStringLiteral("chromatic aberration fringing fringe colour split rgb split lateral "
+                              "lens dispersion red blue shift prism");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     // #512.

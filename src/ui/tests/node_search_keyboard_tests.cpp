@@ -635,7 +635,8 @@ void testSearchKeyboardAndMenus() {
                  {"Combine XY", "Combine XYZ", "Reroute", "Separate XY", "Separate XYZ"},
                  "Utilities holds the plumbing");
         hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
-        hasGroup("Distort", {"Lens Distortion"}, "Distort holds the lens warp");
+        hasGroup("Distort", {"Chromatic Aberration", "Lens Distortion"},
+                 "Distort holds the lens warp and the colour fringe");
         for (const auto* empty : {"Instances & Particles", "Tracking & Analysis"})
             expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +
                                               QString::fromUtf8(empty)) == nullptr,

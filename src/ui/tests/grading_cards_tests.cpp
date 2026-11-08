@@ -51,6 +51,7 @@
 #include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/codec_degrade_widget.hpp>
 #include <bloom/ui/lens_distortion_widget.hpp>
+#include <bloom/ui/chromatic_aberration_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -974,6 +975,45 @@ void lensDistortionCard() {
     expect(fixture.stack.size() == commands + 1 && k1 && *k1 > 0.0,
            "dragging the k1 slider is one command");
     capture(fixture, QStringLiteral("lens-distortion-k1"));
+}
+
+// #486: the Chromatic Aberration card paints inside its card with no label cut short, writes nothing
+// of its own, draws the amount as a slider with a socket beside it and the centre on a point pad; a
+// slider drag is one command.
+void chromaticAberrationCard() {
+    CardFixture fixture(document::kChromaticAberrationNodeType);
+    auto* card = fixture.item
+                     ? qobject_cast<ui::ChromaticAberrationCardWidget*>(fixture.item->cardWidget())
+                     : nullptr;
+    expect(card != nullptr, "Chromatic Aberration draws its card widget");
+    if (card == nullptr)
+        return;
+    const auto value = stored(fixture.session, fixture.node, "amount");
+    expect(value && *value == 0.0, "a new Chromatic Aberration card writes no value of its own");
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "chromatic-aberration paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "chromatic-aberration"))
+        ++failures;
+    capture(fixture, QStringLiteral("chromatic-aberration"));
+    expect(card->showsRole("center") && !card->showsRole("amount") &&
+               card->socketY("amount").has_value() && card->padRow() != nullptr,
+           "the card shows the centre as the node's row, and a socket beside the amount slider");
+    expect(card->valueRow("amount")->name() == QStringLiteral("Amount"),
+           "the amount row is named in full");
+    // A slider drag is one command.
+    auto* slider = card->valueRow("amount")->slider();
+    const auto commands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    const auto amount = stored(fixture.session, fixture.node, "amount");
+    expect(fixture.stack.size() == commands + 1 && amount && *amount > 0.0,
+           "dragging the amount slider is one command");
+    capture(fixture, QStringLiteral("chromatic-aberration-amount"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -2076,6 +2116,7 @@ int main(int argc, char** argv) {
     sharpenCard();
     codecDegradeCard();
     lensDistortionCard();
+    chromaticAberrationCard();
     cameraShakeCard();
     depthEffectCards();
     motionBlurCards();

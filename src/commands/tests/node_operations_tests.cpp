@@ -1024,6 +1024,23 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensCenter,
                                ConstantValueSource{Vec2d{2.0e6, 0.0}});
 
+    // #486 Chromatic Aberration: its amount and centre edit within their domains and refuse
+    // outside them.
+    const auto aberration = addRecipe("bloom.chromatic-aberration");
+    const auto aberrationAmount = aberration.outputId<ParameterId>("parameter.amount");
+    const auto aberrationCenter = aberration.outputId<ParameterId>("parameter.center");
+    if (!aberrationAmount || !aberrationCenter)
+        throw std::logic_error("Chromatic Aberration exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *aberrationAmount, ConstantValueSource{-0.1});
+    (void)exercise<SetParameterSource>(test, fixture, *aberrationCenter,
+                                       ConstantValueSource{Vec2d{12.0, -8.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aberrationAmount,
+                               ConstantValueSource{0.3});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aberrationAmount,
+                               ConstantValueSource{-0.3});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aberrationCenter,
+                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+
     // #486 Sharpen: its values edit within their domains and refuse outside them.
     const auto sharpen = addRecipe("bloom.sharpen");
     const auto sharpenAmount = sharpen.outputId<ParameterId>("parameter.amount");
