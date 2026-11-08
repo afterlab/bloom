@@ -24,7 +24,9 @@ _EXPECTED = {
     "int": "a whole number",
     "float": "a finite number",
     "str": "text",
-    "id": "a positive stable id or a live proxy",
+    "id": "a positive stable id (an integer or decimal text), a live proxy, or a layer or "
+          "parameter given by name and role ({'name': 'Shot 2'} or {'layer': 'Shot 2', "
+          "'role': 'opacity'})",
     "vec2": "two numbers as (x, y)",
     "vec3": "three numbers as (x, y, z)",
     "color4": "four numbers as (r, g, b, a) with alpha in 0..1",
@@ -84,9 +86,31 @@ def _gradient(value):
                     for stop in value["stops"]))
 
 
+_REFERENCE_KEYS = {"name", "layer", "role", "composition"}
+
+
+def _reference(value):
+    """A layer {'name': 'Shot 2'} or parameter {'layer': 'Shot 2', 'role': 'opacity'} given by
+    name and role instead of by id; the layer may also be an id."""
+    if not (isinstance(value, dict) and value and set(value) <= _REFERENCE_KEYS):
+        return False
+    if any(type(value[key]) is not str for key in ("name", "role") if key in value):
+        return False
+    layer = value.get("layer", "")
+    if type(layer) is not str and not (type(layer) is int and layer > 0):
+        return False
+    composition = value.get("composition", 1)
+    return type(composition) is int and composition > 0
+
+
 def _valid(value, kind):
     if kind == "bool":
         return type(value) is bool
+    if kind == "id" and _reference(value):
+        return True
+    if kind == "id" and type(value) is str:
+        # An id is a positive integer or the same value as decimal text ("16").
+        return value.isascii() and value.isdigit() and 0 < int(value) < 2 ** 63
     if kind in ("int", "id"):
         return (type(value) is int and -(2 ** 63) <= value < 2 ** 63
                 and (kind != "id" or value > 0))

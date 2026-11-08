@@ -74,7 +74,9 @@ class AnimationOps:
         """bloom.animation.create-for-parameter  (operation, animation)
         Makes a constant parameter animated: creates its curve with one key holding the current value at
         `time`, as the first click on a key diamond does. Pass `component` to animate one axis or
-        channel of a vector or colour parameter.
+        channel of a vector or colour parameter. `time` is in layer time for a layer's own parameters
+        (the composition frame minus the layer's start) and in composition time for every other
+        parameter; a key outside the layer's range succeeds with a warning naming the range.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -88,7 +90,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           component  int  optional, default the whole value (every component)
               Component index: X=0, Y=1, Z=2, Red=3, Green=4, Blue=5, Alpha=6. Omit for a whole-value
               address.
@@ -319,7 +326,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  color4  required
               The color at that time.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
@@ -381,7 +393,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  float  required
               The scalar value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -446,7 +463,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  vec2  required
               The value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -507,7 +529,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  vec3  required
               The value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -660,7 +687,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  value  required
               The value at that time.
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
@@ -702,7 +734,10 @@ class AnimationOps:
         Sets an animated parameter's value at `time`: updates the key there or inserts one. The
         parameter must already be animated; make a constant one animated first with
         bloom.animation.create-for-parameter (in the same transaction is fine). The value has the
-        parameter's own width (query {kind:"parameter"} reports valueKind).
+        parameter's own width (query {kind:"parameter"} reports valueKind). `time` is in layer time for
+        a layer's own parameters (the composition frame minus the layer's start) and in composition time
+        for every other parameter; a key outside the layer's range succeeds with a warning naming the
+        range.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -717,7 +752,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  value  required
               The value at that time.
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
@@ -734,7 +774,7 @@ class AnimationOps:
 
         Errors:
           bloom.scripting.command-rejected
-              When: The parameter is not animated ("Parameter does not have an animation source")
+              When: The parameter is not animated ("Parameter N is not animated")
               Do: run bloom.animation.create-for-parameter first.
           bloom.scripting.command-rejected
               When: The value has the wrong width
@@ -767,7 +807,9 @@ class AnimationOps:
         """bloom.animation.set-keyframe-at-time-for-parameter-component  (operation, animation)
         Keys one axis or channel of an animated vector or colour parameter at `time`, leaving the other
         components as they are. Make a constant parameter animated first with
-        bloom.animation.create-for-parameter.
+        bloom.animation.create-for-parameter. `time` is in layer time for a layer's own parameters (the
+        composition frame minus the layer's start) and in composition time for every other parameter; a
+        key outside the layer's range succeeds with a warning naming the range.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -792,7 +834,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  float  required
               The scalar value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -1169,6 +1216,90 @@ class AnimationOps:
         Related: bloom.animation.set-keyframe-interpolation, query:keyframes, transact
         """
         ...
+    def set_keys(self, parameter: int | Proxy, keys: tuple, replace: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.animation.set-keys  (operation, animation)
+        Sets a parameter's whole list of keys in one undo step: a key at an existing time takes the new
+        value, any other time gets a new key, and a constant parameter becomes animated. With `replace`
+        the existing keys go first and the parameter returns to the constant it was animated from, so an
+        empty list with `replace` leaves it constant. Each key is [time, value] or [time, value,
+        interpolation]; the last key's interpolation is always linear. Key times are in layer time for a
+        layer's own parameters (the composition frame minus the layer's start) and in composition time
+        for every other parameter; keys outside the layer's range succeed with a warning naming the
+        range.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          parameter  id  required
+              The parameter to key.
+              Unit: parameter id (query:layers .parameters, query:nodes .parameters)
+              Range: >= 1
+          keys  array  required
+              The keys as [time, value] or [time, value, interpolation] entries, in any order. Times
+              count in the parameter owner's unit: layer time for a layer's own parameters (the
+              composition frame minus the layer's start), composition time for every other parameter.
+              Each value has the parameter's own width. Interpolation is the one leaving the key
+              (default linear); the last key's is always linear. An empty list needs replace.
+              Unit: list of [time, value, interpolation?]; times in frames at the composition's frame
+              rate (an integer), or exact seconds as [numerator, denominator], in the unit of the key's
+              owner: LAYER time for a layer's own parameters (query:layers .parameters: position,
+              opacity, blend mode, Time Remap), which is the composition time minus the layer's start,
+              times its speed (a layer starting at frame 48 shows its frame 0 at composition frame 48);
+              COMPOSITION time for every other parameter (a node's, a source's, an effect's). A layer
+              key outside the layer's range never plays; the edit succeeds and returns a warning naming
+              the range
+          replace  bool  optional
+              Clear the existing keys first, returning the parameter to the constant it was animated
+              from. With an empty keys list the parameter ends constant. Default false: keys at existing
+              times are updated and the others added.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: animationCurve
+          (when created), keyframe (one per key, in the order given) (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: A key is not [time, value, interpolation]
+              Do: the message names the key index and the part to fix.
+          bloom.scripting.command-rejected
+              When: Two keys share a time
+              Do: give each key its own time.
+          bloom.scripting.command-rejected
+              When: The parameter is driven by a value node
+              Do: give it a constant with bloom.parameter.set-source first.
+          bloom.scripting.command-rejected
+              When: The value does not fit the parameter
+              Do: the message names the key index; query {kind:"parameter"} reports valueKind and range.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.animation.set-keys","args":{"parameter":1,"keys":[[0,0,"linear"],[24,1]]}}]}}
+          Python:
+            bloom.ops.animation.set_keys(parameter=1, keys=((0, 0, "linear"), (24, 1)))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.animation.set-keys","args":{"parameter":1,"keys":[[0,0,"linear"],[24,1]]}}]
+
+        Related: bloom.animation.set-keyframe-at-time-for-parameter,
+        bloom.animation.convert-to-constant, query:keyframes, transact
+        """
+        ...
     def update_color4_keyframe(self, curve: int | Proxy, keyframe: int | Proxy, value: tuple[float, float, float, float], interpolation: str = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.animation.update-color4-keyframe  (operation, animation)
         Re-places one colour key: its time, value and outgoing interpolation.
@@ -1189,7 +1320,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  color4  required
               The new color.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
@@ -1255,7 +1391,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  float  required
               The new value.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -1320,7 +1461,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  vec2  required
               The new value.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -1385,7 +1531,12 @@ class AnimationOps:
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
-              denominator]
+              denominator], in the unit of the key's owner: LAYER time for a layer's own parameters
+              (query:layers .parameters: position, opacity, blend mode, Time Remap), which is the
+              composition time minus the layer's start, times its speed (a layer starting at frame 48
+              shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a
+              node's, a source's, an effect's). A layer key outside the layer's range never plays; the
+              edit succeeds and returns a warning naming the range
           value  vec3  required
               The new value.
               Unit: the animated parameter's own stored units (query:parameter reports them)
@@ -1596,7 +1747,7 @@ class AssetOps:
         Related: bloom.asset.relink-font, query:assets, transact
         """
         ...
-    def import_(self, paths: tuple, projectDirectory: str, folder: int | Proxy = ..., asSequence: bool = ..., firstFrame: int = ..., lastFrame: int = ..., skipMissingFrames: bool = ..., sequenceFrameRate: str = ..., stillDuration: int = ...) -> Mapping[str, Any] | None:
+    def import_(self, paths: tuple, projectDirectory: str = ..., folder: int | Proxy = ..., asSequence: bool = ..., firstFrame: int = ..., lastFrame: int = ..., skipMissingFrames: bool = ..., sequenceFrameRate: str = ..., stillDuration: int = ...) -> Mapping[str, Any] | None:
         """bloom.asset.import  (operation, asset)
         Imports media files and folders into Assets in one step: hashes and probes each file (image
         sequences are detected from numbered names) and adds one asset per item. Files the project
@@ -1606,8 +1757,10 @@ class AssetOps:
         Arguments:
           paths  array  required
               Absolute or project-relative media files or folders to import.
-          projectDirectory  str  required
-              The project directory the locators are made relative to.
+          projectDirectory  str  optional
+              The project directory the locators are made relative to. Omit it when every path is
+              absolute: the saved project's folder is used, and an unsaved project keeps external
+              locators. A relative path needs it.
               Unit: directory path; relative locators are made relative to it
           folder  id  optional
               The Assets folder the new assets land in. Omit for the project root.
@@ -1655,11 +1808,11 @@ class AssetOps:
 
         Examples:
           MCP:
-            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.asset.import","args":{"paths":["footage/plate.exr"],"projectDirectory":"."}}]}}
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.asset.import","args":{"paths":["/footage/plate.exr"]}}]}}
           Python:
-            bloom.ops.asset.import_(paths=("footage/plate.exr",), projectDirectory=".")
+            bloom.ops.asset.import_(paths=("/footage/plate.exr",))
           CLI:
-            bloom-cli run edits.json   # [{"op":"bloom.asset.import","args":{"paths":["footage/plate.exr"],"projectDirectory":"."}}]
+            bloom-cli run edits.json   # [{"op":"bloom.asset.import","args":{"paths":["/footage/plate.exr"]}}]
 
         Related: bloom.layer.add-image, bloom.layer.add-audio, query:assets, transact
         """
@@ -3404,7 +3557,10 @@ class ExportOps:
               "overwrite"}, "enabled", "importIntoAssets"}; every field is optional. A built-in "preset"
               (export.presets lists them) with no "settings" takes that preset's settings; "settings"
               given with it override them. "overwrite" is "ask", "replace" or "refuse"; an output with
-              no destination path must be given one before Start.
+              no destination path must be given one before Start. A destination is a path below the
+              project folder ("project-relative", the default for a relative path), or an absolute local
+              path such as "/exports/shot.mov", which is stored as portability "external" with its
+              file:// URI.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -3451,7 +3607,10 @@ class ExportOps:
               {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every field is
               optional. A built-in "preset" (export.presets lists them) with no "settings" takes that
               preset's settings; "settings" given with it override them. "overwrite" is "ask", "replace"
-              or "refuse"; an output with no destination path must be given one before Start.
+              or "refuse"; an output with no destination path must be given one before Start. A
+              destination is a path below the project folder ("project-relative", the default for a
+              relative path), or an absolute local path such as "/exports/shot.mov", which is stored as
+              portability "external" with its file:// URI.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -3937,9 +4096,11 @@ class ExportOps:
               Unit: export output id (export.status)
               Range: >= 1
           path  str  required
-              Project-relative path, or a file URI with portability external.
+              A path below the project folder, or an absolute local path (stored as an external file
+              URI), or a file URI with portability external.
           portability  str  optional, default project-relative
-              "project-relative" (default) or "external".
+              "project-relative" or "external". Omitted: an absolute local path is external, any other
+              path project-relative.
               Values:
                 "project-relative"  Inside the project folder
                 "external"  A file URI anywhere

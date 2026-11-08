@@ -108,6 +108,8 @@ OperationContext NativeHost::operationContext() const {
         }
         context.layerGeometry = session_->layerGeometryProvider();
         context.compositionFrameRate = session_->compositionFrameRateLookup();
+        // Name references (#574) read the project the script edits.
+        context.source = session_->operationSourceProvider();
     } else {
         context = session_->operationContext();
     }
@@ -314,6 +316,54 @@ Value pathValue(const nb::dict& mapping) {
     return Value(std::move(path));
 }
 
+// #574: {'name': 'Shot 2'} (a layer) or {'layer': 'Shot 2' or an id, 'role': 'opacity'} (a
+// parameter), with an optional 'composition'. Any other member makes the mapping a path or a
+// gradient.
+bool isReferenceMapping(const nb::dict& mapping) {
+    if (nb::len(mapping) == 0)
+        return false;
+    for (const auto [key, unused] : mapping) {
+        static_cast<void>(unused);
+        if (!nb::isinstance<nb::str>(key))
+            return false;
+        const auto name = nb::cast<std::string>(key);
+        if (name != "name" && name != "layer" && name != "role" && name != "composition")
+            return false;
+    }
+    return true;
+}
+
+Value referenceValue(const nb::dict& mapping) {
+    ObjectReference reference;
+    const auto text = [&](const char* key) -> std::optional<std::string> {
+        if (!mapping.contains(key))
+            return std::nullopt;
+        if (!nb::isinstance<nb::str>(mapping[key]))
+            throw nb::type_error((std::string("A reference's ") + key + " is text").c_str());
+        return nb::cast<std::string>(mapping[key]);
+    };
+    reference.name = text("name");
+    reference.role = text("role");
+    if (mapping.contains("layer")) {
+        const auto layer = mapping["layer"];
+        if (nb::isinstance<nb::str>(layer)) {
+            reference.layerName = nb::cast<std::string>(layer);
+        } else if (nb::isinstance<nb::int_>(layer) && !nb::isinstance<nb::bool_>(layer) &&
+                   nb::cast<std::int64_t>(layer) > 0) {
+            reference.layerId = static_cast<std::uint64_t>(nb::cast<std::int64_t>(layer));
+        } else {
+            throw nb::type_error("A reference's layer is the layer's name (text) or its id");
+        }
+    }
+    if (mapping.contains("composition")) {
+        const auto composition = mapping["composition"];
+        if (!nb::isinstance<nb::int_>(composition) || nb::cast<std::int64_t>(composition) <= 0)
+            throw nb::type_error("A reference's composition is a composition id");
+        reference.composition = static_cast<std::uint64_t>(nb::cast<std::int64_t>(composition));
+    }
+    return Value(std::move(reference));
+}
+
 Value scriptValue(const nb::handle value, const std::size_t depth) {
     if (depth > 16) {
         throw nb::value_error("Argument nesting exceeds 16 levels");
@@ -351,6 +401,8 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
     }
     if (nb::isinstance<nb::dict>(value)) {
         const auto mapping = nb::borrow<nb::dict>(value);
+        if (isReferenceMapping(mapping))
+            return referenceValue(mapping);
         if (mapping.contains("stops"))
             return gradientValue(mapping);
         return pathValue(mapping);

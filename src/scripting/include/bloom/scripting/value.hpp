@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -21,6 +22,18 @@ struct StableId final {
 struct Value;
 using ValueArray = std::vector<Value>;
 
+// A layer or a parameter addressed by name and role instead of by id (#574). A layer is
+// `{name}`; a parameter is `{layer, role}` where `layer` is the layer's name or its id. Optional
+// `composition` scopes the lookup (default: the operation's composition). The operation registry
+// resolves it to the id before the operation is created, so no factory ever sees one.
+struct ObjectReference final {
+    std::optional<std::string> name;
+    std::optional<std::string> layerName;
+    std::optional<std::uint64_t> layerId;
+    std::optional<std::string> role;
+    std::optional<std::uint64_t> composition;
+};
+
 // document::PathValue is ADR 0028's whole-value path (closed flag and cubic anchors), the value of
 // a mask path. Each client reads it from its own projection of a path: a mapping with `closed` and
 // `anchors`, each anchor a `point` and optional in/out handles.
@@ -28,7 +41,8 @@ using ValueArray = std::vector<Value>;
 // each stop a `position` and a `color` [r, g, b, a].
 using ValueStorage =
     std::variant<bool, std::int64_t, double, std::string, document::Vec2d, document::Vec3d,
-                 core::Color4d, StableId, ValueArray, document::PathValue, document::GradientValue>;
+                 core::Color4d, StableId, ValueArray, document::PathValue, document::GradientValue,
+                 ObjectReference>;
 
 struct Value final {
     ValueStorage storage;
@@ -47,6 +61,7 @@ struct Value final {
     Value(ValueArray value) : storage(std::move(value)) {}
     Value(document::PathValue value) : storage(std::move(value)) {}
     Value(document::GradientValue value) : storage(std::move(value)) {}
+    Value(ObjectReference value) : storage(std::move(value)) {}
 };
 
 using Arguments = std::map<std::string, Value, std::less<>>;

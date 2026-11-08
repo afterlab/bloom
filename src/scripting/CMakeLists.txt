@@ -34,6 +34,8 @@ target_sources(
         operation_registry_evaluated.cpp
         operation_registry_export.cpp
         operation_frame_times.cpp
+        operation_references.cpp
+        operation_references.hpp
         operation_registry_parity_entries.cpp
         operation_registry_parity_layers.cpp
         operation_registry_parity_project.cpp
@@ -88,6 +90,14 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.scripting.live-session-host
         COMMAND bloom_scripting_live_session_host_test
         LABELS unit scripting commands mcp TIMEOUT 120)
+    add_executable(bloom_scripting_mcp_fold_test tests/mcp_fold_tests.cpp)
+    target_link_libraries(bloom_scripting_mcp_fold_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_mcp_fold_test)
+    bloom_add_test(
+        NAME bloom.scripting.mcp-fold
+        COMMAND bloom_scripting_mcp_fold_test
+        LABELS unit scripting commands document
+    )
     add_executable(bloom_scripting_operation_schema_test tests/operation_schema_tests.cpp)
     target_link_libraries(bloom_scripting_operation_schema_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_operation_schema_test)

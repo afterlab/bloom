@@ -443,6 +443,31 @@ class Parser final {
     return Value{std::move(gradient)};
 }
 
+// #574: {"name": "Shot 2"} (a layer) or {"layer": "Shot 2" or an id, "role": "opacity"} (a
+// parameter), with an optional "composition". nullopt for any object with another member.
+[[nodiscard]] std::optional<Value> referenceOf(const JsonObject& object) {
+    if (object.empty())
+        return std::nullopt;
+    ObjectReference reference;
+    for (const auto& [key, field] : object) {
+        const auto* text = std::get_if<std::string>(&field.storage);
+        const auto* whole = std::get_if<std::int64_t>(&field.storage);
+        if (key == "name" && text != nullptr)
+            reference.name = *text;
+        else if (key == "role" && text != nullptr)
+            reference.role = *text;
+        else if (key == "layer" && text != nullptr)
+            reference.layerName = *text;
+        else if (key == "layer" && whole != nullptr && *whole > 0)
+            reference.layerId = static_cast<std::uint64_t>(*whole);
+        else if (key == "composition" && whole != nullptr && *whole > 0)
+            reference.composition = static_cast<std::uint64_t>(*whole);
+        else
+            return std::nullopt;
+    }
+    return Value{std::move(reference)};
+}
+
 [[nodiscard]] std::optional<Value> convert(const JsonValue& json) {
     return std::visit(
         [](const auto& value) -> std::optional<Value> {
@@ -461,6 +486,8 @@ class Parser final {
             } else if constexpr (std::is_same_v<Type, JsonObject>) {
                 if (value.contains("stops"))
                     return gradientOf(value);
+                if (auto reference = referenceOf(value))
+                    return reference;
                 return pathOf(value);
             } else if constexpr (std::is_same_v<Type, std::nullptr_t>) {
                 return std::nullopt;

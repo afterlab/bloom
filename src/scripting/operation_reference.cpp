@@ -303,6 +303,22 @@ std::string valueJson(const Value& value) {
                 return jsonQuote(held);
             } else if constexpr (std::is_same_v<Held, StableId>) {
                 return std::to_string(held.value);
+            } else if constexpr (std::is_same_v<Held, ObjectReference>) {
+                std::string text = "{";
+                const auto field = [&text](const char* key, const std::string& rendered) {
+                    text += (text.size() > 1 ? "," : "") + jsonQuote(key) + ":" + rendered;
+                };
+                if (held.name)
+                    field("name", jsonQuote(*held.name));
+                if (held.layerName)
+                    field("layer", jsonQuote(*held.layerName));
+                if (held.layerId)
+                    field("layer", std::to_string(*held.layerId));
+                if (held.role)
+                    field("role", jsonQuote(*held.role));
+                if (held.composition)
+                    field("composition", std::to_string(*held.composition));
+                return text + "}";
             } else if constexpr (std::is_same_v<Held, document::Vec2d>) {
                 return "[" + numberText(held.x) + "," + numberText(held.y) + "]";
             } else if constexpr (std::is_same_v<Held, document::Vec3d>) {
@@ -394,6 +410,31 @@ OperationReference OperationReference::build(const OperationRegistry& registry) 
                 continue;
             entry.errors.push_back(std::move(common));
         }
+    }
+    // Tools that can act on another project file in a headless session of its own.
+    for (auto& entry : reference.entries_) {
+        constexpr std::array<std::string_view, 8> fileTools{"query",  "transact", "history",
+                                                           "render", "export",   "capture",
+                                                           "project.save", "project.close"};
+        if (entry.kind != ReferenceKind::Tool ||
+            std::ranges::find(fileTools, std::string_view(entry.name)) == fileTools.end())
+            continue;
+        entry.arguments.push_back(
+            {.name = "projectFile",
+             .type = "string",
+             .unit = {},
+             .range = {},
+             .defaultValue = "the open project",
+             .context = {},
+             .summary = "The absolute path of a project file other than the open project. The "
+                        "call runs in a headless session of that file, kept between calls so "
+                        "edits and undo persist; project.save writes it and project.close with "
+                        "this argument releases it (discardChanges closes it with unsaved "
+                        "edits). A file that is open in Bloom is refused. At most four files at "
+                        "once. Renders of such a file run on the CPU reference path unless the "
+                        "server owns a GPU provider.",
+             .required = false,
+             .choices = {}});
     }
     for (const auto& descriptor : registry.descriptors())
         reference.entries_.push_back(operationEntry(descriptor));

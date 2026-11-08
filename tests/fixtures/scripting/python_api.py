@@ -243,6 +243,30 @@ class PythonApi(unittest.TestCase):
             bloom.ops.layer.set_enabled(False)
         self.assertIn('bloom.context', str(error.exception))
 
+    def test_names_roles_and_set_keys(self):
+        """Layers by name, parameters by layer and role, string ids and one-step keys."""
+        bloom.ops.layer.add_solid('Wash', (1, 0, 0, 1))
+        bloom.ops.layer.add_solid('Twin', (0, 1, 0, 1))
+        bloom.ops.layer.add_solid('Twin', (0, 0, 1, 1))
+        composition = bloom.context.composition
+        self.assertTrue(bloom.ops.layer.rename('Wash 2', layer={'name': 'Wash'})['succeeded'])
+        names = [layer.name for layer in bloom.data.layers(composition)]
+        self.assertIn('Wash 2', names)
+        self.assertTrue(bloom.ops.layer.rename(
+            'Wash', layer=str(next(int(l) for l in bloom.data.layers(composition)
+                                   if l.name == 'Wash 2')))['succeeded'])
+        with self.assertRaises(bloom.OperationError) as error:
+            bloom.ops.layer.rename('X', layer={'name': 'Twin'})
+        self.assertIn('2 layers are named "Twin"', str(error.exception))
+        with self.assertRaises(bloom.OperationError) as error:
+            bloom.ops.layer.rename('X', layer={'name': 'Missing'})
+        self.assertIn('No layer is named "Missing"', str(error.exception))
+        keyed = bloom.ops.animation.set_keys(
+            {'layer': 'Wash', 'role': 'opacity'}, [(0, 0.0), (12, 1.0, 'hold')])
+        self.assertTrue(keyed['succeeded'])
+        self.assertTrue(bloom.ops.animation.set_keys(
+            {'layer': 'Wash', 'role': 'opacity'}, [], replace=True)['succeeded'])
+
     def test_easing_and_layer_flags(self):
         """Document 1.30: easing equations, Easy Ease and the shy flag through the registry."""
         result = bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))
