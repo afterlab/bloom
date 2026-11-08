@@ -133,7 +133,7 @@ struct ExposurePlan final {
 }
 
 // The gains in stops (exposure, red, blue) the specification asks for at `frame`, in double
-// precision: the recursive filter over the means of the frames `max(frame - lag, 0)`, oldest first.
+// precision: the recursive filter, less the oldest mean's remaining share, over the means of the frames `max(frame - lag, 0)`, oldest first.
 [[nodiscard]] inline std::array<double, 3> expectedGain(const ExposureValues& values,
                                                         const std::int64_t frame) {
     const auto mean = [&](const std::int64_t at) {
@@ -144,6 +144,8 @@ struct ExposurePlan final {
         return seconds > 0.0 ? 1.0 - std::exp(-dt / seconds) : 1.0;
     };
     std::array<double, 3> state{};
+    std::array<double, 3> seed{};
+    std::array<double, 3> weight{1.0, 1.0, 1.0};
     bool have = false;
     for (std::int64_t lag = values.lookBack - 1; lag >= 0; --lag) {
         const auto m = mean(std::max<std::int64_t>(frame - lag, 0));
@@ -161,15 +163,23 @@ struct ExposurePlan final {
         const std::array<double, 3> desired{e, wr, wb};
         if (!have) {
             state = desired;
+            seed = desired;
             have = true;
             continue;
         }
         const double ke = coefficient(desired[0] < state[0] ? values.attack : values.release);
         const double kb = coefficient(values.balanceLag);
-        state[0] += ke * (desired[0] - state[0]);
-        state[1] += kb * (desired[1] - state[1]);
-        state[2] += kb * (desired[2] - state[2]);
+        const std::array<double, 3> k{ke, kb, kb};
+        for (std::size_t i = 0; i < 3; ++i) {
+            state[i] += k[i] * (desired[i] - state[i]);
+            weight[i] *= 1.0 - k[i];
+        }
     }
+    // The state still carries the oldest sample with weight `weight`; take its share out, so a change
+    // leaving the window cannot make the result jump. Too long a lag to separate it keeps the state.
+    for (std::size_t i = 0; i < 3; ++i)
+        if (weight[i] < 0.99609375)
+            state[i] = (state[i] - weight[i] * seed[i]) / (1.0 - weight[i]);
     return state;
 }
 

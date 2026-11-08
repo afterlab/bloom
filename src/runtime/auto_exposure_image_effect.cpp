@@ -19,6 +19,7 @@
 #include <bloom/document/auto_exposure_nodes.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace bloom::runtime::detail {
@@ -283,8 +284,14 @@ bool validAutoExposureProgramData(const std::vector<float>& d) noexcept {
 
 AutoExposureGains autoExposureFilter(const std::vector<std::optional<AutoExposureMean>>& means,
                                      const std::vector<float>& table) noexcept {
+    // The recursive attack/release filter is seeded from the window's oldest sample, so its final
+    // state still carries that sample with weight p, the product of (1 - c) over the steps. When a
+    // change leaves the window that weight would vanish at once and the correction would pop, so the
+    // seed's share is taken out at the end. A constant input returns that constant.
     const float* const k = table.data();
     AutoExposureGains state{};
+    AutoExposureGains seed{};
+    AutoExposureGains weight{1.0F, 1.0F, 1.0F};
     bool have = false;
     for (const auto& mean : means) {
         if (!mean)
@@ -292,15 +299,25 @@ AutoExposureGains autoExposureFilter(const std::vector<std::optional<AutoExposur
         const auto d = desiredGains(k, *mean);
         if (!have) {
             state = d;
+            seed = d;
             have = true;
             continue;
         }
         const float exposureCoefficient = d[0] < state[0] ? k[8] : k[9];
-        state[0] = state[0] + exposureCoefficient * (d[0] - state[0]);
-        state[1] = state[1] + k[10] * (d[1] - state[1]);
-        state[2] = state[2] + k[10] * (d[2] - state[2]);
+        const std::array<float, 3> coefficient{exposureCoefficient, k[10], k[10]};
+        for (std::size_t i = 0; i < 3; ++i) {
+            state[i] = state[i] + coefficient[i] * (d[i] - state[i]);
+            weight[i] = weight[i] * (1.0F - coefficient[i]);
+        }
     }
-    return state;
+    AutoExposureGains result = state;
+    for (std::size_t i = 0; i < 3; ++i) {
+        // A lag far longer than the window (or a zero-length step) leaves the seed nearly the whole
+        // state: the share cannot be separated, so the state itself is the defined result.
+        if (weight[i] < kAutoExposureSeedWeightLimit)
+            result[i] = (state[i] - weight[i] * seed[i]) / (1.0F - weight[i]);
+    }
+    return result;
 }
 
 const std::string& autoExposureProgramText() {
@@ -364,6 +381,8 @@ vec4 bloom_auto_exposure(ivec2 c) {
   int n = int(bae(11));
   bool have = false;
   vec3 s = vec3(0.0);
+  vec3 seed = vec3(0.0);
+  vec3 w = vec3(1.0);
   for (int i = 0; i < n; ++i) {
    int px = int(bae(32 + 2 * i));
    int py = int(bae(33 + 2 * i));
@@ -371,6 +390,7 @@ vec4 bloom_auto_exposure(ivec2 c) {
    vec3 d = bae_desired(imageLoad(bloom_ocio_input, ivec2(px, py)).rgb);
    if (!have) {
     s = d;
+    seed = d;
     have = true;
     continue;
    }
@@ -386,8 +406,33 @@ vec4 bloom_auto_exposure(ivec2 c) {
    precise float nr = s.y + sr2;
    precise float nb = s.z + sb2;
    s = vec3(ne, nr, nb);
+   precise float oe = 1.0 - ke;
+   precise float ob2 = 1.0 - kb;
+   precise float we = w.x * oe;
+   precise float wr = w.y * ob2;
+   precise float wb = w.z * ob2;
+   w = vec3(we, wr, wb);
   }
-  return vec4(s, 1.0);
+  vec3 outv = s;
+  if (w.x < 0.99609375) {
+   precise float sx = w.x * seed.x;
+   precise float nx = s.x - sx;
+   precise float dx = 1.0 - w.x;
+   outv.x = bloom_ocio_cpu_div(nx, dx);
+  }
+  if (w.y < 0.99609375) {
+   precise float sy = w.y * seed.y;
+   precise float ny = s.y - sy;
+   precise float dy = 1.0 - w.y;
+   outv.y = bloom_ocio_cpu_div(ny, dy);
+  }
+  if (w.z < 0.99609375) {
+   precise float sz = w.z * seed.z;
+   precise float nz = s.z - sz;
+   precise float dz = 1.0 - w.z;
+   outv.z = bloom_ocio_cpu_div(nz, dz);
+  }
+  return vec4(outv, 1.0);
  }
  vec4 own = imageLoad(bloom_ocio_input, c);
  if (c.x >= int(bae(12)) || c.y >= int(bae(13)) || bae(19) == 0.0) { return own; }

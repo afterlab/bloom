@@ -233,6 +233,8 @@ std::array<double, 3> reference(const ExposureValues& v,
         return seconds > 0.0 ? 1.0 - std::exp(-dt / seconds) : 1.0;
     };
     std::array<double, 3> state{};
+    std::array<double, 3> seed{};
+    std::array<double, 3> weight{1.0, 1.0, 1.0};
     bool have = false;
     for (const auto& m : means) {
         const double r = std::max(m[0], 1e-6);
@@ -247,15 +249,21 @@ std::array<double, 3> reference(const ExposureValues& v,
         const std::array<double, 3> desired{e, wr, wb};
         if (!have) {
             state = desired;
+            seed = desired;
             have = true;
             continue;
         }
         const double ke = coefficient(desired[0] < state[0] ? v.attack : v.release);
         const double kb = coefficient(v.balanceLag);
-        state[0] += ke * (desired[0] - state[0]);
-        state[1] += kb * (desired[1] - state[1]);
-        state[2] += kb * (desired[2] - state[2]);
+        const std::array<double, 3> k{ke, kb, kb};
+        for (std::size_t i = 0; i < 3; ++i) {
+            state[i] += k[i] * (desired[i] - state[i]);
+            weight[i] *= 1.0 - k[i];
+        }
     }
+    for (std::size_t i = 0; i < 3; ++i)
+        if (weight[i] < 0.99609375)
+            state[i] = (state[i] - weight[i] * seed[i]) / (1.0 - weight[i]);
     return state;
 }
 
@@ -356,6 +364,63 @@ void testFilter() {
         expect(a == b, "absent means hold the filter");
         const auto first = filtered(defaults, {std::nullopt, grey(0.09F), grey(0.09F)});
         expect(near(first, {1.0, 0.0, 0.0}, 1e-5), "a window that begins absent starts at its first mean");
+    }
+    // The oldest mean's remaining share is taken out of the state, so a constant input is returned as
+    // it is, whatever the lags, and the lag of one frame still follows the newest frame exactly.
+    {
+        const std::array<float, 3> warmDim{0.12F, 0.06F, 0.03F};
+        std::vector<std::optional<std::array<float, 3>>> constant(24, warmDim);
+        expect(near(filtered(defaults, constant), reference(defaults, std::vector<std::array<double, 3>>(
+                                                                         24, {0.12, 0.06, 0.03})),
+                    2e-5),
+               "a constant input returns its own gain");
+        ExposureValues slow = defaults;
+        slow.attack = 2.0;
+        slow.release = 2.0;
+        slow.balanceLag = 3.0;
+        expect(near(filtered(slow, constant), reference(slow, std::vector<std::array<double, 3>>(
+                                                                  24, {0.12, 0.06, 0.03})),
+                    2e-5),
+               "a constant input returns its own gain under a long lag");
+        // The oldest mean leaving the window no longer moves the result by its whole remaining share:
+        // a window of a change and one that has just lost the sample before it differ by little.
+        std::vector<std::optional<std::array<float, 3>>> held(24, grey(0.18F));
+        for (std::size_t i = 12; i < held.size(); ++i)
+            held[i] = grey(0.72F);
+        const auto whole = filtered(defaults, held);
+        auto shorter = held;
+        shorter.erase(shorter.begin());
+        shorter.push_back(grey(0.72F));
+        std::vector<std::array<double, 3>> heldD(12, greyd(0.18));
+        heldD.insert(heldD.end(), 12, greyd(0.72));
+        expect(near(whole, reference(defaults, heldD), 2e-5),
+               "a window holding a change follows the independent recursion");
+        expect(std::abs(filtered(defaults, shorter)[0] - whole[0]) < 0.25F,
+               "sliding the window by one frame moves the gain by a small step");
+    }
+    // A lag far longer than the window leaves the seed nearly all of the state: the share cannot be
+    // separated, so the state itself (no division by the vanishing remainder) is the result. The same
+    // for a step of no length, whose coefficient is zero.
+    {
+        ExposureValues forever = defaults;
+        forever.attack = 30.0;
+        forever.release = 30.0;
+        forever.balanceLag = 30.0;
+        const auto got = filtered(forever, {grey(0.09F), grey(0.72F), grey(0.72F)});
+        expect(std::isfinite(got[0]) && std::isfinite(got[1]) && std::isfinite(got[2]) &&
+                   std::abs(got[0] - 1.0F) < 0.05F,
+               "a lag far beyond the window stays on the oldest mean, finite and defined");
+        const auto grade = detail::prepareColorGrade(kernelOf(runtime::AutoExposureRole::Filter),
+                                                     filterValues(defaults, 1e-12));
+        expect(grade.has_value(), "a frame of almost no length prepares");
+        if (grade) {
+            const auto newest = meanImage(grey(0.72F));
+            const auto oldest = meanImage(grey(0.09F));
+            const auto out = apply(*grade, newest.get(), {oldest.get()});
+            const auto p = at(*out, 0, 0);
+            expect(std::isfinite(p[0]) && std::abs(p[0] - 1.0F) < 1e-3F && p[1] == 0.0F && p[2] == 0.0F,
+                   "a step of no length leaves the state on the oldest mean");
+        }
     }
     // Domains.
     {
@@ -751,6 +816,63 @@ void testWindow() {
         expect(count(warmed) > 0 && count(afterChange) > 0 && count(afterChange) * 3 < count(warmed) &&
                    afterChange.pixel != warmed.pixel,
                "a changed lag recomputes the filter only, never the measurements");
+    }
+    // A change leaving the look-back window must not pop the correction. Every frame across the change
+    // and well past the window is rendered, for a brighter, a darker and a color-cast step, at the
+    // node's default look-back and a short one, and the frame-to-frame change of the corrected picture
+    // (sRGB codes, 0 to 255) after the first reaction is bounded by the step before it.
+    {
+        const auto code = [](const float linear) {
+            const double v = std::clamp(static_cast<double>(linear), 0.0, 1.0);
+            const double e = v <= 0.0031308 ? 12.92 * v : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+            return e * 255.0;
+        };
+        struct Step final {
+            const char* name;
+            std::array<double, 3> before;
+            std::array<double, 3> after;
+        };
+        const Step steps[] = {{"brighter", {0.18, 0.18, 0.18}, {0.72, 0.72, 0.72}},
+                              {"darker", {0.72, 0.72, 0.72}, {0.09, 0.09, 0.09}},
+                              {"color cast", {0.18, 0.18, 0.18}, {0.40, 0.18, 0.06}}};
+        std::uint64_t base = 58000;
+        for (const std::int64_t lookBack : {std::int64_t{48}, std::int64_t{8}}) {
+            for (const auto& step : steps) {
+                ExposureValues values;
+                values.lookBack = lookBack;
+                values.changeFrame = 14;
+                values.before = step.before;
+                values.after = step.after;
+                const auto plan = exposure_test::exposurePlan(values, base);
+                base += 200;
+                const runtime::CpuCompositionEvaluator evaluator;
+                const std::int64_t last = values.changeFrame + lookBack + 12;
+                std::array<double, 3> previous{};
+                std::array<double, 3> lastStep{};
+                // How far a step exceeds the previous one (1.5 times it and one code are allowed): a
+                // correction that eases in or out never does, a weight vanishing at once always does.
+                double worst = 0.0;
+                for (std::int64_t frame = values.changeFrame - 2; frame <= last; ++frame) {
+                    const auto got = frameOf(evaluator, plan, frame);
+                    expect(got.evaluated, "every frame across the change renders");
+                    const std::array<double, 3> now{code(got.pixel[0]), code(got.pixel[1]),
+                                                    code(got.pixel[2])};
+                    // The first reaction is the footage's own change at the change frame and the step
+                    // after it; from the second step on the correction alone moves the picture.
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        const double moved = std::abs(now[c] - previous[c]);
+                        if (frame >= values.changeFrame + 2)
+                            worst = std::max(worst, moved - (1.5 * lastStep[c] + 1.0));
+                        lastStep[c] = moved;
+                    }
+                    previous = now;
+                }
+                std::cerr << "no-pop " << step.name << " lookBack " << lookBack << " excess " << worst << '\n';
+                expect(worst <= 0.0,
+                       std::string("the correction has no jump when a ") + step.name +
+                           " change leaves a look-back of " + std::to_string(lookBack));
+            }
+        }
     }
     // A refused budget is an explicit error, never a wrong frame.
     {

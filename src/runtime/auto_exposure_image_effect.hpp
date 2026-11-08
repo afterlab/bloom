@@ -35,6 +35,9 @@ inline constexpr std::size_t kAutoExposurePreparedFloats = 16;
 inline constexpr std::size_t kAutoExposureProgramFloats = 160;
 // The most means one Filter reads: the look-back window (document::kMaximumAutoExposureLookBack).
 inline constexpr std::size_t kAutoExposureMaxCells = 64;
+// The filter removes the oldest sample's remaining weight only while that weight is below this
+// (1 - 1/256); above it the lag is too long for the window to separate it. The GLSL repeats the value.
+inline constexpr float kAutoExposureSeedWeightLimit = 0.99609375F;
 // A channel's mean is never taken below this before it is compared, so black has a finite log.
 inline constexpr float kAutoExposureFloor = 1.0e-6F;
 

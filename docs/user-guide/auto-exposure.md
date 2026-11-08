@@ -38,8 +38,9 @@ Set **Exposure** or **White balance** to 0% to use the other alone.
 **Look-back** is how many frames the node looks back over, counting the current one: 48 by default, 2 s at
 24 frames a second, at most 64. A frame is worked out from these frames alone, so it looks the same
 however you reach it: playing, scrubbing, jumping straight to it, stepping backward or exporting. The
-node does not remember the last frame it drew. The cost is that a lag longer than about a third of the
-look-back is cut short, since the frames before the window are not seen, and that a frame you jump to has
+node does not remember the last frame it drew. The correction settles smoothly as a change leaves the
+window, with no jump. The cost is that a lag longer than about a third of the look-back is cut short,
+since the frames before the window are not seen, and that a frame you jump to has
 to measure the whole window (playing measures only the new frame). Near the start the window repeats the
 first frame.
 

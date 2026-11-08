@@ -1998,10 +1998,20 @@ recursive filter, `s = s + k (d - s)`, with the coefficient of a lag `tau` secon
 `dt = 1 / frameRate` seconds, `k = 1 - exp(-dt / tau)` (1 for `tau = 0`). The exposure uses the attack
 coefficient where `d.e < s.e` (the gain is falling, the footage got brighter) and the release otherwise;
 the two white balance gains use the balance lag. A mean that does not exist (the layer has no pixels at that
-time) holds the state and is not taken for black. The seed stands for a filter that had already settled
-on the oldest frame, so a lag longer than about a third of the look-back is cut short: the frames before the
-window are not seen. The defaults (a release of 0.75 s, a balance lag of 1 s, a look-back of 2 s at 24 f/s)
-keep the lags inside it.
+time) holds the state and is not taken for black.
+
+The final state still carries the seed with the weight `p`, the product of `(1 - k)` over the steps, with
+the `k` actually applied at each (so the attack and the release stay asymmetric), one `p` for each of the
+three gains. When a change leaves the window that weight would vanish at once and the correction would
+pop, so the seed's share is taken out: `result = (s - p seed) / (1 - p)`. A constant input returns that
+constant and a coefficient of 1 (no lag) still returns the newest gain exactly. A `p` of 1/256 below one
+or more (`kAutoExposureSeedWeightLimit`, 0.99609375: a lag far longer than the window, or a step of no
+length) leaves the seed nearly the whole state, which cannot be separated without dividing by a vanishing
+remainder, so there the state itself is the result. The result is a lag-weighted mean of the window's
+means; a lag longer than about a third of the look-back is cut short, since the frames before the window
+are not seen, but it settles without a jump. The defaults (a release of 0.75 s, a balance lag of 1 s, a
+look-back of 2 s at 24 f/s) keep the lags inside it. The GLSL computes the same thing in the same order,
+with the division correctly rounded.
 
 **The gain.** The `Apply` role multiplies the input's premultiplied red, green and blue by `2^(e + wr)`,
 `2^e` and `2^(e + wb)` from the Filter's pixel and keeps alpha. With no Filter pixel it leaves the input
