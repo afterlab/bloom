@@ -1288,7 +1288,9 @@ documents decode without injected data and render unchanged. `SetLayerTiming` co
 speed atomically; `SetLayerTimeModes`, `SetLayerContentExtent`, `EnableLayerTimeRemap` and
 `DisableLayerTimeRemap` complete the command surface. `AddImageLayer`, `AddAudioLayer` and the
 composition drop set `contentExtent = Source{source}` and end the range at the frame boundary at or
-after the extent end, capped by the composition; a still image stays full-duration.
+after the extent end, capped by the composition; a still image stays full-duration. A new video or
+sequence layer also sets `afterMode = Hold` (#559) so a layer stretched past its source shows the last
+frame; the stored default stays None (the writer omits it), so a saved project reads as it did.
 
 `SetLayerRange` edits both endpoints in one transaction. `SplitLayerAtTime` requires an interior
 frame and duplicates the Layer node, its own parameters/curves, boundary and stable stack slot.

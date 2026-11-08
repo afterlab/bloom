@@ -1,5 +1,6 @@
 // Interpret Footage (#381): the frame a timed source shows (assumed and conformed rates, Loop,
 // the node's start and loop), the extents layers resolve, and a conformed video's audio timing.
+#include <bloom/runtime/composition_time.hpp>
 #include <bloom/runtime/footage_time.hpp>
 
 #include <bloom/runtime/layer_time_projection.hpp>
@@ -100,7 +101,22 @@ void testAudio() {
 }
 } // namespace
 
+// #559: a footage layer longer than its source shows the source's last frame at the end. Preview
+// and export both map layer time through wrapToExtent, so the mapped time is the proof.
+void testHoldPastSourceEnd() {
+    const runtime::TimeExtent extent{core::RationalTime::fromInteger(2),
+                                     document::FrameRate::framesPerSecond24()};
+    const auto held = runtime::wrapToExtent(at(50, 24), extent, document::LayerTimeMode::None,
+                                            document::LayerTimeMode::Hold);
+    expect(held && held->present && held->time == at(47, 24),
+           "a layer longer than its source holds the last frame");
+    const auto none = runtime::wrapToExtent(at(50, 24), extent, document::LayerTimeMode::None,
+                                            document::LayerTimeMode::None);
+    expect(none && !none->present, "None still shows nothing past the end");
+}
+
 int main() {
+    testHoldPastSourceEnd();
     testSequences();
     testVideo();
     testAudio();

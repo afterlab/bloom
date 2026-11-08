@@ -798,8 +798,12 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
     // media as its content extent, so after its last frame the layer shows nothing.
     if (layer == nullptr || !imageNode)
         return added;
-    if (!still)
+    if (!still) {
         layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
+        // #559: footage holds its last frame past the source end by default. The project format
+        // omits None, so a saved project keeps whatever mode it stored.
+        layer->timing.afterMode = document::LayerTimeMode::Hold;
+    }
     const auto rate = composition->format().frameRate();
     // #381: the interpreted length (an assumed or conformed rate, and Loop).
     const auto length = document::footageDuration(*asset, rate);

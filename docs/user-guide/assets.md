@@ -167,7 +167,10 @@ Select several items to add several layers; they are stacked in the order you se
 first on top, and all start together. Hold **Alt** when you drop to place them one after another
 instead, each starting where the previous one ends. A composition becomes a nested composition
 layer. Every layer keeps the length of its media, up to the length of the composition: a sequence
-lasts its frames, a video or a nested composition its duration. One **Undo** removes the whole
+lasts its frames, a video or a nested composition its duration. A new video or sequence layer holds
+its last frame if you extend it past the end of its media (its **After** mode is **Hold**); set
+**After** to None to show the layers below instead. Projects saved earlier keep the mode they
+stored. One **Undo** removes the whole
 drop. The new layers are selected afterwards, so their properties show straight away.
 
 Dropping items on the Viewer adds them on top at the playhead, centered in the composition. Files

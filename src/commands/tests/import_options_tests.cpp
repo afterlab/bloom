@@ -271,6 +271,38 @@ void testStillDuration(TestContext& test) {
                     compositionSettingsForAsset(plain, base).duration == base.duration,
                 "New Composition from a still is as long as the still");
 }
+// #559: a footage layer holds its last frame past the source end by default; a still does not
+// need to, and a saved explicit mode is untouched (the project format omits None).
+void testFootageHoldsLastFrame(TestContext& test) {
+    auto seed = document::makeNewProject("Hold", "Main", core::RationalTime::fromInteger(10));
+    const auto composition = seed.initialCompositionId;
+    document::AssetRecord clip;
+    clip.id = document::AssetId::fromRaw(1);
+    clip.kind = AssetKind::Video;
+    clip.locator = {"file", "project-relative", "clip.mov", "file:///clip.mov"};
+    clip.width = 4;
+    clip.height = 4;
+    clip.frames = 48;
+    clip.duration = core::RationalTime::fromInteger(2);
+    clip.name = "clip";
+    document::AssetVideoStream stream;
+    stream.codec = "h264";
+    stream.timebase = *core::RationalTime::create(1, 24);
+    stream.framePeriod = *core::RationalTime::create(1, 24);
+    stream.duration = clip.duration;
+    stream.width = 4;
+    stream.height = 4;
+    clip.videoStreams = {stream};
+    requireFixture(seed.project.addAsset(clip), "clip");
+    Document document(std::move(seed.project));
+    CommandStack stack(document);
+    (void)run(document, stack, std::make_unique<AddImageLayer>(composition, clip.id));
+    const auto* made = document.snapshot().project().findComposition(composition);
+    const auto layers = made->graph().layerOutputs();
+    test.expect(layers.size() == 1 &&
+                    layers.front().timing.afterMode == document::LayerTimeMode::Hold,
+                "a new footage layer holds its last frame after the source ends");
+}
 // #432: importing a file the project already holds adds nothing and names the asset that holds
 // it, as bloom.asset.ensure-font does for a face, so a caller always gets one asset id per file.
 void testReimportReturnsExistingAsset(TestContext& test) {
@@ -388,6 +420,7 @@ int main() {
         bloom::commands::test::testImportOptions(test);
         bloom::commands::test::testRelativeRelink(test);
         bloom::commands::test::testStillDuration(test);
+        bloom::commands::test::testFootageHoldsLastFrame(test);
         bloom::commands::test::testReimportReturnsExistingAsset(test);
         bloom::commands::test::testSequenceGrouping(test);
     } catch (const std::exception& error) {
