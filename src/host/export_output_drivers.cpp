@@ -1764,6 +1764,11 @@ class MediaDriver final : public DriverBase {
                 case Error::Io:
                     code = ExportFailureCode::WriteFailed;
                     break;
+                case Error::Unavailable:
+                    // An encoder or profile the worker cannot serve (#475) is a refusal with that
+                    // name, not an encoder that broke while running.
+                    code = ExportFailureCode::EncoderUnavailable;
+                    break;
                 case Error::Crashed:
                     workerEnded = true; // #583: the cause is plain and goes to the user
                     break;
