@@ -267,13 +267,14 @@ void testSearchKeyboardAndMenus() {
            "the reroute is one of them");
     // Task S1, item 4: the list is sectioned, and carries a heading only for a section that has
     // results under it. #554: the owner's tree, in its order; the eight value groups stay sections
-    // of their own here, and Distort, Instances & Particles and Tracking & Analysis have no node
+    // of their own here, and Instances & Particles and Tracking & Analysis have no node
     // yet so they do not show.
     expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources"),
                                                          QStringLiteral("Compositing"),
                                                          QStringLiteral("Channels"),
                                                          QStringLiteral("Keying & Mattes"),
                                                          QStringLiteral("Transform"),
+                                                         QStringLiteral("Distort"),
                                                          QStringLiteral("Blur & Sharpen"),
                                                          QStringLiteral("Light & Shadow"),
                                                          QStringLiteral("Stylize"),
@@ -563,7 +564,7 @@ void testSearchKeyboardAndMenus() {
         // #554: the owner's tree, in its order, without the groups that have no node yet. A menu
         // title spells its ampersand twice.
         expect(titles(addMenu) == QStringList{"Sources", "Compositing", "Channels",
-                                              "Keying && Mattes", "Transform", "Blur && Sharpen",
+                                              "Keying && Mattes", "Transform", "Distort", "Blur && Sharpen",
                                               "Light && Shadow", "Stylize", "Color Correction",
                                               "Color Management", "Time", "Text && Paths", "Fields",
                                               "Values", "Utilities", "Output"},
