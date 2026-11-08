@@ -683,6 +683,10 @@ The pipeline has four explicit phases:
    aggregate expanded bytes, 4 GiB per file, 1,024 UTF-8 bytes per logical path, and a 1,000:1
    aggregate expansion ratio. Checked counters and final path-containment verification are
    mandatory; a tighter component ceiling may be locked but may not exceed these hard maxima.
+   With `BLOOM_DEPENDENCY_ALLOW_DOWNLOADS=OFF` the superbuild is strictly offline: configuring it
+   fails, naming each recipe, when a locked archive is missing from `BLOOM_DEPENDENCY_DOWNLOAD_DIR`
+   or does not match its locked SHA-256, so the build step never reaches the network. The check
+   runs over every recipe's archive, including recipes added later.
 2. `build` runs with networking disabled, applies only locked patches, and installs into a clean
    staging prefix. Dependency-owned auto-fetch is a hard failure. The profile starts from a
    documented environment allowlist, fixes locale and timezone, records `SOURCE_DATE_EPOCH`,
