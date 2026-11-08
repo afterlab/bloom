@@ -577,6 +577,7 @@ target_sources(
         depth_effect_widget.cpp
         lens_flare_widget.cpp
         codec_degrade_widget.cpp
+        lens_distortion_widget.cpp
         film_grain_widget.cpp
         motion_blur_widget.cpp
         sharpen_widget.cpp
@@ -781,6 +782,7 @@ target_sources(
             include/bloom/ui/depth_effect_widget.hpp
             include/bloom/ui/lens_flare_widget.hpp
             include/bloom/ui/codec_degrade_widget.hpp
+            include/bloom/ui/lens_distortion_widget.hpp
             include/bloom/ui/film_grain_widget.hpp
             include/bloom/ui/motion_blur_widget.hpp
             include/bloom/ui/sharpen_widget.hpp

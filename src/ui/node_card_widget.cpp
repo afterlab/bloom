@@ -5,6 +5,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
@@ -14,6 +15,7 @@
 #include <bloom/ui/depth_effect_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/codec_degrade_widget.hpp>
+#include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
@@ -33,6 +35,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            document::isDepthEffectNodeType(typeId) || typeId == document::kLensFlareNodeType ||
            typeId == document::kFilmGrainNodeType || typeId == document::kSharpenNodeType ||
            typeId == document::kCodecDegradeNodeType ||
+           typeId == document::kLensDistortionNodeType ||
            document::isMotionBlurNodeType(typeId) ||
            isScalarSliderNodeType(typeId) ||
            hasNodeControlsWidget(typeId);
@@ -61,6 +64,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new SharpenCardWidget(session, node, card, parent);
     if (typeId == document::kCodecDegradeNodeType)
         return new CodecDegradeCardWidget(session, node, card, parent);
+    if (typeId == document::kLensDistortionNodeType)
+        return new LensDistortionCardWidget(session, node, card, parent);
     if (document::isDepthEffectNodeType(typeId))
         return new DepthEffectCardWidget(session, node, card, parent);
     if (document::isMotionBlurNodeType(typeId))

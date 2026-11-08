@@ -50,6 +50,7 @@
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/codec_degrade_widget.hpp>
+#include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -923,6 +924,53 @@ void codecDegradeCard() {
     expect(fixture.stack.size() == commands + 1 && quality && *quality > 40.0,
            "dragging the quality slider is one command");
     capture(fixture, QStringLiteral("codec-degrade-quality"));
+}
+
+// #486: the Lens Distortion card paints inside its card with no label cut short, writes nothing of
+// its own, draws the four coefficients as sliders with a socket beside each and the centre on a point
+// pad, leaves the mode to the node's own row; a slider drag is one command.
+void lensDistortionCard() {
+    CardFixture fixture(document::kLensDistortionNodeType);
+    auto* card = fixture.item
+                     ? qobject_cast<ui::LensDistortionCardWidget*>(fixture.item->cardWidget())
+                     : nullptr;
+    expect(card != nullptr, "Lens Distortion draws its card widget");
+    if (card == nullptr)
+        return;
+    for (const auto& spec : document::lensDistortionParameters())
+        if (spec.kind == document::LensDistortionParameterKind::Scalar) {
+            const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
+            expect(value && *value == spec.value,
+                   "a new Lens Distortion card writes no value of its own");
+        }
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "lens-distortion paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "lens-distortion"))
+        ++failures;
+    capture(fixture, QStringLiteral("lens-distortion"));
+    expect(card->showsRole("mode") && card->showsRole("center") && !card->showsRole("k1") &&
+               !card->showsRole("k2") && !card->showsRole("p1") && !card->showsRole("p2") &&
+               card->socketY("k1").has_value() && card->socketY("k2").has_value() &&
+               card->socketY("p1").has_value() && card->socketY("p2").has_value() &&
+               !card->socketY("mode").has_value() && card->padRow() != nullptr,
+           "the card shows the mode and centre as the node's rows, and a socket beside each slider");
+    expect(card->valueRow("k1")->name() == QStringLiteral("Radial k1") &&
+               card->valueRow("p2")->name() == QStringLiteral("Tangential p2"),
+           "the coefficient rows are named in full");
+    // A slider drag is one command.
+    auto* slider = card->valueRow("k1")->slider();
+    const auto commands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    const auto k1 = stored(fixture.session, fixture.node, "k1");
+    expect(fixture.stack.size() == commands + 1 && k1 && *k1 > 0.0,
+           "dragging the k1 slider is one command");
+    capture(fixture, QStringLiteral("lens-distortion-k1"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -2024,6 +2072,7 @@ int main(int argc, char** argv) {
     filmGrainCard();
     sharpenCard();
     codecDegradeCard();
+    lensDistortionCard();
     cameraShakeCard();
     depthEffectCards();
     motionBlurCards();

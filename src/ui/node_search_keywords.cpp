@@ -3,6 +3,7 @@
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
@@ -134,6 +135,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kCodecDegradeNodeType)
         return QStringLiteral("codec degrade compression artifacts blocky blocks macroblock jpeg "
                               "h264 mpeg low bitrate chroma subsampling keyframe gop smear");
+    // #486.
+    if (typeId == document::kLensDistortionNodeType)
+        return QStringLiteral("lens distortion undistort redistort distort barrel pincushion radial "
+                              "tangential brown conrady calibration st map stmap warp fisheye");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     // #512.

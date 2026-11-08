@@ -11,6 +11,7 @@
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -348,6 +349,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #486: the Sharpen card's edge graph and its three slider rows, each a value over a slider.
     if (node->typeId == document::kSharpenNodeType)
         thumbnail = kSharpenGraphHeight + kSmall + 3.0 * (kControl + kSmall) + kPadding;
+    // #486: the Lens Distortion card's centre pad and its four slider rows, each a value over a
+    // slider.
+    if (node->typeId == document::kLensDistortionNodeType)
+        thumbnail = kPadMaxHeight + kSmall + 4.0 * (kControl + kSmall) + kPadding;
     // #563: the Codec Degrade card's two slider rows, each a value over a slider.
     if (node->typeId == document::kCodecDegradeNodeType)
         thumbnail = 2.0 * (kControl + kSmall) + kPadding;

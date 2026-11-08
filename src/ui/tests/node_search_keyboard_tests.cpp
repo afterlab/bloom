@@ -634,7 +634,8 @@ void testSearchKeyboardAndMenus() {
                  {"Combine XY", "Combine XYZ", "Reroute", "Separate XY", "Separate XYZ"},
                  "Utilities holds the plumbing");
         hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
-        for (const auto* empty : {"Distort", "Instances & Particles", "Tracking & Analysis"})
+        hasGroup("Distort", {"Lens Distortion"}, "Distort holds the lens warp");
+        for (const auto* empty : {"Instances & Particles", "Tracking & Analysis"})
             expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +
                                               QString::fromUtf8(empty)) == nullptr,
                    "a group with no node yet does not show");

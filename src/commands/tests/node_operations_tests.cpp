@@ -992,6 +992,38 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *codecGop,
                                ConstantValueSource{std::int64_t{9}});
 
+    // #486 Lens Distortion: its mode, four coefficients and centre edit within their domains and
+    // refuse outside them.
+    const auto lens = addRecipe("bloom.lens-distortion");
+    const auto lensMode = lens.outputId<ParameterId>("parameter.mode");
+    const auto lensK1 = lens.outputId<ParameterId>("parameter.k1");
+    const auto lensK2 = lens.outputId<ParameterId>("parameter.k2");
+    const auto lensP1 = lens.outputId<ParameterId>("parameter.p1");
+    const auto lensP2 = lens.outputId<ParameterId>("parameter.p2");
+    const auto lensCenter = lens.outputId<ParameterId>("parameter.center");
+    if (!lensMode || !lensK1 || !lensK2 || !lensP1 || !lensP2 || !lensCenter)
+        throw std::logic_error("Lens Distortion exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *lensMode,
+                                       ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *lensK1, ConstantValueSource{-0.25});
+    (void)exercise<SetParameterSource>(test, fixture, *lensK2, ConstantValueSource{0.05});
+    (void)exercise<SetParameterSource>(test, fixture, *lensP1, ConstantValueSource{0.01});
+    (void)exercise<SetParameterSource>(test, fixture, *lensP2, ConstantValueSource{-0.01});
+    (void)exercise<SetParameterSource>(test, fixture, *lensCenter,
+                                       ConstantValueSource{Vec2d{12.0, -8.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensMode,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensK1,
+                               ConstantValueSource{2.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensK2,
+                               ConstantValueSource{-2.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensP1,
+                               ConstantValueSource{0.6});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensP2,
+                               ConstantValueSource{-0.6});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lensCenter,
+                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+
     // #486 Sharpen: its values edit within their domains and refuse outside them.
     const auto sharpen = addRecipe("bloom.sharpen");
     const auto sharpenAmount = sharpen.outputId<ParameterId>("parameter.amount");
