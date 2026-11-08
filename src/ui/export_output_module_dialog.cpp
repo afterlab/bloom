@@ -55,6 +55,17 @@ using document::ExportFormat;
     return box;
 }
 
+// H.264 and HEVC take a target bit rate; the codec's own default is what an output without one uses
+// (the same figures the engine encodes with and the queue's size estimate assumes).
+[[nodiscard]] bool takesBitrate(const ExportFormat format) {
+    return format == ExportFormat::H264Mp4 || format == ExportFormat::H264Mov ||
+           format == ExportFormat::HevcMp4 || format == ExportFormat::HevcMov;
+}
+
+[[nodiscard]] std::int64_t defaultBitrateKbps(const ExportFormat format) {
+    return format == ExportFormat::HevcMp4 || format == ExportFormat::HevcMov ? 20000 : 30000;
+}
+
 [[nodiscard]] QString quoted(const QString& name) { return QStringLiteral("“%1”").arg(name); }
 
 } // namespace
@@ -137,6 +148,15 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     profile_ = dropdown(this, QStringLiteral("exportProfile"), tr("Profile"));
     profileRow_ = fieldRow(this, {profile_});
     (void)qualityLeft->addRow(tr("Profile"), profileRow_);
+    bitrate_ = new kit::KValueField(this);
+    bitrate_->setObjectName(QStringLiteral("exportBitrate"));
+    bitrate_->setAccessibleName(tr("Bit rate"));
+    bitrate_->setIntegerMode(true);
+    bitrate_->setIntegerRange(1, 2'000'000);
+    bitrate_->setUnit(tr("kb/s"));
+    bitrate_->setFixedWidth(kit::px(kit::Size::DropdownWidth));
+    bitrateRow_ = fieldRow(this, {bitrate_});
+    (void)qualityLeft->addRow(tr("Bit rate"), bitrateRow_);
     compression_ = dropdown(this, QStringLiteral("exportCompression"), tr("Compression"));
     compressionRow_ = fieldRow(this, {compression_});
     (void)qualityLeft->addRow(tr("Compression"), compressionRow_);
@@ -394,6 +414,9 @@ void OutputModuleDialog::showSettings(const document::ExportOutputSettings& sett
     const bool sceneReferred = format == ExportFormat::OpenExr || format == ExportFormat::Dpx;
     const bool displayReferred = format == ExportFormat::Png || format == ExportFormat::Tiff || movie;
     qualityLeft_->setRowVisible(profileRow_, profiles.size() > 1);
+    qualityLeft_->setRowVisible(bitrateRow_, takesBitrate(format));
+    bitrate_->setIntegerValue(settings.videoBitrateKbps.value_or(
+        static_cast<std::uint32_t>(defaultBitrateKbps(format))));
     qualityLeft_->setRowVisible(compressionRow_, !description.compressions.empty());
     qualityLeft_->setRowVisible(lookRow_, format != ExportFormat::Wav);
     qualityLeft_->setRowVisible(audioRow_, movie);
@@ -423,6 +446,12 @@ document::ExportOutputSettings OutputModuleDialog::settings() const {
     const auto format = settings.format;
     if (profile_->count() > 1)
         settings.codecProfile = profile_->currentData().toString().toStdString();
+    if (takesBitrate(format)) {
+        // An unchanged default stays the codec's default, never written out as a number.
+        const auto kbps = bitrate_->integerValue();
+        if (base_.videoBitrateKbps || kbps != defaultBitrateKbps(format))
+            settings.videoBitrateKbps = static_cast<std::uint32_t>(kbps);
+    }
     if (compression_->count() > 0)
         settings.compression = compression_->currentData().toString().toStdString();
     if (format == ExportFormat::OpenExr || format == ExportFormat::Dpx)

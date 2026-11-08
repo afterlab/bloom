@@ -415,6 +415,64 @@ void testUserPresets() {
     std::filesystem::remove_all(folder);
 }
 
+// Issue #561: the vertical short-form preset is H.264 MP4 with a target bit rate; the bit rate
+// survives the user-preset store and the JSON the scripting and MCP surfaces read and write.
+void testVerticalVideoPreset() {
+    const auto preset = host::builtInExportPreset("builtin:vertical-video-h264");
+    expect(preset && preset->settings.format == document::ExportFormat::H264Mp4 &&
+               preset->settings.videoBitrateKbps == std::optional<std::uint32_t>(12000) &&
+               preset->category == host::ExportPresetCategory::Video &&
+               preset->displayName == "Vertical video H.264",
+           "the vertical video preset is H.264 MP4 at 12000 kb/s");
+    if (!preset)
+        return;
+    // Scripting and MCP: export.presets lists the settings as JSON, and a settings JSON sets them.
+    const auto json = host::exportSettingsToJson(preset->settings);
+    const auto parsed = host::exportSettingsFromJson(json);
+    expect(parsed && *parsed == preset->settings && parsed->videoBitrateKbps == 12000U,
+           "the preset's settings round-trip through the scripting/MCP JSON");
+    // Save as a user preset and load it back from the store.
+    const auto folder = scratch("vertical-preset");
+    runtime::TaskScheduler scheduler;
+    {
+        auto catalogue = host::ExportPresetCatalogue::create(
+            {.userDataDirectory = folder, .initialEncoders = linuxEncoders()});
+        catalogue->loadUserPresets(scheduler);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        auto status = host::ExportUserPresetStatus::StoreUnavailable;
+        while (status == host::ExportUserPresetStatus::StoreUnavailable &&
+               std::chrono::steady_clock::now() < deadline) {
+            status = catalogue->saveUserPreset("Vertical copy", preset->settings);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        expect(status == host::ExportUserPresetStatus::Accepted, "the bit rate preset saves");
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    runtime::TaskScheduler second;
+    auto reloaded = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = folder, .initialEncoders = linuxEncoders()});
+    reloaded->loadUserPresets(second);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (reloaded->snapshot()->presets.back().displayName != "Vertical copy" &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    expect(reloaded->snapshot()->presets.back().displayName == "Vertical copy" &&
+               reloaded->snapshot()->presets.back().settings.videoBitrateKbps ==
+                   std::optional<std::uint32_t>(12000),
+           "the saved preset loads back with its bit rate");
+    bool listed = false;
+    for (const auto& entry : reloaded->snapshot()->presets)
+        listed = listed || entry.id == "builtin:vertical-video-h264";
+    expect(listed, "the catalogue lists the vertical video preset");
+    second.beginShutdown();
+    while (!second.isQuiescent())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::filesystem::remove_all(folder);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The service against a real session.
 
@@ -1327,6 +1385,7 @@ int main() {
         testFormatTokens();
         testDestinationForPath();
         testUserPresets();
+        testVerticalVideoPreset();
         testLifecycle();
         testSequencePublishesInFrameOrder();
         testZeroHostCapacityRefusal();

@@ -67,7 +67,9 @@ An image output writes one file per frame, or a single still when the range is o
 
 Formats are listed in four groups:
 
-- **Video**: H.264 MP4 (default), H.264 MOV, Review H.264 (Rec.709, look on), HEVC MP4 and MOV,
+- **Video**: H.264 MP4 (default), H.264 MOV, Review H.264 (Rec.709, look on), Vertical video H.264
+  (H.264 High in MP4 at 12 Mb/s, for 1080 x 1920 short-form video; set the composition to that
+  size with the 1080 x 1920 composition preset), HEVC MP4 and MOV,
   AV1 MP4, AV1 WebM, VP9 WebM, ProRes 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ MOV, DNxHR HQ MXF.
 - **Image sequences**: VFX handoff EXR (ACES2065-1, PIZ, from 1001, `####`), OpenEXR, DPX, PNG
   and TIFF sequences.
@@ -94,11 +96,13 @@ frames**: **Use cached frames**), **Quality** and, for image sequences, **Number
 number**, or **Use the frame numbers**, and **Digits**). **Quality** shows only what the chosen
 format has: **Profile** where a format has several, **Compression** for OpenEXR, **Color space** for
 OpenEXR and DPX, **Display** and **View** for movies, PNG and TIFF, **Bake in the look**, and
-**Include audio** for movies. **Color space**, **Display** and **View** are lists of what the
+**Include audio** for movies. H.264 and HEVC formats also show **Bit rate**, the target in kb/s
+(12000 kb/s is 12 Mb/s); it starts at the codec's default, 30000 kb/s for H.264 and 20000 kb/s for
+HEVC, and the file's average rate lands near it. **Color space**, **Display** and **View** are lists of what the
 project's color setup offers, with **Project default** first, so a name cannot be mistyped.
 **Project default** is the Viewer's starting view (plain sRGB, **Un-tone-mapped** under ACES CG); the
-output stores that name, so the result never depends on the configuration's own default view. The bit
-rate, encoder choice, audio sample rate and file-name pattern an output already has are kept and
+output stores that name, so the result never depends on the configuration's own default view. The
+encoder choice, audio sample rate and file-name pattern an output already has are kept and
 used; the panel does not edit them.
 
 - **H.264** is encoded by OpenH264, which ships with Bloom on Linux, macOS and Windows; nothing is
@@ -113,7 +117,7 @@ used; the panel does not edit them.
 - **AV1** is encoded by SVT-AV1 and **VP9** by libvpx, both shipped with Bloom on Linux, macOS and
   Windows. Each has an **8-bit** and a **10-bit** profile, and both write real 10-bit. They are
   encoded on the processor at a fixed quality for web delivery; the bit rate and the encoder choice
-  do not apply to them.
+  do not apply to them, and the Bit rate field is not shown.
 - **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.

@@ -80,6 +80,8 @@ class OutputModuleDialog final : public kit::KDialog {
     [[nodiscard]] kit::KValueField* startNumber() const noexcept { return startNumber_; }
     [[nodiscard]] kit::KCheckBox* frameNumbers() const noexcept { return frameNumbers_; }
     [[nodiscard]] kit::KValueField* padding() const noexcept { return padding_; }
+    [[nodiscard]] kit::KValueField* bitrate() const noexcept { return bitrate_; }
+    [[nodiscard]] QWidget* bitrateRow() const noexcept { return bitrateRow_; }
     [[nodiscard]] kit::KSection* mainSection() const noexcept { return main_; }
     [[nodiscard]] kit::KIconButton* savePresetButton() const noexcept { return savePreset_; }
     [[nodiscard]] kit::KLabel* presetError() const noexcept { return presetError_; }
@@ -123,6 +125,8 @@ class OutputModuleDialog final : public kit::KDialog {
     kit::KValueField* startNumber_ = nullptr;
     kit::KCheckBox* frameNumbers_ = nullptr;
     kit::KValueField* padding_ = nullptr;
+    kit::KValueField* bitrate_ = nullptr;
+    QWidget* bitrateRow_ = nullptr;
     QWidget* profileRow_ = nullptr;
     QWidget* compressionRow_ = nullptr;
     QWidget* colourSpaceRow_ = nullptr;

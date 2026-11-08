@@ -1,4 +1,5 @@
 #include "support.hpp"
+#include <algorithm>
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/media_workers.hpp>
@@ -479,6 +480,76 @@ void tests(const std::filesystem::path& directory) {
 }
 // Every lossy preset reopens a tiny saturated feature within tolerance profile v2: the verifier
 // models the codec's own chroma sampling instead of failing what 4:2:2/4:2:0 removes by design.
+// Issue #561: a picture with fine moving noise (a hash of position and frame, at most 3% of full
+// scale, so the reopen stays inside the tolerance), so the encoder always has detail to spend and
+// the rate control, not the picture, sets the file's size.
+FrameProduct busyImage(const EncodeSettingsV1& settings, std::uint64_t index) {
+    auto frame = image(settings, index);
+    auto& plane = frame.planes.front();
+    for (std::uint32_t y = 0; y < plane.height; ++y)
+        for (std::uint32_t x = 0; x < plane.width; ++x) {
+            auto hash =
+                (x * 73856093U) ^ (y * 19349663U) ^ (static_cast<std::uint32_t>(index) * 83492791U);
+            hash ^= hash >> 13U;
+            hash *= 0x5bd1e995U;
+            hash ^= hash >> 15U;
+            for (unsigned c = 0; c < 3; ++c) {
+                const auto base = static_cast<std::uint32_t>(
+                                      plane.bytes[static_cast<std::size_t>(y) * plane.stride +
+                                                  static_cast<std::size_t>(x) * 8U +
+                                                  static_cast<std::size_t>(c) * 2U]) |
+                                  (static_cast<std::uint32_t>(
+                                       plane.bytes[static_cast<std::size_t>(y) * plane.stride +
+                                                   static_cast<std::size_t>(x) * 8U +
+                                                   static_cast<std::size_t>(c) * 2U + 1U])
+                                   << 8U);
+                const auto noise = static_cast<std::int32_t>((hash >> (c * 8U)) & 255U) * 16 - 2040;
+                const auto value = static_cast<std::uint32_t>(
+                    std::clamp(static_cast<std::int32_t>(base) + noise, 0, 65535));
+                const auto offset = static_cast<std::size_t>(y) * plane.stride +
+                                    static_cast<std::size_t>(x) * 8U +
+                                    static_cast<std::size_t>(c) * 2U;
+                plane.bytes[offset] = static_cast<std::byte>(value & 255U);
+                plane.bytes[offset + 1] = static_cast<std::byte>(value >> 8U);
+            }
+        }
+    return frame;
+}
+// The file's average video rate in kb/s, from its size and the duration it reopened to.
+double encodedKbps(const EncodeSettingsV1& settings) {
+    EncodeSessionV1 session({});
+    ok(session.begin(settings));
+    for (std::uint64_t i = 0; i < settings.frames; ++i)
+        ok(session.video(busyImage(settings, i)));
+    const auto qc = get(session.finish());
+    ok(session.close());
+    return static_cast<double>(qc.bytes) * 8.0 / 1000.0 /
+           (static_cast<double>(settings.frames) * static_cast<double>(settings.rate.denominator) /
+            static_cast<double>(settings.rate.numerator));
+}
+// Issue #561: the target bit rate of an H.264 or HEVC export (videoBitrateKbps) sets the file's
+// rate: it lands near the target, and a higher target gives a larger file.
+void targetBitrate() {
+    for (const auto* codec : {"h264", "hevc"}) {
+        EncodeSettingsV1 settings;
+        settings.width = 320;
+        settings.height = 240;
+        settings.frames = 120;
+        settings.videoCodec = codec;
+        settings.profile = std::string_view(codec) == "h264" ? "high" : "main";
+        settings.container = "mp4";
+        double previous = 0;
+        for (const std::uint32_t target : {400U, 700U}) {
+            settings.videoBitrateKbps = target;
+            const auto kbps = encodedKbps(settings);
+            std::cout << codec << " target=" << target << " kb/s file=" << kbps << " kb/s\n";
+            test::check(kbps > target * 0.7 && kbps < target * 1.3,
+                        "the exported file's rate is within 30% of the target bit rate");
+            test::check(kbps > previous, "a higher target gives a higher file rate");
+            previous = kbps;
+        }
+    }
+}
 void chromaSampling(const std::filesystem::path& directory) {
     redSquare = true;
     EncodeSettingsV1 settings;
@@ -709,6 +780,7 @@ int main(int argc, char** argv) {
         prores4444Threaded(argv[1]);
         tests(argv[1]);
         chromaSampling(argv[1]);
+        targetBitrate();
         // Issue #352: one 8K UHD ProRes frame exports and passes reopen quality check.
         EncodeSettingsV1 eightK;
         eightK.width = 7680;

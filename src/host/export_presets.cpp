@@ -146,6 +146,14 @@ std::vector<BuiltIn> makeBuiltIns() {
         add("builtin:review-h264", "Review H.264", "Rec.709 review deliverable with the look on",
             C::Video, std::move(review), true);
     }
+    {
+        // Short-form vertical video (1080 x 1920 at 30 frames a second): H.264 at 12 Mb/s.
+        auto vertical = video(ExportFormat::H264Mp4, "high");
+        vertical.videoBitrateKbps = 12000;
+        add("builtin:vertical-video-h264", "Vertical video H.264",
+            "H.264 High in MP4 at 12 Mb/s, for 1080 x 1920 short-form video", C::Video,
+            std::move(vertical));
+    }
     // HEVC prefers a VA-API encoder when one answers and otherwise uses the bundled Kvazaar.
     auto hevc = video(ExportFormat::HevcMp4, "main");
     add("builtin:hevc-mp4", "HEVC MP4", "HEVC Main in MP4", C::Video, hevc);

@@ -855,7 +855,8 @@ void outputModuleDialog(TestContext& context) {
     context.expect(dialog->shows(dialog->profile()) && !dialog->shows(dialog->compression()) &&
                        dialog->shows(dialog->display()) && dialog->shows(dialog->view()) &&
                        !dialog->shows(dialog->colourSpace()) && dialog->shows(dialog->includeAudio()) &&
-                       dialog->shows(dialog->bakeLook()) && !dialog->shows(dialog->startNumber()),
+                       dialog->shows(dialog->bakeLook()) && !dialog->shows(dialog->startNumber()) &&
+                       !dialog->shows(dialog->bitrate()),
                    "ProRes shows only what applies to it");
     context.expect(dialog->shows(dialog->cachedFrames()) && dialog->shows(dialog->importIntoAssets()) &&
                        dialog->shows(dialog->overwrite()),
@@ -1088,6 +1089,41 @@ void everyFormatIsOffered(TestContext& context) {
     context.expect(!all.contains("not available") && !all.contains("VA-API") && !all.contains("Install") &&
                        !all.contains("Locate"),
                    "the dialog never says unavailable and never offers to install an encoder");
+}
+
+// The target bit rate (#561): a kb/s field in Quality for H.264 and HEVC only, the codec's default
+// until changed, and the edit carries the number the artist set.
+void bitrateRow(TestContext& context) {
+    Rig rig;
+    auto catalogue = makeCatalogue();
+    catalogue->presets.push_back(makePreset("builtin:hevc-mp4", "HEVC MP4", host::ExportPresetCategory::Video,
+                                            document::ExportFormat::HevcMp4));
+    auto output = makeOutput(11, "builtin:h264-mp4", document::ExportFormat::H264Mp4, "Exports/a.mp4");
+    ep::OutputModuleDialog dialog(output, catalogue, {}, *rig.editor);
+    context.expect(dialog.shows(dialog.bitrateRow()) && dialog.shows(dialog.bitrate()) &&
+                       dialog.bitrate()->integerValue() == 30000 && dialog.bitrate()->unit() == "kb/s",
+                   "H.264 shows a Bit rate field in kb/s at the codec's default");
+    context.expect(!dialog.edit().has_value(), "the shown default is not an edit");
+    dialog.format()->chooseIndex(dialog.format()->findData(QStringLiteral("builtin:hevc-mp4")));
+    QApplication::processEvents();
+    context.expect(dialog.shows(dialog.bitrate()) && dialog.bitrate()->integerValue() == 20000,
+                   "HEVC shows it too, at its own default");
+    dialog.format()->chooseIndex(dialog.format()->findData(QStringLiteral("builtin:prores-422hq-mov")));
+    QApplication::processEvents();
+    context.expect(!dialog.shows(dialog.bitrateRow()) && !dialog.shows(dialog.bitrate()),
+                   "a format without a target bit rate shows no Bit rate row");
+    dialog.format()->chooseIndex(dialog.format()->findData(QStringLiteral("builtin:h264-mp4")));
+    QApplication::processEvents();
+    dialog.bitrate()->setIntegerValue(12000);
+    const auto edit = dialog.edit();
+    context.expect(edit.has_value() && edit->settings.has_value() &&
+                       edit->settings->videoBitrateKbps == std::optional<std::uint32_t>(12000),
+                   "the edit carries the bit rate the artist set");
+    // An output that already carries a bit rate shows it.
+    output.record.settings.videoBitrateKbps = 8000;
+    ep::OutputModuleDialog carried(output, catalogue, {}, *rig.editor);
+    context.expect(carried.bitrate()->integerValue() == 8000 && !carried.edit().has_value(),
+                   "an output's own bit rate is shown and kept");
 }
 
 void addAndRemoveOutputs(TestContext& context) {
@@ -1672,6 +1708,7 @@ int main(int argc, char** argv) {
     outputModuleDialog(context);
     saveAsPreset(context);
     everyFormatIsOffered(context);
+    bitrateRow(context);
     addAndRemoveOutputs(context);
     quickPickMenus(context);
     replaceConfirm(context);

@@ -464,6 +464,11 @@ struct Encoder::State {
             av_dict_set(&options, "profile", settings.profile.c_str(), 0);
             av_dict_set_int(&options, "delay", 0, 0);
         }
+        if (video && name == "libopenh264") {
+            // OpenH264 defaults to quality mode, which ignores the target bit rate; the bit-rate
+            // mode follows it (#561).
+            av_dict_set(&options, "rc_mode", "bitrate", 0);
+        }
         if (video && (name == "libkvazaar" || name == "libkvazaar10")) {
             // One-second intra period like the other delivery encoders, the session's thread
             // budget, and Kvazaar's fast preset (an export, not an archival master).
