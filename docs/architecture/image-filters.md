@@ -1900,7 +1900,7 @@ exact for any motion up to quadratic over the readout and within a fraction of a
 motion (a test holds it to half a pixel). The input already carries the shake at the frame's time, so the pixel at
 `p` reads the input at `q`, with `v = p - o(b) - d_o`, `q = v + g perp(v) + o(b)`: `d_o` the offset's change,
 `g` the roll's change in radians (clockwise), `perp(x, y) = (-y, x)` and positions measured from the
-composition's centre; this is the inverse of the shake's move to first order in the roll's change over the
+composition's center; this is the inverse of the shake's move to first order in the roll's change over the
 readout, and it ignores the shake's overscan scale. The flow adds `q -= f s readout amount`. Everything
 is multiplied by `amount`. The field raster works in y up, the shake and flow in y down, so the y of each is
 flipped. `s` is measured in composition pixels (`-y / height`, `y / height`, `x / width`, `-x / width` for
