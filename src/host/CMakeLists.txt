@@ -174,7 +174,7 @@ if(BUILD_TESTING)
         LABELS unit host
     )
 
-    add_executable(bloom_host_export_capacity_wait_test tests/export_capacity_wait_tests.cpp)
+    add_executable(bloom_host_export_capacity_wait_test ${PROJECT_SOURCE_DIR}/tests/export_capacity_wait_tests.cpp)
     target_link_libraries(bloom_host_export_capacity_wait_test PRIVATE bloom_host)
     target_include_directories(bloom_host_export_capacity_wait_test PRIVATE
         "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/render/include")
