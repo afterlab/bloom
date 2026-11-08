@@ -1,4 +1,7 @@
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/camera_shake.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <map>
@@ -1936,6 +1939,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_lens_distortion_tests.ipp"
 #include "snapshot_compiler_chromatic_aberration_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
+#include "snapshot_compiler_test_card_tests.ipp"
 
 } // namespace
 
@@ -1974,6 +1978,11 @@ int main() {
         testChromaticAberrationLowering(expectations);
         testChromaticAberrationPixels(expectations);
         testSharpenLowering(expectations);
+        testTestCardLowering(expectations);
+        testTestCardPixels(expectations);
+        testTestCardPatchMatchesTheTransform(expectations);
+        testTestCardKeepsLevelsBelowBlack(expectations);
+        testTestCardBarsArePaddedNotStretched(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);
         testFieldSampleDrivesAValue(expectations);

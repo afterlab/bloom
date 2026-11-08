@@ -400,7 +400,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             testCard->parameters.size() == document::testCardParameters().size() &&
             testCard->parameters[0].role == "card" && !testCard->parameters[0].supportsAnimation &&
             testCard->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
-            testCard->parameters[1].role == "size" &&
+            testCard->parameters[1].role == "sizeMode" &&
             testCard->parameters[1].defaultValue == document::ParameterValue{std::int64_t{0}} &&
             std::ranges::none_of(testCard->parameters,
                                  [](const auto& p) { return p.supportsAnimation; }),

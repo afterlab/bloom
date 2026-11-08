@@ -332,6 +332,53 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         p.centreY = -vector(0).y;
         return field::encodeLensWarp(p);
     }
+    case FieldOp::TestCard: {
+        field::TestCardParameters p;
+        p.card = choiceAt(in, 0);
+        p.variant = choiceAt(in, 1);
+        p.option = choiceAt(in, 2);
+        const auto flags = choiceAt(in, 3);
+        p.label = (flags & 1) != 0;
+        const bool animated = (flags & 2) != 0;
+        for (std::size_t i = 4; i < in.choices.size(); ++i)
+            p.text.push_back(static_cast<std::uint8_t>(std::clamp<std::int64_t>(in.choices[i], 0, 255)));
+        p.width = scalar(0, 1.0);
+        p.height = scalar(1, 1.0);
+        p.centreX = scalar(2);
+        p.centreY = scalar(3);
+        p.values = {scalar(4), scalar(5), scalar(6), scalar(7)};
+        const auto fps = std::max(scalar(8, 24.0), 1.0);
+        const auto frame = std::floor(std::max(seconds, 0.0) * fps + 1.0e-6);
+        switch (p.card) {
+        case 4: // Patch: one value of the set to a frame
+            if (animated)
+                p.variant = static_cast<std::int64_t>(std::fmod(frame, 27.0));
+            break;
+        case 11: // Zone Plate: two seconds to a turn of phase
+            if (animated)
+                p.timed[0] = std::fmod(std::max(seconds, 0.0) * 0.5, 1.0);
+            break;
+        case 13: { // Moving Bar: the share of its crossing done
+            const auto duration = std::max(scalar(5, 2.0), 0.1);
+            p.timed[0] = std::fmod(std::max(seconds, 0.0) / duration, 1.0);
+            break;
+        }
+        case 14: { // Countdown
+            const auto whole = std::max(std::round(fps), 1.0);
+            const auto start = std::max(std::floor(scalar(4, 10.0)), 0.0);
+            const auto elapsed = std::floor(frame / whole);
+            const auto within = std::fmod(frame, whole);
+            p.timed[1] = std::max(start - elapsed, 0.0);
+            p.timed[2] = within;
+            p.timed[3] = (within < 0.5 && elapsed <= start) ? 1.0 : 0.0;
+            p.values[0] = whole;
+            break;
+        }
+        default:
+            break;
+        }
+        return field::encodeTestCard(p);
+    }
     case FieldOp::Combine:
         return field::encodeConstant({scalar(0), scalar(1), scalar(2), scalar(3)});
     case FieldOp::Offset: {
@@ -366,7 +413,7 @@ std::optional<std::vector<float>> buildTable(const FieldProgram& program,
     OperandReader reader(values.first(values.size() - 1U));
     field::FieldProgramBuilder builder;
     for (const auto& instruction : program.instructions) {
-        if (instruction.op > static_cast<std::uint8_t>(FieldOp::LensWarp))
+        if (instruction.op > static_cast<std::uint8_t>(FieldOp::TestCard))
             return std::nullopt;
         const auto block = encode(instruction, reader, seconds, program.compositionSeconds);
         if (!block)

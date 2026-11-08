@@ -623,6 +623,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::Cryptomatte:
     case runtime::NodeLoweringKind::Matte:
     case runtime::NodeLoweringKind::ImagePreview:
+    case runtime::NodeLoweringKind::TestCard:
         break;
     }
     return std::nullopt;

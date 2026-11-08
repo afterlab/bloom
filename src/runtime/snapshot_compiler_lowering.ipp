@@ -511,6 +511,12 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *shuffled);
             continue;
         }
+        // #587 Test Card: a canvas, one field raster and the colour space transform of its signal.
+        if (node->typeId == document::kTestCardNodeType) {
+            if (!lowerTestCard(*node, operations, indices))
+                return {};
+            continue;
+        }
         // #486 Lens Distortion: the warped image and the ST map, each its own field raster. Muting
         // is the identity warp, so it is handled here and not as a bypass of the image alone.
         if (node->typeId == document::kLensDistortionNodeType) {
@@ -1243,6 +1249,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Mask: // lowered in the main loop: a canvas Solid then a mask effect
     case NodeLoweringKind::Matte: // #383, lowered in the main loop (lowerMatteNode())
     case NodeLoweringKind::Adjustment: // lowered in the main loop: the stack below its entry
+    case NodeLoweringKind::TestCard: // #587, lowered in the main loop (lowerTestCard())
     // ADR 0026: channel nodes are lowered in the main loop (a Shuffle's image output is a
     // CompiledChannelShuffle; channel algebra compiles into its expression).
     case NodeLoweringKind::Channel:

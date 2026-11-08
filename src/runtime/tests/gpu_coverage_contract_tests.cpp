@@ -1700,6 +1700,20 @@ displayProofRunner(const bool customView) {
                  "production Chromatic Aberration lowering: red and blue read at opposite radial "
                  "offsets, full frame and ROI");
         base += 1000;
+        // #587 Test Card: every card, as the raster its lowering builds (four sub-samples, a variant
+        // and option where the card has them, the label on every other card).
+        {
+            std::vector<bloom::runtime::ImageEffectKernel> cards;
+            for (std::int64_t card = 0; card < 16; ++card)
+                cards.emplace_back(bloom::runtime::FieldRasterKernel{
+                    bloom::field_test_programs::testCardProgram(
+                        base + static_cast<std::uint64_t>(card) * 100, card, card == 3 ? 2 : 14,
+                        card == 9 ? 15 : (card == 4 ? 2 : 0), card % 2 == 0),
+                    4});
+            addField("node.bloom.test-card", std::move(cards), base + 1700,
+                     "production Test Card lowering: all sixteen cards, full frame and ROI");
+            base += 2000;
+        }
         for (const auto& [type, ops] : nodes) {
             std::vector<bloom::runtime::ImageEffectKernel> kernels;
             for (const auto op : ops) {

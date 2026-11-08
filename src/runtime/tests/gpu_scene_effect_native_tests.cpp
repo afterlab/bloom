@@ -1787,6 +1787,15 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                          bloom::runtime::FieldRasterKernel{
                              bloom::field_test_programs::chromaticAberrationProgram(id), 1U});
     id += 100;
+    // #587 Test Card: every card, the programs its lowering builds, CPU and device compared.
+    for (std::int64_t card = 0; card < 16; ++card) {
+        kernels.emplace_back("test card " + std::to_string(card),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::testCardProgram(
+                                     id, card, card == 3 ? 2 : 14, card == 9 ? 15 : 2, card % 2 == 0),
+                                 4U});
+        id += 100;
+    }
     for (const auto& [name, kernel] : kernels) {
         cache.clear();
         auto definition =

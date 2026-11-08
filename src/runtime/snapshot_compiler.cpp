@@ -23,6 +23,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -1110,6 +1111,7 @@ class CompilePass final {
 #include "snapshot_compiler_layer_time.ipp"
 #include "snapshot_compiler_lowering.ipp"
 #include "snapshot_compiler_fields.ipp"
+#include "snapshot_compiler_test_card.ipp"
 #include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_depth.ipp"
 #include "snapshot_compiler_motion.ipp"

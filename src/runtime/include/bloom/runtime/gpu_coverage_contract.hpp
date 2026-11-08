@@ -601,6 +601,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::Matte:
     // #525: a Fields node's rasters (its field outputs compile into them).
     case NodeLoweringKind::Field:
+    // #587: a Test Card's raster.
+    case NodeLoweringKind::TestCard:
         return true;
     // #490: an inspection sink lowers to no operation; its preview is its upstream operations
     // through the Viewer's GPU preview route.
@@ -649,6 +651,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::Mask: // a canvas Solid masked by a LayerMaskKernel effect
     case NodeLoweringKind::Field: // a canvas Solid replaced by a FieldRasterKernel effect
+    case NodeLoweringKind::TestCard: // #587: the same raster, then a colour space transform
     case NodeLoweringKind::Matte: // #383: a canvas Solid combined with Masks
         return "operation.CompiledImageEffect";
     case NodeLoweringKind::Channel: // channel algebra reaches pixels only through the gather

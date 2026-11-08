@@ -67,6 +67,54 @@ class Builder final {
     int registers_ = 0;
 };
 
+// A Test Card program: the TestCard instruction of `card` over the Coordinate, in a `width` x `height`
+// frame centred on the composition's centre, with numbers that make every card vary across it, as the
+// premultiplied raster its lowering builds.
+inline void addTestCard(Builder& b, const int coordinate, const std::int64_t card,
+                        const double width, const double height, const std::int64_t variant = 0,
+                        const std::int64_t option = 0, const bool label = false) {
+    double v0 = 0.0;
+    double v1 = 0.0;
+    switch (card) {
+    case 7:
+        v0 = 4.0;
+        v1 = 1.0;
+        break;
+    case 10:
+        v0 = 4.0;
+        break;
+    case 12:
+        v0 = 8.0;
+        break;
+    case 13:
+        v0 = 3.0;
+        v1 = 2.0;
+        break;
+    case 14:
+        v0 = 5.0;
+        break;
+    default:
+        break;
+    }
+    std::vector<std::int64_t> choices{card, variant, option, label ? 1 + (6 << 4) : 0};
+    if (label)
+        for (const std::int64_t glyph : {17, 5, 15, 17, 1, 3})
+            choices.push_back(glyph);
+    b.add(FieldOp::TestCard, {coordinate}, std::move(choices),
+          {width, height, 0.0, 0.0, v0, v1, 0.0, 0.0, 24.0});
+}
+
+[[nodiscard]] inline FieldProgram testCardProgram(const std::uint64_t idBase,
+                                                  const std::int64_t card,
+                                                  const std::int64_t variant = 0,
+                                                  const std::int64_t option = 0,
+                                                  const bool label = false) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    addTestCard(b, c, card, 16.0, 12.0, variant, option, label);
+    return b.finish(b.last().output, FieldResultKind::Premultiplied);
+}
+
 [[nodiscard]] inline document::PathValue curvePoints(std::initializer_list<Vec2d> points) {
     document::PathValue path;
     for (const auto point : points)
@@ -188,6 +236,8 @@ class Builder final {
                                   {-0.18, 0.04, 0.012, -0.008, 14.0}, {Vec2d{1.5, -1.0}});
         return b.finish(warped, FieldResultKind::Vector);
     }
+    case FieldOp::TestCard:
+        return testCardProgram(idBase, variant % 16, variant % 3, variant % 4, variant % 2 == 0);
     case FieldOp::Ramp: {
         const auto n = noise(c, 3, 1);
         const auto ramp = b.add(FieldOp::Ramp, {n}, {}, {0.1, 0.9});
