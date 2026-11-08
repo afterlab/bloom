@@ -619,7 +619,7 @@ from the GPU route. The node editor background draws the same image in viewport 
 card and over the dot grid.
 
 A graphically edited node (#494: Grade and Levels; #498: Curves; #501: Hue/Saturation, Exposure,
-Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain and Sharpen; #563: Codec Degrade; #486: Lens Distortion and Chromatic Aberration) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
+Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain and Sharpen; #563: Codec Degrade; #486: Lens Distortion and Chromatic Aberration; #587: Test Card) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
 its transport rows and its parameter rows, inset by the card padding at the card's width. The same
 widget is the first thing in its Properties section, so every edit works on the card without
 Properties. Its controls follow the grading rules under "Live Value Editing": each gesture is one
@@ -1135,7 +1135,7 @@ group is waiting for:
 
 | Group | Nodes |
 | --- | --- |
-| Sources | Image, Video, Audio, Composition, Solid, Checker, Linear Gradient, Radial Gradient (+ both become one Gradient) |
+| Sources | Image, Video, Audio, Composition, Solid, Checker, Linear Gradient, Radial Gradient (+ both become one Gradient), Test Card |
 | Compositing | Merge (Layer Stack), Adjustment, Layer (Layer Output), Image Mix, Set Alpha, Multiply Alpha, Alpha Association, + Image Switch, + Edge Extend |
 | Channels | Channel Copy, Pass, Select Channels, Shuffle, Separate Channels, Combine Channels, Image to Channel Set, + Image Math, + Image Map Range, + Image Clamp |
 | Keying & Mattes | Luma Key, Cryptomatte, Mask, Mask Combine, Image to Mask, Matte Blur, Matte Dilate, Matte Erode, + Channel Key, + Chroma Key, + Despill, + Matte Refine, + HSL Qualifier, + Transition/Wipe Matte |

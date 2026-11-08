@@ -83,6 +83,20 @@ over a transparent base, after which the target is cut back out. The program rea
 atlas position with the CPU's own bounds, filter and edge rules. The table, and so the prepared
 command, carries the geometry; a keyed parameter changes only data, never the program.
 
+### Test Card
+
+The Test Card source (`user-guide/test-card.md`, #587) lowers to a field raster of one instruction,
+`core::field::FieldOp::TestCard` (a Required GPU coverage feature as every operation is), over the coordinate,
+followed by one colour space transform into the working space (none for a working-space Patch). The
+instruction draws all sixteen cards from one kernel source shared by the CPU reference and the GPU: it
+receives the card's pixel size and centre as data and computes everything from the pixel's position in the
+card's own frame, so no raster is stored and nothing has a fixed resolution. A card's size is the composition's
+unless Custom; the canvas under the raster is cut or padded about the composition's centre with integer
+margins. The raster result is the premultiplied signal in the card's own colour space (signal levels outside 0
+to 1 are kept, which the PLUGE and HDR cards need). Time (the stepping Patch, the moving Zone Plate and Moving
+Bar, the Countdown) arrives as host-resolved scalars, so a still card is not time dependent. The Zone Plate and
+the Siemens Star run 16 sub-samples a pixel, the other cards 4.
+
 ### Lens Warp
 
 Lens Distortion (`image-filters.md`; Chromatic Aberration lowers to the same instruction) lowers to field rasters, and adds one instruction and two small

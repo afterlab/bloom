@@ -475,6 +475,15 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.chromatic-aberration")
         self.assertIn("amount", effect[2]["keys"])
 
+    def test_test_card_scenario_draws_a_moving_zone_plate_with_no_media(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["test-card-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        generator = scenario["layers"][0]["generator"]
+        self.assertEqual(generator[0], "bloom.test-card")
+        self.assertEqual(generator[1]["card"], "Zone Plate")
+        self.assertTrue(generator[1]["zoneMoving"])
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]

@@ -390,6 +390,20 @@ SCENARIOS["chromatic-aberration-2k"] = {
     ],
 }
 
+# #587: a Test Card source drawn as a procedural layer: the Zone Plate, the card with the most samples per
+# pixel (16), moving so every frame is new. No media is read: the card is drawn at the composition's size.
+# Written, not run.
+SCENARIOS["test-card-2k"] = {
+    "description": "A moving Zone Plate Test Card drawn procedurally at the composition's size.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Card",
+         "generator": ["bloom.test-card", {"card": "Zone Plate", "zoneMoving": True,
+                                           "label": False}]},
+    ],
+}
+
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
 # is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
 # the render's camera depth and read as data), the focus racking from the near pillars to the back;
