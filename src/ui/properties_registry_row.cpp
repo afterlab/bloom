@@ -180,6 +180,11 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #563 Codec Degrade: its table's own labels.
     if (const auto* codec = document::codecDegradeParameterSpec(schemaKey); codec != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(codec->label).c_str());
+    // #566 Auto Exposure: its table's own labels.
+    if (const auto* autoExposure = document::autoExposureParameterSpec(schemaKey);
+        autoExposure != nullptr)
+        return QCoreApplication::translate("PropertiesRow",
+                                           std::string(autoExposure->label).c_str());
     // #564 Frame Rate Hold: its table's own labels.
     if (schemaKey.starts_with(document::kFrameRateHoldNodeType))
         if (const auto* hold = document::motionParameterSpec(schemaKey); hold != nullptr)

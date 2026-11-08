@@ -1,4 +1,7 @@
 #include <QAction>
+#include <QDir>
+#include <QPixmap>
+#include <QScreen>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -24,6 +27,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/assets_editor.hpp>
@@ -1033,8 +1037,64 @@ void recipeRows() {
     }
 }
 
+// #566 Auto Exposure in Properties: a row for each value and the look-back, in plain words, each
+// label shown whole, nothing wider than the panel, at the widths of a wide, a normal and a narrow
+// panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the
+// device pixel ratio).
+void autoExposureRows() {
+    auto project = document::makeNewProject("Exposure", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    const auto exposure = addNode(session, document::kAutoExposureNodeType);
+    session.selectNode(exposure);
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                               ? QStringLiteral("dpr1")
+                               : QStringLiteral("dpr15");
+    for (const int width : {2000, 900, 420}) {
+        properties.resize(width, 900);
+        properties.show();
+        QCoreApplication::processEvents();
+        for (const auto& spec : document::autoExposureParameters()) {
+            auto* found = row(properties, std::string(spec.role).c_str());
+            expect(found != nullptr && found->isVisibleTo(&properties),
+                   "Auto Exposure presents every value");
+            if (found == nullptr)
+                continue;
+            expect(found->property("rowLabel").toString() ==
+                       QString::fromLatin1(spec.label.data(), static_cast<int>(spec.label.size())),
+                   "an Auto Exposure row is named in plain words");
+            QLabel* label = nullptr;
+            for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                if (candidate->text() == QString::fromLatin1(spec.label.data(),
+                                                             static_cast<int>(spec.label.size())) &&
+                    candidate->isVisibleTo(&properties))
+                    label = candidate;
+            expect(label != nullptr &&
+                       label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                   "an Auto Exposure row label is shown whole");
+            for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                if (field->isVisibleTo(&properties))
+                    expect(!field->paintedText().contains(QChar(0x2026)) && !field->isDisplayRounded(),
+                           "an Auto Exposure value is shown whole");
+        }
+        if (auto* scroll = properties.findChild<QScrollArea*>())
+            expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                   "Auto Exposure's rows never exceed the panel's width");
+        if (!directory.isEmpty()) {
+            QDir().mkpath(directory);
+            if (!properties.grab().save(directory + QStringLiteral("/auto-exposure-properties-") +
+                                        QString::number(width) + QLatin1Char('-') + suffix +
+                                        QStringLiteral(".png")))
+                std::cerr << "could not write the Auto Exposure Properties capture\n";
+        }
+    }
+}
+
 // #564 Frame Rate Hold in Properties: the amount and the seed appear with the irregular cadence, the
-// seed row carries Randomise seed, and every label is shown whole.
+// seed row carries Randomize seed, and every label is shown whole.
 void frameRateHoldRows() {
     auto project = document::makeNewProject("Hold", "Main", core::RationalTime::fromInteger(10));
     document::Document document(std::move(project.project));
@@ -1064,7 +1124,7 @@ void frameRateHoldRows() {
     expect(shown("amount") && shown("seed"),
            "the irregular cadence shows the amount and the seed");
     expect(seed != nullptr && seed->findChild<ui::kit::KButton*>("randomiseSeed") != nullptr,
-           "the Seed row carries Randomise seed");
+           "the Seed row carries Randomize seed");
     const std::array<std::pair<const char*, const char*>, 4> names{{{"rate", "Frame rate"},
                                                                    {"irregular", "Irregular cadence"},
                                                                    {"amount", "Drop and double"},
@@ -1085,7 +1145,7 @@ void frameRateHoldRows() {
 
 // #512 Camera Shake in Properties: the roll amount and the shutter angle are rows like Transform's
 // Rotation (a right-aligned label, the dial and the field together, the diamond in the diamond
-// column), the Seed row carries Randomise seed, every animatable value has a diamond, and the
+// column), the Seed row carries Randomize seed, every animatable value has a diamond, and the
 // offset and roll outputs read out their values in readable text.
 void cameraShakeRows() {
     auto project = document::makeNewProject("Shake", "Main", core::RationalTime::fromInteger(10));
@@ -1141,7 +1201,7 @@ void cameraShakeRows() {
     auto* randomise = seed ? seed->findChild<ui::kit::KButton*>("randomiseSeed") : nullptr;
     auto* seedField = seed ? seed->findChild<ui::kit::KValueField*>() : nullptr;
     expect(randomise != nullptr && seedField != nullptr && left(randomise) > left(seedField),
-           "Randomise seed sits on the Seed row beside its field");
+           "Randomize seed sits on the Seed row beside its field");
     // Nothing above the rows: no widget block with a lone dial or button.
     expect(properties.findChild<QWidget*>("propertiesControls") == nullptr ||
                !properties.findChild<QWidget*>("propertiesControls")->isVisible() ||
@@ -1151,7 +1211,7 @@ void cameraShakeRows() {
         const auto before = stack.size();
         randomise->click();
         QCoreApplication::processEvents();
-        expect(stack.size() == before + 1, "Randomise seed is one command");
+        expect(stack.size() == before + 1, "Randomize seed is one command");
     }
     // The shutter angle is a dial inside the motion blur's rows.
     expect(row(properties, "shutterAngle") == nullptr || !row(properties, "shutterAngle")->isVisible(),
@@ -1246,6 +1306,7 @@ int main(int argc, char** argv) try {
     discreteImageRows();
     transform2DRows();
     frameRateHoldRows();
+    autoExposureRows();
     cameraShakeRows();
     matteBlurRows();
     matteKeyRows();

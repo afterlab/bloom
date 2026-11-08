@@ -51,6 +51,7 @@
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/codec_degrade_widget.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
 #include <bloom/ui/test_card_widget.hpp>
@@ -1212,6 +1213,64 @@ void lightRaysCard() {
     capture(fixture, QStringLiteral("light-rays-boost"));
 }
 
+// #566: Auto Exposure is a plain node card: its rows and sockets paint inside the card with no label
+// cut short and no value of its own written. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the card is written
+// alone and beside its Color Correction neighbors.
+void autoExposureCard() {
+    CardFixture fixture(document::kAutoExposureNodeType);
+    expect(fixture.item != nullptr, "Auto Exposure draws a card");
+    if (fixture.item == nullptr)
+        return;
+    for (const auto& spec : document::autoExposureParameters())
+        if (spec.kind == document::AutoExposureParameterKind::Scalar) {
+            const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
+            expect(value && *value == spec.value, "a new Auto Exposure card writes no value of its own");
+        }
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "auto-exposure paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "auto-exposure"))
+        ++failures;
+    capture(fixture, QStringLiteral("auto-exposure"));
+    // Beside its neighbors: the plain Exposure and the Colorize and Hue/Saturation cards, in a row.
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    if (directory.isEmpty())
+        return;
+    std::vector<ui::node_editor::NodeItem*> neighbors{fixture.item};
+    double x = fixture.item->mapRectToScene(fixture.item->cardRect()).right() + 40.0;
+    for (const auto type : {"bloom.exposure", "bloom.colorize", "bloom.hue-saturation"}) {
+        const auto node = addNode(fixture.session, type);
+        QApplication::processEvents();
+        auto* item = ui::node_editor::nodeItemAncestor(fixture.editor->graphScene()->findNodeItem(node));
+        if (item == nullptr)
+            continue;
+        item->setPos(item->pos() + QPointF(x - item->mapRectToScene(item->cardRect()).left(),
+                                          fixture.item->mapRectToScene(fixture.item->cardRect()).top() -
+                                              item->mapRectToScene(item->cardRect()).top()));
+        x = item->mapRectToScene(item->cardRect()).right() + 40.0;
+        neighbors.push_back(item);
+    }
+    QApplication::processEvents();
+    QRectF source;
+    for (auto* item : neighbors)
+        source = source.united(item->mapRectToScene(item->cardRect()));
+    source.adjust(-24, -24, 24, 24);
+    constexpr qreal scale = 2.0;
+    QImage image((source.size() * scale).toSize(), QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(ui::kit::color(ui::kit::Color::Canvas));
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        fixture.editor->graphScene()->render(&painter, QRectF(QPointF(), source.size()), source);
+    }
+    QDir().mkpath(directory);
+    if (!image.save(directory + QStringLiteral("/auto-exposure-neighbors-card.png")))
+        std::cerr << "could not write the Auto Exposure neighbors capture\n";
+}
+
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
 // and shows its node's rows; the graph follows the values, each handle's drag is one command that
 // moves its own value alone and its row follows; a slider drag is one command too.
@@ -2331,6 +2390,7 @@ int main(int argc, char** argv) {
     filmGrainCard();
     sharpenCard();
     codecDegradeCard();
+    autoExposureCard();
     lensDistortionCard();
     chromaticAberrationCard();
     testCardCard();

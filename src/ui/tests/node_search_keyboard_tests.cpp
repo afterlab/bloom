@@ -622,7 +622,7 @@ void testSearchKeyboardAndMenus() {
                  "Light & Shadow holds the light effects");
         hasGroup("Stylize", {"Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
         hasGroup("Color Correction",
-                 {"Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation", "Invert", "Levels",
+                 {"Auto Exposure", "Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation", "Invert", "Levels",
                   "Multiply", "Offset"},
                  "Color Correction offers the image grades");
         hasGroup("Color Management", {"OCIO Color Space Transform", "OCIO File Transform"},

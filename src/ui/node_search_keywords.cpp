@@ -96,6 +96,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.offset", "Add|Arithmetic"},
     {"bloom.multiply", "Arithmetic|Gain"},
     {"bloom.colorize", "Fill|Tint|Tritone|Colorama"},
+    {"bloom.auto-exposure", "Auto White Balance|Auto Gain|Auto Levels|Camera Hunting|AE|AWB"},
     // Color Management
     {"bloom.ocio-colour-space-transform", "OCIOColorSpace|Colorspace|Color Profile Converter"},
     {"bloom.ocio-file-transform", "OCIOFileTransform|Apply Color LUT|Vectorfield"},
