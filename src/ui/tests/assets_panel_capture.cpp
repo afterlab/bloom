@@ -57,7 +57,7 @@ int run(int argc, char** argv) {
         return 1;
     // Five plates like the owner's project, at the same 2.39:1 frame, plus a still.
     QStringList firsts;
-    const QStringList plates{"SC020_SH010_image", "BG_0101", "CH_0101", "SKY_0101", "UT_0101"};
+    const QStringList plates{"Shot010_plate", "BG_0101", "CH_0101", "SKY_0101", "UT_0101"};
     for (int plate = 0; plate < plates.size(); ++plate) {
         QImage frame(512, 214, QImage::Format_RGBA8888);
         for (int index = 1; index <= 12; ++index) {
@@ -83,7 +83,7 @@ int run(int argc, char** argv) {
     // A second composition, and a folder holding the first plate.
     bloom::commands::Transaction organise("Organise", session.snapshot().revision());
     organise.emplace<bloom::commands::AddComposition>(
-        "SC020_SH010", bloom::document::CompositionFormat{}, bloom::core::RationalTime::fromInteger(16));
+        "Shot010", bloom::document::CompositionFormat{}, bloom::core::RationalTime::fromInteger(16));
     organise.emplace<bloom::commands::CreateAssetFolder>("test");
     if (!session.executeTransaction(std::move(organise)).succeeded())
         return 1;
@@ -92,7 +92,7 @@ int run(int argc, char** argv) {
         return 1;
     bloom::document::AssetId first;
     for (const auto& asset : project.assets())
-        if (asset.name.starts_with("SC020"))
+        if (asset.name.starts_with("Shot010"))
             first = asset.id;
     bloom::commands::Transaction move("Move", session.snapshot().revision());
     move.emplace<bloom::commands::MoveAssets>(std::vector{first}, project.assetFolders().front().id,
@@ -154,7 +154,7 @@ int run(int argc, char** argv) {
     capture("sequence");
     if (folder != nullptr)
         folder->setExpanded(true);
-    tree->setCurrentItem(named(*tree, QStringLiteral("SC020_SH010_image")));
+    tree->setCurrentItem(named(*tree, QStringLiteral("Shot010_plate")));
     capture("nested");
     tree->clearSelection();
     if (auto* toggle = editor->window()->findChild<QWidget*>(QStringLiteral("assetsSearchButton")))

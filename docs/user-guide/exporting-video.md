@@ -12,7 +12,7 @@ working. An agent connected over [MCP](mcp.md) brings the panel forward the same
 calls `export.reveal`; its queue edits never reveal the panel on their own.
 
 The panel is laid out like a compositor's render queue. At the top, **Current Render** says in
-one line what renders now ("Rendering SC020 · frame 404 of 2156 · 0:28 elapsed · about 2 min
+one line what renders now ("Rendering Shot010 · frame 404 of 2156 · 0:28 elapsed · about 2 min
 left", or **Idle**); open it with its caret for a progress bar. Below it is the render list, with
 the columns **Render** (a check box: include the job in **Start All**), **#** (queue order),
 **Composition**, **Status**, **Started** and **Render Time**. While a job renders, a thin bar sits
@@ -128,7 +128,7 @@ BT.709, P3 and Rec.2100 displays with their own code points.
 
 **Output To** is relative to the project folder (moving a project with its renders keeps it
 working) or an absolute file. The default, `Exports/{name}.<ext>`, follows the composition's name;
-the panel always shows the name it resolves to (`Exports/SC020.mov`), never the token. A script may
+the panel always shows the name it resolves to (`Exports/Shot010.mov`), never the token. A script may
 also use `{job}` (job name), `{format}` (`mp4`, `prores`, `exr`, ...) and `{date}` (frozen when the
 job starts), and a sequence's naming pattern `<base>`, `<ext>` and exactly one `####` or `{frame}`;
 **Start number** changes file names, not which frames render. The Output Module line's summary shows
@@ -144,7 +144,7 @@ estimate does not fit the free space, Start is blocked.
 
 **If a file is there** is **Ask first** (the default), **Replace** or **Don't render**. When the
 file exists under Ask first, the job reads **Waiting for your OK**, and **Start** or **Start All**
-asks once: "Replace SC020.mov?" with **Replace**, **Choose another name** (the file chooser) and
+asks once: "Replace Shot010.mov?" with **Replace**, **Choose another name** (the file chooser) and
 **Cancel**. Several files are asked about in one question. The confirmation covers exactly the files that were checked; if they change before the
 export publishes, Bloom refuses to replace them, and a file that appears after **Start**, such as a
 frame another program writes, is not replaced either. **Don't render** holds for every file the

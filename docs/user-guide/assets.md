@@ -75,7 +75,7 @@ it searches folders you dropped and counts the frames of each image sequence ("F
 the bar fills: a sequence shows "Reading frame 120 of 522" while it notes each frame's size and
 time (it reads only the frame you chose; every other frame is read the first time it is shown,
 previewed or exported, so a sequence on network storage is ready at once), and its name with "· sequence"
-("Importing SC020_SH070_image · sequence"). An image sequence is one item however many of its
+("Importing Shot010_plate · sequence"). An image sequence is one item however many of its
 frames you chose, but every frame counts towards the bar, so a long sequence moves it steadily.
 When you import several items the heading also says which one it is on ("Importing 2 of 5: …").
 A single large file, such as a big still or a video, is read in one go, so while it is read the bar

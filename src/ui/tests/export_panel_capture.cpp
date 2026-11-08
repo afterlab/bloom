@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
                             ? QStringLiteral("dpr15")
                             : QStringLiteral("dpr1");
 
-    auto seed = document::makeNewProject("Export Capture", "SC020", core::RationalTime::fromInteger(90));
+    auto seed = document::makeNewProject("Export Capture", "Shot010", core::RationalTime::fromInteger(90));
     document::Document doc(std::move(seed.project));
     commands::CommandStack stack(doc);
     CompositionSession session(doc, stack, seed.initialCompositionId);
@@ -161,9 +161,9 @@ int main(int argc, char** argv) {
 
     // Three queued jobs; the first open on two outputs.
     const auto queued = [&](host::ExportQueueSnapshot& s) {
-        s.jobs = {shotJob(1, "SC020", composition, {proresOutput(11, "SC020"), exrOutput(12, "SC020")}),
-                  shotJob(2, "SC030", composition, {proresOutput(21, "SC030")}),
-                  shotJob(3, "SC040", composition, {proresOutput(31, "SC040")})};
+        s.jobs = {shotJob(1, "Shot010", composition, {proresOutput(11, "Shot010"), exrOutput(12, "Shot010")}),
+                  shotJob(2, "Shot020", composition, {proresOutput(21, "Shot020")}),
+                  shotJob(3, "Shot030", composition, {proresOutput(31, "Shot030")})};
         s.activeJob = std::nullopt;
     };
     publish(queued);
@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
         auto& output = s.jobs[1].outputs[0];
         output.preflight.push_back({host::ExportPreflightCode::DestinationExists,
                                     host::ExportPreflightTarget::Destination,
-                                    host::ExportPreflightSeverity::NeedsConfirmation, "SC030.mov already exists."});
+                                    host::ExportPreflightSeverity::NeedsConfirmation, "Shot020.mov already exists."});
         refuse(s.jobs[1].commands, host::ExportCommand::Start, host::ExportUnavailableCode::NeedsReplaceConfirmation,
                "Replace existing files?");
     });

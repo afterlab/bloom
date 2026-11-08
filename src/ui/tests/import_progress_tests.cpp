@@ -353,9 +353,9 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
     QDir(directory.path()).mkpath("long");
     for (int frame = 1; frame <= frames; ++frame)
         writePng(directory.filePath(
-                     QStringLiteral("long/SC020_SH070_image_%1.png").arg(frame, 4, 10, QChar('0'))),
+                     QStringLiteral("long/Shot010_plate_%1.png").arg(frame, 4, 10, QChar('0'))),
                  QColor(frame * 5, 40, 90));
-    const auto first = directory.filePath("long/SC020_SH070_image_0001.png");
+    const auto first = directory.filePath("long/Shot010_plate_0001.png");
 
     // Discovery: the member count is not known yet.
     harness.holdWhen([](const commands::ImportProgress& state) {
@@ -367,7 +367,7 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
     auto* dialog = harness.visibleDialog();
     require(waitUntil([&] { return dialog->headingText() == QStringLiteral("Finding frames…"); }),
             "discovery says it is finding frames");
-    require(dialog->detailText() == QStringLiteral("SC020_SH070_image · 25 found"),
+    require(dialog->detailText() == QStringLiteral("Shot010_plate · 25 found"),
             "discovery names the sequence and counts what it found");
     require(dialog->progressBar()->busy() && dialog->progressBar()->sweeping(),
             "the bar is busy and animating while the total is unknown");
@@ -394,7 +394,7 @@ void longSequenceMovesTheBar(const QTemporaryDir& directory) {
     require(
         waitUntil([&] { return dialog->detailText() == QStringLiteral("Reading frame 21 of 40"); }),
         "the dialog says which frame it is reading");
-    require(dialog->headingText() == QStringLiteral("Importing SC020_SH070_image · sequence"),
+    require(dialog->headingText() == QStringLiteral("Importing Shot010_plate · sequence"),
             "a single item is named without a count");
     require(!dialog->progressBar()->busy() && dialog->progressBar()->completed() == 20 &&
                 dialog->progressBar()->total() == frames,

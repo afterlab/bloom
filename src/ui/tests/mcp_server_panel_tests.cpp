@@ -502,15 +502,15 @@ void testProjectActivityLines() {
         entry.summary = std::string(m::toolName(tool)) + " " + summary;
         return ui::mcppanel::activityLine(entry);
     };
-    expect(line(m::McpTool::ProjectSave, "SC020").endsWith(QStringLiteral("claude-code  saved 'SC020'")),
-           "project.save reads \"saved 'SC020'\"");
-    expect(line(m::McpTool::ProjectSaveAs, "SC020").contains(QStringLiteral("saved 'SC020'")),
+    expect(line(m::McpTool::ProjectSave, "Shot010").endsWith(QStringLiteral("claude-code  saved 'Shot010'")),
+           "project.save reads \"saved 'Shot010'\"");
+    expect(line(m::McpTool::ProjectSaveAs, "Shot010").contains(QStringLiteral("saved 'Shot010'")),
            "project.save-as reads as saved");
     expect(line(m::McpTool::ProjectOpen, "My Reel").contains(QStringLiteral("opened 'My Reel'")),
            "project.open reads as opened, with spaces in the name");
     expect(line(m::McpTool::ProjectNew, "Untitled").contains(QStringLiteral("created 'Untitled'")),
            "project.new reads as created");
-    expect(line(m::McpTool::ProjectClose, "SC020").contains(QStringLiteral("closed 'SC020'")),
+    expect(line(m::McpTool::ProjectClose, "Shot010").contains(QStringLiteral("closed 'Shot010'")),
            "project.close reads as closed");
     m::McpActivityEntry refused;
     refused.kind = m::McpActivityKind::ToolCall;

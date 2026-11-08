@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
         // Status bar: idle, then busy (an export notice and a RAM preview run), then narrow.
         settle();
         save(status->grab(), QStringLiteral("status-idle"));
-        status->setPersistentMessage(QStringLiteral("Exporting SC020_SH010 · frame 120 of 386"));
+        status->setPersistentMessage(QStringLiteral("Exporting Shot010 · frame 120 of 386"));
         fixture.preview->beginRamPreviewProgress(386);
         fixture.preview->setRamPreviewProgress(120, 120, 120);
         settle();

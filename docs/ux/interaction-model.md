@@ -344,9 +344,9 @@ phases:
 
 - **Finding**, while chosen folders are searched and each sequence's members are listed (no file is
   opened, and the amount of work is not known yet): `Finding frames…` with
-  `SC020_SH070_image · 522 found`, or `Finding files…` with `Looking in <folder> · 12 found`, over a
+  `Shot010_plate · 522 found`, or `Finding files…` with `Looking in <folder> · 12 found`, over a
   busy bar.
-- **Reading**, against a known total: the heading names the item (`Importing SC020_SH070_image ·
+- **Reading**, against a known total: the heading names the item (`Importing Shot010_plate ·
   sequence`, or `Importing plate.png`) and adds `2 of 5:` only when several items were chosen; the
   detail reads `Reading frame 120 of 522` for a sequence or `Reading file` otherwise. The bar fills by
   work, one unit per sequence frame (each is stamped with its size and time; only the frame chosen

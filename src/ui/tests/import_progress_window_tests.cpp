@@ -211,9 +211,9 @@ int run(int argc, char** argv) {
     constexpr int shotFrames = 60;
     for (int frame = 1; frame <= shotFrames; ++frame)
         writePng(
-            file(QStringLiteral("Shot/SC020_SH070_image_%1.png").arg(frame, 4, 10, QChar('0'))),
+            file(QStringLiteral("Shot/Shot010_plate_%1.png").arg(frame, 4, 10, QChar('0'))),
             QColor(30 + frame * 3, 70, 120));
-    const auto shot = file("Shot/SC020_SH070_image_0001.png");
+    const auto shot = file("Shot/Shot010_plate_0001.png");
     holdWhen([](const commands::ImportProgress& state) {
         return state.phase == Phase::Finding && state.findingFrames && state.found == 37;
     });

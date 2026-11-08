@@ -55,7 +55,7 @@ struct StatusText final {
 [[nodiscard]] QString remainingText(const host::ExportJobProgress& progress);
 // "about 40 s left", "about 2 min left", "about 1 h 5 min left".
 [[nodiscard]] QString leftText(std::chrono::milliseconds remaining);
-// The Current Render strip's line: "Rendering SC020 · frame 404 of 2156 · 0:28 elapsed · about 2
+// The Current Render strip's line: "Rendering Shot010 · frame 404 of 2156 · 0:28 elapsed · about 2
 // min left", or "Idle" when nothing runs (`job` null or not active).
 [[nodiscard]] QString currentRenderText(const host::ExportJobView* job);
 // The Started column: the time today, the date and time before today.

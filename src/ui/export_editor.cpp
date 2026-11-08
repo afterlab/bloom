@@ -81,7 +81,7 @@ constexpr auto kStripKey = "export/current-render/expanded";
 }
 
 // Where an output saves, as the artist reads it: the folder as it was chosen and the file name as
-// it resolves now ("Exports/SC020.mov"), never a name token.
+// it resolves now ("Exports/Shot010.mov"), never a name token.
 [[nodiscard]] QString destinationShown(const host::ExportOutputView& output) {
     const auto chosen = exportpanel::detail::displayPath(output.record.destination);
     if (chosen.isEmpty())

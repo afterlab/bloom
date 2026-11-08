@@ -50,8 +50,8 @@ requests it has in flight and the last tool it used. Activity lists, newest last
 client, the tool and its outcome. Repeated identical refusals fold into one line with a count. When
 old lines were dropped, the list starts with "Earlier activity was trimmed."
 
-Project calls read as plain lines, for example "claude-code saved 'SC020'", "opened 'SC020'",
-"created 'Untitled'" and "closed 'SC020'". When an agent's edit leaves a composition unable to
+Project calls read as plain lines, for example "claude-code saved 'Shot010'", "opened 'Shot010'",
+"created 'Untitled'" and "closed 'Shot010'". When an agent's edit leaves a composition unable to
 render, the list adds a red line naming the client, the tool, the composition and what is wrong.
 
 While no project is open, the panel says so under Connected clients.

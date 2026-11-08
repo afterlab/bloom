@@ -12,8 +12,8 @@
 namespace bloom::ui {
 namespace {
 
-// A sequence named by its first member, without the frame number: "SC020_SH070_image_0001.png"
-// reads "SC020_SH070_image" (the separator before the number goes with it).
+// A sequence named by its first member, without the frame number: "Shot010_plate_0001.png"
+// reads "Shot010_plate" (the separator before the number goes with it).
 QString sequenceName(const QString& file) {
     const auto dot = file.lastIndexOf(QLatin1Char('.'));
     const QString stem = dot > 0 ? file.left(dot) : file;

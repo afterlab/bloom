@@ -5,7 +5,7 @@
 //
 // - the panel header: the editor picker, Add composition (Secondary); on the right Start All (the
 //   one Primary while a job is ready), Stop All while something renders, and the maximize button;
-// - the Current Render strip, folded to one line ("Rendering SC020 · frame 404 of 2156 · 0:28
+// - the Current Render strip, folded to one line ("Rendering Shot010 · frame 404 of 2156 · 0:28
 //   elapsed · about 2 min left", or "Idle"), opened to add a progress bar;
 // - the render list: the Assets row system with real column headers (Render, #, Composition,
 //   Status, Started, Render Time). A job opens to its "Render Settings" line and one "Output

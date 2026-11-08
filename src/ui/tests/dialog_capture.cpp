@@ -431,7 +431,7 @@ void importDialogs(test::WindowFixture& fixture) {
     state.total = 5;
     state.workDone = 140;
     state.workTotal = 600;
-    state.current = QStringLiteral("SC020_SH070_image_0001.png");
+    state.current = QStringLiteral("Shot010_plate_0001.png");
     state.frames = 522;
     state.framesRead = 119;
     dialog.showProgress(state);
@@ -441,7 +441,7 @@ void importDialogs(test::WindowFixture& fixture) {
     report.imported = 10;
     report.skipped = {
         {QStringLiteral("broken.png"), QStringLiteral("The file is not a readable image.")},
-        {QStringLiteral("SC020_SH070_reference_plate_with_a_very_long_name_v012.exr"),
+        {QStringLiteral("Shot010_reference_plate_with_a_very_long_name_v012.exr"),
          QStringLiteral("Already in the project")}};
     report.cancelled = true;
     report.notImported = 9;

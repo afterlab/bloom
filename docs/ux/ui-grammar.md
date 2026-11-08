@@ -193,7 +193,7 @@ its reason. The empty state's own Primary is **Add composition** (`exportAddActi
 "Nothing to render yet." and "Or drag compositions here from Assets."
 
 **Current Render** (`exportCurrentRender`) is a strip on the Surface fill above the list, folded by
-default (a per-user setting): caret, the UiSmallStrong title and one Muted line, "Rendering SC020 ·
+default (a per-user setting): caret, the UiSmallStrong title and one Muted line, "Rendering Shot010 ·
 frame 404 of 2156 · 0:28 elapsed · about 2 min left" or "Idle" (with the platform's reason where
 export cannot run). Opened, it adds a `KProgressBar` no wider than `Size::DialogWideWidth`.
 
@@ -237,7 +237,7 @@ keyboard focus; the ▾ quick picks are plate-less carets.
 **Render Settings** (`exportRenderSettingsDialog`) and **Output Module**
 (`exportOutputModuleDialog`) are `KDialog`s of `Width::Wide` built from `KSection` groups holding
 two `KForm` columns side by side, as a compositor's render queue groups them; fields keep their
-content width. Render Settings has one group, `Composition “SC020”`: Range (Work area, Whole
+content width. Render Settings has one group, `Composition “Shot010”`: Range (Work area, Whole
 composition, Custom, One frame) on the left; Start, End (frame `KValueField`s with their timecode
 for Custom and One frame, readouts otherwise) and Duration on the right. Output Module has the
 preset's own group (`“ProRes 422 HQ”`: Format, If a file is there | Post-render, Cached frames),
@@ -253,7 +253,7 @@ catalogue refuses is reported under Format (`exportSavePresetError`).
 
 When an output's file exists under Ask first, the job reads **Waiting for your OK**, and Start
 (in the ⋯ menu) or Start All asks once with `kit::confirm` (`exportReplaceConfirm`): "Replace
-SC020.mov?" with Replace (Danger), Choose another name and Cancel (the default). The ⋯ menu holds
+Shot010.mov?" with Replace (Danger), Choose another name and Cancel (the default). The ⋯ menu holds
 the verbs that fit the state (Start; Pause and Stop; Resume and Stop; Stop; Render again),
 **Details…**, Duplicate, Remove, Move up, Move down, Copy as bloom-cli command and Copy as Python.
 **Details…** (`exportJobDetailsDialog`) holds the result sentence, the plain verification lines, a
@@ -1531,8 +1531,8 @@ narrower down to the widest page's minimum. Changes apply on OK or Apply, never 
 [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)) shows one application-modal
 `kit::KTaskDialog` titled `Import`, at least `DialogTextWidth` wide, built only from kit parts with `Spacing::M`
 margins and `Spacing::S` between rows. While importing it shows an elided `KLabel` heading (`Finding frames…`, `Finding files…`,
-`Importing SC020_SH070_image · sequence`, `Importing 2 of 5: plate.png`, `Cancelling…`), an elided
-`UiSmall` `KLabel` detail in `Muted` ink (`SC020_SH070_image · 522 found`, `Reading frame 120 of
+`Importing Shot010_plate · sequence`, `Importing 2 of 5: plate.png`, `Cancelling…`), an elided
+`UiSmall` `KLabel` detail in `Muted` ink (`Shot010_plate · 522 found`, `Reading frame 120 of
 522`, `Reading file`), a full-width `KProgressBar` (busy while finding, then filled by work units;
 busy again while a single-unit file is read with nothing finished yet, or for longer than
 `ImportProgressDialog::kItemBusyAfter`, 400 ms),

@@ -1,7 +1,7 @@
 #pragma once
 
 // Render Settings, opened from a job's "Render Settings" link (a compositor's render settings
-// dialog, with only what an export job carries: its range). One group, `Composition “SC020”`: the
+// dialog, with only what an export job carries: its range). One group, `Composition “Shot010”`: the
 // Range on the left, and on the right where it starts and ends (frame fields for a custom range or
 // one frame, the timecode beside them) and how long it is. OK writes the range as one undoable
 // edit; Cancel changes nothing.

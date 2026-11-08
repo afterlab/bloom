@@ -73,8 +73,8 @@ QString toolErrorText(const mcp::McpToolErrorCode code) {
     return {};
 }
 
-// A successful project call as a plain line: "saved 'SC020'". The service records the project's
-// name after the tool name in the entry's summary ("project.save SC020").
+// A successful project call as a plain line: "saved 'Shot010'". The service records the project's
+// name after the tool name in the entry's summary ("project.save Shot010").
 QString projectLine(const mcp::McpActivityEntry& entry) {
     using T = mcp::McpTool;
     if (!entry.tool || !entry.outcome || *entry.outcome != mcp::McpCallOutcome::Succeeded)

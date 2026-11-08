@@ -180,7 +180,7 @@ void testEveryVariantHasADistinctRecipe(Expectations& expectations) {
 void testLinkIsAccentTextWithoutAPlate(Expectations& expectations) {
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
-    auto& link = *new kit::KButton(QStringLiteral("Exports/a-very-long-folder/SC020.mov"), &host);
+    auto& link = *new kit::KButton(QStringLiteral("Exports/a-very-long-folder/Shot010.mov"), &host);
     link.setVariant(kit::KButton::Variant::Link);
     layout->addWidget(&link);
     expectations.expect(!link.fillForState(kit::State::Normal).isValid() &&
@@ -200,7 +200,7 @@ void testLinkIsAccentTextWithoutAPlate(Expectations& expectations) {
     expectations.expect(kit::buttonColors(kit::ButtonKind::Link, kit::State::Normal, true).border ==
                             kit::color(kit::Color::Accent),
                         "keyboard focus still draws the one focus border on a link");
-    kit::KButton plain(QStringLiteral("Exports/a-very-long-folder/SC020.mov"));
+    kit::KButton plain(QStringLiteral("Exports/a-very-long-folder/Shot010.mov"));
     expectations.expect(link.sizeHint().width() < plain.sizeHint().width(),
                         "a link is as wide as its text, without a button's side padding");
     expectations.expect(link.sizeHint().height() == kit::px(kit::Size::Control),

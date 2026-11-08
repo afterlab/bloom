@@ -83,7 +83,7 @@ struct Fixture {
     Fixture() {
         const auto folder = document::AssetFolderId::fromRaw(1);
         expect(seed.project.addAssetFolder({folder, "test", {}}), "folder fixture");
-        expect(seed.project.addAsset(sequenceAsset(1, "SC020_SH010_image_0001", folder)) &&
+        expect(seed.project.addAsset(sequenceAsset(1, "Shot010_plate_0001", folder)) &&
                    seed.project.addAsset(sequenceAsset(2, "BG_0101")) &&
                    seed.project.addAsset(sequenceAsset(3, "Shot_0101")),
                "sequence fixtures");
@@ -238,7 +238,7 @@ void monochromeGlyphsAndNesting() {
     editor.show();
     auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
     auto* folder = named(*tree, "test");
-    auto* child = named(*tree, "SC020_SH010_image_0001");
+    auto* child = named(*tree, "Shot010_plate_0001");
     auto* root = named(*tree, "BG_0101");
     auto* composition = named(*tree, "Main");
     expect(folder && child && root && composition, "fixture rows");
@@ -373,7 +373,7 @@ void collapsibleSearch() {
            "Ctrl+F opens the search row and focuses it");
     QTest::keyClicks(field, "Shot");
     settle();
-    expect(!count->isHidden() && count->text() == "1 of 4", "the match count names the matches");
+    expect(!count->isHidden() && count->text() == "2 of 4", "the match count names the matches");
     tree->setFocus();
     settle();
     expect(!bar->isHidden() && !count->isHidden(),

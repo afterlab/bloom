@@ -4,7 +4,7 @@
 // job:
 //
 //   ▸ Render Settings:  ▾ Work area · 0–239
-//   ▸ Output Module:    ▾ ProRes 422 HQ      + −   Output To: ▾ Exports/SC020.mov
+//   ▸ Output Module:    ▾ ProRes 422 HQ      + −   Output To: ▾ Exports/Shot010.mov
 //
 // Each value is a kit Link button that opens its dialog (Render Settings, Output Module) or the
 // file chooser (Output To); each ▾ is a short menu of quick picks. A line is one list row; on a
@@ -126,7 +126,7 @@ struct OutputLineState final {
     QStringList recentFolders;
 };
 
-// "Output Module:  ▾ ProRes 422 HQ   + −   Output To: ▾ Exports/SC020.mov".
+// "Output Module:  ▾ ProRes 422 HQ   + −   Output To: ▾ Exports/Shot010.mov".
 class OutputModuleLine final : public QWidget {
     Q_OBJECT
   public:

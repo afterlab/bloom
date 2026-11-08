@@ -283,9 +283,9 @@ void testBinding() {
     expect(!host.isBusy() && host.isDirty(), "refusals leave the project untouched");
 
     // ---- Save As, Save, and the destination rule
-    const auto shot = fs::path(projects.path().toStdString()) / "SC020.bloom";
+    const auto shot = fs::path(projects.path().toStdString()) / "Shot010.bloom";
     result = runProject(binding, request(mcp::McpProjectRequestKind::SaveAs, shot));
-    expect(result.ok() && result.projectName == "SC020" && result.path == shot &&
+    expect(result.ok() && result.projectName == "Shot010" && result.path == shot &&
                fs::exists(shot),
            "SaveAs writes the file and names the project");
     expect(!host.isDirty(), "the project is clean after Save As");
@@ -593,7 +593,7 @@ void testBinding() {
             expect(host.exportQueue()->activeJobCount() > 0, "the refusals left the export running");
             result = runProject(binding,
                                 request(mcp::McpProjectRequestKind::Open, shot, true, true));
-            expect(result.ok() && result.projectName == "SC020" &&
+            expect(result.ok() && result.projectName == "Shot010" &&
                        (host.exportQueue() == nullptr || host.exportQueue()->activeJobCount() == 0),
                    "stopJobs stops the export through the queue, then Open goes on");
         }
@@ -628,7 +628,7 @@ void testBinding() {
                    !host.isDirty(),
                "New with discardChanges opens an untitled project");
         result = runProject(binding, request(mcp::McpProjectRequestKind::Open, shot));
-        expect(result.ok() && result.projectName == "SC020", "Open on a clean project");
+        expect(result.ok() && result.projectName == "Shot010", "Open on a clean project");
         result = runProject(binding, request(mcp::McpProjectRequestKind::Close));
         expect(result.ok() && result.path.empty(), "Close on a clean project");
         // No composition now: the seams answer typed refusals, not crashes.
