@@ -155,8 +155,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
-    // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens Distortion and Chromatic Aberration.
-    expectations.expect(registry.definitions().size() == 192,
+    // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
+    // Distortion and Chromatic Aberration; #587 adds Test Card.
+    expectations.expect(registry.definitions().size() == 193,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -303,7 +304,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         "#504: Colorize has its constant choices and an animatable socket per value");
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
-    expectCategory({"bloom.camera-shake", "bloom.lens-distortion", "bloom.chromatic-aberration"}, document::NodeCategory::Transform);
+    // Zoom Blur; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens Distortion and Chromatic
+    // Aberration; #587 adds Test Card.
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
                     "bloom.sharpen", "bloom.codec-degrade"},
@@ -387,6 +389,22 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             sharpenUnmasked->outputs.size() == 1 &&
             sharpenUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Sharpen has an animatable socket per value");
+    // #587 Test Card: no input and one Image output; every parameter a constant with no socket, in
+    // the table's order.
+    const auto* testCard = registry.find("bloom.test-card", 1);
+    expectations.expect(
+        testCard != nullptr && testCard->inputs.empty() && testCard->outputs.size() == 1 &&
+            testCard->outputs[0].name == "image" &&
+            testCard->outputs[0].valueKind == runtime::SocketValueKind::Image &&
+            testCard->lowering == document::NodeLoweringKind::TestCard &&
+            testCard->parameters.size() == document::testCardParameters().size() &&
+            testCard->parameters[0].role == "card" && !testCard->parameters[0].supportsAnimation &&
+            testCard->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            testCard->parameters[1].role == "size" &&
+            testCard->parameters[1].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            std::ranges::none_of(testCard->parameters,
+                                 [](const auto& p) { return p.supportsAnimation; }),
+        "#587: Test Card is a source with an Image output and constant parameters only");
     // #486 Lens Distortion: an Image in; the warped Image and its ST map out; the mode with no
     // socket, then a socket for the four coefficients and the centre, in parameter order. It takes
     // no effect mask.

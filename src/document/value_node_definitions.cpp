@@ -836,6 +836,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::Matte:
     case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::Adjustment:
+    case NodeLoweringKind::TestCard:
     case NodeLoweringKind::Field:
     case NodeLoweringKind::ValueFieldSample:
         break;

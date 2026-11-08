@@ -1,6 +1,7 @@
 #include "zip_container_test_support.hpp"
 
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -180,7 +181,7 @@ void blurNodeReopen() {
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
           "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade",
-          "bloom.lens-distortion", "bloom.chromatic-aberration"}) {
+          "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.test-card"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -309,6 +310,22 @@ void blurNodeReopen() {
                     ? document::ParameterValue{0.0625}
                 : parameter.schemaKey.starts_with("bloom.lens-distortion.")
                     ? document::ParameterValue{0.125}
+                // #587 Test Card: moved choices, whole numbers, scalars and switches.
+                : parameter.schemaKey.starts_with("bloom.test-card.")
+                    ? (document::testCardParameterSpec(parameter.schemaKey)->kind ==
+                               document::TestCardParameterKind::Boolean
+                           ? document::ParameterValue{
+                                 document::testCardParameterSpec(parameter.schemaKey)->value == 0.0}
+                       : document::testCardParameterSpec(parameter.schemaKey)->kind ==
+                               document::TestCardParameterKind::Scalar
+                           ? document::ParameterValue{
+                                 document::testCardParameterSpec(parameter.schemaKey)->value + 1.0}
+                       : document::testCardParameterSpec(parameter.schemaKey)->kind ==
+                               document::TestCardParameterKind::Choice
+                           ? document::ParameterValue{static_cast<std::int64_t>(
+                                 document::testCardParameterSpec(parameter.schemaKey)->maximum)}
+                           : document::ParameterValue{static_cast<std::int64_t>(
+                                 document::testCardParameterSpec(parameter.schemaKey)->value + 1.0)})
                 // #486 Sharpen: moved values.
                 : parameter.schemaKey.starts_with("bloom.sharpen.")
                     ? document::ParameterValue{0.625}

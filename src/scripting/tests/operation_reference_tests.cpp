@@ -244,6 +244,7 @@ void everyNodeGroupIsNamed() {
            "keying-mattes");
     pinned({"bloom.vignette", "bloom.film-grain", "bloom.codec-degrade"}, "stylize");
     pinned({"bloom.lens-distortion", "bloom.chromatic-aberration"}, "distort");
+    pinned({"bloom.test-card"}, "sources");
     pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");
     pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},
            "light-shadow");

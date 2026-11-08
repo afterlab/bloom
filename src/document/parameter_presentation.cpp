@@ -6,6 +6,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
@@ -567,6 +568,26 @@ std::optional<ParameterPresentation> chromaticAberrationPresentation(const std::
     return std::nullopt;
 }
 
+// #587 Test Card: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> testCardPresentation(const std::string_view schemaKey) {
+    const auto* spec = testCardParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    switch (spec->kind) {
+    case TestCardParameterKind::Choice:
+        return choice();
+    case TestCardParameterKind::Boolean:
+        return std::nullopt;
+    case TestCardParameterKind::Whole:
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                     spec->unit);
+    case TestCardParameterKind::Scalar:
+        return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                      spec->step, spec->decimals, spec->unit);
+    }
+    return std::nullopt;
+}
+
 // #563 Codec Degrade: one presentation per parameter, from its table.
 std::optional<ParameterPresentation> codecDegradePresentation(const std::string_view schemaKey) {
     const auto* spec = codecDegradeParameterSpec(schemaKey);
@@ -599,6 +620,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *lens;
     if (auto aberration = chromaticAberrationPresentation(schemaKey))
         return *aberration;
+    if (auto card = testCardPresentation(schemaKey))
+        return *card;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
     for (const auto& entry : table())

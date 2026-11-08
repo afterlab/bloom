@@ -377,6 +377,9 @@ enum class NodeLoweringKind {
     Field,
     // #525 Field Sample: a field read at one position, a value (runtime::CompiledValueFieldSample).
     ValueFieldSample,
+    // #587 Test Card: a source drawn procedurally by one field raster over a canvas the size of the
+    // composition (or a custom size), then the node's signal colour space into the working space.
+    TestCard,
     // #383: Mask Combine and Image to Mask (matte_nodes.hpp), lowered to image combines.
     Matte,
 };
@@ -426,6 +429,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::Adjustment:
     case NodeLoweringKind::Matte:
+    case NodeLoweringKind::TestCard:
         return false;
     }
     return false;

@@ -9,6 +9,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -204,6 +205,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         Options options;
         for (std::size_t index = 0; index < lens->choices.size(); ++index)
             options.push_back({std::string(lens->choices[index]),
+                               static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #587 Test Card.
+    if (const auto* card = testCardParameterSpec(schemaKey);
+        card != nullptr && card->kind == TestCardParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < card->choices.size(); ++index)
+            options.push_back({std::string(card->choices[index]),
                                static_cast<std::int64_t>(index)});
         return options;
     }

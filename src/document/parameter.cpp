@@ -7,6 +7,7 @@
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
+#include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -413,6 +414,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (isChromaticAberrationScalarSchemaKey(schemaKey) ||
         schemaKey == kChromaticAberrationCenterSchemaKey)
         return isChromaticAberrationParameterValueValid(schemaKey, constant.value);
+    // #587 Test Card: every parameter within its document domain.
+    if (testCardParameterSpec(schemaKey) != nullptr)
+        return isTestCardParameterValueValid(schemaKey, constant.value);
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeParameterValueValid(schemaKey, constant.value);
@@ -604,6 +608,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isFilmGrainConstantSchemaKey(schemaKey) ||
          bloom::document::isCodecDegradeConstantSchemaKey(schemaKey) ||
          bloom::document::isLensDistortionConstantSchemaKey(schemaKey) ||
+         bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))

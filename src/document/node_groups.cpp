@@ -10,10 +10,10 @@ namespace {
 // compositor would look for it; ask rather than invent a group.
 //
 // Planned: Gradient (one node replacing Linear Gradient and Radial Gradient).
-constexpr std::array<std::string_view, 8> kSources{
+constexpr std::array<std::string_view, 9> kSources{
     "bloom.image-source",       "bloom.video-source",   "bloom.audio-source",
     "bloom.composition-source", "bloom.solid-source",   "bloom.checker-source",
-    "bloom.linear-gradient",    "bloom.radial-gradient"};
+    "bloom.linear-gradient",    "bloom.radial-gradient", "bloom.test-card"};
 // Planned: Image Switch, Edge Extend.
 constexpr std::array<std::string_view, 7> kCompositing{
     "bloom.layer-stack", "bloom.adjustment",     "bloom.layer-output",     "bloom.image-mix",
