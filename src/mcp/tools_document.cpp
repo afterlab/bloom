@@ -222,6 +222,47 @@ document::GradientValue gradientValue(yyjson_val* item) {
     return gradient;
 }
 
+// #574: {"name": "Shot 2"} (a layer) or {"layer": "Shot 2", "role": "opacity"} (a parameter), with
+// an optional "composition". An object with any other member is a path or a gradient.
+bool isReferenceObject(yyjson_val* item) {
+    if (!yyjson_is_obj(item) || yyjson_obj_size(item) == 0)
+        return false;
+    yyjson_obj_iter iterator = yyjson_obj_iter_with(item);
+    while (auto* key = yyjson_obj_iter_next(&iterator)) {
+        const std::string_view name(yyjson_get_str(key), yyjson_get_len(key));
+        if (name != "name" && name != "layer" && name != "role" && name != "composition")
+            return false;
+    }
+    return true;
+}
+
+scripting::ObjectReference referenceValue(yyjson_val* item) {
+    scripting::ObjectReference reference;
+    const auto text = [](yyjson_val* field, const char* what) {
+        if (!yyjson_is_str(field))
+            throw InvalidInput(std::string("A reference's ") + what + " is text");
+        return string(field, 1024);
+    };
+    if (auto* field = yyjson_obj_get(item, "name"))
+        reference.name = text(field, "name");
+    if (auto* field = yyjson_obj_get(item, "role"))
+        reference.role = text(field, "role");
+    if (auto* field = yyjson_obj_get(item, "layer")) {
+        if (yyjson_is_str(field))
+            reference.layerName = string(field, 1024);
+        else if (yyjson_is_uint(field) && yyjson_get_uint(field) != 0)
+            reference.layerId = yyjson_get_uint(field);
+        else
+            throw InvalidInput("A reference's layer is the layer's name (text) or its id");
+    }
+    if (auto* field = yyjson_obj_get(item, "composition")) {
+        if (!yyjson_is_uint(field) || yyjson_get_uint(field) == 0)
+            throw InvalidInput("A reference's composition is a composition id");
+        reference.composition = yyjson_get_uint(field);
+    }
+    return reference;
+}
+
 scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
     if (depth > 16)
         throw InvalidInput("Argument exceeds nesting limit");
@@ -250,6 +291,8 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
             values.push_back(value(child, depth + 1));
         return scripting::Value(std::move(values));
     }
+    if (isReferenceObject(item))
+        return scripting::Value(referenceValue(item));
     if (yyjson_is_obj(item) && yyjson_obj_get(item, "stops") != nullptr)
         return scripting::Value(gradientValue(item));
     if (yyjson_is_obj(item))
@@ -269,6 +312,18 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
     case Kind::String:
         return yyjson_is_str(value);
     case Kind::Id:
+        // A layer or parameter may be given by name and role instead (#574).
+        if (isReferenceObject(value))
+            return true;
+        // An id is a positive integer or the same value as decimal text ("16").
+        if (yyjson_is_str(value)) {
+            const std::string_view text(yyjson_get_str(value), yyjson_get_len(value));
+            std::uint64_t parsed = 0;
+            const auto [end, error] =
+                std::from_chars(text.data(), text.data() + text.size(), parsed);
+            return !text.empty() && error == std::errc{} && end == text.data() + text.size() &&
+                   parsed != 0;
+        }
         return yyjson_is_uint(value) && yyjson_get_uint(value) != 0;
     case Kind::Array:
         return yyjson_is_arr(value);
@@ -521,8 +576,9 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
                  yyjson_get_uint(item) > std::numeric_limits<std::uint32_t>::max()))
                 throw InvalidInput(at + " (" + id +
                                    "): frame-rate components must be in 1..4294967295");
-            values.emplace(name, schema->kind == scripting::ValueKind::Id
-                                     ? scripting::Value(scripting::StableId{integer(item)})
+            values.emplace(name, schema->kind == scripting::ValueKind::Id &&
+                                         !isReferenceObject(item)
+                                     ? scripting::Value(scripting::StableId{identifier(item)})
                                      : value(item));
         }
         auto created = registry.create(id, std::move(values), context);
@@ -679,12 +735,19 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         return readbackQuery(out, call, arguments, string(requested, 32), sessionToken);
     members(arguments,
             {"kind", "composition", "pageSize", "cursor", "parameter", "expectedRevision", "offset",
-             "limit"},
+             "limit", "idPrefix", "layer", "fields"},
             {"kind"});
     const auto kind = string(member(arguments, "kind"), 32);
+    if (member(arguments, "idPrefix") && kind != "operations")
+        throw InvalidInput("idPrefix applies to the operations query");
+    if (member(arguments, "layer") && kind != "nodes")
+        throw InvalidInput("layer applies to the layers and nodes queries");
     const bool parameterPage =
         kind == "parameters" && (member(arguments, "pageSize") || member(arguments, "cursor"));
     const bool individualParameter = kind == "parameter" || kind == "parameter-value";
+    if (member(arguments, "fields") &&
+        (kind == "context" || kind == "project" || individualParameter))
+        throw InvalidInput("fields applies to the queries that return records");
     const bool compositionRecords =
         kind == "nodes" || kind == "parameters" || kind == "layers" || kind == "keyframes";
     if (member(arguments, "composition") && !compositionRecords && !individualParameter)
@@ -701,8 +764,11 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         throw InvalidInput("expectedRevision, offset and limit apply only to parameter and "
                            "parameter-value queries");
     const auto snapshot = call.session.snapshot();
-    if (kind == "context")
+    if (kind == "context") {
+        if (member(arguments, "fields"))
+            throw InvalidInput("fields applies to the queries that return records");
         return contextProjection(out, call, snapshot);
+    }
     auto* result = out.object();
     out.set(result, "revision", out.number(snapshot.revision().value()));
     if (kind == "project") {
@@ -771,7 +837,11 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
     }
     auto* records = out.array();
     if (kind == "operations") {
+        const auto prefix = member(arguments, "idPrefix") ? string(member(arguments, "idPrefix"), 128)
+                                                          : std::string{};
         for (const auto& descriptor : call.session.operations().descriptors()) {
+            if (!descriptor.schema.typeId.starts_with(prefix))
+                continue;
             auto* record = out.object();
             out.set(record, "id", out.text(descriptor.schema.typeId));
             out.set(record, "description", out.text(descriptor.schema.description));
@@ -834,7 +904,8 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Stale composition ID at revision " +
                                std::to_string(snapshot.revision().value()));
         if (kind == "nodes") {
-            appendNodeGraph(out, result, records, *composition);
+            appendNodeGraph(out, result, records, *composition,
+                            layerFilter(*composition, arguments));
         } else if (parameterPage) {
             // A summary only carries bounded structural strings (at most 256 bytes each),
             // never a value. Even worst-case JSON escaping and the MCP text copy fit 4 MiB.
@@ -870,6 +941,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                            "parameters, parameter, parameter-value, keyframes, assets, "
                            "operations, context");
     out.set(result, "records", records);
+    projectRecords(out, result, arguments);
     return result;
 }
 } // namespace bloom::mcp

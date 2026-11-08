@@ -13,6 +13,10 @@
 #include <array>
 #include <charconv>
 #include <limits>
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
 
 namespace bloom::mcp {
 namespace {
@@ -164,7 +168,8 @@ std::size_t parsePageCursor(std::string_view cursor, const std::array<std::uint6
 // ---- layers
 
 yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::Project& project,
-                            const document::Composition& comp) {
+                            const document::Composition& comp,
+                            const std::optional<document::LayerId> only) {
     const auto& graph = comp.graph();
     const auto rate = comp.format().frameRate();
     out.set(result, "composition", out.number(comp.id().value()));
@@ -178,6 +183,8 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
     std::vector<Placement> placements;
     const auto output = graph.outputMergeId();
     for (const auto& boundary : graph.layerOutputs()) {
+        if (only && boundary.layerId != *only)
+            continue;
         Placement placement{.layer = &boundary,
                             .merge = {},
                             .slot = {},
@@ -365,6 +372,8 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
     // render as an entry layer at its defaults.
     auto* entries = out.array();
     for (const auto& view : scripting::mergeEntryViews(comp)) {
+        if (only && (view.layer == nullptr || view.layer->layerId != *only))
+            continue;
         auto* row = out.object();
         out.set(row, "merge", out.number(view.merge.value()));
         out.set(row, "slot", out.number(view.slot.value()));
@@ -562,21 +571,32 @@ bool isReadbackQuery(const std::string_view kind) noexcept {
 yyjson_mut_val* readbackQuery(Json& out, McpCall& call, yyjson_val* arguments,
                               const std::string_view kind, const std::uint64_t sessionToken) {
     if (kind == "layers")
-        members(arguments, {"kind", "composition"}, {"kind", "composition"});
+        members(arguments, {"kind", "composition", "layer", "fields"}, {"kind", "composition"});
     else if (kind == "keyframes")
-        members(arguments, {"kind", "composition", "parameter", "curve", "pageSize", "cursor"},
+        members(arguments,
+                {"kind", "composition", "parameter", "curve", "pageSize", "cursor", "fields"},
                 {"kind", "composition"});
     else
-        members(arguments, {"kind", "nodeType"}, {"kind"});
+        members(arguments, {"kind", "nodeType", "fields"}, {"kind"});
     const auto snapshot = call.session.snapshot();
     auto* result = out.object();
     out.set(result, "revision", out.number(snapshot.revision().value()));
-    if (kind == "node-types")
-        return nodeTypesQuery(out, result, arguments);
+    if (kind == "node-types") {
+        nodeTypesQuery(out, result, arguments);
+        projectRecords(out, result, arguments);
+        return result;
+    }
     const auto& composition = compositionArgument(snapshot, arguments);
-    if (kind == "layers")
-        return layersQuery(out, result, snapshot.project(), composition);
-    return keyframesQuery(out, result, snapshot, composition, arguments, sessionToken);
+    if (kind == "layers") {
+        layersQuery(out, result, snapshot.project(), composition,
+                    layerFilter(composition, arguments));
+    } else {
+        if (member(arguments, "layer"))
+            throw InvalidInput("layer applies to the layers and nodes queries");
+        keyframesQuery(out, result, snapshot, composition, arguments, sessionToken);
+    }
+    projectRecords(out, result, arguments);
+    return result;
 }
 
 yyjson_mut_val* compositionRecord(Json& out, const document::Composition& composition) {
@@ -658,9 +678,97 @@ yyjson_mut_val* assetFolders(Json& out, const document::Project& project) {
     return folders;
 }
 
+std::optional<document::LayerId> layerFilter(const document::Composition& composition,
+                                             yyjson_val* arguments) {
+    if (!member(arguments, "layer"))
+        return std::nullopt;
+    const auto id = document::LayerId::fromRaw(identifier(member(arguments, "layer")));
+    if (composition.graph().findLayer(id) == nullptr)
+        throw InvalidInput("Layer " + std::to_string(id.value()) + " does not exist in composition " +
+                           std::to_string(composition.id().value()) +
+                           "; query {kind:\"layers\",\"composition\":" +
+                           std::to_string(composition.id().value()) + "} lists its layers");
+    return id;
+}
+
+void projectRecords(Json& out, yyjson_mut_val* result, yyjson_val* arguments) {
+    auto* requested = member(arguments, "fields");
+    if (requested == nullptr)
+        return;
+    if (!yyjson_is_arr(requested) || yyjson_arr_size(requested) == 0 ||
+        yyjson_arr_size(requested) > 64)
+        throw InvalidInput("fields is a list of 1 to 64 member names, such as [\"id\", \"name\"]");
+    std::vector<std::string> names;
+    yyjson_arr_iter names_iterator = yyjson_arr_iter_with(requested);
+    while (auto* item = yyjson_arr_iter_next(&names_iterator))
+        names.push_back(string(item, 128));
+    auto* records = yyjson_mut_obj_get(result, "records");
+    if (records == nullptr || !yyjson_mut_is_arr(records))
+        throw InvalidInput("fields applies to the queries that return records");
+    // Every requested name must exist on the first record, so a misspelling is an error, not an
+    // empty answer.
+    if (auto* first = yyjson_mut_arr_get_first(records); first != nullptr) {
+        std::string available;
+        std::vector<std::string> present;
+        yyjson_mut_obj_iter probe = yyjson_mut_obj_iter_with(first);
+        while (auto* key = yyjson_mut_obj_iter_next(&probe)) {
+            present.emplace_back(yyjson_mut_get_str(key), yyjson_mut_get_len(key));
+            available += (available.empty() ? "" : ", ") + present.back();
+        }
+        for (const auto& name : names)
+            if (std::ranges::find(present, name) == present.end())
+                throw InvalidInput("Unknown field " + name + "; the records carry: " + available);
+    }
+    yyjson_mut_arr_iter iterator = yyjson_mut_arr_iter_with(records);
+    while (auto* record = yyjson_mut_arr_iter_next(&iterator)) {
+        if (!yyjson_mut_is_obj(record))
+            continue;
+        std::vector<std::string> drop;
+        yyjson_mut_obj_iter members_iterator = yyjson_mut_obj_iter_with(record);
+        while (auto* key = yyjson_mut_obj_iter_next(&members_iterator)) {
+            const std::string name(yyjson_mut_get_str(key), yyjson_mut_get_len(key));
+            if (std::ranges::find(names, name) == names.end())
+                drop.push_back(name);
+        }
+        for (const auto& name : drop)
+            yyjson_mut_obj_remove_strn(record, name.data(), name.size());
+    }
+    static_cast<void>(out);
+}
+
 void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
-                     const document::Composition& composition) {
+                     const document::Composition& composition,
+                     const std::optional<document::LayerId> layer) {
     const auto& graph = composition.graph();
+    // With a layer filter: that layer's node (or its Merge entry's source) and everything upstream.
+    std::set<document::NodeId> included;
+    if (layer) {
+        std::vector<document::NodeId> pending;
+        if (const auto* boundary = graph.findLayer(*layer)) {
+            if (boundary->entryOwned()) {
+                if (const auto* edge =
+                        document::mergeSlotImageEdge(graph, boundary->nodeId, *boundary->entrySlot))
+                    pending.push_back(edge->source.nodeId);
+            } else {
+                pending.push_back(boundary->nodeId);
+            }
+        }
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            if (!included.insert(current).second)
+                continue;
+            for (const auto& edge : graph.edges()) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                if (input != nullptr && input->nodeId == current)
+                    pending.push_back(edge.source.nodeId);
+            }
+        }
+        out.set(result, "layer", out.number(layer->value()));
+    }
+    const auto keep = [&](const document::NodeId node) {
+        return !layer || included.contains(node);
+    };
     const auto& registry = document::builtInNodeDefinitions();
     const auto& layout = composition.nodeLayout();
     const auto target = [&out](const document::InputPortRef& input) {
@@ -678,6 +786,8 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
     };
     out.set(result, "composition", out.number(composition.id().value()));
     for (const auto& node : graph.nodes()) {
+        if (!keep(node.id))
+            continue;
         const auto* definition = registry.find(node.typeId, node.schemaVersion);
         auto* record = out.object();
         out.set(record, "id", out.number(node.id.value()));
@@ -822,6 +932,11 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
     }
     auto* links = out.array();
     for (const auto& edge : graph.edges()) {
+        if (layer) {
+            const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+            if (!keep(edge.source.nodeId) || input == nullptr || !keep(input->nodeId))
+                continue;
+        }
         auto* row = out.object();
         out.set(row, "id", out.number(edge.id.value()));
         auto* source = out.object();
@@ -834,12 +949,15 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
     out.set(result, "links", links);
     auto* groups = out.array();
     for (const auto& [id, group] : composition.nodeGroups()) {
+        if (layer && std::ranges::none_of(group.members, keep))
+            continue;
         auto* row = out.object();
         out.set(row, "id", out.number(id.value()));
         out.set(row, "name", out.text(group.name));
         auto* members = out.array();
         for (const auto node : group.members)
-            out.append(members, out.number(node.value()));
+            if (keep(node))
+                out.append(members, out.number(node.value()));
         out.set(row, "members", members);
         out.append(groups, row);
     }

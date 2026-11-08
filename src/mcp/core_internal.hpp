@@ -16,6 +16,7 @@
 #include <deque>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -114,6 +115,16 @@ struct McpServerCore::State {
     std::mutex captureMutex;
     std::uint64_t captureCounter = 0;
 
+    // Project files other than the open project (the `projectFile` argument), each in its own
+    // headless session kept between calls so edits, undo history and unsaved changes persist
+    // until project.save and project.close. One call at a time holds fileMutex.
+    struct FileSession final {
+        std::unique_ptr<scripting::Session> session;
+        document::Revision savedRevision;
+    };
+    std::mutex fileMutex;
+    std::map<std::string, FileSession> fileSessions;
+
     // The newest kRetiredTransientJobs transient render/export/capture jobs, oldest first: each
     // job's final view and whole run log, kept after the call returned and the queue retired the
     // job, so export.status, export.log and export.wait still read it. Each belongs to the export
@@ -135,6 +146,25 @@ struct McpServerCore::State {
     void record(const commands::CommandEvent& event);
     void notice(McpNotice notice);
 };
+
+// ---- Project files other than the open project (tools_file_session.cpp)
+inline constexpr std::size_t kMcpFileSessions = 4;
+// The `projectFile` argument: an absolute path to an existing project file, normalised, or nullopt
+// when absent.
+[[nodiscard]] std::optional<std::filesystem::path> projectFileArgument(yyjson_val* arguments);
+// `arguments` without projectFile, for the tools that do not know the member.
+[[nodiscard]] std::string withoutProjectFile(yyjson_val* arguments);
+// The headless session for `path`, opened on first use. The caller holds State::fileMutex. Refuses
+// a file that is open in the application or as the server's own project, and more than
+// kMcpFileSessions files at once.
+[[nodiscard]] scripting::Session& fileSessionFor(McpServerCore::State& core,
+                                                 const std::filesystem::path& path,
+                                                 const McpRequestControl& control);
+// project.save and project.close on such a file.
+[[nodiscard]] yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, McpTool tool,
+                                              const std::filesystem::path& path,
+                                              yyjson_val* arguments,
+                                              const McpRequestControl& control);
 
 // ---- Projections (projections.cpp, tools_document.cpp)
 [[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result);
@@ -224,8 +254,18 @@ struct TransientResult final {
 [[nodiscard]] yyjson_mut_val* assetRecord(Json& out, const document::AssetRecord& value);
 [[nodiscard]] yyjson_mut_val* assetFolders(Json& out, const document::Project& project);
 // query nodes: the records with ports, links, positions and groups, plus `links` and `groups`.
+// With `layer`, only that layer's nodes: its Layer Output node (or the source of its Merge entry)
+// and everything upstream of it; `links` and `groups` are narrowed to those nodes.
 void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
-                     const document::Composition& composition);
+                     const document::Composition& composition,
+                     std::optional<document::LayerId> layer = std::nullopt);
+// The `layer` argument of a nodes or layers query: a layer of `composition`, or the refusal
+// listing where layers are found.
+[[nodiscard]] std::optional<document::LayerId> layerFilter(const document::Composition& composition,
+                                                           yyjson_val* arguments);
+// The `fields` argument: keeps only the named members of every record in result.records. A name no
+// record has is refused, listing the members the first record carries.
+void projectRecords(Json& out, yyjson_mut_val* result, yyjson_val* arguments);
 // transact's refusals, naming what the operation takes and where its reference is.
 [[nodiscard]] std::string unknownOperation(std::string_view id);
 // ". help {"name": <operation>} shows every argument.", appended to an argument refusal.
