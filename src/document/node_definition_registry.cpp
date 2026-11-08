@@ -1556,7 +1556,8 @@ template <typename Definition>
                                      ParameterValueKind::Integer, false, false, std::int64_t{0}});
     definition.parameters.push_back({std::string(kTextAnchorModeParameterRole),
                                      std::string(kTextAnchorModeParameterSchemaKey),
-                                     ParameterValueKind::Integer, false, false, std::int64_t{0}});
+                                     ParameterValueKind::Integer, false, false,
+                                     kTextAnchorModeFollowsAlignment});
     definition.parameters.push_back({std::string(kTextOverflowParameterRole),
                                      std::string(kTextOverflowParameterSchemaKey),
                                      ParameterValueKind::Integer, false, false, std::int64_t{0}});

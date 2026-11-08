@@ -248,7 +248,7 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kTextVerticalAlignmentParameterSchemaKey)
         return sequential({"Top", "Middle", "Bottom"});
     if (schemaKey == kTextAnchorModeParameterSchemaKey)
-        return sequential({"Left", "Center", "Right"});
+        return sequential({"Left", "Center", "Right", "Follow alignment"});
     if (schemaKey == kTextOverflowParameterSchemaKey)
         return sequential({"Clip", "Grow"});
     if (schemaKey == kImagePreviewDisplayParameterSchemaKey)

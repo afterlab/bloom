@@ -540,6 +540,60 @@ void testOutlineScale(Expectations& expectations) {
 
 } // namespace
 
+// #560: with the anchor following the alignment, the block's left edge, centre or right edge is the
+// layout origin, so lines of different lengths share it. The stored anchor modes 0..2 keep their
+// earlier layout, and the CPU reference and the GPU route both read this layout.
+void testAnchorFollowsAlignment(Expectations& expectations) {
+    using namespace bloom::render;
+    const auto created = TextRasterParameters::create(16, 16);
+    const auto parameters = *created.value();
+    const std::string content = "WWWWWWWW\nW\nWWWW";
+    expectations.expect(resolveTextAnchorMode(kTextAnchorFollowsAlignment, TextAlignment::Left) ==
+                                TextLayoutOptions::AnchorMode::Left &&
+                            resolveTextAnchorMode(kTextAnchorFollowsAlignment,
+                                                  TextAlignment::Center) ==
+                                TextLayoutOptions::AnchorMode::Center &&
+                            resolveTextAnchorMode(kTextAnchorFollowsAlignment,
+                                                  TextAlignment::Right) ==
+                                TextLayoutOptions::AnchorMode::Right &&
+                            resolveTextAnchorMode(0, TextAlignment::Right) ==
+                                TextLayoutOptions::AnchorMode::Left &&
+                            resolveTextAnchorMode(2, TextAlignment::Left) ==
+                                TextLayoutOptions::AnchorMode::Right,
+                        "the following anchor takes the alignment; stored modes keep their value");
+    for (const auto alignment : {TextAlignment::Left, TextAlignment::Center, TextAlignment::Right}) {
+        TextLayoutOptions options;
+        options.alignment = alignment;
+        options.anchorMode = resolveTextAnchorMode(kTextAnchorFollowsAlignment, alignment);
+        const auto laid = layoutText(EmbeddedFace::DejaVuSans, content, parameters, options);
+        expectations.expect(laid && laid.value()->lines.size() == 3, "three lines are laid out");
+        if (!laid || laid.value()->lines.size() != 3)
+            continue;
+        const auto& lines = laid.value()->lines;
+        expectations.expect(lines[0].box.width > lines[2].box.width &&
+                                lines[2].box.width > lines[1].box.width,
+                            "the lines have different lengths");
+        for (const auto& line : lines) {
+            const double anchor = alignment == TextAlignment::Left     ? line.box.x
+                                  : alignment == TextAlignment::Center ? line.box.x +
+                                                                             line.box.width / 2.0
+                                                                       : line.box.x +
+                                                                             line.box.width;
+            expectations.expect(std::abs(anchor) < 1.0e-9,
+                                "every line meets the block's anchor at the layout origin");
+        }
+    }
+    // The earlier modes: a left-aligned block with the Left mode starts at the origin and grows to
+    // the right, so the layer (which centres the bounds) was the only thing that centred it.
+    TextLayoutOptions legacy;
+    legacy.alignment = TextAlignment::Right;
+    legacy.anchorMode = resolveTextAnchorMode(0, TextAlignment::Right);
+    const auto laid = layoutText(EmbeddedFace::DejaVuSans, content, parameters, legacy);
+    expectations.expect(laid && laid.value()->lines.size() == 3 &&
+                            laid.value()->lines[0].box.x == 0.0,
+                        "a stored Left anchor keeps the widest line at the origin");
+}
+
 int main() {
     try {
         Expectations expectations;
@@ -556,6 +610,7 @@ int main() {
         testPerAxisScaling(expectations);
         testCoverageSolidRow(expectations);
         testBoxTypographyGoldens(expectations);
+        testAnchorFollowsAlignment(expectations);
         return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

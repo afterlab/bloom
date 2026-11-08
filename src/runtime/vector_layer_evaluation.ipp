@@ -63,7 +63,7 @@ if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     layout.wrap = text->layout.wrap;
     layout.verticalAlignment =
         static_cast<render::TextLayoutOptions::VerticalAlignment>(text->layout.verticalAlignment);
-    layout.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(text->layout.anchorMode);
+    layout.anchorMode = render::resolveTextAnchorMode(text->layout.anchorMode, layout.alignment);
     layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(text->layout.overflow);
     auto outlines = render::textOutlines(text->font, content->value, *parameters.value(), layout,
                                          [&] { return cancellation.isCancellationRequested(); });

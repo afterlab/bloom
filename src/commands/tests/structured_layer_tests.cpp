@@ -340,7 +340,7 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
         ConstantValueSource{std::int64_t{0}}};
     const ParameterRecord expectedAnchorMode{
         *anchorModeParameterId, std::string(document::kTextAnchorModeParameterSchemaKey),
-        ConstantValueSource{std::int64_t{0}}};
+        ConstantValueSource{document::kTextAnchorModeFollowsAlignment}};
     const ParameterRecord expectedOverflow{*overflowParameterId,
                                            std::string(document::kTextOverflowParameterSchemaKey),
                                            ConstantValueSource{std::int64_t{0}}};

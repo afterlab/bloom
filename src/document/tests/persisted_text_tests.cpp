@@ -229,8 +229,12 @@ void testTextOverflowRange(ExpectationContext& expectations) {
             !insertInteger(bloom::document::kTextOverflowParameterSchemaKey, 2) &&
             !insertInteger(bloom::document::kTextOverflowParameterSchemaKey, -1) &&
             insertInteger(bloom::document::kTextVerticalAlignmentParameterSchemaKey, 2) &&
-            insertInteger(bloom::document::kTextAnchorModeParameterSchemaKey, 2),
-        "text overflow accepts only Clip and Grow while alignment and anchor keep 0..2");
+            insertInteger(bloom::document::kTextAnchorModeParameterSchemaKey, 2) &&
+            insertInteger(bloom::document::kTextAnchorModeParameterSchemaKey,
+                          bloom::document::kTextAnchorModeFollowsAlignment) &&
+            !insertInteger(bloom::document::kTextAnchorModeParameterSchemaKey, 4) &&
+            !insertInteger(bloom::document::kTextAnchorModeParameterSchemaKey, -1),
+        "text overflow accepts only Clip and Grow; anchor adds the following value (3) to 0..2");
 }
 
 } // namespace

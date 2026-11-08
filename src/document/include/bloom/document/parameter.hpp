@@ -71,6 +71,9 @@ inline constexpr std::string_view kTextVerticalAlignmentParameterSchemaKey =
     "bloom.text.vertical-alignment";
 inline constexpr std::string_view kTextAnchorModeParameterSchemaKey = "bloom.text.anchor-mode";
 inline constexpr std::string_view kTextOverflowParameterSchemaKey = "bloom.text.overflow";
+// The text anchor-mode value whose block anchor follows the horizontal alignment. Stored 0..2 keep
+// the placement every project saved before this value existed has (position at the block centre).
+inline constexpr std::int64_t kTextAnchorModeFollowsAlignment = 3;
 inline constexpr std::string_view kTextColorParameterSchemaKey = "bloom.text.color";
 inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
 // Offset from the centre of the source's local content bounds, in full-resolution pixels.

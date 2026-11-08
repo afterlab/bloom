@@ -64,6 +64,15 @@ enum class Placement { ParentedDefault, ParentedOrigin, Unparented };
             : std::optional{document::Vec2d{kWidth / 2.0 - 1.0, kHeight / 2.0 - 1.0}};
     execute<commands::AddTextLayer>(document, commands, main, "Text", "Hello", position, 1.0,
                                     static_cast<double>(size));
+    // This sweep pins parented placement of a text block centred on its position, which is what a
+    // stored Left/Center/Right anchor mode (every project saved before the anchor followed the
+    // alignment) still does; the following anchor is covered by the text anchor tests.
+    {
+        const auto text = lastNode(document, main, document::kTextSourceNodeType);
+        execute<commands::SetParameterSource>(
+            document, commands, main, parameter(document, main, text, "anchorMode"),
+            document::ConstantValueSource{document::ParameterValue{std::int64_t{0}}});
+    }
     if (placement != Placement::Unparented)
         execute<commands::SetLayerParent>(document, commands, main, lastLayer(document, main),
                                           null);

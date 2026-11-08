@@ -339,7 +339,9 @@ q = position + R(rotation) * S(scale) * (p - a)
 
 Pixel edges use integer coordinates and pixel centers use half-integers in this authoring space.
 The resampler converts to its integer-centered lattice once. A fresh composition-sized Solid therefore
-fills the frame exactly, and fresh Text sits centered. Changing anchor while holding position fixed
+fills the frame exactly, and fresh Text sits centered when its anchor mode is a stored Left, Center or Right; a Text whose
+anchor mode follows its alignment instead takes its horizontal `c` from the text block (see "Text
+And Mute Lowering"). Changing anchor while holding position fixed
 moves content because position continues to place the new pivot. Rotation is clockwise with Y down;
 pixel aspect affects presentation, not the authored rotation.
 
@@ -692,6 +694,21 @@ the box. Clip keeps the box bounds and clips coverage; Grow lets content extend 
 With no box, point text retains content-sized bounds, alignment acts within the widest line as
 before, and anchor mode selects the left, center or right baseline anchor. Shaping and bidi remain
 deferred.
+
+Anchor mode is stored 0 (Left), 1 (Center), 2 (Right) or 3 (Follow alignment; issue #560). In
+Follow alignment the anchor is the horizontal alignment's: the layout puts the block's left edge,
+centre or right edge at the text origin (the box edge, centre or opposite edge for a boxed text),
+and the evaluated content bounds carry that coordinate as `pivotX`. A Layer Output over such a
+Text uses `pivotX` for the horizontal `c` of the transform above (the vertical `c` stays the middle of
+the bounds), so `position` is the block's left edge, centre or right edge and a long line grows away
+from it. The Viewer's anchor and scale handles use the same pivot. The CPU reference and the GPU
+preparation compute the layout and the pivot with the same helpers (`resolveTextAnchorMode`,
+`textBlockPivotX`). Stored 0..2 never carried a placement meaning (the Layer Output centred the
+content bounds whatever they said), so they keep `c` at the bounds centre and a project saved
+before value 3 existed renders where it always did; no document minor changed, nothing is migrated,
+and a document with value 3 is refused by an earlier build as an out-of-domain value. New Text
+(`AddTextLayer` and the Text node's default) stores 3. An effect that rebuilds its bounds (instead of
+passing its input's through) drops `pivotX` and keeps the bounds centre.
 
 Source rows are projected from the current registry in Nodes and Timeline. The color role
 is node-local and shared with Solid; the text color schema retains its distinct global identity.

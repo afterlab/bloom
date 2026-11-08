@@ -236,7 +236,7 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
         }
         const auto& bounds = state.gesture.bounds->local;
         const auto centre = transformPoint(bounds.centre());
-        const auto anchor = centre + transformPoint(state.anchor);
+        const auto anchor = transformPoint(bounds.pivot()) + transformPoint(state.anchor);
         const std::array<QPointF, 8> handles{{{bounds.left, bounds.top},
                                               {centre.x(), bounds.top},
                                               {bounds.right, bounds.top},

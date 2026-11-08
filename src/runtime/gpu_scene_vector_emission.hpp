@@ -53,6 +53,13 @@ resolveVectorLeafWindow(const CompiledOperation& operation, const CompiledCompos
         }
         if (window) {
             local = boundsForWindow(*window, hScale, vScale);
+            // The window was resolved from this same alignment; the evaluator's text arm publishes
+            // the same pivot with the same helper.
+            if (const auto alignment = resolveParameter(text->layout.alignmentId,
+                                                        text->layout.alignment,
+                                                        text->layout.drivenAlignment, resolved)) {
+                local.pivotX = textBlockPivotX(text->layout, alignment->value);
+            }
         }
         return std::nullopt;
     }

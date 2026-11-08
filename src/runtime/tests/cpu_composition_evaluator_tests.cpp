@@ -2404,6 +2404,7 @@ int main(int argc, char* argv[]) {
         testParentedBounds(expectations);
         testContentBounds(expectations);
         testContentBoundsEdgeCases(expectations);
+        testTextAnchorFollowsAlignment(expectations);
         testLayerBoundsReadout(expectations);
         testMemoryBudgetLedger(expectations);
         testOperationCacheByteAccounting(expectations);

@@ -894,11 +894,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // #502: a frame pivot is the composition frame's centre, as on the CPU.
             const auto centre =
                 layer->framePivot
-                    ? decltype(inputLocal.centre()){static_cast<double>(plan->format().width()) /
+                    ? decltype(inputLocal.pivot()){static_cast<double>(plan->format().width()) /
                                                         2.0,
                                                     static_cast<double>(plan->format().height()) /
                                                         2.0}
-                    : inputLocal.centre();
+                    : inputLocal.pivot();
             const auto authoredMatrix = detail::LayerMatrix::authored(
                 position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
                 scale->value, rotation->value);

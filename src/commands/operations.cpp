@@ -909,7 +909,7 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
            document::kTextVerticalAlignmentParameterSchemaKey, std::int64_t{0},
            kAddTextLayerVerticalAlignmentParameterOutput},
           {document::kTextAnchorModeParameterRole, document::kTextAnchorModeParameterSchemaKey,
-           std::int64_t{0}, kAddTextLayerAnchorModeParameterOutput},
+           document::kTextAnchorModeFollowsAlignment, kAddTextLayerAnchorModeParameterOutput},
           {document::kTextOverflowParameterRole, document::kTextOverflowParameterSchemaKey,
            std::int64_t{0}, kAddTextLayerOverflowParameterOutput}}},
         useCompositionCentre_

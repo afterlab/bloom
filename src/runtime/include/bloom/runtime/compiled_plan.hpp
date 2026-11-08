@@ -98,9 +98,17 @@ struct ContentBounds final {
     double top = 0.0;
     double right = 0.0;
     double bottom = 0.0;
+    // The horizontal coordinate a Layer Output places at its position instead of the centre of
+    // these bounds: the edge or centre of a text block whose anchor follows its alignment. Absent
+    // for every other content, which keeps the bounds centre.
+    std::optional<double> pivotX = std::nullopt;
     [[nodiscard]] bool empty() const noexcept { return right <= left || bottom <= top; }
     [[nodiscard]] document::Vec2d centre() const noexcept {
         return {(left + right) / 2.0, (top + bottom) / 2.0};
+    }
+    [[nodiscard]] document::Vec2d pivot() const noexcept {
+        const auto middle = centre();
+        return {pivotX.value_or(middle.x), middle.y};
     }
     friend bool operator==(const ContentBounds&, const ContentBounds&) = default;
 };
@@ -214,6 +222,20 @@ struct CompiledTextLayout {
     std::int64_t overflow = 0;
     friend bool operator==(const CompiledTextLayout&, const CompiledTextLayout&) = default;
 };
+
+// The local horizontal coordinate a Layer Output places at its position for a text whose anchor
+// follows its alignment: the left edge, centre or right edge of the text block, which is the
+// layout origin for point text (the layout puts the anchor at x = 0) and the authored box for boxed
+// text. Absent for the stored anchor modes that predate this one, whose layer keeps the centre of
+// the content bounds, so a project saved before it renders where it always did. Author-space
+// units, like ContentBounds.
+[[nodiscard]] inline std::optional<double>
+textBlockPivotX(const CompiledTextLayout& layout, const std::int64_t alignment) noexcept {
+    if (layout.anchorMode != document::kTextAnchorModeFollowsAlignment)
+        return std::nullopt;
+    const double extent = layout.box.x > 0.0 ? layout.box.x : 0.0;
+    return alignment == 1 ? extent / 2.0 : alignment == 2 ? extent : 0.0;
+}
 
 class CompiledCompositionPlan;
 

@@ -179,8 +179,9 @@ void ViewerEditor::refreshTextLayout() {
     options.wrap = textValue(session_, document::kTextWrapParameterRole, false);
     options.verticalAlignment = static_cast<render::TextLayoutOptions::VerticalAlignment>(
         textValue(session_, document::kTextVerticalAlignmentParameterRole, std::int64_t{0}));
-    options.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(
-        textValue(session_, document::kTextAnchorModeParameterRole, std::int64_t{0}));
+    options.anchorMode = render::resolveTextAnchorMode(
+        textValue(session_, document::kTextAnchorModeParameterRole, std::int64_t{0}),
+        options.alignment);
     options.overflow = static_cast<render::TextLayoutOptions::Overflow>(
         textValue(session_, document::kTextOverflowParameterRole, std::int64_t{0}));
     const auto size = textValue(session_, document::kTextSizeParameterRole, 72.0);

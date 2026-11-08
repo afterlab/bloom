@@ -804,7 +804,7 @@ with a closed set (an enum, a choice presentation, the audio stream) must never 
 | Image source, Video source | Input color space | color space (string) | text field | dropdown |
 | Audio source | Asset | asset (string) | text field | dropdown |
 | Text source | Vertical alignment (Top, Middle, Bottom) | enum (int) | value field | dropdown |
-| Text source | Anchor mode (Left, Center, Right) | enum (int) | value field | dropdown |
+| Text source | Anchor mode (Left, Center, Right, Follow alignment) | enum (int) | value field | dropdown |
 | Text source | Overflow (Clip, Grow) | enum (int) | value field | dropdown |
 | Channel Shuffle | Mode (Auto, Color, Raw; #480 adds Auto) | enum (int) | value field | dropdown |
 

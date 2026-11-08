@@ -100,6 +100,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   Directional, Spin and Zoom Blur.
 - [Camera Shake](user-guide/camera-shake.md) — seeded handheld, impact and gate-weave shake with
   loop, auto overscan, motion blur and offset and roll outputs for other parameters.
+- [Text layers](user-guide/text-layers.md) — what a text layer's Position names for Left, Center and
+  Right alignment, and how older projects keep their placement.
 - [Sharpen](user-guide/sharpen.md) — the unsharp mask: amount, radius and threshold, and what it does
   to HDR highlights and alpha edges.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into

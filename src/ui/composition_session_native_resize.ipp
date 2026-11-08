@@ -83,6 +83,15 @@ if (state.nativeKind == Native::PointText) {
     }
 }
 const auto change = next - base;
-const QPointF offset(modifiers.alt || !xActive ? 0 : signX* change.x() / 2,
-                     modifiers.alt || !yActive ? 0 : signY* change.y() / 2);
+// Where the layer's pivot sits across the bounds (one half for every content but a text whose
+// anchor follows its alignment), so the edge the gesture holds still stays still when the
+// bounds grow around that pivot instead of around their centre.
+const double pivotFraction =
+    bounds.right > bounds.left
+        ? std::clamp((bounds.pivot().x - bounds.left) / (bounds.right - bounds.left), 0.0, 1.0)
+        : 0.5;
+const double offsetX = modifiers.alt ? (pivotFraction - 0.5) * change.x()
+                                     : signX * (left ? 1.0 - pivotFraction : pivotFraction) *
+                                           change.x();
+const QPointF offset(!xActive ? 0 : offsetX, modifiers.alt || !yActive ? 0 : signY* change.y() / 2);
 put(0, transformValue(position + linear.map(offset)));

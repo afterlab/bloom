@@ -39,6 +39,21 @@ struct TextLayoutOptions final {
     Overflow overflow = Overflow::Clip;
 };
 
+// The stored text anchor-mode value that makes the anchor follow the horizontal alignment: Left
+// anchors the block's left edge, Center its centre and Right its right edge. The stored values
+// 0..2 keep their earlier meaning (a layout origin only; the Layer Output still places the centre of
+// the content bounds at its position) so a project saved before this value existed renders exactly
+// as it did.
+inline constexpr std::int64_t kTextAnchorFollowsAlignment = 3;
+
+// The layout anchor a stored anchor-mode value and a resolved alignment select.
+[[nodiscard]] constexpr TextLayoutOptions::AnchorMode
+resolveTextAnchorMode(const std::int64_t stored, const TextAlignment alignment) noexcept {
+    if (stored == kTextAnchorFollowsAlignment)
+        return static_cast<TextLayoutOptions::AnchorMode>(alignment);
+    return static_cast<TextLayoutOptions::AnchorMode>(stored);
+}
+
 class TextRasterParameters final {
   public:
     [[nodiscard]] static ImageResult<TextRasterParameters>

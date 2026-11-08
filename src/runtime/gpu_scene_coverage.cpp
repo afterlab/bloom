@@ -55,7 +55,7 @@ void addTextFontToKey(OperationKey& key, const render::TextFont& font) {
     layout.wrap = text.layout.wrap;
     layout.verticalAlignment =
         static_cast<render::TextLayoutOptions::VerticalAlignment>(text.layout.verticalAlignment);
-    layout.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(text.layout.anchorMode);
+    layout.anchorMode = render::resolveTextAnchorMode(text.layout.anchorMode, layout.alignment);
     layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(text.layout.overflow);
     return layout;
 }
@@ -195,7 +195,7 @@ resolveTextLeafWindow(const CompiledText& text, const CompiledCompositionPlan& p
     layout.wrap = text.layout.wrap;
     layout.verticalAlignment =
         static_cast<render::TextLayoutOptions::VerticalAlignment>(text.layout.verticalAlignment);
-    layout.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(text.layout.anchorMode);
+    layout.anchorMode = render::resolveTextAnchorMode(text.layout.anchorMode, layout.alignment);
     layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(text.layout.overflow);
 
     const auto byteLimit =
@@ -441,7 +441,7 @@ std::optional<GpuSceneLeafFailure> buildTextLeafCoverageLeaf(
     layout.wrap = text.layout.wrap;
     layout.verticalAlignment =
         static_cast<render::TextLayoutOptions::VerticalAlignment>(text.layout.verticalAlignment);
-    layout.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(text.layout.anchorMode);
+    layout.anchorMode = render::resolveTextAnchorMode(text.layout.anchorMode, layout.alignment);
     layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(text.layout.overflow);
     const auto byteLimit =
         coverageByteLimit > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())

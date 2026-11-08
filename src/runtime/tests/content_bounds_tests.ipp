@@ -263,3 +263,116 @@ void testParentedBounds(Expectations& expectations) {
                 runtime::ContentBounds{16, 5, 18, 9},
         "grandparent translation composes with parent rotation and child local placement");
 }
+
+// Lit columns of one band of rows of a composed text frame, as {first, last, any}.
+struct TextInkSpan final {
+    std::int64_t first = 1'000'000;
+    std::int64_t last = -1'000'000;
+    bool any = false;
+};
+[[nodiscard]] TextInkSpan textInkSpan(const runtime::EvaluationResult& result,
+                                      const std::int64_t rowBegin, const std::int64_t rowEnd,
+                                      const std::int64_t width) {
+    TextInkSpan span;
+    for (std::int64_t y = rowBegin; y < rowEnd; ++y) {
+        for (std::int64_t x = 0; x < width; ++x) {
+            render::Rgba32f storage = render::Rgba32f::transparent();
+            const auto* sampled = pixel(result, x, y, storage);
+            if (sampled == nullptr || sampled->alpha() <= 0.5F)
+                continue;
+            span.any = true;
+            span.first = std::min(span.first, x);
+            span.last = std::max(span.last, x);
+        }
+    }
+    return span;
+}
+
+// #560: a text block's anchor follows its alignment. The layout the CPU reference and the GPU route
+// share (the text raster's origin plus the compiled pivot) puts the block's left edge, centre or
+// right edge at the layer position, for lines of different lengths; a stored anchor mode that
+// predates the value keeps the block centre at the position, exactly as before.
+void testTextAnchorFollowsAlignment(Expectations& expectations) {
+    constexpr std::int64_t kWidth = 120;
+    constexpr double kPositionX = 60.0;
+    const runtime::CpuCompositionEvaluator evaluator;
+    const std::string content = "WWWWWWWW\nW\nWWWW";
+    const auto build = [&](const std::int64_t alignment, const std::int64_t anchorMode) {
+        auto definition = oneTextPlan({1, 1, 1, 1}, content, 12, 1, {kPositionX, 30.0},
+                                      format(kWidth, 60))
+                              ->copyDefinition();
+        auto& source = std::get<runtime::CompiledText>(definition.operations[0]);
+        source.layout = runtime::CompiledTextLayout{document::ParameterId::fromRaw(90),
+                                                    alignment,
+                                                    {document::ParameterId::fromRaw(91), 1.0},
+                                                    {document::ParameterId::fromRaw(92), 0.0}};
+        source.layout.anchorModeId = document::ParameterId::fromRaw(93);
+        source.layout.anchorMode = anchorMode;
+        return publishPlan(definition);
+    };
+    struct Bands final {
+        TextInkSpan whole;
+        TextInkSpan longLine;
+        TextInkSpan shortLine;
+        TextInkSpan mediumLine;
+        std::optional<double> pivotX;
+        bool valid = false;
+    };
+    const auto measure = [&](const std::int64_t alignment, const std::int64_t anchorMode) {
+        const auto plan = build(alignment, anchorMode);
+        const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+        Bands bands;
+        if (result.frame() == nullptr)
+            return bands;
+        bands.valid = true;
+        bands.pivotX = result.frame()->evaluatedBounds()[0].local.pivotX;
+        bands.whole = textInkSpan(result, 0, 60, kWidth);
+        // Three 12 px lines, vertically centred on y = 30: [12, 48) split in thirds.
+        bands.longLine = textInkSpan(result, 12, 24, kWidth);
+        bands.shortLine = textInkSpan(result, 24, 36, kWidth);
+        bands.mediumLine = textInkSpan(result, 36, 48, kWidth);
+        return bands;
+    };
+    constexpr auto kFollow = document::kTextAnchorModeFollowsAlignment;
+
+    const auto left = measure(0, kFollow);
+    expectations.expect(left.valid && left.whole.any && left.pivotX == 0.0 &&
+                            left.whole.first >= 59 && left.whole.first <= 62 &&
+                            left.whole.last > 70,
+                        "left-aligned text with the following anchor starts at the position");
+    expectations.expect(left.shortLine.any && left.mediumLine.any &&
+                            std::abs(left.shortLine.first - left.longLine.first) <= 2 &&
+                            std::abs(left.mediumLine.first - left.longLine.first) <= 2,
+                        "left-aligned lines of different lengths share the block's left edge");
+
+    const auto right = measure(2, kFollow);
+    expectations.expect(right.valid && right.whole.any && right.pivotX == 0.0 &&
+                            right.whole.last >= 57 && right.whole.last <= 60 &&
+                            right.whole.first < 50,
+                        "right-aligned text with the following anchor ends at the position");
+    expectations.expect(right.shortLine.any && right.mediumLine.any &&
+                            std::abs(right.shortLine.last - right.longLine.last) <= 2 &&
+                            std::abs(right.mediumLine.last - right.longLine.last) <= 2,
+                        "right-aligned lines of different lengths share the block's right edge");
+
+    const auto centre = measure(1, kFollow);
+    expectations.expect(centre.valid && centre.whole.any && centre.pivotX == 0.0 &&
+                            std::abs(static_cast<double>(centre.whole.first + centre.whole.last) / 2.0 -
+                                     (kPositionX - 0.5)) <= 2.0,
+                        "centre-aligned text with the following anchor is centred on the position");
+    expectations.expect(centre.shortLine.any && centre.mediumLine.any &&
+                            std::abs((centre.shortLine.first + centre.shortLine.last) -
+                                     (centre.longLine.first + centre.longLine.last)) <= 3 &&
+                            std::abs((centre.mediumLine.first + centre.mediumLine.last) -
+                                     (centre.longLine.first + centre.longLine.last)) <= 3,
+                        "centre-aligned lines of different lengths share the block's centre");
+
+    for (const std::int64_t alignment : {0, 1, 2}) {
+        const auto legacy = measure(alignment, 0);
+        expectations.expect(legacy.valid && legacy.whole.any && !legacy.pivotX.has_value() &&
+                                std::abs(static_cast<double>(legacy.whole.first + legacy.whole.last) / 2.0 -
+                                         (kPositionX - 0.5)) <= 2.0,
+                            "a stored anchor mode that predates the following anchor keeps the "
+                            "block centre at the position for every alignment");
+    }
+}

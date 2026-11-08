@@ -44,6 +44,10 @@
 #include <utility>
 #include <vector>
 
+static_assert(bloom::render::kTextAnchorFollowsAlignment ==
+                  bloom::document::kTextAnchorModeFollowsAlignment,
+              "the render and document spellings of the following anchor must agree");
+
 namespace bloom::runtime {
 namespace detail {
 
@@ -750,7 +754,8 @@ enum class ScalarDomain : std::uint8_t {
                         std::isfinite(text.layout.box.x) && std::isfinite(text.layout.box.y) &&
                         ((text.layout.box.x == 0.0) == (text.layout.box.y == 0.0)) &&
                         text.layout.verticalAlignment >= 0 && text.layout.verticalAlignment <= 2 &&
-                        text.layout.anchorMode >= 0 && text.layout.anchorMode <= 2 &&
+                        text.layout.anchorMode >= 0 &&
+                        text.layout.anchorMode <= render::kTextAnchorFollowsAlignment &&
                         text.layout.overflow >= 0 && text.layout.overflow <= 1);
             },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
@@ -2711,7 +2716,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     layer->framePivot
                         ? document::Vec2d{static_cast<double>(plan->format().width()) / 2.0,
                                           static_cast<double>(plan->format().height()) / 2.0}
-                        : bounds[layer->input.value()].output.centre();
+                        : bounds[layer->input.value()].output.pivot();
                 const document::Vec2d pivot{centre.x + anchor->value.x, centre.y + anchor->value.y};
                 auto matrix = detail::LayerMatrix::authored(position->value, pivot, scale->value,
                                                             rotation->value);
@@ -3901,8 +3906,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             layout.verticalAlignment =
                                 static_cast<render::TextLayoutOptions::VerticalAlignment>(
                                     text.layout.verticalAlignment);
-                            layout.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(
-                                text.layout.anchorMode);
+                            layout.anchorMode = render::resolveTextAnchorMode(
+                                text.layout.anchorMode, layout.alignment);
                             layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(
                                 text.layout.overflow);
 
@@ -3993,6 +3998,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].local = detail::boundsForWindow(descriptor.dataWindow(),
                                                                           resolved.horizontalScale,
                                                                           resolved.verticalScale);
+                            bounds[index].local.pivotX =
+                                textBlockPivotX(text.layout, alignment->value);
                             bounds[index].output = bounds[index].local;
                             if (!clipDescriptor(descriptor, index))
                                 return;
@@ -4110,7 +4117,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (geometry.local.empty())
                                 return;
 
-                            const auto contentCentre = geometry.local.centre();
+                            const auto contentCentre = geometry.local.pivot();
                             const auto centre =
                                 layer.framePivot
                                     ? decltype(contentCentre){static_cast<double>(
