@@ -329,7 +329,9 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
         std::lock_guard lock(path_coverage_detail::reservationMutex());
         path_coverage_detail::Reservation& slot = path_coverage_detail::reservation();
         if (slot.state == path_coverage_detail::ReservationState::Reserved) {
-            return {GpuPathCoverageDiagnosticCode::Busy,
+            return {slot.ownerThread != std::this_thread::get_id()
+                        ? GpuPathCoverageDiagnosticCode::ReservationHeld
+                        : GpuPathCoverageDiagnosticCode::Busy,
                     "the coverage reservation is held by a live submission"};
         }
         if (slot.state == path_coverage_detail::ReservationState::Quarantined) {

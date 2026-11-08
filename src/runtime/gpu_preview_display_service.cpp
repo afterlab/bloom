@@ -100,8 +100,11 @@ void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
 // injected stall), so the next wait is the condition wait. Returns false when it did not wait.
 [[nodiscard]] bool waitForResidentFence(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
                                         const std::uint64_t observedGeneration, bool& stalled) {
+    // A step waiting for another owner's reservation (#553) has no fence to block on: the short
+    // condition wait paces its retry instead.
     if (std::exchange(stalled, false) || core->residentExecutor == nullptr ||
-        core->residentExecutor->state() != GpuSceneExecutorJobState::Pending || core->nativeInFlight)
+        core->residentExecutor->state() != GpuSceneExecutorJobState::Pending ||
+        core->residentExecutor->waitingForReservation() || core->nativeInFlight)
         return false;
     const auto& active = core->residentNativeActive;
     if (active != nullptr && (active->residentPhase == detail::ResidentNativePhase::Display ||

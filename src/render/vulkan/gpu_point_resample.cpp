@@ -313,7 +313,9 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
         std::lock_guard lock(point_resample_detail::reservationMutex());
         point_resample_detail::Reservation& slot = point_resample_detail::reservation();
         if (slot.state == point_resample_detail::ReservationState::Reserved) {
-            return makeDiagnostic(GpuPointResampleDiagnosticCode::Busy,
+            return makeDiagnostic(slot.ownerThread != self
+                                      ? GpuPointResampleDiagnosticCode::ReservationHeld
+                                      : GpuPointResampleDiagnosticCode::Busy,
                                   "the point-resample reservation is held by a live submission");
         }
         if (slot.state == point_resample_detail::ReservationState::Quarantined) {

@@ -102,7 +102,9 @@ co-owned until the consuming submission is proved retired, and the consume path 
 thread, exact device identity, and generation before readiness or dimensions. In-flight submissions
 are serialized by one process-wide bounded reservation claimed before any native allocation: a
 proven retirement returns it, an unproven one moves the exact submission into an owner-only
-quarantine, and admission is refused while occupied. The failed producer keeps its exact
+quarantine, and admission is refused while occupied: `Busy` when the same owner thread holds it,
+`ReservationHeld` when another device owner's live submission does (#553; the same two codes
+apply to the `GpuCryptomatteCoverage` and `GpuPointResample` reservations). The failed producer keeps its exact
 reservation token and device identity: `hasUnretiredSubmission()` remains true until owner polling
 proves that quarantine retired. Failed polling never publishes a mask, and a stale token cannot
 retire a later job. Native access also checks the exact owner thread lifetime. Destroying a
@@ -249,7 +251,12 @@ one takes the same path. The lookahead begins only within the request budget lef
 pins and the in-flight job's actual bytes, and its own actual bytes stay reserved against the budget
 until its step adopts it. A later step refused beside that reservation drops the lookahead, waits for
 its fence and runs on the serial path with lookahead off for the rest of the job, so the lookahead
-never fails a scene the serial executor runs. Cancellation, a failure or device loss drops it with
+never fails a scene the serial executor runs. A step whose process-wide native reservation (path
+coverage, Cryptomatte coverage, point resample) another device owner holds, such as the export's
+frame beside the Viewer's on another owner thread, is not a failure either (#553): nothing was
+allocated, so the executor stays Pending at that step, counts one `reservationWaits`, and retries it
+on each poll until that submission retires; only a wait past the job deadline fails the step, with
+its reason. Cancellation, a failure or device loss drops the lookahead with
 the job; a lookahead whose fence is not yet proven keeps the failed job owner-drain-required until an
 owner poll proves it, like any unproven native job. It allocates under the request's processing phase
 like every upload, so device admission sees it in the phase's measured peak. Each executor therefore

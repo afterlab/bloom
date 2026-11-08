@@ -6,6 +6,10 @@
 // (plus a PointResampleV1 under a proxy); the production GpuSceneExecutor runs it on a real device and the
 // result is compared BIT FOR BIT with the unchanged CpuCompositionEvaluator oracle.
 //
+// #553: a Cryptomatte step whose process-wide coverage reservation another device owner's live
+// submission holds (the export beside the Viewer) waits for it and then runs on the GPU, instead of
+// failing the frame to the CPU path.
+//
 // It also proves the cache identity (an edited selection keeps the rank layer uploads and
 // re-dispatches only the coverage passes; an unchanged selection is a warm hit), that two mattes of
 // one type share one gather and one upload per rank layer (#549), one to four ranks (an odd count
@@ -39,6 +43,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -185,6 +190,7 @@ struct Harness final {
     GpuDevice& device;
     CpuCompositionEvaluator& evaluator;
     std::filesystem::path directory;
+    std::filesystem::path loaderPath;
 };
 
 // One plan prepared by the production builder, run natively cold then warm, and compared with the
@@ -466,6 +472,144 @@ void testCancellationAndBudget(Expectations& expectations, Harness& harness,
                         "native cancel: the executor retires and then renders the exact matte");
 }
 
+// #553: the export and the Viewer run their scenes on two device owner threads, and the Cryptomatte
+// coverage pass has one process-wide reservation. A second owner holds it here with a coverage
+// submission it does not poll yet, deterministically, the way the export's frame held it while the
+// Viewer's first frame reached its own pass. The executor waits at that step (Pending, nothing
+// dispatched, one reservation wait counted) instead of failing the frame, and runs the exact matte
+// on the GPU once the other owner's submission retires.
+void testReservationHeldByAnotherOwner(Expectations& expectations, Harness& harness,
+                                       const bloom::document::AssetRecord& asset) {
+    using bloom::runtime::GpuSceneExecutorJobState;
+    using bloom::runtime::GpuSceneExecutorPollResult;
+    auto context = GpuSceneMediaContext::fromEvaluator(harness.evaluator);
+    context.assetBaseDirectory = harness.directory;
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto plan = cryptomattePlan(asset, {"cube", "floor"}, false, 98000);
+    const auto mine = builder.build(plan, request(*plan, false));
+    const auto theirs = builder.build(plan, request(*plan, false));
+    auto cache = GpuSceneCache::create(harness.device, GpuSceneCacheBudgets{});
+    auto executor = cache ? GpuSceneExecutor::create(harness.device, *cache.cache)
+                          : decltype(GpuSceneExecutor::create(harness.device, *cache.cache)){};
+    expectations.expect(mine.hasValue() && theirs.hasValue() && cache.hasValue() &&
+                            executor.hasValue(),
+                        "other owner: prepares and creates an executor");
+    if (!mine || !theirs || !cache || !executor)
+        return;
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool holding = false;
+    bool release = false;
+    bool finished = false;
+    std::string otherError;
+    std::thread other([&] {
+        const auto report = [&](std::string error) {
+            std::lock_guard lock(mutex);
+            otherError = std::move(error);
+            holding = true;
+            finished = true;
+            changed.notify_all();
+        };
+        GpuDeviceCreationOptions options;
+        options.loader_path = harness.loaderPath;
+        auto device = GpuDevice::create(options);
+        if (!device)
+            return report("device: " + device.diagnostic.message);
+        auto otherCache = GpuSceneCache::create(*device.device, GpuSceneCacheBudgets{});
+        auto otherExecutor =
+            otherCache ? GpuSceneExecutor::create(*device.device, *otherCache.cache)
+                       : decltype(GpuSceneExecutor::create(*device.device, *otherCache.cache)){};
+        if (!otherCache || !otherExecutor)
+            return report("executor");
+        auto& native = *otherExecutor.executor;
+        if (native.begin(theirs.scene, kSceneBudget).code !=
+            bloom::runtime::GpuSceneExecutorDiagnosticCode::None)
+            return report("begin");
+        // Poll one step at a time until the coverage pass is submitted, then stop polling: its
+        // reservation stays held until this owner observes the submission retire.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (native.counters().cryptomatteDispatches == 0) {
+            if (native.poll() != GpuSceneExecutorPollResult::Pending ||
+                std::chrono::steady_clock::now() > deadline)
+                return report("never reached its coverage pass");
+        }
+        {
+            std::unique_lock lock(mutex);
+            holding = true;
+            changed.notify_all();
+            changed.wait(lock, [&] { return release; });
+        }
+        auto poll = GpuSceneExecutorPollResult::Pending;
+        while (poll == GpuSceneExecutorPollResult::Pending &&
+               std::chrono::steady_clock::now() < deadline + std::chrono::seconds(10))
+            poll = native.poll();
+        const bool ready = poll == GpuSceneExecutorPollResult::Ready && native.takeImage();
+        otherExecutor.executor.reset();
+        otherCache.cache.reset();
+        report(ready ? std::string{} : "did not complete after its release");
+    });
+    const auto otherFailed = [&] {
+        std::lock_guard lock(mutex);
+        return !otherError.empty();
+    };
+    {
+        std::unique_lock lock(mutex);
+        changed.wait(lock, [&] { return holding; });
+    }
+    std::size_t passes = 0;
+    for (const auto& command : mine.scene->commands())
+        passes += std::holds_alternative<GpuSceneCryptomatteCommand>(command) ? 1U : 0U;
+    auto& native = *executor.executor;
+    const auto begun = native.begin(mine.scene, kSceneBudget);
+    expectations.expect(begun.code == bloom::runtime::GpuSceneExecutorDiagnosticCode::None,
+                        "other owner: begin accepts the scene");
+    auto poll = GpuSceneExecutorPollResult::Pending;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!otherFailed() && poll == GpuSceneExecutorPollResult::Pending &&
+           native.counters().reservationWaits == 0 && std::chrono::steady_clock::now() < deadline)
+        poll = native.poll();
+    // Keep polling well past the step: the job waits and never fails while the reservation is held.
+    for (int index = 0; index < 50 && poll == GpuSceneExecutorPollResult::Pending; ++index) {
+        poll = native.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto waiting = native.counters();
+    expectations.expect(!otherFailed(), "other owner: holds the coverage reservation");
+    expectations.expect(poll == GpuSceneExecutorPollResult::Pending &&
+                            native.state() == GpuSceneExecutorJobState::Pending,
+                        "other owner: the held reservation leaves the job Pending, not Failed (" +
+                            native.diagnostic().message + ")");
+    expectations.expect(waiting.reservationWaits == 1 && waiting.cryptomatteDispatches == 0,
+                        "other owner: the coverage step waits once and dispatches nothing");
+    expectations.expect(native.waitingForReservation(),
+                        "other owner: the executor reports the wait, with no fence to block on");
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    changed.notify_all();
+    while (poll == GpuSceneExecutorPollResult::Pending &&
+           std::chrono::steady_clock::now() < deadline + std::chrono::seconds(10))
+        poll = native.poll();
+    other.join();
+    expectations.expect(!native.waitingForReservation(),
+                        "other owner: the wait ends when the step runs");
+    expectations.expect(otherError.empty(), "other owner: completes after its release (" +
+                                                otherError + ")");
+    const auto image = poll == GpuSceneExecutorPollResult::Ready ? native.takeImage() : nullptr;
+    auto oracleRequest = request(*plan, false);
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = harness.evaluator.evaluate(plan, oracleRequest, {});
+    const auto readback = image ? readbackResidentImage(*image, kSceneBudget)
+                                : decltype(readbackResidentImage(*image, kSceneBudget)){};
+    expectations.expect(image != nullptr && passes != 0 &&
+                            native.counters().cryptomatteDispatches == passes &&
+                            frame.frame() != nullptr && readback.hasValue() &&
+                            pixelsExact(readback.pixels, frame.frame()->processImage().pixels()),
+                        "other owner: the waiting step then renders the exact matte on the GPU");
+}
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -503,7 +647,7 @@ int main(const int argc, char** argv) {
                       << device.diagnostic.message << '\n';
             return 77;
         }
-        Harness harness{*device.device, evaluator, directory};
+        Harness harness{*device.device, evaluator, directory, options.loader_path};
         const auto sky =
             bloom::runtime::formatCryptomatteRawId(bloom::runtime::cryptomatteNameId("sky"));
         testParity(expectations, harness, manifest, {"cube", "floor"}, false, false, 93000,
@@ -527,6 +671,7 @@ int main(const int argc, char** argv) {
         testSelectionEdit(expectations, harness, manifest);
         testSharedLayers(expectations, harness, manifest);
         testCancellationAndBudget(expectations, harness, manifest);
+        testReservationHeldByAnotherOwner(expectations, harness, manifest);
         if (!expectations.ok()) {
             std::cerr << "FAIL: native Cryptomatte expectations failed\n";
             return 1;

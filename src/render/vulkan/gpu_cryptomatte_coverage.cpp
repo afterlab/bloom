@@ -308,7 +308,8 @@ GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
         cryptomatte_coverage_detail::Reservation& slot = cryptomatte_coverage_detail::reservation();
         if (slot.state == cryptomatte_coverage_detail::ReservationState::Reserved) {
             return makeDiagnostic(
-                GpuCryptomatteCoverageDiagnosticCode::Busy,
+                slot.ownerThread != self ? GpuCryptomatteCoverageDiagnosticCode::ReservationHeld
+                                         : GpuCryptomatteCoverageDiagnosticCode::Busy,
                 "the cryptomatte-coverage reservation is held by a live submission");
         }
         if (slot.state == cryptomatte_coverage_detail::ReservationState::Quarantined) {

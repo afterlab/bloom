@@ -42,6 +42,8 @@ GpuSceneExecutor::Impl::startPointResampleStep(const GpuSceneExecutorStep& step)
     };
     const auto native = pointResample->begin(parameters, remainingBudget());
     if (native.code != render::GpuPointResampleDiagnosticCode::None) {
+        reservationHeldElsewhere =
+            native.code == render::GpuPointResampleDiagnosticCode::ReservationHeld;
         return diagnosticFromPointResample(native);
     }
     ++counters.pointResampleDispatches;

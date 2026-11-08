@@ -66,8 +66,8 @@ void runOwnerThread(OwnerThreadContext& context) {
     bool ready = false;
     for (int attempt = 0; attempt < 2000 && !ready; ++attempt) {
         const auto began = producer.coverage->begin(parameters, *geometry.value(), 1ULL << 34ULL);
-        if (began.code == GpuPathCoverageDiagnosticCode::Busy) {
-            // Another device owner holds the single in-flight reservation; retry.
+        if (began.code == GpuPathCoverageDiagnosticCode::ReservationHeld) {
+            // Another device owner holds the single in-flight reservation; retry (#553).
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
@@ -87,7 +87,7 @@ void runOwnerThread(OwnerThreadContext& context) {
     }
     if (!ready) {
         if (context.error.empty()) {
-            context.error = "begin never left Busy";
+            context.error = "begin never left ReservationHeld";
         }
         context.ready.store(true);
         return;

@@ -46,6 +46,8 @@ GpuSceneExecutor::Impl::startCryptomatteCoverageStep(const GpuSceneExecutorStep&
     };
     const auto native = cryptomatteCoverage->begin(parameters, remainingBudget());
     if (native.code != render::GpuCryptomatteCoverageDiagnosticCode::None) {
+        reservationHeldElsewhere =
+            native.code == render::GpuCryptomatteCoverageDiagnosticCode::ReservationHeld;
         return diagnosticFromCryptomatteCoverage(native);
     }
     ++counters.cryptomatteDispatches;

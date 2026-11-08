@@ -115,7 +115,10 @@ GpuSceneExecutor::Impl::startCoveredStep(const GpuSceneExecutorStep& step) {
             pathCoverage->begin(coverageParameters, *step.coverageGeometry, remaining);
         if (native.code != render::GpuPathCoverageDiagnosticCode::None) {
             // A refused begin has no unretired submission, so the step fails without a drain and
-            // the caller takes the CPU path.
+            // the caller takes the CPU path, unless another device owner holds the reservation
+            // (#553): the executor then retries the step once that submission retires.
+            reservationHeldElsewhere =
+                native.code == render::GpuPathCoverageDiagnosticCode::ReservationHeld;
             return diagnosticFromPathCoverage(native);
         }
         ++counters.coverageDispatches;

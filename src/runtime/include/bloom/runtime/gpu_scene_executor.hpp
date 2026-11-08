@@ -152,6 +152,9 @@ struct GpuSceneExecutorCounters final {
     std::uint64_t pointResampleDispatches = 0;
     // #364: CryptomatteCoverageV1 dispatches (zero on a warm cached matte).
     std::uint64_t cryptomatteDispatches = 0;
+    // #553: steps that waited because another device owner's live submission held a process-wide
+    // native reservation (Cryptomatte coverage, point resample, path coverage); once per step.
+    std::uint64_t reservationWaits = 0;
     // Bounded OCIO native-program cache: creations, warm reuses, evictions, and refusals.
     std::uint64_t ocioProgramCreations = 0;
     std::uint64_t ocioProgramReuses = 0;
@@ -377,6 +380,10 @@ class GpuSceneExecutor final {
     // so the next poll() makes progress. False at once when no native submission is pending, off
     // the owner thread, or while an injected fault holds a job pending. Changes no state.
     [[nodiscard]] bool waitForNative(std::chrono::nanoseconds timeout) noexcept;
+
+    // #553: the next step waits for another device owner's process-wide native reservation, so
+    // there is no fence of this job to block on and the owner paces its next poll itself.
+    [[nodiscard]] bool waitingForReservation() const noexcept;
 
     // The resident output image while Ready; nullptr otherwise. Ownership stays with the executor.
     [[nodiscard]] const render::GpuImage* image() const noexcept;

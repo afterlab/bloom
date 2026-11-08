@@ -572,6 +572,11 @@ struct GpuSceneExecutor::Impl final {
     // First step index not yet ruled out as the next lookahead candidate (monotone per job).
     std::size_t lookaheadScan = 0;
     std::chrono::steady_clock::time_point lookaheadStart{};
+    // #553: the step's native begin found its process-wide reservation held by another device
+    // owner's live submission. The step is retried on the next poll, without failing the job,
+    // until that submission retires or the job deadline passes (`reservationWaitStart`).
+    bool reservationHeldElsewhere = false;
+    std::optional<std::chrono::steady_clock::time_point> reservationWaitStart;
 
     [[nodiscard]] bool onOwnerThread() const noexcept {
         return device != nullptr && device->isOwnerThread();

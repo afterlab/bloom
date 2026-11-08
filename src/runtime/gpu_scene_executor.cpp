@@ -311,6 +311,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
     }
 
     impl.cursor = 0;
+    impl.reservationHeldElsewhere = false;
+    impl.reservationWaitStart.reset();
     impl.ocioJobSerialStart = impl.ocioProgramSerial;
     impl.state = GpuSceneExecutorJobState::Pending;
     impl.diagnostic = {};
@@ -459,7 +461,27 @@ GpuSceneExecutorPollResult GpuSceneExecutor::pollOnce() {
         impl.startLookahead();
         return GpuSceneExecutorPollResult::Pending;
     }
+    impl.reservationHeldElsewhere = false;
     const auto started = impl.startStep(impl.steps[impl.cursor]);
+    // #553: another device owner (the export beside the Viewer, say) holds the step's process-wide
+    // reservation for one live submission. Nothing was allocated; the step waits for that
+    // submission to retire and runs on the GPU then, instead of failing the frame to the CPU.
+    if (std::exchange(impl.reservationHeldElsewhere, false)) {
+        const auto now = std::chrono::steady_clock::now();
+        if (!impl.reservationWaitStart) {
+            impl.reservationWaitStart = now;
+            ++impl.counters.reservationWaits;
+        }
+        if (now - *impl.reservationWaitStart <
+            std::chrono::milliseconds(impl.budgets.jobDeadlineMilliseconds))
+            return GpuSceneExecutorPollResult::Pending;
+        impl.reservationWaitStart.reset();
+        impl.fail(started.code,
+                  started.message + "; another device owner held it past the job deadline",
+                  false);
+        return GpuSceneExecutorPollResult::Failure;
+    }
+    impl.reservationWaitStart.reset();
     if (started.code != GpuSceneExecutorDiagnosticCode::None && retryWithoutLookahead()) {
         return impl.dropLookahead() ? pollOnce() : GpuSceneExecutorPollResult::Pending;
     }
@@ -569,6 +591,10 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
 // Folded additive accessor (declared in the public header). It introduces no field or layout
 // change; it reports both the executor's own native-in-flight flag and any owned pipeline's
 // unretired submission. Kept here in the owning translation unit rather than a tiny separate one.
+bool GpuSceneExecutor::waitingForReservation() const noexcept {
+    return impl_ != nullptr && impl_->reservationWaitStart.has_value();
+}
+
 bool GpuSceneExecutor::hasUnretiredSubmission() const noexcept {
     return impl_ != nullptr && (impl_->nativeInFlight || impl_->hasUnretiredNative());
 }

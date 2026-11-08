@@ -76,6 +76,10 @@ enum class GpuCryptomatteCoverageDiagnosticCode : std::uint8_t {
     AllocationFailed,
     Cancelled,
     NativeTimeout,
+    // Another device owner's live submission holds the process-wide reservation (#553): nothing
+    // was allocated, and the same begin succeeds once that submission retires. A caller waits and
+    // retries; it is not a failure of this request. The same owner holding it stays Busy.
+    ReservationHeld,
 };
 
 struct GpuCryptomatteCoverageDiagnostic final {
