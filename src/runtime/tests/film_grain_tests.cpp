@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -105,6 +106,13 @@ std::array<float, 4> at(const render::Rgba32fImage& picture, const std::int64_t 
     if (const auto pixel = picture.read(x, y))
         std::ranges::copy(pixel.value()->components(), value.begin());
     return value;
+}
+
+// Whether two images hold the same bits.
+bool identical(const render::Rgba32fImage& a, const render::Rgba32fImage& b) {
+    const auto x = a.pixels();
+    const auto y = b.pixels();
+    return x.size() == y.size() && std::memcmp(x.data(), y.data(), x.size_bytes()) == 0;
 }
 
 struct Stats final {
@@ -580,15 +588,349 @@ void testMonochromeOffIsUnchanged() {
     expect(tables == 0xf82cc1e137a703f8ULL, "Monochrome off gives the GPU the table it always did");
     expect(identities == 0x562610ff73852333ULL,
            "Monochrome off keeps the cache identity a frame always had");
-    // The GPU program is the one it always was, with one branch this table never takes.
+    // The GPU program is the one it always was, with the Monochrome branch and, since #565, the
+    // Sensor Noise function and the one line that enters it, which this table never takes.
     const std::string branch = " if (k1.w != 0.0) { grain = grain.xxx; }\n";
     auto program = runtime::detail::filmGrainProgramText();
     const auto at = program.find(branch);
     expect(at != std::string::npos, "the program holds the Monochrome branch");
     if (at != std::string::npos)
         program.erase(at, branch.size());
+    const std::string entry = " if (k1.w >= 2.0) { return bloom_film_grain_sensor(";
+    const auto entryAt = program.find(entry);
+    expect(entryAt != std::string::npos, "the program holds the Sensor Noise entry");
+    if (entryAt != std::string::npos)
+        program.erase(entryAt, program.find('\n', entryAt) + 1 - entryAt);
+    const std::string function = "vec4 bloom_film_grain_sensor(";
+    const auto functionAt = program.find(function);
+    const auto wrapperAt = program.find("vec4 bloom_film_grain(ivec2 c) {");
+    expect(functionAt != std::string::npos && wrapperAt != std::string::npos &&
+               functionAt < wrapperAt,
+           "the program holds the Sensor Noise function before the wrapper");
+    if (functionAt != std::string::npos && wrapperAt != std::string::npos && functionAt < wrapperAt)
+        program.erase(functionAt, wrapperAt - functionAt);
     expect(digest(kDigestStart, program.data(), program.size()) == 0x6ce0e680bb6a981dULL,
-           "without that branch the GPU program is the one it always was");
+           "without those the GPU program is the one it always was");
+}
+
+// #565 Sensor Noise: the formula against an independent reading, the shadow weighting, luma-neutral
+// low-frequency blotches, a fixed pattern that never changes and an animated grain that does, the
+// seeds, the cache identity of each, and a node left in Film mode that no Sensor Noise value touches.
+void testSensorNoise() {
+    using film_grain_test::everyPathSensor;
+    using film_grain_test::fixedPatternOnly;
+    const Frame frame;
+    const GrainValues sensor = everyPathSensor();
+
+    // The formula over HDR and partial alpha, one term at a time in the order the program adds them.
+    const auto value = [&](const GrainValues& v, const std::string& role) { return v.scalars.at(role); };
+    const std::array<Straight, 4> colors{Straight{0.05F, 0.02F, 0.01F, 0.5F},
+                                         Straight{0.3F, 0.25F, 0.2F, 0.75F},
+                                         Straight{0.8F, 0.6F, 0.5F, 1.0F},
+                                         Straight{6.0F, 3.0F, 1.5F, 0.6F}};
+    for (const bool monochrome : {false, true}) {
+        GrainValues look = sensor;
+        look.monochrome = monochrome;
+        for (const auto color : colors) {
+            const double time = 5.0;
+            const auto input = image(frame, color);
+            const auto output = apply(look, input, time);
+            const double aspect = 1.0;
+            const double norm = core::film_grain::kNormalise;
+            const double intensity = value(look, "intensity") * norm;
+            const auto fine = core::film_grain::stream(look.seed, 5);
+            const auto blotchStream = core::film_grain::blotchStream(look.seed, 5);
+            const auto fixedStream = core::film_grain::fixedStream(look.seed);
+            double worst = 0.0;
+            for (std::int64_t y = 0; y < 64; y += 5)
+                for (std::int64_t x = 0; x < 96; x += 7) {
+                    const std::array<double, 3> premultiplied{
+                        static_cast<double>(color.red * color.alpha),
+                        static_cast<double>(color.green * color.alpha),
+                        static_cast<double>(color.blue * color.alpha)};
+                    const double luma = (0.2126 * premultiplied[0] + 0.7152 * premultiplied[1] +
+                                         0.0722 * premultiplied[2]) /
+                                        static_cast<double>(color.alpha);
+                    const double scale =
+                        static_cast<double>(color.alpha) /
+                        (1.0 + value(look, "shadowWeighting") / document::kFilmGrainMidGrey * luma);
+                    const double size = value(look, "size");
+                    const auto px = static_cast<float>((static_cast<double>(x) + 0.5) * aspect / size);
+                    const auto py = static_cast<float>((static_cast<double>(y) + 0.5) / size);
+                    const auto grain = core::film_grain::noise(px, py, fine);
+                    const auto ratio = static_cast<float>(size / value(look, "blotchSize"));
+                    const auto raw =
+                        core::film_grain::noise(px * ratio, py * ratio, blotchStream);
+                    const double mean = (static_cast<double>(raw[0]) + static_cast<double>(raw[1]) +
+                                         static_cast<double>(raw[2])) /
+                                        3.0;
+                    const auto pattern = core::film_grain::noise(px, py, fixedStream);
+                    const auto got = at(*output, x, y);
+                    const std::array amounts{value(look, "redAmount"), value(look, "greenAmount"),
+                                             value(look, "blueAmount")};
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        const double expected =
+                            premultiplied[c] +
+                            scale * (intensity * amounts[c] *
+                                         static_cast<double>(grain[monochrome ? 0 : c]) +
+                                     intensity * value(look, "chromaBlotches") *
+                                         (static_cast<double>(raw[c]) - mean) +
+                                     intensity * value(look, "fixedPattern") *
+                                         static_cast<double>(pattern[c]));
+                        worst = std::max(worst, std::abs(expected - static_cast<double>(got[c])) /
+                                                    std::max(1.0, std::abs(expected)));
+                    }
+                    expect(got[3] == color.alpha, "Sensor Noise keeps alpha");
+                }
+            expect(worst < 2e-5, "Sensor Noise matches an independent reading of its formula");
+        }
+    }
+
+    // Weighted toward the shadows: the same grain on a dark and a bright flat image, and it never
+    // exceeds the unweighted grain.
+    const auto deviation = [&](const GrainValues& v, const Straight color, const double time) {
+        const auto input = image(frame, color);
+        const auto output = apply(v, input, time);
+        std::vector<double> deltas;
+        for (std::int64_t y = 0; y < 64; ++y)
+            for (std::int64_t x = 0; x < 96; ++x)
+                deltas.push_back(static_cast<double>(at(*output, x, y)[1]) - static_cast<double>(color.green));
+        return statsOf(deltas).deviation;
+    };
+    GrainValues fineOnly;
+    fineOnly.mode = document::kFilmGrainSensorNoise;
+    fineOnly.scalars = {{"intensity", 0.05}, {"chromaBlotches", 0.0}, {"fixedPattern", 0.0}};
+    const double dark = deviation(fineOnly, Straight{0.02F, 0.02F, 0.02F, 1.0F}, 1.0);
+    const double mid = deviation(fineOnly, Straight{0.18F, 0.18F, 0.18F, 1.0F}, 1.0);
+    const double bright = deviation(fineOnly, Straight{0.9F, 0.9F, 0.9F, 1.0F}, 1.0);
+    expect(dark > mid && mid > bright && dark > 3.0 * bright,
+           "Sensor Noise is weighted toward the shadows");
+    GrainValues evenly = fineOnly;
+    evenly.scalars["shadowWeighting"] = 0.0;
+    const double evenDark = deviation(evenly, Straight{0.02F, 0.02F, 0.02F, 1.0F}, 1.0);
+    const double evenBright = deviation(evenly, Straight{0.9F, 0.9F, 0.9F, 1.0F}, 1.0);
+    expect(std::abs(evenDark - evenBright) < 0.1 * evenDark && std::abs(evenDark - 0.05) < 0.01,
+           "with no shadow weighting the noise is even and the intensity's");
+
+    // The blotches add no brightness (the channels' deltas sum to nothing), are soft where the grain
+    // is not, and are wider as their size grows.
+    GrainValues blotches;
+    blotches.mode = document::kFilmGrainSensorNoise;
+    blotches.scalars = {{"intensity", 0.1}, {"redAmount", 0.0}, {"greenAmount", 0.0},
+                        {"blueAmount", 0.0}, {"shadowWeighting", 0.0}, {"chromaBlotches", 1.0},
+                        {"blotchSize", 16.0}, {"size", 1.0}};
+    const Straight grey{0.4F, 0.4F, 0.4F, 1.0F};
+    const auto flat = image(frame, grey);
+    const auto blotched = apply(blotches, flat, 2.0);
+    double neutral = 0.0;
+    double coloured = 0.0;
+    double neighbours = 0.0;
+    double spread = 0.0;
+    for (std::int64_t y = 0; y < 63; ++y)
+        for (std::int64_t x = 0; x < 95; ++x) {
+            const auto p = at(*blotched, x, y);
+            const auto q = at(*blotched, x + 1, y);
+            neutral = std::max(neutral, std::abs(static_cast<double>(p[0] + p[1] + p[2]) - 1.2));
+            coloured = std::max(coloured, std::abs(static_cast<double>(p[0] - p[1])));
+            neighbours += std::abs(static_cast<double>(q[0] - p[0]));
+            spread += std::abs(static_cast<double>(p[0]) - 0.4);
+        }
+    expect(neutral < 1e-4, "chroma blotches add no brightness");
+    expect(coloured > 0.01, "chroma blotches carry color");
+    expect(neighbours < 0.25 * spread, "chroma blotches are soft: neighbors agree");
+    GrainValues wide = blotches;
+    wide.scalars["blotchSize"] = 64.0;
+    const auto widened = apply(wide, flat, 2.0);
+    double wideNeighbours = 0.0;
+    for (std::int64_t y = 0; y < 63; ++y)
+        for (std::int64_t x = 0; x < 95; ++x)
+            wideNeighbours += std::abs(static_cast<double>(at(*widened, x + 1, y)[0]) -
+                                       static_cast<double>(at(*widened, x, y)[0]));
+    expect(wideNeighbours < 0.6 * neighbours, "a larger blotch size is smoother");
+
+    // The fixed pattern is the same on every frame and every animation; the grain is not.
+    const auto input = image(frame, Straight{0.1F, 0.1F, 0.1F, 1.0F});
+    GrainValues without = sensor;
+    without.scalars["fixedPattern"] = 0.0;
+    const auto patternAt = [&](const double time, const bool held) {
+        GrainValues with = sensor;
+        with.animation = held ? document::kFilmGrainHeld : document::kFilmGrainEveryFrame;
+        without.animation = with.animation;
+        const auto a = apply(with, input, time);
+        const auto b = apply(without, input, time);
+        std::vector<float> difference;
+        for (std::int64_t y = 0; y < 64; y += 3)
+            for (std::int64_t x = 0; x < 96; x += 3)
+                for (std::size_t c = 0; c < 3; ++c)
+                    difference.push_back(at(*a, x, y)[c] - at(*b, x, y)[c]);
+        return difference;
+    };
+    const auto first = patternAt(2.0, false);
+    const auto later = patternAt(917.0, false);
+    const auto heldPattern = patternAt(2.0, true);
+    double drift = 0.0;
+    double size = 0.0;
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        drift = std::max({drift, static_cast<double>(std::abs(first[i] - later[i])),
+                          static_cast<double>(std::abs(first[i] - heldPattern[i]))});
+        size = std::max(size, static_cast<double>(std::abs(first[i])));
+    }
+    expect(size > 0.01 && drift < 1e-5, "the fixed pattern is the same on every frame");
+    const auto frameA = apply(sensor, input, 2.0);
+    const auto frameB = apply(sensor, input, 3.0);
+    expect(!identical(*frameA, *frameB), "animated Sensor Noise varies from frame to frame");
+    GrainValues reseeded = sensor;
+    reseeded.seed = 43;
+    expect(!identical(*apply(reseeded, input, 2.0), *frameA),
+           "another seed draws other Sensor Noise");
+    GrainValues reseededPattern = sensor;
+    reseededPattern.seed = 99;
+    expect(!identical(*apply(reseededPattern, input, 9.0), *apply(sensor, input, 9.0)),
+           "another seed draws another fixed pattern");
+
+    // Through the evaluator and its operation cache, as an authored node runs: each frame has its own
+    // grain, held keeps one pattern, and a fixed pattern alone is the same picture on every frame.
+    {
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto pixels = [&](const GrainValues& values, const std::int64_t frameNumber) {
+            const auto plan = film_grain_test::grainPlan(values);
+            runtime::EvaluationRequest request{*core::RationalTime::create(frameNumber, 24),
+                                               plan->output(),
+                                               runtime::CompositionFormatResolution{}};
+            request.pixelStorageByteLimit = 1U << 26U;
+            const auto result = evaluator.evaluate(plan, request, {});
+            if (result.frame() == nullptr)
+                throw std::logic_error("the plan evaluates");
+            const auto view = result.frame()->processImage().pixels();
+            return std::vector<render::Rgba32f>(view.begin(), view.end());
+        };
+        const auto sameBits = [](const std::vector<render::Rgba32f>& a,
+                                 const std::vector<render::Rgba32f>& b) {
+            return a.size() == b.size() &&
+                   std::memcmp(a.data(), b.data(), a.size() * sizeof(render::Rgba32f)) == 0;
+        };
+        GrainValues animated = everyPathSensor();
+        GrainValues heldLook = everyPathSensor();
+        heldLook.animation = document::kFilmGrainHeld;
+        const auto effectIndex = runtime::OperationIndex::fromRaw(1);
+        expect(film_grain_test::grainPlan(animated)->operationTimeDependent(effectIndex) &&
+                   !film_grain_test::grainPlan(heldLook)->operationTimeDependent(effectIndex),
+               "animated Sensor Noise varies with time and held does not");
+        const auto one = pixels(animated, 1);
+        const auto two = pixels(animated, 2);
+        expect(!sameBits(one, two) && sameBits(one, pixels(animated, 1)),
+               "a new frame is new Sensor Noise, and returning to a frame draws it again");
+        expect(sameBits(pixels(heldLook, 1), pixels(heldLook, 2)),
+               "held Sensor Noise is one pattern on every frame");
+        // The fixed pattern is the difference between the same frame with it on and off.
+        const auto onOne = pixels(animated, 1);
+        const auto onTwo = pixels(animated, 2);
+        GrainValues noPattern = animated;
+        noPattern.scalars["fixedPattern"] = 0.0;
+        const auto offOne = pixels(noPattern, 1);
+        const auto offTwo = pixels(noPattern, 2);
+        double patternDrift = 0.0;
+        double patternSize = 0.0;
+        for (std::size_t i = 0; i < onOne.size(); ++i)
+            for (std::size_t c = 0; c < 3; ++c) {
+                const float atOne = onOne[i].components()[c] - offOne[i].components()[c];
+                const float atTwo = onTwo[i].components()[c] - offTwo[i].components()[c];
+                patternDrift = std::max(patternDrift, static_cast<double>(std::abs(atOne - atTwo)));
+                patternSize = std::max(patternSize, static_cast<double>(std::abs(atOne)));
+            }
+        expect(patternSize > 0.001 && patternDrift < 1e-4,
+               "the fixed pattern is the same on every frame while the grain around it changes");
+        const GrainValues only = film_grain_test::fixedPatternOnly();
+        expect(sameBits(pixels(only, 1), pixels(only, 2)) && sameBits(pixels(only, 1), pixels(only, 40)),
+               "a fixed pattern alone draws the same picture on every frame");
+        GrainValues clean;
+        clean.scalars = {{"intensity", 0.0}};
+        expect(!sameBits(pixels(only, 1), pixels(clean, 1)),
+               "a fixed pattern alone is not the clean picture");
+    }
+
+    // Cache identity: a fixed pattern alone has one identity on every frame; with grain or blotches
+    // every frame has its own; a fixed pattern is part of every frame's identity.
+    const auto fixedA = prepare(fixedPatternOnly(), 4.0);
+    const auto fixedB = prepare(fixedPatternOnly(), 500.0);
+    expect(fixedA && fixedB && !fixedA->identity && fixedA->data == fixedB->data &&
+               runtime::detail::colorGradeIdentity(*fixedA) ==
+                   runtime::detail::colorGradeIdentity(*fixedB),
+           "a fixed pattern alone has one cache identity on every frame");
+    const auto grainA = prepare(sensor, 4.0);
+    const auto grainB = prepare(sensor, 500.0);
+    expect(grainA && grainB &&
+               runtime::detail::colorGradeIdentity(*grainA) !=
+                   runtime::detail::colorGradeIdentity(*grainB),
+           "animated Sensor Noise has its own cache identity on every frame");
+    GrainValues moved = sensor;
+    moved.scalars["fixedPattern"] = 0.7;
+    expect(runtime::detail::colorGradeIdentity(*grainA) !=
+               runtime::detail::colorGradeIdentity(*prepare(moved, 4.0)),
+           "the fixed pattern's amount is part of the identity");
+    GrainValues monochromeLook = sensor;
+    monochromeLook.monochrome = true;
+    expect(runtime::detail::colorGradeIdentity(*grainA) !=
+               runtime::detail::colorGradeIdentity(*prepare(monochromeLook, 4.0)),
+           "Monochrome is part of Sensor Noise's identity");
+    GrainValues nothing = sensor;
+    for (const char* role : {"intensity"})
+        nothing.scalars[role] = 0.0;
+    expect(prepare(nothing)->identity, "Sensor Noise with no intensity is an identity");
+
+    // Film mode reads no Sensor Noise value: moving them changes neither the table nor a pixel.
+    GrainValues film = film_grain_test::everyPath();
+    GrainValues filmMoved = film;
+    filmMoved.scalars["shadowWeighting"] = 4.0;
+    filmMoved.scalars["chromaBlotches"] = 3.0;
+    filmMoved.scalars["blotchSize"] = 100.0;
+    filmMoved.scalars["fixedPattern"] = 2.0;
+    expect(prepare(film, 3.0)->data == prepare(filmMoved, 3.0)->data &&
+               runtime::detail::colorGradeIdentity(*prepare(film, 3.0)) ==
+                   runtime::detail::colorGradeIdentity(*prepare(filmMoved, 3.0)) &&
+               identical(*apply(film, input, 3.0), *apply(filmMoved, input, 3.0)),
+           "Film mode ignores every Sensor Noise value");
+    expect(prepare(film, 3.0)->data.size() == runtime::detail::kFilmGrainTableFloats,
+           "Film mode keeps its table");
+    // Sensor Noise differs from Film.
+    GrainValues asFilm = sensor;
+    asFilm.mode = document::kFilmGrainFilm;
+    expect(!identical(*apply(asFilm, input, 3.0), *apply(sensor, input, 3.0)),
+           "Sensor Noise is not Film");
+
+    // The table and the program: one fixed program for both modes' frames, the geometry before the
+    // extras, and a table that does not match its mode is refused.
+    const auto window = render::ImageWindow::create(-4, -3, 32, 24);
+    const auto data = runtime::detail::filmGrainProgramData(*grainA, *window.value(), 1.0, 1.0, 1.0);
+    expect(data && data->size() == runtime::detail::kFilmGrainProgramFloats + 8 &&
+               runtime::detail::validFilmGrainProgramData(*data),
+           "the Sensor Noise program data holds the geometry and the extras");
+    if (data) {
+        auto truncated = *data;
+        truncated.resize(runtime::detail::kFilmGrainProgramFloats);
+        expect(!runtime::detail::validFilmGrainProgramData(truncated),
+               "Sensor Noise program data without its extras is refused");
+        auto filmData = *runtime::detail::filmGrainProgramData(*prepare(film, 3.0), *window.value(),
+                                                              1.0, 1.0, 1.0);
+        filmData.resize(runtime::detail::kFilmGrainProgramFloats + 8);
+        expect(!runtime::detail::validFilmGrainProgramData(filmData),
+               "Film program data with extras is refused");
+        const auto built =
+            runtime::detail::buildColorGradeProgram(runtime::detail::ColorGradeKind::FilmGrain, *data);
+        const auto filmBuilt = runtime::detail::buildColorGradeProgram(
+            runtime::detail::ColorGradeKind::FilmGrain,
+            *runtime::detail::filmGrainProgramData(*prepare(film, 3.0), *window.value(), 1.0, 1.0,
+                                                   1.0));
+        expect(built.succeeded() && filmBuilt.succeeded() &&
+                   built.program()->shaderText == filmBuilt.program()->shaderText,
+               "one fixed program draws both modes");
+    }
+    GrainValues badMode;
+    badMode.mode = 2;
+    expect(!prepare(badMode).has_value(), "a mode outside its domain is refused");
+    GrainValues badSize = sensor;
+    badSize.scalars["blotchSize"] = 0.5;
+    expect(!prepare(badSize).has_value(), "a blotch size outside its domain is refused");
 }
 
 void testMonochrome() {
@@ -843,6 +1185,7 @@ int main() {
         testPrepared();
         testMonochromeOffIsUnchanged();
         testMonochrome();
+        testSensorNoise();
         testBudgetAndCancellation();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

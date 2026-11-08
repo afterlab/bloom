@@ -318,6 +318,20 @@ SCENARIOS["frame-rate-hold-2k"] = {
     ],
 }
 
+# #565: Film Grain's Sensor Noise mode over a plate: shadow-weighted grain drawn anew for every frame
+# (no key needed), chroma blotches, and a fixed pattern that is the same on every frame.
+SCENARIOS["film-grain-sensor-noise-2k"] = {
+    "description": "A PNG16 plate under Film Grain in Sensor Noise mode, with a fixed pattern.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.film-grain",
+                      {"mode": 1, "intensity": 0.05, "size": 1.5, "shadowWeighting": 1.5,
+                       "chromaBlotches": 0.6, "blotchSize": 24.0, "fixedPattern": 0.4}]]},
+    ],
+}
+
 # #512: Camera Shake over a plate with its motion blur on: every frame is new (the shake is a function
 # of the frame), and each frame resamples the plate once per shutter sample.
 SCENARIOS["camera-shake-2k"] = {

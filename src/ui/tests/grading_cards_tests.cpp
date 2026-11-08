@@ -762,6 +762,80 @@ void filmGrainCard() {
             expect(undone && monochrome() == false, "undo turns Monochrome off");
         }
     }
+
+    // #565 Sensor Noise is the node's own Mode, Film for a new node and for the rows above. Choosing
+    // it is one command that swaps the response rows for the four Sensor Noise rows, each with its
+    // socket, keeps the card inside itself with every label whole, and draws the shadow weighting in
+    // the graph, whose handles go; undo restores Film.
+    {
+        expect(card->showsRole("mode") && !card->socketY("mode").has_value() &&
+                   !card->socketY("shadowWeighting").has_value() &&
+                   !card->valueRow("shadowWeighting")->isVisibleTo(card) &&
+                   card->valueRow("shadows")->isVisibleTo(card),
+               "a new Film Grain is in Film mode and shows no Sensor Noise row");
+        const int filmHeight = card->heightAt(card->minimumWidthHint());
+        const auto mode = ui::nodeRoleParameter(fixture.session, fixture.node, "mode");
+        const auto modeValue = [&]() -> std::optional<std::int64_t> {
+            const auto live = mode ? fixture.session.liveValue(*mode) : std::nullopt;
+            const auto* value = live ? std::get_if<std::int64_t>(&*live) : nullptr;
+            return value ? std::optional(*value) : std::nullopt;
+        };
+        expect(modeValue() == document::kFilmGrainFilm, "a new Film Grain is in Film mode");
+        expect(mode && fixture.session.setParameterValue(*mode, document::kFilmGrainSensorNoise,
+                                                         QStringLiteral("Set Mode")),
+               "the mode is set to Sensor Noise");
+        QApplication::processEvents();
+        expect(modeValue() == document::kFilmGrainSensorNoise, "the mode is Sensor Noise");
+        // One command: a single undo is Film again, and a redo is Sensor Noise.
+        expect(fixture.session.undo() && modeValue() == document::kFilmGrainFilm &&
+                   fixture.session.redo() && modeValue() == document::kFilmGrainSensorNoise,
+               "choosing Sensor Noise is one command");
+        QApplication::processEvents();
+        for (const auto* role : {"shadowWeighting", "chromaBlotches", "blotchSize", "fixedPattern"})
+            expect(card->socketY(role).has_value() && card->valueRow(role)->isVisibleTo(card),
+                   "Sensor Noise shows its row and its socket");
+        for (const auto* role : {"shadows", "midtones", "highlights"})
+            expect(!card->socketY(role).has_value() && !card->valueRow(role)->isVisibleTo(card),
+                   "Sensor Noise hides the Film response rows");
+        expect(card->socketY("intensity").has_value() && card->socketY("size").has_value() &&
+                   card->heightAt(card->minimumWidthHint()) > filmHeight,
+               "Sensor Noise keeps the shared rows and has one more");
+        if (!paintsInsideCard(*fixture.item) || !cardContentFits(*fixture.item, "film-grain-sensor")) {
+            std::cerr << "film-grain in Sensor Noise leaves its card or cuts a label\n";
+            ++failures;
+        }
+        capture(fixture, QStringLiteral("film-grain-sensor-noise"));
+        // The graph's ramp shows the weighting: the noise is wider in the shadows than the highlights.
+        const auto sensor = graph.preview(256, 256);
+        expect(spread(sensor, 20) > spread(sensor, 235) * 2.0,
+               "the graph draws noise weighted toward the shadows");
+        const auto handleCommands = fixture.stack.size();
+        const QPointF handle = graph.handlePosition(1);
+        mouse(graph, QEvent::MouseButtonPress, handle);
+        mouse(graph, QEvent::MouseMove, handle + QPointF(0.0, -20.0));
+        mouse(graph, QEvent::MouseButtonRelease, handle + QPointF(0.0, -20.0));
+        QApplication::processEvents();
+        expect(fixture.stack.size() == handleCommands && stored(fixture.session, fixture.node,
+                                                                "midtones") == 1.0,
+               "Sensor Noise's graph has no handles to drag");
+        // A slider drag is one command.
+        auto* weighting = card->valueRow("shadowWeighting")->slider();
+        const QPointF origin = weighting->rect().center();
+        mouse(*weighting, QEvent::MouseButtonPress, origin);
+        mouse(*weighting, QEvent::MouseMove, origin + QPointF(weighting->width() * 0.2, 0.0));
+        mouse(*weighting, QEvent::MouseButtonRelease, origin + QPointF(weighting->width() * 0.2, 0.0));
+        const auto moved = stored(fixture.session, fixture.node, "shadowWeighting");
+        expect(moved && *moved > 1.0, "dragging Shadow weighting moves it");
+        expect(fixture.session.undo() && stored(fixture.session, fixture.node, "shadowWeighting") == 1.0 &&
+                   modeValue() == document::kFilmGrainSensorNoise,
+               "the drag is one command");
+        const bool undone = fixture.session.undo();
+        QApplication::processEvents();
+        expect(undone && modeValue() == document::kFilmGrainFilm &&
+                   card->valueRow("shadows")->isVisibleTo(card) &&
+                   !card->valueRow("shadowWeighting")->isVisibleTo(card),
+               "undo restores Film and its rows");
+    }
 }
 
 // #512: the Camera Shake card draws the roll amount and the shutter angle as dials on their own

@@ -2237,6 +2237,8 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         const char* name;
         bool proxy = false;
         bool roi = false;
+        // Every frame is the same picture: nothing is drawn anew and the next frame reuses it.
+        bool frameInvariant = false;
     };
     std::vector<Case> cases;
     cases.push_back({GrainValues{}, "default"});
@@ -2265,6 +2267,30 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         monochrome.name = kMonochromeNames[index];
         cases.push_back(monochrome);
     }
+    // #565 Sensor Noise, on the same routes: every term, Monochrome, held, a proxy, a region of
+    // interest, and a fixed pattern alone (the same picture on every frame).
+    using bloom::film_grain_test::everyPathSensor;
+    cases.push_back({everyPathSensor(), "sensor noise, every path"});
+    {
+        GrainValues mono = everyPathSensor();
+        mono.monochrome = true;
+        cases.push_back({mono, "sensor noise, monochrome"});
+        GrainValues held = everyPathSensor();
+        held.animation = bloom::document::kFilmGrainHeld;
+        cases.push_back({held, "sensor noise, held"});
+        GrainValues fine = everyPathSensor();
+        fine.scalars["size"] = 0.25;
+        fine.scalars["blotchSize"] = 4.0;
+        cases.push_back({fine, "sensor noise, fine"});
+        GrainValues coarse = everyPathSensor();
+        coarse.scalars["size"] = 16.0;
+        coarse.scalars["blotchSize"] = 256.0;
+        cases.push_back({coarse, "sensor noise, coarse"});
+    }
+    cases.push_back({everyPathSensor(), "sensor noise, a proxy", true});
+    cases.push_back({everyPathSensor(), "sensor noise, a region of interest", false, true});
+    cases.push_back({bloom::film_grain_test::fixedPatternOnly(), "sensor noise, fixed pattern only",
+                     false, false, true});
     std::uint64_t id = 48600;
     for (const auto& item : cases) {
         cache.clear();
@@ -2326,7 +2352,8 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         const auto beforeNext = executor.executor->counters();
         const auto rerun = runScene(*executor.executor, next.scene);
         const auto nextDispatches = executor.executor->counters().dispatches - beforeNext.dispatches;
-        const bool held = item.values.animation == bloom::document::kFilmGrainHeld;
+        const bool held = item.values.animation == bloom::document::kFilmGrainHeld ||
+                          item.frameInvariant;
         expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
                                 parity(rerun.pixels, nextOracle.frame()->processImage().pixels(),
                                        detail, AlphaGate::Exact) &&
@@ -2349,6 +2376,9 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
                                        detail, AlphaGate::Exact) &&
                                 executor.executor->counters().dispatches > beforeChanged.dispatches,
                             name + "a changed value re-runs with CPU parity: " + detail);
+        // A fixed pattern alone has no per-channel grain for Monochrome to share.
+        if (item.frameInvariant)
+            continue;
         // Toggling Monochrome re-runs with parity on the same node's ids, and neither state serves
         // the other's frame: going back finds the first state's own entry and pixels.
         GrainValues toggledValues = item.values;

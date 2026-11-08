@@ -190,6 +190,21 @@ std::vector<Case> cases() {
     add("film-grain-held", "bloom.film-grain (held)", "noise", [beauty](Doc& doc) {
         doc.set(doc.grain(doc.solid(beauty)), "animation", document::kFilmGrainHeld);
     });
+    // #565 Sensor Noise: the grain, the blotches (a second noise read) and a fixed pattern (a third)
+    // on every pixel, then the grain alone for what the extra reads add. Written for the benchmarking
+    // hardware; not run on a workstation.
+    add("film-grain-sensor-noise", "bloom.film-grain (sensor noise, every term)", "noise",
+        [beauty](Doc& doc) {
+            const auto id = doc.grain(doc.solid(beauty));
+            doc.set(id, "mode", document::kFilmGrainSensorNoise);
+            doc.set(id, "fixedPattern", 0.5);
+        });
+    add("film-grain-sensor-noise-grain-only", "bloom.film-grain (sensor noise, grain only)",
+        "noise", [beauty](Doc& doc) {
+            const auto id = doc.grain(doc.solid(beauty));
+            doc.set(id, "mode", document::kFilmGrainSensorNoise);
+            doc.set(id, "chromaBlotches", 0.0);
+        });
     // Transparent, so no pixel runs the noise: the program's floor.
     add("film-grain-transparent", "bloom.film-grain (transparent input)", "noise",
         [](Doc& doc) { doc.grain(doc.solid(core::Color4d{0.8, 0.6, 0.4, 0.0})); });

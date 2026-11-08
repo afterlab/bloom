@@ -341,8 +341,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // animatable socket per value; the effect mask follows them.
     const auto grainUnmasked = withoutMask(registry.find("bloom.film-grain", 1));
     expectations.expect(
-        grainUnmasked && grainUnmasked->inputs.size() == 9 &&
-            grainUnmasked->parameters.size() == 11 &&
+        grainUnmasked && grainUnmasked->inputs.size() == 13 &&
+            grainUnmasked->parameters.size() == 16 &&
             grainUnmasked->inputs[0].valueKind == runtime::SocketValueKind::Image &&
             grainUnmasked->inputs[1].name == "intensity" &&
             grainUnmasked->parameters[0].defaultValue == document::ParameterValue{0.02} &&
@@ -355,6 +355,20 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             !grainUnmasked->parameters[10].required &&
             !grainUnmasked->parameters[10].supportsAnimation &&
             grainUnmasked->parameters[10].defaultValue == document::ParameterValue{false} &&
+            // #565 Sensor Noise: optional, so a node saved before it opens in Film mode.
+            grainUnmasked->parameters[11].role == "mode" &&
+            grainUnmasked->parameters[11].valueKind == document::ParameterValueKind::Integer &&
+            !grainUnmasked->parameters[11].required &&
+            !grainUnmasked->parameters[11].supportsAnimation &&
+            grainUnmasked->parameters[11].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            grainUnmasked->parameters[12].role == "shadowWeighting" &&
+            !grainUnmasked->parameters[12].required && grainUnmasked->parameters[12].supportsAnimation &&
+            grainUnmasked->parameters[13].role == "chromaBlotches" &&
+            !grainUnmasked->parameters[13].required &&
+            grainUnmasked->parameters[14].role == "blotchSize" && !grainUnmasked->parameters[14].required &&
+            grainUnmasked->parameters[15].role == "fixedPattern" &&
+            grainUnmasked->parameters[15].defaultValue == document::ParameterValue{0.0} &&
+            !grainUnmasked->parameters[15].required &&
             grainUnmasked->outputs.size() == 1 &&
             grainUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Film Grain has its constants and an animatable socket per value");

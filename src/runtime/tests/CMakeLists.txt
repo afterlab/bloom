@@ -262,6 +262,12 @@ target_link_libraries(bloom_runtime_film_grain_monochrome_migration_test PRIVATE
 bloom_enable_warnings(bloom_runtime_film_grain_monochrome_migration_test)
 bloom_enable_strict_floating_point(bloom_runtime_film_grain_monochrome_migration_test)
 bloom_add_test(NAME bloom.runtime.film-grain-monochrome-migration COMMAND bloom_runtime_film_grain_monochrome_migration_test LABELS runtime integration)
+# #565: a Film Grain saved before Sensor Noise opens in Film mode and renders identically.
+add_executable(bloom_runtime_film_grain_sensor_noise_test ${PROJECT_SOURCE_DIR}/tests/integration/film_grain_sensor_noise_tests.cpp)
+target_link_libraries(bloom_runtime_film_grain_sensor_noise_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_film_grain_sensor_noise_test)
+bloom_enable_strict_floating_point(bloom_runtime_film_grain_sensor_noise_test)
+bloom_add_test(NAME bloom.runtime.film-grain-sensor-noise COMMAND bloom_runtime_film_grain_sensor_noise_test LABELS runtime integration)
 # #541: a document older than 1.39 opens its schema 1 colour pairs as gradient values.
 add_executable(bloom_runtime_gradient_color_pairs_test ${PROJECT_SOURCE_DIR}/tests/integration/gradient_color_pair_migration_tests.cpp)
 target_link_libraries(bloom_runtime_gradient_color_pairs_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)

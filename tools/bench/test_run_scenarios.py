@@ -429,6 +429,16 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.film-grain")
         self.assertNotIn("animation", effect[1], "every frame draws new grain")
 
+    def test_sensor_noise_scenario_draws_every_term_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["film-grain-sensor-noise-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.film-grain")
+        self.assertEqual(effect[1]["mode"], 1)
+        self.assertGreater(effect[1]["fixedPattern"], 0.0)
+        self.assertNotIn("animation", effect[1], "every frame draws new grain")
+
     def test_frame_rate_hold_scenario_holds_a_moving_plate_with_a_cadence(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["frame-rate-hold-2k"]

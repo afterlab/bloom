@@ -29,6 +29,7 @@ struct GrainValues final {
     std::int64_t animation = document::kFilmGrainEveryFrame;
     std::int64_t seed = 1;
     bool monochrome = false;
+    std::int64_t mode = document::kFilmGrainFilm;
 };
 
 [[nodiscard]] inline runtime::FilmGrainKernel grainKernel(const GrainValues& values,
@@ -37,6 +38,7 @@ struct GrainValues final {
     kernel.animation = values.animation;
     kernel.seed = values.seed;
     kernel.monochrome = values.monochrome;
+    kernel.mode = values.mode;
     std::uint64_t id = idBase;
     for (const auto& spec : document::filmGrainParameters()) {
         if (spec.kind != document::FilmGrainParameterKind::Scalar)
@@ -76,6 +78,28 @@ struct GrainValues final {
 [[nodiscard]] inline GrainValues everyPathMonochrome() {
     GrainValues values = everyPath();
     values.monochrome = true;
+    return values;
+}
+
+// #565 Sensor Noise with every term on and distinct: the shadow weighting, the chroma blotches at
+// a size apart from the grain's, and the fixed pattern.
+[[nodiscard]] inline GrainValues everyPathSensor() {
+    GrainValues values = everyPath();
+    values.mode = document::kFilmGrainSensorNoise;
+    values.scalars["shadowWeighting"] = 1.5;
+    values.scalars["chromaBlotches"] = 0.8;
+    values.scalars["blotchSize"] = 8.0;
+    values.scalars["fixedPattern"] = 0.6;
+    return values;
+}
+
+// Sensor Noise with only the fixed pattern: every frame is the same picture.
+[[nodiscard]] inline GrainValues fixedPatternOnly() {
+    GrainValues values = everyPathSensor();
+    values.scalars["redAmount"] = 0.0;
+    values.scalars["greenAmount"] = 0.0;
+    values.scalars["blueAmount"] = 0.0;
+    values.scalars["chromaBlotches"] = 0.0;
     return values;
 }
 

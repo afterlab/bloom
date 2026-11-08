@@ -1979,10 +1979,13 @@ displayProofRunner(const bool customView) {
             "src/runtime film grain tests",
             [runGrain, held] {
                 return runGrain({GrainValues{}, bloom::film_grain_test::everyPath(), held,
-                                 bloom::film_grain_test::everyPathMonochrome()},
+                                 bloom::film_grain_test::everyPathMonochrome(),
+                                 bloom::film_grain_test::everyPathSensor(),
+                                 bloom::film_grain_test::fixedPatternOnly()},
                                 486000,
                                 "production Film Grain: the default, every channel and response "
-                                "distinct at a larger size, held grain and Monochrome, over HDR "
+                                "distinct at a larger size, held grain and Monochrome, and Sensor "
+                                "Noise with every term and with a fixed pattern alone, over HDR "
                                 "and partial alpha, on a moved frame, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
@@ -1991,10 +1994,12 @@ displayProofRunner(const bool customView) {
             "src/runtime film grain tests",
             [runGrain] {
                 return runGrain({GrainValues{}, bloom::film_grain_test::everyPath(),
-                                 bloom::film_grain_test::everyPathMonochrome()},
+                                 bloom::film_grain_test::everyPathMonochrome(),
+                                 bloom::film_grain_test::everyPathSensor()},
                                 487000,
                                 "production Film Grain node: the default, strong distinct "
-                                "channels and Monochrome, on a moved frame, full frame and ROI");
+                                "channels, Monochrome and Sensor Noise, on a moved frame, full "
+                                "frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }
