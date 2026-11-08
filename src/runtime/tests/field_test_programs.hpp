@@ -181,6 +181,13 @@ class Builder final {
         return b.finish(b.add(FieldOp::Streak, {c, v}, {}, {1.5, 2.0}), FieldResultKind::Scalar,
                         FieldOutputMode::Mask);
     }
+    case FieldOp::LensWarp: {
+        // The source position of an Undistort (variant 0) or a Redistort (variant 1) about a centre
+        // off the middle, as a vector raster.
+        const auto warped = b.add(FieldOp::LensWarp, {c}, {variant % 2},
+                                  {-0.18, 0.04, 0.012, -0.008, 14.0}, {Vec2d{1.5, -1.0}});
+        return b.finish(warped, FieldResultKind::Vector);
+    }
     case FieldOp::Ramp: {
         const auto n = noise(c, 3, 1);
         const auto ramp = b.add(FieldOp::Ramp, {n}, {}, {0.1, 0.9});
@@ -192,6 +199,27 @@ class Builder final {
     }
     }
     return b.finish(c, FieldResultKind::Vector);
+}
+
+// #486 Lens Distortion: the program its image output (`stMap` false) or its ST map output lowers to
+// over the 16 x 12 test composition, mirroring snapshot_compiler_fields.ipp's lowerLensDistortion
+// (the snapshot compiler test holds the two to the same instruction sequence).
+[[nodiscard]] inline FieldProgram lensDistortionProgram(const std::uint64_t idBase,
+                                                        const bool stMap, const bool reverse) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto where = b.add(FieldOp::LensWarp, {c}, {reverse ? 1 : 0},
+                             {-0.18, 0.04, 0.012, -0.008, 10.0}, {Vec2d{1.5, -1.0}});
+    if (stMap) {
+        const auto scaled = b.add(FieldOp::Swizzle, {where}, {0, 1, 4, 4},
+                                  {1.0 / 16.0, 1.0 / 12.0, 1.0, 1.0});
+        const auto half = b.add(FieldOp::Constant, {}, {}, {0.5, 0.5, 0.0, 0.0});
+        const auto position = b.add(FieldOp::Math, {scaled, half}, {0}, {0.1, 0.0});
+        return b.finish(position, FieldResultKind::Vector);
+    }
+    const auto read = b.add(FieldOp::Image, {where}, {0, 1, 3, 4, 0, 1});
+    b.last().slot = 0;
+    return b.finish(read, FieldResultKind::Premultiplied);
 }
 
 } // namespace bloom::field_test_programs

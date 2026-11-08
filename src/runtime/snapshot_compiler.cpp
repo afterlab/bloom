@@ -21,6 +21,7 @@
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>

@@ -1676,6 +1676,21 @@ displayProofRunner(const bool customView) {
             {bloom::document::kFieldSeparateNodeType, {FieldOp::Swizzle}},
             {bloom::document::kFieldRasterizeNodeType,
              {FieldOp::Ramp, FieldOp::Arrow, FieldOp::Streak}}};
+        // #486 Lens Distortion: its image output undistorting and redistorting, and its ST map in
+        // both modes, the programs its lowering builds.
+        addField("node.bloom.lens-distortion",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::lensDistortionProgram(base, false, false), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::lensDistortionProgram(base + 100, false, true), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::lensDistortionProgram(base + 200, true, false), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::lensDistortionProgram(base + 300, true, true), 1}},
+                 base + 400,
+                 "production Lens Distortion lowering: the warped image in both modes and its ST "
+                 "map in both modes, full frame and ROI");
+        base += 1000;
         for (const auto& [type, ops] : nodes) {
             std::vector<bloom::runtime::ImageEffectKernel> kernels;
             for (const auto op : ops) {

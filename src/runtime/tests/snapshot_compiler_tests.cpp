@@ -14,6 +14,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -30,6 +31,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
+#include "field_test_programs.hpp"
 #include "snapshot_compiler_support.hpp"
 
 #include <algorithm>
@@ -47,6 +49,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -1929,6 +1932,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_recipe_tests.ipp"
 #include "snapshot_compiler_motion_tests.ipp"
 #include "snapshot_compiler_camera_shake_tests.ipp"
+#include "snapshot_compiler_lens_distortion_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 
 } // namespace
@@ -1963,6 +1967,8 @@ int main() {
         testCodecDegradeLowering(expectations);
         testMotionBlurLowering(expectations);
         testCameraShake(expectations);
+        testLensDistortionLowering(expectations);
+        testLensDistortionPixels(expectations);
         testSharpenLowering(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);

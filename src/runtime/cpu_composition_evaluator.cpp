@@ -2311,6 +2311,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<DefocusKernel>(effect->kernel) ||
                                std::holds_alternative<LensFlareKernel>(effect->kernel) ||
                                std::holds_alternative<CodecDegradeKernel>(effect->kernel) ||
+                               // #486 a field raster that reads images (Lens Distortion's warp)
+                               // reads them wherever the position field points.
+                               (std::holds_alternative<FieldRasterKernel>(effect->kernel) &&
+                                !effect->fieldImages.empty()) ||
                                isMotionKernel(effect->kernel))) {
                     fullSupport[effect->input.value()] = true;
                     // #484: a motion kernel reads its sample, vectors, neighbour frames and

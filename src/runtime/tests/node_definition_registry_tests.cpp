@@ -155,8 +155,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
-    // Zoom Blur; #512 adds Camera Shake; #563 adds Codec Degrade.
-    expectations.expect(registry.definitions().size() == 189,
+    // Zoom Blur; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens Distortion.
+    expectations.expect(registry.definitions().size() == 190,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -303,7 +303,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         "#504: Colorize has its constant choices and an animatable socket per value");
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
-    expectCategory({"bloom.camera-shake"}, document::NodeCategory::Transform);
+    expectCategory({"bloom.camera-shake", "bloom.lens-distortion"}, document::NodeCategory::Transform);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
                     "bloom.sharpen", "bloom.codec-degrade"},
@@ -373,6 +373,30 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             sharpenUnmasked->outputs.size() == 1 &&
             sharpenUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#486: Sharpen has an animatable socket per value");
+    // #486 Lens Distortion: an Image in; the warped Image and its ST map out; the mode with no
+    // socket, then a socket for the four coefficients and the centre, in parameter order. It takes
+    // no effect mask.
+    const auto* lens = registry.find("bloom.lens-distortion", 1);
+    expectations.expect(
+        lens != nullptr && !document::hasEffectMask(*lens) && lens->inputs.size() == 6 &&
+            lens->parameters.size() == 6 &&
+            lens->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            lens->inputs[1].name == "k1" && lens->inputs[2].name == "k2" &&
+            lens->inputs[3].name == "p1" && lens->inputs[4].name == "p2" &&
+            lens->inputs[5].name == "center" &&
+            lens->inputs[5].valueKind == runtime::SocketValueKind::Vector2 &&
+            lens->parameters[0].role == "mode" &&
+            lens->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            lens->parameters[1].defaultValue == document::ParameterValue{0.0} &&
+            lens->parameters[2].defaultValue == document::ParameterValue{0.0} &&
+            lens->parameters[3].defaultValue == document::ParameterValue{0.0} &&
+            lens->parameters[4].defaultValue == document::ParameterValue{0.0} &&
+            lens->parameters[5].defaultValue == document::ParameterValue{document::Vec2d{}} &&
+            lens->outputs.size() == 2 && lens->outputs[0].name == "image" &&
+            lens->outputs[0].valueKind == runtime::SocketValueKind::Image &&
+            lens->outputs[1].name == "stMap" &&
+            lens->outputs[1].valueKind == runtime::SocketValueKind::Image,
+        "#486: Lens Distortion has an animatable socket per value and two Image outputs");
     // #563 Codec Degrade: an Image in and out, its block size, GOP length and chroma bleed with no
     // socket, and a socket for Quality and P-frame persistence; the effect mask follows.
     const auto codecUnmasked = withoutMask(registry.find("bloom.codec-degrade", 1));

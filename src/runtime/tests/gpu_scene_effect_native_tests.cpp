@@ -1769,6 +1769,18 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
             id += 100;
         }
     kernels.emplace_back("mask distance", bloom::runtime::MaskDistanceKernel{3.0});
+    // #486 Lens Distortion: the programs its lowering builds, the warped image (premultiplied HDR
+    // and partial alpha read through the atlas) and the ST map, each in both modes.
+    for (const bool stMap : {false, true})
+        for (const bool reverse : {false, true}) {
+            kernels.emplace_back(std::string("lens distortion ") + (stMap ? "ST map " : "image ") +
+                                     (reverse ? "redistort" : "undistort"),
+                                 bloom::runtime::FieldRasterKernel{
+                                     bloom::field_test_programs::lensDistortionProgram(id, stMap,
+                                                                                       reverse),
+                                     1U});
+            id += 100;
+        }
     for (const auto& [name, kernel] : kernels) {
         cache.clear();
         auto definition =

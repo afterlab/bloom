@@ -846,3 +846,128 @@ lowerFieldSample(const document::NodeRecord& node, const runtime::NodeDefinition
     sample.position = std::move(*position);
     return runtime::CompiledValueKernel{std::move(sample)};
 }
+
+// #486 Lens Distortion: the warped image and the ST map of the same warp, each a field raster over
+// the input's data window. The warp is one Lens Warp instruction (the Brown-Conrady model, in
+// normalised coordinates about the centre); the image reads the input at that position through the
+// field program's Image instruction (bilinear over premultiplied texels, transparent outside the
+// input), the ST map draws the position itself, normalised over the composition frame. With every
+// coefficient a constant zero the warp is the identity and the image is the input itself. A muted
+// node is that identity.
+[[nodiscard]] bool
+lowerLensDistortion(const document::NodeRecord& node,
+                    std::vector<runtime::CompiledOperation>& operations,
+                    std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    using core::field::FieldOutputMode;
+    using core::field::FieldResultKind;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    const bool muted = isMuted(node.id);
+    std::array<runtime::CompiledScalarParameter, 4> coefficients{};
+    std::size_t next = 0;
+    for (const auto role : {"k1", "k2", "p1", "p2"}) {
+        const auto value = compiledScalarParameter(findParameterBinding(node, role));
+        if (!value) {
+            addTopologyFailure(node.id, "Lens Distortion parameters could not be lowered.");
+            return false;
+        }
+        coefficients[next++] = muted ? fieldConstant(0.0) : *value;
+    }
+    auto centre = compiledVec2Parameter(findParameterBinding(node, "center"));
+    const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+    if (!centre || mode == nullptr || *mode < kLensUndistort || *mode > kLensRedistort) {
+        addTopologyFailure(node.id, "Lens Distortion parameters could not be lowered.");
+        return false;
+    }
+    const auto& format = composition_->format();
+    const auto width = static_cast<double>(format.width());
+    const auto height = static_cast<double>(format.height());
+    // Coordinates are normalised by half the composition's diagonal.
+    const auto scale = std::max(0.5 * std::hypot(width, height), 1.0);
+    const bool identity = std::ranges::all_of(coefficients, [](const auto& coefficient) {
+        const auto* constant = std::get_if<double>(&coefficient.source);
+        return constant != nullptr && *constant == 0.0;
+    });
+    const auto wanted = [&](const std::string_view port) {
+        const bool inspected = request_.channelInspection &&
+                               request_.channelInspection->node == node.id &&
+                               request_.channelInspection->port == port;
+        return hasReachableOutput(node.id, port) || inspected;
+    };
+    const bool wantImage = wanted(kLensDistortionImagePort) || !wanted(kLensDistortionStMapPort);
+    const bool wantMap = wanted(kLensDistortionStMapPort);
+    const auto raster = [&](FieldBuild& build, const int result, const FieldResultKind kind)
+        -> std::optional<runtime::OperationIndex> {
+        auto program = finishFieldProgram(build, result, kind, FieldOutputMode::Raw, node.id);
+        if (!program)
+            return std::nullopt;
+        runtime::CompiledImageEffect effect{node.id, *input,
+                                            runtime::FieldRasterKernel{std::move(*program), 1}};
+        effect.fieldImages = std::move(build.images);
+        const auto index = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(effect));
+        return index;
+    };
+    const auto warp = [&](FieldBuild& build) {
+        return fieldEmit(build, FieldOp::LensWarp, {build.coordinate, -1, -1, -1}, {*mode},
+                         {coefficients[0], coefficients[1], coefficients[2], coefficients[3],
+                          fieldConstant(scale)},
+                         {*centre});
+    };
+    std::optional<runtime::OperationIndex> first;
+    if (wantImage) {
+        auto index = *input;
+        if (!identity) {
+            FieldBuild build;
+            build.operations = &operations;
+            build.indices = &indices;
+            build.coordinate = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+            const auto slot = fieldSlot(build, node, *input);
+            if (slot < 0)
+                return false;
+            const auto where = warp(build);
+            FieldBuild::Step step;
+            step.instruction.op = static_cast<std::uint8_t>(FieldOp::Image);
+            // Bilinear, transparent outside the input, the texel as stored (premultiplied).
+            step.instruction.choices = {0, 1, 3, 4, 0, 1};
+            step.instruction.slot = slot;
+            step.output = build.nextRegister++;
+            step.inputs = {where, -1, -1, -1};
+            build.steps.push_back(std::move(step));
+            const auto drawn = raster(build, build.steps.back().output,
+                                      FieldResultKind::Premultiplied);
+            if (!drawn)
+                return false;
+            index = *drawn;
+        }
+        portOperations_.insert_or_assign({node.id, std::string(kLensDistortionImagePort)}, index);
+        first = index;
+    }
+    if (wantMap) {
+        FieldBuild build;
+        build.operations = &operations;
+        build.indices = &indices;
+        build.coordinate = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+        const auto where = warp(build);
+        // The position over the composition frame, 0 to 1 from the bottom left.
+        const auto scaled = fieldSwizzle(build, where, {0, 1, 4, 4},
+                                         {1.0 / width, 1.0 / height, 1.0, 1.0});
+        const auto half = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                    {fieldConstant(0.5), fieldConstant(0.5), fieldConstant(0.0),
+                                     fieldConstant(0.0)});
+        const auto position = fieldEmit(build, FieldOp::Math, {scaled, half, -1, -1}, {0},
+                                        {fieldConstant(0.1), fieldConstant(0.0)});
+        const auto drawn = raster(build, position, FieldResultKind::Vector);
+        if (!drawn)
+            return false;
+        portOperations_.insert_or_assign({node.id, std::string(kLensDistortionStMapPort)}, *drawn);
+        if (!first)
+            first = *drawn;
+    }
+    indices.emplace(node.id, *first);
+    return true;
+}

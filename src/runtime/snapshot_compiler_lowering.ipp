@@ -511,6 +511,13 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *shuffled);
             continue;
         }
+        // #486 Lens Distortion: the warped image and the ST map, each its own field raster. Muting
+        // is the identity warp, so it is handled here and not as a bypass of the image alone.
+        if (node->typeId == document::kLensDistortionNodeType) {
+            if (!lowerLensDistortion(*node, operations, indices))
+                return {};
+            continue;
+        }
         // #364 Cryptomatte: the matte (Mask) and, with an input image, the image multiplied by
         // the matte (MultiplyAlpha, matte in alpha); without one the Image output is the matte.
         if (definition->second->lowering == runtime::NodeLoweringKind::Cryptomatte) {
