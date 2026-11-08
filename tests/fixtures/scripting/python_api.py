@@ -427,6 +427,35 @@ class PythonApi(unittest.TestCase):
             self.assertNotEqual(mixed.returncode, 0)
             self.assertIn(b'The job does not exist: 999', mixed.stderr)
 
+    def test_a_compound_path_value_round_trips(self):
+        """#589: a Path node's value takes contours, a fill rule and keyed groups from Python."""
+        composition = bloom.context.composition
+        def square(left, size):
+            return {'closed': True, 'anchors': [
+                {'point': (left, left)}, {'point': (left + size, left)},
+                {'point': (left + size, left + size)}, {'point': (left, left + size)}]}
+        result = bloom.ops.node.add(nodeType='bloom.value-path', position=(0, 0))
+        self.assertTrue(result['succeeded'])
+        node = next(o['id'] for o in result['outputs'] if o['name'] == 'node')
+        parameter = bloom.data.nodes(composition).get(node).parameters['value']
+        compound = {'contours': [square(0, 40), square(10, 10)], 'fill_rule': 'evenOdd',
+                    'groups': [{'key': 'outer', 'first_contour': 0, 'contour_count': 1,
+                                'color': (1, 0, 0, 1)}]}
+        self.assertTrue(bloom.ops.parameter.set_source(parameter, value=compound)['succeeded'])
+        value = bloom.data.parameters(composition).get(parameter).value
+        self.assertEqual(value['fill_rule'], 'evenOdd')
+        self.assertEqual(len(value['contours']), 2)
+        self.assertEqual(value['contours'][1]['anchors'][0]['point'], (10.0, 10.0))
+        self.assertEqual(value['groups'][0]['key'], 'outer')
+        self.assertEqual(value['groups'][0]['first_contour'], 0)
+        self.assertEqual(value['groups'][0]['color'], (1.0, 0.0, 0.0, 1.0))
+        # A one-contour value reads back in the shape it always had.
+        self.assertTrue(bloom.ops.parameter.set_source(parameter, value=square(0, 4))['succeeded'])
+        value = bloom.data.parameters(composition).get(parameter).value
+        self.assertTrue(value['closed'])
+        self.assertEqual(len(value['anchors']), 4)
+        self.assertNotIn('contours', value)
+
     def test_layer_masks_take_path_values(self):
         """ADR 0028: a path is a value kind; masks are added, edited and keyed from Python and the CLI."""
         composition = bloom.context.composition

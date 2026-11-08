@@ -203,6 +203,53 @@ class Protocol(unittest.TestCase):
         self.assertEqual(record['value'], expected)
         self.assertIn('error', responses[3])
 
+    def test_a_compound_path_drives_a_shape_and_reads_back(self):
+        """#589: MCP writes and reads the compound shape, keys it on a Path node and connects it."""
+        def square(left, size):
+            return {'closed': True, 'anchors': [
+                {'point': [x, y], 'inHandle': None, 'outHandle': None, 'mode': 'corner'}
+                for x, y in ((left, left), (left + size, left), (left + size, left + size),
+                             (left, left + size))]}
+        compound = {'contours': [square(0, 40), square(10, 10)], 'fillRule': 'evenOdd',
+                    'groups': [{'key': 'outer', 'firstContour': 0, 'contourCount': 1,
+                                'color': [1, 0, 0, 1]},
+                               {'key': 'span:0:3', 'firstContour': 1, 'contourCount': 1}]}
+        add = {'op': 'bloom.node.add', 'args': {'composition': 1, 'nodeType': 'bloom.value-path'}}
+        def reply(responses, id):
+            return next(r for r in responses if r.get('id') == id)
+        first = exchange([INIT, READY, tool(2, 'transact', {'expectedRevision': 0,
+                                                            'operations': [add]}),
+                          tool(3, 'query', {'kind': 'nodes', 'composition': 1})])
+        node = next(o['id'] for o in reply(first, 2)['result']['structuredContent']['outputs']
+                    if o['name'] == 'node')
+        record = next(r for r in reply(first, 3)['result']['structuredContent']['records']
+                      if r['id'] == node)
+        parameter = record['parameters']['value']
+        responses = exchange([
+            INIT, READY,
+            tool(2, 'transact', {'expectedRevision': 0, 'operations': [
+                add,
+                {'op': 'bloom.parameter.set-source',
+                 'args': {'composition': 1, 'parameter': parameter, 'value': compound}}]}),
+            tool(3, 'query', {'kind': 'parameters', 'composition': 1}),
+            tool(4, 'transact', {'expectedRevision': 1, 'operations': [
+                {'op': 'bloom.parameter.set-source',
+                 'args': {'composition': 1, 'parameter': parameter, 'value': {
+                     'contours': [square(0, 40)],
+                     'groups': [{'key': 'a', 'firstContour': 4, 'contourCount': 1}]}}}]})])
+        self.assertTrue(reply(responses, 2)['result']['structuredContent']['succeeded'], responses)
+        value = next(r for r in reply(responses, 3)['result']['structuredContent']['records']
+                     if r['id'] == parameter)['value']
+        self.assertEqual(value['fillRule'], 'evenOdd')
+        self.assertEqual([c['anchors'] for c in value['contours']],
+                         [square(0, 40)['anchors'], square(10, 10)['anchors']])
+        self.assertEqual([g['key'] for g in value['groups']], ['outer', 'span:0:3'])
+        self.assertEqual(value['groups'][0]['color'], [1, 0, 0, 1])
+        # A group outside the contours is a refusal with a reason, not a stored value.
+        refused = reply(responses, 4)
+        self.assertTrue('error' in refused or not refused['result']['structuredContent']['succeeded'],
+                        refused)
+
     def test_handshake_transactions_and_events(self):
         responses = exchange([
             INIT, READY, request(2, 'tools/list', {}),

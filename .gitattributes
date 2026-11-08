@@ -8,3 +8,6 @@ assets/ocio/** -text
 # */provenance.md): their exact bytes are what those SHA-256 values cover, so they must never be
 # line-ending normalized or otherwise rewritten.
 src/ui/kit/third_party/** -text
+
+# A project and document as an older build wrote them: the migration test compares their exact bytes.
+tests/fixtures/paths/** -text

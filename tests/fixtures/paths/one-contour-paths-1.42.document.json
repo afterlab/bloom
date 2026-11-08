@@ -1,0 +1,3100 @@
+{
+  "schemaVersion": {
+    "major": 1,
+    "minor": 42
+  },
+  "project": {
+    "id": "1",
+    "name": "One Contour Paths",
+    "colorSettings": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "processColorSpaceId": "lin_rec709_scene",
+      "ocioConfig": {
+        "schemaVersion": {
+          "major": 1,
+          "minor": 0
+        },
+        "locator": {
+          "kind": "builtin",
+          "uri": "bloom://ocio/neutral-v1/config.ocio"
+        },
+        "expectedRevision": {
+          "algorithm": "sha256",
+          "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "portability": "builtin",
+        "contextVariables": []
+      }
+    },
+    "compositions": [
+      {
+        "id": "1",
+        "name": "Main",
+        "duration": {
+          "numerator": "2",
+          "denominator": "1"
+        },
+        "format": {
+          "width": 96,
+          "height": 64,
+          "pixelAspect": {
+            "numerator": "1",
+            "denominator": "1"
+          },
+          "frameRate": {
+            "numerator": "24",
+            "denominator": "1"
+          }
+        },
+        "parameters": [
+          {
+            "id": "1",
+            "schemaKey": "bloom.field-noise.type",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "2",
+            "schemaKey": "bloom.field-noise.fractal",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "1"
+              }
+            }
+          },
+          {
+            "id": "3",
+            "schemaKey": "bloom.field-noise.seed",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "4",
+            "schemaKey": "bloom.field-noise.size",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 20.0,
+                "y": 20.0
+              }
+            }
+          },
+          {
+            "id": "5",
+            "schemaKey": "bloom.field-noise.offset",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "6",
+            "schemaKey": "bloom.field-noise.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "7",
+            "schemaKey": "bloom.field-noise.octaves",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 6.0
+              }
+            }
+          },
+          {
+            "id": "8",
+            "schemaKey": "bloom.field-noise.lacunarity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": "9",
+            "schemaKey": "bloom.field-noise.gain",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": "10",
+            "schemaKey": "bloom.field-noise.octaveRotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "11",
+            "schemaKey": "bloom.field-noise.octaveOffset",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "12",
+            "schemaKey": "bloom.field-noise.ridgeOffset",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "13",
+            "schemaKey": "bloom.field-noise.ridgeGain",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": "14",
+            "schemaKey": "bloom.field-noise.evolution",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "15",
+            "schemaKey": "bloom.field-noise.evolutionMode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "16",
+            "schemaKey": "bloom.field-noise.loop",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": "17",
+            "schemaKey": "bloom.field-noise.loopLength",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "18",
+            "schemaKey": "bloom.field-noise.contrast",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "19",
+            "schemaKey": "bloom.field-noise.brightness",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "20",
+            "schemaKey": "bloom.field-noise.invert",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": "21",
+            "schemaKey": "bloom.field-noise.overflow",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "3"
+              }
+            }
+          },
+          {
+            "id": "22",
+            "schemaKey": "bloom.field-noise.range",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "23",
+            "schemaKey": "bloom.field-remap.inLow",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "24",
+            "schemaKey": "bloom.field-remap.inHigh",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "25",
+            "schemaKey": "bloom.field-remap.outLow",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "26",
+            "schemaKey": "bloom.field-remap.outHigh",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "27",
+            "schemaKey": "bloom.field-remap.clamp",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": "28",
+            "schemaKey": "bloom.field-remap.invert",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": "29",
+            "schemaKey": "bloom.field-remap.steps",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "30",
+            "schemaKey": "bloom.field-remap.bias",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": "31",
+            "schemaKey": "bloom.field-remap.gain",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": "32",
+            "schemaKey": "bloom.field-remap.curve",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 0.0,
+                      "y": 0.2
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 0.5,
+                      "y": 0.9
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 1.0,
+                      "y": 0.1
+                    }
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "33",
+            "schemaKey": "bloom.field-rasterize.output",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "34",
+            "schemaKey": "bloom.field-rasterize.extent",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "35",
+            "schemaKey": "bloom.field-rasterize.explicitCentre",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "36",
+            "schemaKey": "bloom.field-rasterize.explicitSize",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1920.0,
+                "y": 1080.0
+              }
+            }
+          },
+          {
+            "id": "37",
+            "schemaKey": "bloom.field-rasterize.supersample",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "38",
+            "schemaKey": "bloom.field-rasterize.inspect",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "39",
+            "schemaKey": "bloom.field-rasterize.ramp",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "gradient",
+                "stops": [
+                  {
+                    "position": 0.0,
+                    "red": 0.0,
+                    "green": 0.0,
+                    "blue": 0.0,
+                    "alpha": 1.0
+                  },
+                  {
+                    "position": 1.0,
+                    "red": 1.0,
+                    "green": 1.0,
+                    "blue": 1.0,
+                    "alpha": 1.0
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "40",
+            "schemaKey": "bloom.field-rasterize.rampLow",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "41",
+            "schemaKey": "bloom.field-rasterize.rampHigh",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "42",
+            "schemaKey": "bloom.field-rasterize.arrowSpacing",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 32.0
+              }
+            }
+          },
+          {
+            "id": "43",
+            "schemaKey": "bloom.field-rasterize.arrowScale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 20.0
+              }
+            }
+          },
+          {
+            "id": "44",
+            "schemaKey": "bloom.solid.color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.0,
+                "green": 0.0,
+                "blue": 0.0,
+                "alpha": 1.0
+              }
+            }
+          },
+          {
+            "id": "45",
+            "schemaKey": "bloom.solid.width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 96.0
+              }
+            }
+          },
+          {
+            "id": "46",
+            "schemaKey": "bloom.solid.height",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 64.0
+              }
+            }
+          },
+          {
+            "id": "47",
+            "schemaKey": "bloom.transform.position",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 48.0,
+                "y": 32.0
+              }
+            }
+          },
+          {
+            "id": "48",
+            "schemaKey": "bloom.transform.anchor",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "49",
+            "schemaKey": "bloom.transform.scale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          {
+            "id": "50",
+            "schemaKey": "bloom.transform.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "51",
+            "schemaKey": "bloom.layer.opacity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "52",
+            "schemaKey": "bloom.layer.blend-mode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "53",
+            "schemaKey": "bloom.shape.kind",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "6"
+              }
+            }
+          },
+          {
+            "id": "54",
+            "schemaKey": "bloom.shape.size",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 320.0,
+                "y": 240.0
+              }
+            }
+          },
+          {
+            "id": "55",
+            "schemaKey": "bloom.shape.corner-radius",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "56",
+            "schemaKey": "bloom.shape.points",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "5"
+              }
+            }
+          },
+          {
+            "id": "57",
+            "schemaKey": "bloom.shape.inner-ratio",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": "58",
+            "schemaKey": "bloom.shape.line-start",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "59",
+            "schemaKey": "bloom.shape.line-end",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 320.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "60",
+            "schemaKey": "bloom.shape.path",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 32.0,
+                      "y": 2.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 50.0,
+                      "y": 58.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 4.0,
+                      "y": 22.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 60.0,
+                      "y": 22.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 14.0,
+                      "y": 58.0
+                    }
+                  }
+                ],
+                "closed": true
+              }
+            }
+          },
+          {
+            "id": "61",
+            "schemaKey": "bloom.shape.fill-enabled",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": "62",
+            "schemaKey": "bloom.shape.fill-color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.8,
+                "green": 0.2,
+                "blue": 0.1,
+                "alpha": 0.9
+              }
+            }
+          },
+          {
+            "id": "63",
+            "schemaKey": "bloom.shape.stroke-enabled",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": "64",
+            "schemaKey": "bloom.shape.stroke-color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.1,
+                "green": 0.1,
+                "blue": 0.9,
+                "alpha": 1.0
+              }
+            }
+          },
+          {
+            "id": "65",
+            "schemaKey": "bloom.shape.stroke-width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.5
+              }
+            }
+          },
+          {
+            "id": "66",
+            "schemaKey": "bloom.shape.stroke-align",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "67",
+            "schemaKey": "bloom.shape.stroke-join",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "68",
+            "schemaKey": "bloom.shape.stroke-cap",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "69",
+            "schemaKey": "bloom.shape.fill-rule",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "1"
+              }
+            }
+          },
+          {
+            "id": "70",
+            "schemaKey": "bloom.transform.position",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 48.0,
+                "y": 32.0
+              }
+            }
+          },
+          {
+            "id": "71",
+            "schemaKey": "bloom.transform.anchor",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "72",
+            "schemaKey": "bloom.transform.scale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          {
+            "id": "73",
+            "schemaKey": "bloom.transform.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "74",
+            "schemaKey": "bloom.layer.opacity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "75",
+            "schemaKey": "bloom.layer.blend-mode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "76",
+            "schemaKey": "bloom.shape.kind",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "6"
+              }
+            }
+          },
+          {
+            "id": "77",
+            "schemaKey": "bloom.shape.size",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 320.0,
+                "y": 240.0
+              }
+            }
+          },
+          {
+            "id": "78",
+            "schemaKey": "bloom.shape.corner-radius",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "79",
+            "schemaKey": "bloom.shape.points",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "5"
+              }
+            }
+          },
+          {
+            "id": "80",
+            "schemaKey": "bloom.shape.inner-ratio",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.5
+              }
+            }
+          },
+          {
+            "id": "81",
+            "schemaKey": "bloom.shape.line-start",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "82",
+            "schemaKey": "bloom.shape.line-end",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 320.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "83",
+            "schemaKey": "bloom.shape.path",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 4.0,
+                      "y": 40.0
+                    },
+                    "outHandle": {
+                      "x": 20.0,
+                      "y": 2.0
+                    },
+                    "mode": "corner"
+                  },
+                  {
+                    "point": {
+                      "x": 40.0,
+                      "y": 30.0
+                    },
+                    "inHandle": {
+                      "x": 24.0,
+                      "y": 62.0
+                    },
+                    "outHandle": {
+                      "x": 50.0,
+                      "y": 10.0
+                    },
+                    "mode": "free"
+                  },
+                  {
+                    "point": {
+                      "x": 70.0,
+                      "y": 44.0
+                    },
+                    "inHandle": {
+                      "x": 60.0,
+                      "y": 60.0
+                    },
+                    "mode": "corner"
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "84",
+            "schemaKey": "bloom.shape.fill-enabled",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": "85",
+            "schemaKey": "bloom.shape.fill-color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 1.0,
+                "green": 1.0,
+                "blue": 1.0,
+                "alpha": 1.0
+              }
+            }
+          },
+          {
+            "id": "86",
+            "schemaKey": "bloom.shape.stroke-enabled",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": true
+              }
+            }
+          },
+          {
+            "id": "87",
+            "schemaKey": "bloom.shape.stroke-color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.1,
+                "green": 0.9,
+                "blue": 0.2,
+                "alpha": 1.0
+              }
+            }
+          },
+          {
+            "id": "88",
+            "schemaKey": "bloom.shape.stroke-width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 3.0
+              }
+            }
+          },
+          {
+            "id": "89",
+            "schemaKey": "bloom.shape.stroke-align",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "90",
+            "schemaKey": "bloom.shape.stroke-join",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "91",
+            "schemaKey": "bloom.shape.stroke-cap",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "1"
+              }
+            }
+          },
+          {
+            "id": "92",
+            "schemaKey": "bloom.shape.fill-rule",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "93",
+            "schemaKey": "bloom.transform.position",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 48.0,
+                "y": 32.0
+              }
+            }
+          },
+          {
+            "id": "94",
+            "schemaKey": "bloom.transform.anchor",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "95",
+            "schemaKey": "bloom.transform.scale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          {
+            "id": "96",
+            "schemaKey": "bloom.transform.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "97",
+            "schemaKey": "bloom.layer.opacity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "98",
+            "schemaKey": "bloom.layer.blend-mode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "99",
+            "schemaKey": "bloom.solid.color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 1.0,
+                "green": 1.0,
+                "blue": 0.5,
+                "alpha": 0.5
+              }
+            }
+          },
+          {
+            "id": "100",
+            "schemaKey": "bloom.solid.width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 96.0
+              }
+            }
+          },
+          {
+            "id": "101",
+            "schemaKey": "bloom.solid.height",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 64.0
+              }
+            }
+          },
+          {
+            "id": "102",
+            "schemaKey": "bloom.transform.position",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 48.0,
+                "y": 32.0
+              }
+            }
+          },
+          {
+            "id": "103",
+            "schemaKey": "bloom.transform.anchor",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "104",
+            "schemaKey": "bloom.transform.scale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          {
+            "id": "105",
+            "schemaKey": "bloom.transform.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "106",
+            "schemaKey": "bloom.layer.opacity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "107",
+            "schemaKey": "bloom.layer.blend-mode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "108",
+            "schemaKey": "bloom.mask.path",
+            "source": {
+              "kind": "animation-curve",
+              "curveId": "1",
+              "defaultValue": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 50.0,
+                      "y": 6.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 70.0,
+                      "y": 6.0
+                    },
+                    "outHandle": {
+                      "x": 76.0,
+                      "y": 10.0
+                    },
+                    "mode": "corner"
+                  },
+                  {
+                    "point": {
+                      "x": 70.0,
+                      "y": 30.0
+                    },
+                    "inHandle": {
+                      "x": 76.0,
+                      "y": 26.0
+                    },
+                    "mode": "corner"
+                  },
+                  {
+                    "point": {
+                      "x": 50.0,
+                      "y": 30.0
+                    }
+                  }
+                ],
+                "closed": true
+              }
+            }
+          },
+          {
+            "id": "109",
+            "schemaKey": "bloom.mask.feather",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "110",
+            "schemaKey": "bloom.mask.expansion",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "111",
+            "schemaKey": "bloom.mask.opacity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "112",
+            "schemaKey": "bloom.solid.color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.4,
+                "green": 0.5,
+                "blue": 0.6,
+                "alpha": 0.35
+              }
+            }
+          },
+          {
+            "id": "113",
+            "schemaKey": "bloom.solid.width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 96.0
+              }
+            }
+          },
+          {
+            "id": "114",
+            "schemaKey": "bloom.solid.height",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 64.0
+              }
+            }
+          },
+          {
+            "id": "115",
+            "schemaKey": "bloom.transform.position",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 48.0,
+                "y": 32.0
+              }
+            }
+          },
+          {
+            "id": "116",
+            "schemaKey": "bloom.transform.anchor",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "117",
+            "schemaKey": "bloom.transform.scale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          {
+            "id": "118",
+            "schemaKey": "bloom.transform.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "119",
+            "schemaKey": "bloom.layer.opacity",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": "120",
+            "schemaKey": "bloom.layer.blend-mode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "121",
+            "schemaKey": "bloom.curves.master",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 0.0,
+                      "y": 0.1
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 0.4,
+                      "y": 0.7
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 1.0,
+                      "y": 0.9
+                    }
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "122",
+            "schemaKey": "bloom.curves.red",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 1.0,
+                      "y": 1.0
+                    }
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "123",
+            "schemaKey": "bloom.curves.green",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 1.0,
+                      "y": 1.0
+                    }
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "124",
+            "schemaKey": "bloom.curves.blue",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 1.0,
+                      "y": 1.0
+                    }
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "125",
+            "schemaKey": "bloom.curves.alpha",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [
+                  {
+                    "point": {
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  },
+                  {
+                    "point": {
+                      "x": 1.0,
+                      "y": 1.0
+                    }
+                  }
+                ],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "126",
+            "schemaKey": "bloom.curves.hue-vs-hue",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "127",
+            "schemaKey": "bloom.curves.hue-vs-saturation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "128",
+            "schemaKey": "bloom.curves.hue-vs-luma",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "129",
+            "schemaKey": "bloom.curves.luma-vs-saturation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "path",
+                "anchors": [],
+                "closed": false
+              }
+            }
+          },
+          {
+            "id": "130",
+            "schemaKey": "bloom.curves.clamp",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": "131",
+            "schemaKey": "bloom.effect-mask.channel",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "132",
+            "schemaKey": "bloom.solid.color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.4,
+                "green": 0.5,
+                "blue": 0.6,
+                "alpha": 0.35
+              }
+            }
+          },
+          {
+            "id": "133",
+            "schemaKey": "bloom.solid.width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 96.0
+              }
+            }
+          },
+          {
+            "id": "134",
+            "schemaKey": "bloom.solid.height",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 64.0
+              }
+            }
+          }
+        ],
+        "animationCurves": [
+          {
+            "id": "1",
+            "kind": "path",
+            "keyframes": [
+              {
+                "id": "1",
+                "time": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "value": {
+                  "kind": "path",
+                  "anchors": [
+                    {
+                      "point": {
+                        "x": 50.0,
+                        "y": 6.0
+                      }
+                    },
+                    {
+                      "point": {
+                        "x": 70.0,
+                        "y": 6.0
+                      },
+                      "outHandle": {
+                        "x": 76.0,
+                        "y": 10.0
+                      },
+                      "mode": "corner"
+                    },
+                    {
+                      "point": {
+                        "x": 70.0,
+                        "y": 30.0
+                      },
+                      "inHandle": {
+                        "x": 76.0,
+                        "y": 26.0
+                      },
+                      "mode": "corner"
+                    },
+                    {
+                      "point": {
+                        "x": 50.0,
+                        "y": 30.0
+                      }
+                    }
+                  ],
+                  "closed": true
+                },
+                "outgoingInterpolation": "linear"
+              },
+              {
+                "id": "2",
+                "time": {
+                  "numerator": "1",
+                  "denominator": "1"
+                },
+                "value": {
+                  "kind": "path",
+                  "anchors": [
+                    {
+                      "point": {
+                        "x": 56.0,
+                        "y": 12.0
+                      }
+                    },
+                    {
+                      "point": {
+                        "x": 92.0,
+                        "y": 12.0
+                      },
+                      "outHandle": {
+                        "x": 104.0,
+                        "y": 16.0
+                      },
+                      "mode": "corner"
+                    },
+                    {
+                      "point": {
+                        "x": 92.0,
+                        "y": 58.0
+                      },
+                      "inHandle": {
+                        "x": 104.0,
+                        "y": 54.0
+                      },
+                      "mode": "corner"
+                    },
+                    {
+                      "point": {
+                        "x": 56.0,
+                        "y": 58.0
+                      }
+                    }
+                  ],
+                  "closed": true
+                },
+                "outgoingInterpolation": "linear"
+              },
+              {
+                "id": "3",
+                "time": {
+                  "numerator": "3",
+                  "denominator": "2"
+                },
+                "value": {
+                  "kind": "path",
+                  "anchors": [
+                    {
+                      "point": {
+                        "x": 60.0,
+                        "y": 8.0
+                      }
+                    },
+                    {
+                      "point": {
+                        "x": 92.0,
+                        "y": 60.0
+                      }
+                    },
+                    {
+                      "point": {
+                        "x": 50.0,
+                        "y": 60.0
+                      }
+                    }
+                  ],
+                  "closed": true
+                },
+                "outgoingInterpolation": "linear"
+              }
+            ]
+          }
+        ],
+        "graph": {
+          "nodes": [
+            {
+              "id": "1",
+              "typeId": "bloom.layer-stack",
+              "schemaVersion": 2,
+              "parameters": []
+            },
+            {
+              "id": "2",
+              "typeId": "bloom.composition-output",
+              "schemaVersion": 1,
+              "parameters": []
+            },
+            {
+              "id": "3",
+              "typeId": "bloom.field-noise",
+              "schemaVersion": 1,
+              "parameters": [
+                {
+                  "role": "brightness",
+                  "parameterId": "19"
+                },
+                {
+                  "role": "contrast",
+                  "parameterId": "18"
+                },
+                {
+                  "role": "evolution",
+                  "parameterId": "14"
+                },
+                {
+                  "role": "evolutionMode",
+                  "parameterId": "15"
+                },
+                {
+                  "role": "fractal",
+                  "parameterId": "2"
+                },
+                {
+                  "role": "gain",
+                  "parameterId": "9"
+                },
+                {
+                  "role": "invert",
+                  "parameterId": "20"
+                },
+                {
+                  "role": "lacunarity",
+                  "parameterId": "8"
+                },
+                {
+                  "role": "loop",
+                  "parameterId": "16"
+                },
+                {
+                  "role": "loopLength",
+                  "parameterId": "17"
+                },
+                {
+                  "role": "octaveOffset",
+                  "parameterId": "11"
+                },
+                {
+                  "role": "octaveRotation",
+                  "parameterId": "10"
+                },
+                {
+                  "role": "octaves",
+                  "parameterId": "7"
+                },
+                {
+                  "role": "offset",
+                  "parameterId": "5"
+                },
+                {
+                  "role": "overflow",
+                  "parameterId": "21"
+                },
+                {
+                  "role": "range",
+                  "parameterId": "22"
+                },
+                {
+                  "role": "ridgeGain",
+                  "parameterId": "13"
+                },
+                {
+                  "role": "ridgeOffset",
+                  "parameterId": "12"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "6"
+                },
+                {
+                  "role": "seed",
+                  "parameterId": "3"
+                },
+                {
+                  "role": "size",
+                  "parameterId": "4"
+                },
+                {
+                  "role": "type",
+                  "parameterId": "1"
+                }
+              ]
+            },
+            {
+              "id": "4",
+              "typeId": "bloom.field-remap",
+              "schemaVersion": 1,
+              "parameters": [
+                {
+                  "role": "bias",
+                  "parameterId": "30"
+                },
+                {
+                  "role": "clamp",
+                  "parameterId": "27"
+                },
+                {
+                  "role": "curve",
+                  "parameterId": "32"
+                },
+                {
+                  "role": "gain",
+                  "parameterId": "31"
+                },
+                {
+                  "role": "inHigh",
+                  "parameterId": "24"
+                },
+                {
+                  "role": "inLow",
+                  "parameterId": "23"
+                },
+                {
+                  "role": "invert",
+                  "parameterId": "28"
+                },
+                {
+                  "role": "outHigh",
+                  "parameterId": "26"
+                },
+                {
+                  "role": "outLow",
+                  "parameterId": "25"
+                },
+                {
+                  "role": "steps",
+                  "parameterId": "29"
+                }
+              ]
+            },
+            {
+              "id": "5",
+              "typeId": "bloom.field-rasterize",
+              "schemaVersion": 1,
+              "parameters": [
+                {
+                  "role": "arrowScale",
+                  "parameterId": "43"
+                },
+                {
+                  "role": "arrowSpacing",
+                  "parameterId": "42"
+                },
+                {
+                  "role": "explicitCentre",
+                  "parameterId": "35"
+                },
+                {
+                  "role": "explicitSize",
+                  "parameterId": "36"
+                },
+                {
+                  "role": "extent",
+                  "parameterId": "34"
+                },
+                {
+                  "role": "inspect",
+                  "parameterId": "38"
+                },
+                {
+                  "role": "output",
+                  "parameterId": "33"
+                },
+                {
+                  "role": "ramp",
+                  "parameterId": "39"
+                },
+                {
+                  "role": "rampHigh",
+                  "parameterId": "41"
+                },
+                {
+                  "role": "rampLow",
+                  "parameterId": "40"
+                },
+                {
+                  "role": "supersample",
+                  "parameterId": "37"
+                }
+              ]
+            },
+            {
+              "id": "6",
+              "typeId": "bloom.solid-source",
+              "schemaVersion": 2,
+              "parameters": [
+                {
+                  "role": "color",
+                  "parameterId": "44"
+                },
+                {
+                  "role": "height",
+                  "parameterId": "46"
+                },
+                {
+                  "role": "width",
+                  "parameterId": "45"
+                }
+              ]
+            },
+            {
+              "id": "7",
+              "typeId": "bloom.layer-output",
+              "schemaVersion": 5,
+              "parameters": [
+                {
+                  "role": "anchor",
+                  "parameterId": "48"
+                },
+                {
+                  "role": "blendMode",
+                  "parameterId": "52"
+                },
+                {
+                  "role": "opacity",
+                  "parameterId": "51"
+                },
+                {
+                  "role": "position",
+                  "parameterId": "47"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "50"
+                },
+                {
+                  "role": "scale",
+                  "parameterId": "49"
+                }
+              ]
+            },
+            {
+              "id": "8",
+              "typeId": "bloom.shape-source",
+              "schemaVersion": 1,
+              "parameters": [
+                {
+                  "role": "cornerRadius",
+                  "parameterId": "55"
+                },
+                {
+                  "role": "fillColor",
+                  "parameterId": "62"
+                },
+                {
+                  "role": "fillEnabled",
+                  "parameterId": "61"
+                },
+                {
+                  "role": "fillRule",
+                  "parameterId": "69"
+                },
+                {
+                  "role": "innerRatio",
+                  "parameterId": "57"
+                },
+                {
+                  "role": "kind",
+                  "parameterId": "53"
+                },
+                {
+                  "role": "lineEnd",
+                  "parameterId": "59"
+                },
+                {
+                  "role": "lineStart",
+                  "parameterId": "58"
+                },
+                {
+                  "role": "path",
+                  "parameterId": "60"
+                },
+                {
+                  "role": "points",
+                  "parameterId": "56"
+                },
+                {
+                  "role": "size",
+                  "parameterId": "54"
+                },
+                {
+                  "role": "strokeAlign",
+                  "parameterId": "66"
+                },
+                {
+                  "role": "strokeCap",
+                  "parameterId": "68"
+                },
+                {
+                  "role": "strokeColor",
+                  "parameterId": "64"
+                },
+                {
+                  "role": "strokeEnabled",
+                  "parameterId": "63"
+                },
+                {
+                  "role": "strokeJoin",
+                  "parameterId": "67"
+                },
+                {
+                  "role": "strokeWidth",
+                  "parameterId": "65"
+                }
+              ]
+            },
+            {
+              "id": "9",
+              "typeId": "bloom.layer-output",
+              "schemaVersion": 5,
+              "parameters": [
+                {
+                  "role": "anchor",
+                  "parameterId": "71"
+                },
+                {
+                  "role": "blendMode",
+                  "parameterId": "75"
+                },
+                {
+                  "role": "opacity",
+                  "parameterId": "74"
+                },
+                {
+                  "role": "position",
+                  "parameterId": "70"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "73"
+                },
+                {
+                  "role": "scale",
+                  "parameterId": "72"
+                }
+              ]
+            },
+            {
+              "id": "10",
+              "typeId": "bloom.shape-source",
+              "schemaVersion": 1,
+              "parameters": [
+                {
+                  "role": "cornerRadius",
+                  "parameterId": "78"
+                },
+                {
+                  "role": "fillColor",
+                  "parameterId": "85"
+                },
+                {
+                  "role": "fillEnabled",
+                  "parameterId": "84"
+                },
+                {
+                  "role": "fillRule",
+                  "parameterId": "92"
+                },
+                {
+                  "role": "innerRatio",
+                  "parameterId": "80"
+                },
+                {
+                  "role": "kind",
+                  "parameterId": "76"
+                },
+                {
+                  "role": "lineEnd",
+                  "parameterId": "82"
+                },
+                {
+                  "role": "lineStart",
+                  "parameterId": "81"
+                },
+                {
+                  "role": "path",
+                  "parameterId": "83"
+                },
+                {
+                  "role": "points",
+                  "parameterId": "79"
+                },
+                {
+                  "role": "size",
+                  "parameterId": "77"
+                },
+                {
+                  "role": "strokeAlign",
+                  "parameterId": "89"
+                },
+                {
+                  "role": "strokeCap",
+                  "parameterId": "91"
+                },
+                {
+                  "role": "strokeColor",
+                  "parameterId": "87"
+                },
+                {
+                  "role": "strokeEnabled",
+                  "parameterId": "86"
+                },
+                {
+                  "role": "strokeJoin",
+                  "parameterId": "90"
+                },
+                {
+                  "role": "strokeWidth",
+                  "parameterId": "88"
+                }
+              ]
+            },
+            {
+              "id": "11",
+              "typeId": "bloom.layer-output",
+              "schemaVersion": 5,
+              "parameters": [
+                {
+                  "role": "anchor",
+                  "parameterId": "94"
+                },
+                {
+                  "role": "blendMode",
+                  "parameterId": "98"
+                },
+                {
+                  "role": "opacity",
+                  "parameterId": "97"
+                },
+                {
+                  "role": "position",
+                  "parameterId": "93"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "96"
+                },
+                {
+                  "role": "scale",
+                  "parameterId": "95"
+                }
+              ]
+            },
+            {
+              "id": "12",
+              "typeId": "bloom.solid-source",
+              "schemaVersion": 2,
+              "parameters": [
+                {
+                  "role": "color",
+                  "parameterId": "99"
+                },
+                {
+                  "role": "height",
+                  "parameterId": "101"
+                },
+                {
+                  "role": "width",
+                  "parameterId": "100"
+                }
+              ]
+            },
+            {
+              "id": "13",
+              "typeId": "bloom.layer-output",
+              "schemaVersion": 5,
+              "parameters": [
+                {
+                  "role": "anchor",
+                  "parameterId": "103"
+                },
+                {
+                  "role": "blendMode",
+                  "parameterId": "107"
+                },
+                {
+                  "role": "opacity",
+                  "parameterId": "106"
+                },
+                {
+                  "role": "position",
+                  "parameterId": "102"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "105"
+                },
+                {
+                  "role": "scale",
+                  "parameterId": "104"
+                }
+              ]
+            },
+            {
+              "id": "14",
+              "typeId": "bloom.solid-source",
+              "schemaVersion": 2,
+              "parameters": [
+                {
+                  "role": "color",
+                  "parameterId": "112"
+                },
+                {
+                  "role": "height",
+                  "parameterId": "114"
+                },
+                {
+                  "role": "width",
+                  "parameterId": "113"
+                }
+              ]
+            },
+            {
+              "id": "15",
+              "typeId": "bloom.layer-output",
+              "schemaVersion": 5,
+              "parameters": [
+                {
+                  "role": "anchor",
+                  "parameterId": "116"
+                },
+                {
+                  "role": "blendMode",
+                  "parameterId": "120"
+                },
+                {
+                  "role": "opacity",
+                  "parameterId": "119"
+                },
+                {
+                  "role": "position",
+                  "parameterId": "115"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "118"
+                },
+                {
+                  "role": "scale",
+                  "parameterId": "117"
+                }
+              ]
+            },
+            {
+              "id": "16",
+              "typeId": "bloom.curves",
+              "schemaVersion": 2,
+              "parameters": [
+                {
+                  "role": "alpha",
+                  "parameterId": "125"
+                },
+                {
+                  "role": "blue",
+                  "parameterId": "124"
+                },
+                {
+                  "role": "clamp",
+                  "parameterId": "130"
+                },
+                {
+                  "role": "green",
+                  "parameterId": "123"
+                },
+                {
+                  "role": "hueVsHue",
+                  "parameterId": "126"
+                },
+                {
+                  "role": "hueVsLuma",
+                  "parameterId": "128"
+                },
+                {
+                  "role": "hueVsSaturation",
+                  "parameterId": "127"
+                },
+                {
+                  "role": "lumaVsSaturation",
+                  "parameterId": "129"
+                },
+                {
+                  "role": "maskChannel",
+                  "parameterId": "131"
+                },
+                {
+                  "role": "master",
+                  "parameterId": "121"
+                },
+                {
+                  "role": "red",
+                  "parameterId": "122"
+                }
+              ]
+            },
+            {
+              "id": "17",
+              "typeId": "bloom.solid-source",
+              "schemaVersion": 2,
+              "parameters": [
+                {
+                  "role": "color",
+                  "parameterId": "132"
+                },
+                {
+                  "role": "height",
+                  "parameterId": "134"
+                },
+                {
+                  "role": "width",
+                  "parameterId": "133"
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "id": "1",
+              "source": {
+                "nodeId": "1",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "2",
+                "port": "image"
+              }
+            },
+            {
+              "id": "2",
+              "source": {
+                "nodeId": "3",
+                "port": "scalar"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "4",
+                "port": "field"
+              }
+            },
+            {
+              "id": "3",
+              "source": {
+                "nodeId": "4",
+                "port": "scalar"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "5",
+                "port": "field"
+              }
+            },
+            {
+              "id": "4",
+              "source": {
+                "nodeId": "5",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "7",
+                "port": "image"
+              }
+            },
+            {
+              "id": "5",
+              "source": {
+                "nodeId": "7",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "layer-stack-input",
+                "stackNodeId": "1",
+                "slotId": "1",
+                "role": "content"
+              }
+            },
+            {
+              "id": "6",
+              "source": {
+                "nodeId": "8",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "9",
+                "port": "image"
+              }
+            },
+            {
+              "id": "7",
+              "source": {
+                "nodeId": "9",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "layer-stack-input",
+                "stackNodeId": "1",
+                "slotId": "2",
+                "role": "content"
+              }
+            },
+            {
+              "id": "8",
+              "source": {
+                "nodeId": "10",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "11",
+                "port": "image"
+              }
+            },
+            {
+              "id": "9",
+              "source": {
+                "nodeId": "11",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "layer-stack-input",
+                "stackNodeId": "1",
+                "slotId": "3",
+                "role": "content"
+              }
+            },
+            {
+              "id": "10",
+              "source": {
+                "nodeId": "12",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "13",
+                "port": "image"
+              }
+            },
+            {
+              "id": "11",
+              "source": {
+                "nodeId": "13",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "layer-stack-input",
+                "stackNodeId": "1",
+                "slotId": "4",
+                "role": "content"
+              }
+            },
+            {
+              "id": "12",
+              "source": {
+                "nodeId": "16",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "15",
+                "port": "image"
+              }
+            },
+            {
+              "id": "13",
+              "source": {
+                "nodeId": "15",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "layer-stack-input",
+                "stackNodeId": "1",
+                "slotId": "5",
+                "role": "content"
+              }
+            },
+            {
+              "id": "14",
+              "source": {
+                "nodeId": "17",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "16",
+                "port": "input"
+              }
+            }
+          ],
+          "layerOutputs": [
+            {
+              "nodeId": "7",
+              "layerId": "1",
+              "name": "Field",
+              "outputPort": "image"
+            },
+            {
+              "nodeId": "9",
+              "layerId": "2",
+              "name": "Path",
+              "outputPort": "image"
+            },
+            {
+              "nodeId": "11",
+              "layerId": "3",
+              "name": "Path",
+              "outputPort": "image"
+            },
+            {
+              "nodeId": "13",
+              "layerId": "4",
+              "name": "Masked",
+              "outputPort": "image",
+              "masks": [
+                {
+                  "id": "1",
+                  "name": "Mask 1",
+                  "mode": "add",
+                  "inverted": false,
+                  "path": "108",
+                  "feather": "109",
+                  "expansion": "110",
+                  "opacity": "111"
+                }
+              ]
+            },
+            {
+              "nodeId": "15",
+              "layerId": "5",
+              "name": "Graded",
+              "outputPort": "image"
+            }
+          ],
+          "layerStack": {
+            "nodeId": "1",
+            "entries": [
+              {
+                "slotId": "5",
+                "layerId": "5"
+              },
+              {
+                "slotId": "4",
+                "layerId": "4"
+              },
+              {
+                "slotId": "3",
+                "layerId": "3"
+              },
+              {
+                "slotId": "2",
+                "layerId": "2"
+              },
+              {
+                "slotId": "1",
+                "layerId": "1"
+              }
+            ]
+          },
+          "compositionOutput": {
+            "nodeId": "2",
+            "port": "image"
+          }
+        },
+        "nodeLayout": [
+          {
+            "nodeId": "1",
+            "position": {
+              "x": 544.0,
+              "y": 32.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "2",
+            "position": {
+              "x": 800.0,
+              "y": 32.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "3",
+            "position": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "4",
+            "position": {
+              "x": -336.0,
+              "y": 0.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "5",
+            "position": {
+              "x": 1248.0,
+              "y": 0.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "6",
+            "position": {
+              "x": -240.0,
+              "y": -592.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "7",
+            "position": {
+              "x": 96.0,
+              "y": -592.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "8",
+            "position": {
+              "x": -352.0,
+              "y": -1520.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "9",
+            "position": {
+              "x": 96.0,
+              "y": -1520.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "10",
+            "position": {
+              "x": -352.0,
+              "y": -2448.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "11",
+            "position": {
+              "x": 96.0,
+              "y": -2448.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "12",
+            "position": {
+              "x": -240.0,
+              "y": -3040.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "13",
+            "position": {
+              "x": 96.0,
+              "y": -3040.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "14",
+            "position": {
+              "x": -240.0,
+              "y": -3632.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "15",
+            "position": {
+              "x": 96.0,
+              "y": -3632.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "16",
+            "position": {
+              "x": 400.0,
+              "y": 1312.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "17",
+            "position": {
+              "x": 880.0,
+              "y": 300.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          }
+        ],
+        "nodeGroups": [],
+        "backgroundColor": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    ],
+    "assets": [],
+    "dataBlocks": [
+      {
+        "id": "1",
+        "kind": "path",
+        "owner": null,
+        "typeId": "bloom.test.data-block",
+        "schemaVersion": {
+          "major": 1,
+          "minor": 0
+        },
+        "mediaType": "application/vnd.bloom.test-data-block",
+        "provenance": {
+          "kind": "producer",
+          "producer": {
+            "name": "bloom.test",
+            "version": "1",
+            "parametersDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "createdAt": "2026-09-17T00:00:00Z",
+          "contentDigest": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "subject": null,
+        "payload": {
+          "kind": "path",
+          "closed": false,
+          "anchors": [
+            {
+              "point": {
+                "x": 4.0,
+                "y": 40.0
+              },
+              "inHandle": null,
+              "outHandle": {
+                "x": 20.0,
+                "y": 2.0
+              }
+            },
+            {
+              "point": {
+                "x": 40.0,
+                "y": 30.0
+              },
+              "inHandle": {
+                "x": 24.0,
+                "y": 62.0
+              },
+              "outHandle": {
+                "x": 50.0,
+                "y": 10.0
+              }
+            },
+            {
+              "point": {
+                "x": 70.0,
+                "y": 44.0
+              },
+              "inHandle": {
+                "x": 60.0,
+                "y": 60.0
+              },
+              "outHandle": null
+            }
+          ]
+        },
+        "tags": []
+      }
+    ],
+    "exportQueue": {
+      "jobs": []
+    }
+  },
+  "idAllocation": {
+    "highestIssued": {
+      "composition": "1",
+      "node": "17",
+      "edge": "14",
+      "layer": "5",
+      "layerSlot": "5",
+      "parameter": "134",
+      "animationCurve": "1",
+      "keyframe": "3",
+      "driverBinding": "0",
+      "extensionRecord": "0",
+      "nodeGroup": "0",
+      "asset": "0",
+      "dataBlock": "1",
+      "layerMask": "1",
+      "exportJob": "0",
+      "exportOutput": "0"
+    }
+  },
+  "extensions": []
+}

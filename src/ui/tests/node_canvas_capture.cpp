@@ -1,7 +1,8 @@
 // Review captures of the Node editor (task N1), maximized at about 2000 and 900 px wide: an
 // arranged multi-layer graph, collapsed cards, a coloured group frame, a Merge with three inputs,
 // the canvas at 25%, the footer and every Fields card (#525). A tool, not a test:
-//   bloom_node_canvas_capture <directory> <1|1.5>
+//   bloom_node_canvas_capture <directory> <1|1.5> [path-socket]
+// `path-socket` takes only the Path socket (#589) beside its neighbors, at 2000, 900 and 480 wide.
 #include "window_fixture.hpp"
 
 #include "node_editor_items.hpp"
@@ -9,7 +10,9 @@
 #include <QDir>
 #include <QImage>
 #include <bloom/commands/node_layout_arrange.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/document/field_nodes.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -19,6 +22,8 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -164,6 +169,66 @@ int capture(int argc, char** argv) {
     fixture.clearInteraction();
     session.clearSelection();
 
+    // #589: the Path socket beside its neighbors: a Path node driving a Shape Source, with Scalar,
+    // Color and String literals alongside it.
+    if (argc > 3 && QString::fromLatin1(argv[3]) == QStringLiteral("path-socket")) {
+        commands::Transaction addShape("Add Shape", session.snapshot().revision());
+        commands::ShapeLayerGeometry geometry;
+        geometry.path = document::PathValue::fromContour(
+            {{{10.0, 10.0}, {}, {}}, {{90.0, 10.0}, {}, {}}, {{50.0, 80.0}, {}, {}}}, true);
+        addShape.emplace<commands::AddShapeLayer>(composition, document::ShapeKind::Path, geometry);
+        const auto shape = session.executeNodeTransaction(std::move(addShape))
+                               .outputId<document::NodeId>("shapeNode");
+        if (!shape)
+            return 1;
+        std::vector<document::NodeId> shown{*shape};
+        double y = -500.0;
+        std::optional<document::NodeId> path;
+        for (const auto type : {document::kScalarValueNodeType, document::kPathValueNodeType,
+                                document::kColorValueNodeType, document::kStringValueNodeType}) {
+            commands::Transaction add("Add Value", session.snapshot().revision());
+            add.emplace<commands::AddNode>(composition, std::string(type),
+                                           document::Vec2d{-500.0, y});
+            y += 200.0;
+            const auto node = session.executeNodeTransaction(std::move(add))
+                                  .outputId<document::NodeId>(commands::kAddNodeOutput);
+            if (!node)
+                return 1;
+            shown.push_back(*node);
+            if (type == document::kPathValueNodeType)
+                path = node;
+        }
+        commands::Transaction wire("Wire Path", session.snapshot().revision());
+        wire.emplace<commands::ConnectPorts>(composition, document::OutputPortRef{*path, "value"},
+                                             document::NodeInputRef{*shape, "path"});
+        run(session, std::move(wire));
+        // Beside the Shape Source card and clear of the sample graph.
+        {
+            std::map<document::NodeId, document::Vec2d> positions;
+            constexpr std::array rows{0.0, 120.0, 270.0, 500.0};
+            for (std::size_t index = 1; index < shown.size(); ++index)
+                positions[shown[index]] = document::Vec2d{-6400.0, rows.at(index - 1)};
+            positions[*shape] = document::Vec2d{-6000.0, 0.0};
+            commands::Transaction arrange("Place", session.snapshot().revision());
+            arrange.emplace<commands::MoveNodes>(composition, std::move(positions));
+            run(session, std::move(arrange));
+        }
+        for (const auto& [name, size] : std::vector<std::pair<const char*, QSize>>{
+                 {"2000", QSize(2000, 1000)}, {"900", QSize(900, 700)}, {"480", QSize(480, 700)}}) {
+            sizeArea(*fixture.window, *area, size);
+            settle();
+            QRectF bounds;
+            for (const auto id : shown)
+                if (auto* card = editor->graphScene()->findNodeItem(id))
+                    bounds = bounds.isNull() ? card->sceneBoundingRect()
+                                             : bounds.united(card->sceneBoundingRect());
+            editor->graphView()->frameRect(bounds.adjusted(-60, -60, 60, 60));
+            settle(120);
+            save(area->grab().toImage(), QStringLiteral("nodes-path-socket-%1").arg(name));
+        }
+        return gFailures == 0 ? 0 : 1;
+    }
+
     const std::vector<std::pair<const char*, QSize>> sizes{{"wide", QSize(2000, 1000)},
                                                            {"narrow", QSize(900, 700)}};
     const auto shoot = [&](const char* state, const std::function<void()>& frame) {
@@ -287,7 +352,7 @@ int capture(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: bloom_node_canvas_capture <directory> <1|1.5>\n";
+        std::cerr << "Usage: bloom_node_canvas_capture <directory> <1|1.5> [path-socket]\n";
         return 2;
     }
     qputenv("QT_SCALE_FACTOR", argv[2]);

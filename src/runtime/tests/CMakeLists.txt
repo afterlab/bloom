@@ -280,6 +280,21 @@ bloom_enable_warnings(bloom_runtime_gradient_stop_links_test)
 bloom_enable_strict_floating_point(bloom_runtime_gradient_stop_links_test)
 bloom_add_test(NAME bloom.runtime.gradient-stop-links COMMAND bloom_runtime_gradient_stop_links_test LABELS unit runtime persistence TIMEOUT 120)
 
+# #589: a project saved before compound paths opens with one contour everywhere and renders identically.
+add_executable(bloom_runtime_path_value_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/path_value_migration_tests.cpp)
+target_link_libraries(bloom_runtime_path_value_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+target_compile_definitions(bloom_runtime_path_value_migration_test PRIVATE BLOOM_PATH_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/paths")
+bloom_enable_warnings(bloom_runtime_path_value_migration_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_value_migration_test)
+bloom_add_test(NAME bloom.runtime.path-value-migration COMMAND bloom_runtime_path_value_migration_test LABELS unit runtime persistence TIMEOUT 120)
+
+# #589: a path as a graph value: contours, keys, subdivision, arc length, the socket, save and reopen.
+add_executable(bloom_runtime_path_value_test ${PROJECT_SOURCE_DIR}/tests/integration/path_value_tests.cpp)
+target_link_libraries(bloom_runtime_path_value_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project bloom_render)
+bloom_enable_warnings(bloom_runtime_path_value_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_value_test)
+bloom_add_test(NAME bloom.runtime.path-value COMMAND bloom_runtime_path_value_test LABELS unit runtime persistence TIMEOUT 120)
+
 add_executable(bloom_runtime_layer_time_test ${PROJECT_SOURCE_DIR}/tests/integration/layer_time_tests.cpp)
 target_link_libraries(bloom_runtime_layer_time_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
 bloom_enable_warnings(bloom_runtime_layer_time_test)
@@ -809,6 +824,25 @@ bloom_add_test(
     TIMEOUT 300
 )
 set_tests_properties(bloom.runtime.gpu_parented_text_sweep_native
+    PROPERTIES SKIP_RETURN_CODE 77)
+
+# #589: compound and driven paths on the production GPU route against the CPU reference, with cache
+# identity, invalidation, cancellation and budget. Skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_gpu_path_value_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_path_value_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_path_value_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_path_value_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_gpu_path_value_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_path_value_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_path_value_native
+    COMMAND bloom_runtime_gpu_path_value_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_path_value_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
 # Bounded GPU coverage contract gate. It enumerates every CompiledOperation/ImageEffectKernel
