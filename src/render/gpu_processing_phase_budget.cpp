@@ -90,7 +90,12 @@ void GpuProcessingPhaseLease::releaseLocked() noexcept {
                 std::max(peakAllocatedDeviceBytes_, counters.recentPhaseDevicePeakBytes -
                                                         counters.recentPhaseDevicePeakBytes / 8);
     }
-    --counters.admittedPhases;
+    if (retired_) {
+        --counters.retainedPhases;
+        counters.retainedProcessingHostBytes -= ownedHostBackingBytes_;
+    } else {
+        --counters.admittedPhases;
+    }
     incrementSaturating(counters.admissionRevision);
     if (unproven_) {
         --counters.unprovenPhases;
@@ -120,7 +125,7 @@ ProcessingHostBackingToken::transfer(const std::shared_ptr<GpuProcessingPhaseLea
     const std::lock_guard lock(phase->state_->mutex);
     auto& state = *phase->state_;
     auto& counters = state.counters;
-    if (phase->id_ == 0 || phase->unproven_ || allocatedBytes > phase->remainingOutputHostBytes_ ||
+    if (phase->id_ == 0 || phase->unproven_ || phase->retired_ || allocatedBytes > phase->remainingOutputHostBytes_ ||
         allocatedBytes > phase->remainingHostBytes_)
         return {};
     // The allocation was constructed while the fixed phase claim was held. The full allocated
@@ -128,6 +133,7 @@ ProcessingHostBackingToken::transfer(const std::shared_ptr<GpuProcessingPhaseLea
     // This atomic transfer changes ownership, never the total claim or admission capacity.
     phase->remainingOutputHostBytes_ -= allocatedBytes;
     phase->remainingHostBytes_ -= allocatedBytes;
+    phase->ownedHostBackingBytes_ += allocatedBytes;
     counters.hostReservedBytes -= allocatedBytes;
     counters.ownedProcessingHostBytes += allocatedBytes;
     ++counters.ownedProcessingHostAllocations;
@@ -150,6 +156,9 @@ void ProcessingHostBackingToken::releaseAfterFree() noexcept {
         auto& counters = phase_->state_->counters;
         counters.ownedProcessingHostBytes -= allocatedBytes_;
         --counters.ownedProcessingHostAllocations;
+        phase_->ownedHostBackingBytes_ -= allocatedBytes_;
+        if (phase_->retired_)
+            counters.retainedProcessingHostBytes -= allocatedBytes_;
         phase_->remainingOutputHostBytes_ += allocatedBytes_;
         phase_->remainingHostBytes_ += allocatedBytes_;
         counters.hostReservedBytes += allocatedBytes_;
@@ -314,6 +323,32 @@ bool GpuProcessingPhaseLease::finishSourcePreparation(
         // Increment only its own watermark, preserving intervening independent release events.
         incrementSaturating(admissionRevision_);
     }
+    return true;
+}
+
+bool GpuProcessingPhaseLease::retireToRetention() noexcept {
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (id_ == 0 || retired_ || unproven_ || deviceClaimBytes_ != 0 ||
+            allocatedDeviceBytes_ != 0)
+            return false;
+        auto& counters = state_->counters;
+        // Give back the unspent reservation. A backing freed later returns its bytes to
+        // remainingHostBytes_, which the release subtracts, so the totals stay exact.
+        counters.hostReservedBytes -= remainingHostBytes_;
+        counters.totalHostClaimBytes -= remainingHostBytes_;
+        remainingHostBytes_ = 0;
+        remainingOutputHostBytes_ = 0;
+        remainingProcessingHostScratchBytes_ = 0;
+        remainingUploadBytes_ = 0;
+        retired_ = true;
+        --counters.admittedPhases;
+        ++counters.retainedPhases;
+        counters.retainedProcessingHostBytes += ownedHostBackingBytes_;
+        incrementSaturating(counters.admissionRevision);
+        incrementSaturating(admissionRevision_);
+    }
+    state_->changed.notify_all();
     return true;
 }
 

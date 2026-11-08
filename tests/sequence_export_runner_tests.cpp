@@ -23,6 +23,7 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
@@ -552,6 +553,37 @@ void testCapacityWait(Fixture& f, const std::filesystem::path& directory, const 
                   result.diagnostic);
         check(provider->shutdownAndWait(std::chrono::seconds(3)), "capacity provider retires");
     }
+}
+
+// #586: a capacity wait in which only retention holds claims (cached audio retired from its
+// phase) has no admitted phase to wait for, so it stalls after its limit instead of waiting on
+// retention that never releases by itself.
+void testRetentionOnlyCapacityWaitStalls() {
+    using Wait = host::OutputAnalysisCapacityWaitV1;
+    auto policy = capacityPolicy(768ULL * 1024 * 1024);
+    auto granted = policy->reserve({.pixels = 1,
+                                    .metadataBytes = 72,
+                                    .sourceFree = true,
+                                    .native = false});
+    check(granted.lease != nullptr, "retention wait: a phase is admitted");
+    auto cached = render::adoptProcessingHostBacking(
+        std::make_unique<std::array<std::byte, 80>>(), granted.lease, 80, 80);
+    const auto t0 = Wait::Clock::now();
+    Wait active;
+    active.refused(t0, policy.get(), 0);
+    check(host::otherProcessingPhasesAdmittedV1(policy.get(), 0) &&
+              !active.stalled(t0 + Wait::kStallAfter + std::chrono::seconds(1), policy.get(), 0),
+          "an admitted phase keeps the wait alive");
+    check(cached && granted.lease->retireToRetention(), "retention wait: the phase retires");
+    granted.lease.reset();
+    check(!host::otherProcessingPhasesAdmittedV1(policy.get(), 0),
+          "a retention-only root has no other admitted phase");
+    Wait wait;
+    wait.refused(t0, policy.get(), 0);
+    check(!wait.stalled(t0 + Wait::kStallAfter - std::chrono::seconds(1), policy.get(), 0),
+          "the wait is not stalled before its limit");
+    check(wait.stalled(t0 + Wait::kStallAfter, policy.get(), 0),
+          "with only retention held the wait stalls after its limit");
 }
 
 void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& path, bool video) {
@@ -1246,6 +1278,7 @@ int main(int argc, char** argv) {
                                      "[--route-proof-dir <dir>]");
         }
         testRootedQueueAdmission();
+        testRetentionOnlyCapacityWaitStalls();
         const auto outcome = tests(directory, requireDevice, proofDirectory);
         if (outcome == GpuProofOutcome::Skipped) {
             return 77;

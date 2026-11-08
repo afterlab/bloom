@@ -153,12 +153,16 @@ struct CompositionOutputStreamV1::State {
                 ExportResourceAdmissionStatusV1 status{};
                 retainedClaim = queueReservation->reserveOwnedHostBacking(retained, status,
                                                                           context.cancellation());
-                require(retainedClaim != nullptr, "Audio backing admission refused",
-                        Error::Oversized);
+                require(retainedClaim != nullptr,
+                        "Audio backing admission refused: not enough free memory or processing "
+                        "capacity for the decoded audio",
+                        Error::Busy);
                 scratchClaim =
                     queueReservation->reserveScratch(scratchBytes, status, context.cancellation());
-                require(scratchClaim != nullptr, "Audio decode scratch admission refused",
-                        Error::Oversized);
+                require(scratchClaim != nullptr,
+                        "Audio decode scratch admission refused: not enough free memory or "
+                        "processing capacity to decode the audio",
+                        Error::Busy);
             } else {
                 // Legacy callers without a processing root retain the existing ledger
                 // envelope and cannot claim physical-sample backing credit.

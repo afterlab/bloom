@@ -1247,6 +1247,64 @@ void deviceRoomGiveWayCoversTheAllocationAndHalfTheRetention() {
             "a large retention gives half of itself back");
 }
 
+// #586: a decoded audio buffer that stays cached after its decode must not keep one of the root's
+// request slots. N+1 streams decode through a root with N slots; each retires its phase to
+// retention once the buffer is adopted, so no slot is held, every buffer is still cached and
+// charged, and an export-class request is admitted.
+void cachedAudioDoesNotHoldRequestSlots() {
+    using Backing = std::array<std::byte, 80>;
+    const auto start = GpuProcessingPhasePolicy::Clock::now();
+    MemoryBudgetState delivered;
+    delivered.machine.availableBytes = 1ULL << 30;
+    delivered.process.source = ProcessMemorySource::OtherHostOnly;
+    delivered.process.status = ProcessMemoryStatus::Unsupported;
+    delivered.process.sampledAt = start;
+    delivered.processSampleFresh = true;
+    delivered.sampleSerial = 1;
+    constexpr std::size_t slots = 3;
+    GpuProcessingPhasePolicy policy(slots);
+    policy.applyHostSample(delivered, 1ULL << 30, start);
+    const GpuProcessingPhaseEnvelope audio{
+        .pixels = 1, .metadataBytes = 72, .sourceFree = true, .native = false};
+    std::vector<std::shared_ptr<const Backing>> cached;
+    for (std::size_t stream = 0; stream < slots + 1; ++stream) {
+        auto granted = policy.reserve(audio, start);
+        require(granted.lease != nullptr, "every audio stream gets a slot once earlier ones retire");
+        auto buffer = adoptProcessingHostBacking(std::make_unique<Backing>(), granted.lease, 80, 80);
+        require(buffer != nullptr && granted.lease->retireToRetention(),
+                "an adopted buffer retires its phase to retention");
+        require(!granted.lease->retireToRetention(), "retirement happens once");
+        cached.push_back(std::move(buffer));
+        granted.lease.reset();
+    }
+    const auto held = policy.snapshot().reservations;
+    require(cached.size() == slots + 1 && held.admittedPhases == 0 &&
+                held.retainedPhases == slots + 1 && held.retainedProcessingHostBytes == 80 * 4 &&
+                held.totalHostClaimBytes == 80 * 4 && held.hostReservedBytes == 0,
+            "cached audio holds no admitted phase but stays claimed as retention, with no spare "
+            "reservation");
+    require(policy.usableCapacity().hostRetentionBytes == 80 * 4,
+            "the cached audio is reported as evictable host retention");
+    auto exportPhase = policy.reserve({.pixels = 1,
+                                       .metadataBytes = 72,
+                                       .sourceFree = true,
+                                       .native = false,
+                                       .admissionClass = GpuAdmissionClass::Export},
+                                      start);
+    require(exportPhase.lease != nullptr, "an export-class request is admitted beside cached audio");
+    exportPhase.lease.reset();
+    cached.resize(1);
+    const auto trimmed = policy.snapshot().reservations;
+    require(trimmed.retainedPhases == 1 && trimmed.retainedProcessingHostBytes == 80 &&
+                trimmed.totalHostClaimBytes == 80,
+            "freeing a cached buffer releases its retention");
+    cached.clear();
+    const auto empty = policy.snapshot().reservations;
+    require(empty.retainedPhases == 0 && empty.admittedPhases == 0 &&
+                empty.totalHostClaimBytes == 0 && empty.retainedProcessingHostBytes == 0,
+            "the root returns to empty once the cache lets go");
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--live-unlimited-probe")
@@ -1259,6 +1317,7 @@ int main(int argc, char** argv) {
         liveHeadroomDuringCachePressure();
         rootedBackingReconcilesSampledHostHeadroom();
         adoptedHostBackingCreditsOnlyMaterializedBytes();
+        cachedAudioDoesNotHoldRequestSlots();
         newBackingCannotInflateAnOlderFiniteLimit();
         policy();
         deviceReportRecoversAfterPressure();

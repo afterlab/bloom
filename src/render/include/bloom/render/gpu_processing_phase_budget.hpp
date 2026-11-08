@@ -156,6 +156,11 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t peakPhaseSourceNeedBytes = 0;
     std::uint64_t peakPhaseRetainedSourceBytes = 0;
     std::size_t admittedPhases = 0;
+    // #586: phases retired to retention (GpuProcessingPhaseLease::retireToRetention): still alive
+    // because a cached product owns a host backing, no longer counted in admittedPhases or against
+    // requestCapacity. retainedProcessingHostBytes is the part of ownedProcessingHostBytes they hold.
+    std::size_t retainedPhases = 0;
+    std::uint64_t retainedProcessingHostBytes = 0;
     std::size_t unprovenPhases = 0;
     std::size_t requestCapacity = 0;
     std::uint64_t budgetRefusals = 0;
@@ -229,6 +234,12 @@ class GpuProcessingPhaseLease final {
     // covers at most its stated working allowance (display, transfer, readback). Storage it still
     // holds (the output image) stays allocated; later allocations are admitted against live room.
     void endDeviceExecution() noexcept;
+    // #586: the phase's work is finished and only cached products it adopted remain (a decoded
+    // audio buffer). It stops counting as an admitted request, and its unspent host reservation
+    // goes back to the root now; the adopted backing stays claimed as evictable retention until the
+    // last product is freed, which then releases the lease. Call once, after the final adoption.
+    // False (nothing changes) for an unproven phase or one holding native device storage.
+    bool retireToRetention() noexcept;
     void markUnproven() noexcept;
     [[nodiscard]] bool isUnproven() const noexcept;
     // Only after the owning device has gone idle (every submission that could touch this phase's
@@ -295,6 +306,9 @@ class GpuProcessingPhaseLease final {
     std::uint64_t envelopeMinimumSourceBytes_ = 0;
     bool unproven_ = false;
     bool sourcePreparationFinished_ = false;
+    // #586: retired to retention; owned host backing bytes adopted by this phase (guarded).
+    bool retired_ = false;
+    std::uint64_t ownedHostBackingBytes_ = 0;
 };
 
 enum class HostPixelStorageDomain { PackedPreview, FinalProcess, FinalEncoded };

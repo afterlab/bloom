@@ -1571,6 +1571,18 @@ went to the CPU reference path. An OCIO effect's (or display's) output image ref
 the same typed over-budget refusal, not an allocation failure: before, that one refusal reported
 the device unavailable and sent a CG comp export frame to the CPU reference path.
 
+**Cached audio holds no request slot (#586).** A decoded audio buffer (a video's audio stream or an
+audio asset) is adopted into the cache with its processing phase. Once the adoption succeeds the
+phase calls `GpuProcessingPhaseLease::retireToRetention()`: it stops counting in `admittedPhases`
+against the request capacity (32), returns its unspent host reservation, and keeps only the adopted
+backing claimed, reported as `retainedPhases` / `retainedProcessingHostBytes` and included in
+`UsableCapacity::hostRetentionBytes`. Freeing the buffer releases the lease. Before, every cached
+stream kept one of the 32 slots for its life, so enough audio filled them, exports sat in Compiling
+with no frame and the Viewer's preparation was refused. The export capacity wait counts only
+admitted phases, so with retention alone it stalls after its limit and the job fails with a plain
+error instead of hanging. A refused audio backing or decode-scratch admission in an export is
+reported as that cause (a resource refusal), never as a full destination.
+
 **Purge returns device memory (#544).** Purge preview cache (and the media purge, which clears the
 same store) clears the resident scene cache on the service owner, then frees all parked native
 storage, which the cleared entries had moved into, measures the device again and reports the bytes

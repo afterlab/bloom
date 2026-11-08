@@ -120,9 +120,15 @@ adoptAudioBuffer(media::audio::AudioBuffer&& decoded,
     const auto bytes = measuredAudioBufferBytes(*backing);
     if (!bytes)
         return {};
-    if (phase)
-        return render::adoptProcessingHostBacking(std::move(backing), phase, bytes->allocated,
-                                                  bytes->initialized);
+    if (phase) {
+        auto adopted = render::adoptProcessingHostBacking(std::move(backing), phase,
+                                                          bytes->allocated, bytes->initialized);
+        // #586: the decode is finished and the buffer is cached. It keeps its backing claimed as
+        // retention but must not keep holding one of the root's request slots for its whole life.
+        if (adopted)
+            phase->retireToRetention();
+        return adopted;
+    }
     return std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
 }
 
