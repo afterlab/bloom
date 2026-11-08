@@ -14,10 +14,13 @@
 #include <windows.h>
 #endif
 namespace bloom::media::worker {
+// Bytes already in std::cin's buffer are invisible to the descriptor poll below, so a request the
+// previous read pulled in ahead of its own message is never waited for.
+inline bool bufferedInput() { return std::cin.rdbuf()->in_avail() > 0; }
 inline provider::Result<provider::Message>
 read(std::chrono::milliseconds idleTimeout = std::chrono::milliseconds{0}) {
 #if defined(__linux__) || defined(__APPLE__)
-    if (idleTimeout.count() > 0) {
+    if (idleTimeout.count() > 0 && !bufferedInput()) {
         const auto deadline = std::chrono::steady_clock::now() + idleTimeout;
         pollfd input{STDIN_FILENO, POLLIN, 0};
         while (true) {
@@ -38,7 +41,7 @@ read(std::chrono::milliseconds idleTimeout = std::chrono::milliseconds{0}) {
     }
 #elif defined(_WIN32)
     // Anonymous/named pipe stdin: wait for readable bytes or a closed pipe in short steps.
-    if (idleTimeout.count() > 0) {
+    if (idleTimeout.count() > 0 && !bufferedInput()) {
         const auto deadline = std::chrono::steady_clock::now() + idleTimeout;
         auto* input = GetStdHandle(STD_INPUT_HANDLE);
         while (true) {
