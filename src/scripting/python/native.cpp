@@ -1,5 +1,7 @@
 #include "native.hpp"
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/project_color_choice.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <nanobind/stl/optional.h>
 
 #include <nanobind/stl/string.h>
@@ -10,6 +12,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace bloom::scripting::python {
 namespace {
@@ -465,6 +468,58 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
     throw nb::type_error("Expected a scalar, an array, a path or a gradient of Bloom argument values");
 }
 
+namespace {
+
+// #442: after an edit that changed the project, every edited composition is compiled once (never
+// rendered) so a composition that still compiles but degrades, such as a text layer drawn in the
+// fallback face because its Font asset is gone, tells the caller, as MCP transact does in
+// compileWarnings. Each row has composition, code, detail and subject (composition, node and
+// parameter, None when the warning is not about one).
+nb::list compileWarnings(const document::Snapshot& snapshot, const commands::CommandResult& command) {
+    nb::list warnings;
+    if (!command.changed())
+        return warnings;
+    std::vector<document::CompositionId> edited;
+    if (command.affectedComposition) {
+        edited.push_back(*command.affectedComposition);
+    } else {
+        for (const auto& composition : snapshot.project().compositions())
+            edited.push_back(composition.id());
+    }
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    for (const auto composition : edited) {
+        if (snapshot.project().findComposition(composition) == nullptr)
+            continue;
+        const auto compiled = [&] {
+            const nb::gil_scoped_release release;
+            return compiler.compile({.snapshot = snapshot, .compositionId = composition}, {});
+        }();
+        for (const auto& diagnostic : compiled.diagnostics) {
+            if (diagnostic.severity != runtime::DiagnosticSeverity::Warning)
+                continue;
+            auto text = diagnostic.summary;
+            if (!diagnostic.detail.empty())
+                text += (text.empty() ? "" : ": ") + diagnostic.detail;
+            nb::dict row;
+            row["composition"] = composition.value();
+            row["code"] = std::string(runtime::compileDiagnosticCodeId(diagnostic.code));
+            row["detail"] = text;
+            nb::dict subject;
+            subject["composition"] = diagnostic.subject.compositionId.value();
+            subject["node"] = diagnostic.subject.nodeId ? nb::cast(diagnostic.subject.nodeId->value())
+                                                        : nb::none();
+            subject["parameter"] = diagnostic.subject.parameterId
+                                       ? nb::cast(diagnostic.subject.parameterId->value())
+                                       : nb::none();
+            row["subject"] = subject;
+            warnings.append(row);
+        }
+    }
+    return warnings;
+}
+
+} // namespace
+
 nb::dict NativeHost::transact(const nb::list& operations, const std::string& label,
                               const std::uint64_t revision) {
     if (std::this_thread::get_id() != owner_) {
@@ -525,7 +580,9 @@ nb::dict NativeHost::transact(const nb::list& operations, const std::string& lab
                            : OperationDiagnostic{"bloom.scripting.session-unavailable", "", "",
                                                  "Session cannot edit"});
     }
-    return commandResult(*result.command);
+    auto row = commandResult(*result.command);
+    row["compile_warnings"] = compileWarnings(facade_->query.snapshot(), *result.command);
+    return row;
 }
 
 nb::dict NativeHost::history(const bool redo) {

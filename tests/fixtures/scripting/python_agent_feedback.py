@@ -1,5 +1,7 @@
 """The agent-feedback contracts through Python: one time contract and parameter value kinds."""
+import os
 import sys
+import tempfile
 import unittest
 from fractions import Fraction
 
@@ -55,6 +57,31 @@ class AgentFeedback(unittest.TestCase):
             bloom.ops.parameter.set_source(parameter=points, value=99)
         self.assertIn('3..64', str(refused.exception))
         self.assertEqual(refused.exception.diagnostics[0]['operation_index'], 0)
+
+    def test_missing_font_file_is_a_compile_warning(self):
+        # #442: a text layer whose system font file is gone draws the fallback face; the edit says so.
+        added = bloom.ops.layer.add_text(name='T', text='Hi')
+        self.assertTrue(added['succeeded'])
+        self.assertEqual(len(added['compile_warnings']), 0)
+        row = next(c for c in bloom.data.snapshot()['compositions']
+                   if c['id'] == int(bloom.context.composition))
+        font = next(n['parameters']['font'] for n in row['nodes'] if 'font' in n['parameters'])
+        with tempfile.TemporaryDirectory() as directory:
+            face = os.path.join(directory, 'Gone.ttf')
+            ensured = bloom.ops.asset.ensure_font(
+                path=face, digest='3' * 64, family='Gone', style='Regular',
+                relinkHint='file://' + face)
+            asset = next(o['id'] for o in ensured['outputs'] if o['name'] == 'asset')
+            result = bloom.ops.parameter.set_source(parameter=font, value=str(asset))
+        self.assertTrue(result['succeeded'], result)
+        self.assertEqual(len(result['compile_warnings']), 1, result)
+        warning = result['compile_warnings'][0]
+        self.assertEqual(warning['code'], 'bloom.runtime.compile.font-asset-unavailable')
+        self.assertIn('DejaVu Sans was used', warning['detail'])
+        self.assertEqual(warning['subject']['parameter'], font)
+        # An edit that changes nothing reports no warnings.
+        again = bloom.ops.parameter.set_source(parameter=font, value=str(asset))
+        self.assertEqual(len(again['compile_warnings']), 0)
 
 
 if __name__ == '__main__':

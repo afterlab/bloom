@@ -108,6 +108,13 @@ operation edits, at its frame rate; a `Fraction`, a float and a pair are seconds
 refused call raises `bloom.OperationError`, whose `diagnostics` carry `operation_index` (the
 operation's place in its transaction group) and a message naming the cause.
 
+An edit's result also carries `compile_warnings`: after an edit that changed the project, each
+edited composition is compiled once (never rendered), and what still compiles but degrades is listed
+as `[{composition, code, detail, subject: {composition, node, parameter}}]`, as MCP `transact` does
+in `compileWarnings`. For example a text layer whose Font asset was removed, or whose system font
+file is missing or changed, is drawn in DejaVu Sans and reports
+`bloom.runtime.compile.font-asset-unavailable`. An empty list means nothing degrades.
+
 ```python
 bloom.ops.layer.add_solid("Red", (1, 0, 0, 1))
 bloom.ops.layer.add_solid(name="Red", color=[1, 0, 0, 1], position=(960, 540))
