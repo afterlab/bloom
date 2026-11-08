@@ -29,7 +29,7 @@ namespace {
 //
 // #565 Sensor Noise: the monochrome slot is 2 (3 with Monochrome), and the prepared table is
 // followed by eight more floats, which filmGrainProgramData places after the geometry:
-// 16  the shadow weighting over mid grey, the chroma amplitude, the blotch scale relative to the
+// 16  the shadow weighting over mid gray, the chroma amplitude, the blotch scale relative to the
 //     grain, the fixed pattern's amplitude
 // 20  the blotch stream's low and high 16 bits, the fixed pattern's low and high 16 bits
 constexpr std::size_t kSize = 3;
@@ -229,7 +229,7 @@ namespace {
 // #565 Sensor Noise at the data window's index (x, y), given the pixel's straight luma `l`. The
 // noise is weighted by 1 / (1 + shadowWeight * l), so the shadows carry the most. Three terms are
 // added in this order, each in proportion to alpha: the grain (per channel, or red's with
-// Monochrome), low-frequency blotches with the channels' mean removed so they carry colour and
+// Monochrome), low-frequency blotches with the channels' mean removed so they carry color and
 // not brightness, and the fixed pattern. A term whose amplitude is zero adds nothing and is
 // skipped, on the GPU too.
 bool sensorPixel(const float* const k, const float l, const std::int64_t x, const std::int64_t y,

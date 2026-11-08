@@ -1464,7 +1464,7 @@ the shadows, soft colored blotches over it, and optionally a pattern that stays 
 `intensity`, `size`, the three amounts, `monochrome`, `shadowWeighting`, `chromaBlotches`,
 `blotchSize` and `fixedPattern`, and not `shadows`, `midtones` or `highlights`; Film reads none of the
 four Sensor Noise values. With `L` as above, `w = 1 / (1 + shadowWeighting * L / 0.18)` (1 at black,
-0.5 at mid grey when `shadowWeighting` is 1, and falling toward white; 0 makes the noise even),
+0.5 at mid gray when `shadowWeighting` is 1, and falling toward white; 0 makes the noise even),
 `i = intensity * sqrt(15 / pi)`, and the noise `n` of one stream at the pixel:
 
 ```text
@@ -1484,8 +1484,10 @@ amount is 0 adds nothing and runs no noise.
 *Cache identity.* The prepared table gains eight values after the geometry, and holds the two frame
 streams and the fixed one. Film's table, identity, pixels and program text are as before the mode
 existed. A frame that has only the fixed pattern (no grain amount and no blotches) names no frame, so
-every frame has one identity and, on the GPU, one resident result; with any grain or blotches each
-frame has its own. Film mode lowers only the values Film reads and Sensor Noise only its own (the others
+every frame has one identity and, on the GPU, one resident result. The plan then does not mark the
+operation as varying with time (unless an amount is animated or driven), so the evaluator's operation
+key leaves the frame out and one frame's result serves the rest, even with `Every Frame`; with any
+grain or blotches each frame has its own. Film mode lowers only the values Film reads and Sensor Noise only its own (the others
 keep their defaults with no identity), so moving a value the mode ignores neither invalidates a cache
 entry nor changes a pixel.
 

@@ -719,34 +719,34 @@ void testSensorNoise() {
     blotches.scalars = {{"intensity", 0.1}, {"redAmount", 0.0}, {"greenAmount", 0.0},
                         {"blueAmount", 0.0}, {"shadowWeighting", 0.0}, {"chromaBlotches", 1.0},
                         {"blotchSize", 16.0}, {"size", 1.0}};
-    const Straight grey{0.4F, 0.4F, 0.4F, 1.0F};
-    const auto flat = image(frame, grey);
+    const Straight gray{0.4F, 0.4F, 0.4F, 1.0F};
+    const auto flat = image(frame, gray);
     const auto blotched = apply(blotches, flat, 2.0);
     double neutral = 0.0;
-    double coloured = 0.0;
-    double neighbours = 0.0;
+    double colored = 0.0;
+    double neighbors = 0.0;
     double spread = 0.0;
     for (std::int64_t y = 0; y < 63; ++y)
         for (std::int64_t x = 0; x < 95; ++x) {
             const auto p = at(*blotched, x, y);
             const auto q = at(*blotched, x + 1, y);
             neutral = std::max(neutral, std::abs(static_cast<double>(p[0] + p[1] + p[2]) - 1.2));
-            coloured = std::max(coloured, std::abs(static_cast<double>(p[0] - p[1])));
-            neighbours += std::abs(static_cast<double>(q[0] - p[0]));
+            colored = std::max(colored, std::abs(static_cast<double>(p[0] - p[1])));
+            neighbors += std::abs(static_cast<double>(q[0] - p[0]));
             spread += std::abs(static_cast<double>(p[0]) - 0.4);
         }
     expect(neutral < 1e-4, "chroma blotches add no brightness");
-    expect(coloured > 0.01, "chroma blotches carry color");
-    expect(neighbours < 0.25 * spread, "chroma blotches are soft: neighbors agree");
+    expect(colored > 0.01, "chroma blotches carry color");
+    expect(neighbors < 0.25 * spread, "chroma blotches are soft: neighbors agree");
     GrainValues wide = blotches;
     wide.scalars["blotchSize"] = 64.0;
     const auto widened = apply(wide, flat, 2.0);
-    double wideNeighbours = 0.0;
+    double wideNeighbors = 0.0;
     for (std::int64_t y = 0; y < 63; ++y)
         for (std::int64_t x = 0; x < 95; ++x)
-            wideNeighbours += std::abs(static_cast<double>(at(*widened, x + 1, y)[0]) -
+            wideNeighbors += std::abs(static_cast<double>(at(*widened, x + 1, y)[0]) -
                                        static_cast<double>(at(*widened, x, y)[0]));
-    expect(wideNeighbours < 0.6 * neighbours, "a larger blotch size is smoother");
+    expect(wideNeighbors < 0.6 * neighbors, "a larger blotch size is smoother");
 
     // The fixed pattern is the same on every frame and every animation; the grain is not.
     const auto input = image(frame, Straight{0.1F, 0.1F, 0.1F, 1.0F});
@@ -847,6 +847,68 @@ void testSensorNoise() {
         clean.scalars = {{"intensity", 0.0}};
         expect(!sameBits(pixels(only, 1), pixels(clean, 1)),
                "a fixed pattern alone is not the clean picture");
+    }
+
+    // Reuse through the evaluator's real operation key: a fixed pattern alone is not time-dependent
+    // (so one frame's result serves the next, with Every Frame on), while grain, blotches or any
+    // animated amount keep the key per frame.
+    {
+        const runtime::CpuCompositionEvaluator evaluator;
+        const auto grainNode = document::NodeId::fromRaw(48620);
+        const auto effectIndex = runtime::OperationIndex::fromRaw(1);
+        const auto run = [&](const GrainValues& values, const std::int64_t frameNumber) {
+            const auto plan = film_grain_test::grainPlan(values);
+            runtime::EvaluationRequest request{*core::RationalTime::create(frameNumber, 24),
+                                               plan->output(),
+                                               runtime::CompositionFormatResolution{}};
+            request.pixelStorageByteLimit = 1U << 26U;
+            runtime::OperationCacheStatistics statistics;
+            const auto result = evaluator.evaluate(plan, request, {}, {}, nullptr, &statistics);
+            if (result.frame() == nullptr)
+                throw std::logic_error("the plan evaluates");
+            const bool evaluated = std::ranges::find(statistics.evaluatedNodes, grainNode) !=
+                                   statistics.evaluatedNodes.end();
+            return std::pair{evaluated, statistics.hits};
+        };
+        const GrainValues only = fixedPatternOnly();
+        expect(!film_grain_test::grainPlan(only)->operationTimeDependent(effectIndex),
+               "a fixed pattern alone is not time-dependent, with Every Frame on");
+        const auto firstFrame = run(only, 3);
+        const auto laterFrame = run(only, 17);
+        expect(firstFrame.first && !laterFrame.first && laterFrame.second > 0,
+               "a fixed pattern alone is served from the operation cache on another frame");
+        const GrainValues moving = everyPathSensor();
+        expect(film_grain_test::grainPlan(moving)->operationTimeDependent(effectIndex),
+               "a fixed pattern with moving grain stays time-dependent");
+        const auto movingFirst = run(moving, 3);
+        const auto movingLater = run(moving, 17);
+        expect(movingFirst.first && movingLater.first,
+               "a fixed pattern with moving grain is evaluated again on another frame");
+        GrainValues blotchesOnly = only;
+        blotchesOnly.scalars["chromaBlotches"] = 0.5;
+        expect(film_grain_test::grainPlan(blotchesOnly)->operationTimeDependent(effectIndex),
+               "blotches keep it time-dependent");
+        GrainValues film = film_grain_test::everyPath();
+        film.scalars["intensity"] = 0.0;
+        expect(film_grain_test::grainPlan(film)->operationTimeDependent(effectIndex),
+               "Film mode is time-dependent whatever its values");
+        // An animated or driven amount is not constant zero, so grain from it keeps varying.
+        auto kernel = film_grain_test::grainKernel(only, 100);
+        expect(!kernel.drawsPerFrame(), "the fixed-pattern-only kernel draws nothing per frame");
+        auto drivenAmount = kernel;
+        drivenAmount.values[document::filmGrainScalarIndex("chromaBlotches")].source =
+            runtime::ScalarCurveIndex::fromRaw(0);
+        expect(drivenAmount.drawsPerFrame(), "animated blotches draw per frame");
+        auto drivenRed = kernel;
+        for (const char* role : {"redAmount", "greenAmount", "blueAmount"})
+            drivenRed.values[document::filmGrainScalarIndex(role)].source =
+                runtime::ScalarCurveIndex::fromRaw(0);
+        drivenRed.values[document::filmGrainScalarIndex("chromaBlotches")].source = 0.5;
+        expect(drivenRed.drawsPerFrame(), "constant blotches draw per frame");
+        auto drivenRedAmount = kernel;
+        drivenRedAmount.values[document::filmGrainScalarIndex("redAmount")].source =
+            runtime::ScalarCurveIndex::fromRaw(0);
+        expect(drivenRedAmount.drawsPerFrame(), "an animated grain amount draws per frame");
     }
 
     // Cache identity: a fixed pattern alone has one identity on every frame; with grain or blotches

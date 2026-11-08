@@ -53,7 +53,7 @@ shadows, soft colored blotches, and, if you want it, a pattern that never change
 the three response rows with:
 
 - **Shadow weighting** is how much the noise favors the shadows. At 100% the noise is half as strong at
-  mid grey as at black and falls further toward white; at 0% it is even across the picture.
+  mid gray as at black and falls further toward white; at 0% it is even across the picture.
 - **Chroma blotches** is the strength of soft, low-frequency color blotches, relative to **Intensity**.
   They shift color and not brightness. 0% turns them off.
 - **Blotch size** is how wide a blotch is, in full-resolution pixels.
