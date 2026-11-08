@@ -333,6 +333,15 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.matte.absent", "absent matte is zero coverage on every route",
         GpuCoverageDisposition::Required,
         "src/render ImageCombineV1 native + image combine production scene preparation"});
+    // #589: a path of several contours, and a path that arrives through the value graph, are both
+    // required through the same coverage producer as a one-contour constant.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.path.compound",
+        "compound path value: contours, holes and the value's own fill rule",
+        GpuCoverageDisposition::Required, "tests/integration gpu path value native tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.path.driven", "a keyed path value driving Shape Source through its Path socket",
+        GpuCoverageDisposition::Required, "tests/integration gpu path value native tests"});
     // ADR 0028 masks and mattes.
     out.push_back(GpuFeatureCoverageEntry{
         "feature.mask.layer",

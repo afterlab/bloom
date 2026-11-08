@@ -521,6 +521,34 @@ displayProofRunner(const bool customView) {
     add("feature.geometry.vector_coverage", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime GpuSceneExecutor native coverage tests",
         [] { return runBuilder(withSource(shape(ShapeKind::Ellipse, 107500, true), 107500)); });
+    // #589: the compound value and the driven value reach the same production coverage producer.
+    add("feature.path.compound", GpuCoverageFixtureCriterion::Prepared,
+        "tests/integration gpu path value native tests", [] {
+            auto source = shape(ShapeKind::Path, 107600, true);
+            source.path = bloom::gpu_coverage_plans::compoundPath();
+            return runBuilder(withSource(source, 107600));
+        });
+    add("feature.path.driven", GpuCoverageFixtureCriterion::Prepared,
+        "tests/integration gpu path value native tests", [] {
+            auto source = shape(ShapeKind::Path, 107700, true);
+            // The compiler keeps no path on a driven shape; the frame's value is its only source.
+            source.path = bloom::document::PathValue{};
+            source.drivenPath = bloom::runtime::ValueOutputIndex::fromRaw(0);
+            auto definition = withSource(source, 107700)->copyDefinition();
+            definition.valueOperations = {bloom::runtime::CompiledValueOperation{
+                NodeId::fromRaw(107710), bloom::runtime::ValueOutputIndex::fromRaw(0), 1,
+                bloom::runtime::CompiledValuePathCurve{bloom::runtime::CompiledPathCurve{
+                    bloom::document::AnimationCurveId::fromRaw(107711),
+                    {bloom::runtime::CompiledPathKeyframe{
+                         bloom::document::KeyframeId::fromRaw(107712), bloom::core::RationalTime{},
+                         bloom::gpu_coverage_plans::compoundPath()},
+                     bloom::runtime::CompiledPathKeyframe{
+                         bloom::document::KeyframeId::fromRaw(107713),
+                         bloom::core::RationalTime::fromInteger(1),
+                         bloom::gpu_coverage_plans::compoundPath(3.0)}}}}}};
+            definition.valueOutputCount = 1;
+            return runBuilder(publish(std::move(definition)));
+        });
     // A layer over a raster merge result is a raster input, so the production builder must emit the
     // accepted GpuAffine command for each transform axis (scale, rotation, anchor).
     add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::Prepared,
