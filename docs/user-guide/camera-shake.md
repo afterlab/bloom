@@ -35,9 +35,9 @@ nervousness off a gate weave.
 ## Seed
 
 **Seed** chooses which shake. Every new Camera Shake gets a seed of its own, so two nodes added with
-their defaults never move together. **Randomise seed**, beside the Seed field on the card and in Properties, gives the node a new seed in one
+their defaults never move together. **Randomize seed**, beside the Seed field on the card and in Properties, gives the node a new seed in one
 click; you can also type one, to match a shake you liked on another node. The seed (0 to 999999) is saved in the
-project. A copy of a Camera Shake keeps its seed and so shakes the same; use **Randomise seed** on
+project. A copy of a Camera Shake keeps its seed and so shakes the same; use **Randomize seed** on
 the copy to make it different. Two projects can start with the same seed on their first node.
 
 ## Loop

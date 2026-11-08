@@ -65,7 +65,7 @@ makeRandomiseSeedButton(CompositionSession& session,
                         std::function<std::optional<document::ParameterId>()> parameter,
                         QWidget* parent) {
     auto* button = new kit::KButton(
-        QCoreApplication::translate("RowInlineControls", "Randomise seed"), parent);
+        QCoreApplication::translate("RowInlineControls", "Randomize seed"), parent);
     button->setObjectName(QStringLiteral("randomiseSeed"));
     button->setVariant(kit::KButton::Variant::Secondary);
     button->setToolTip(
@@ -75,7 +75,7 @@ makeRandomiseSeedButton(CompositionSession& session,
         if (const auto id = parameter())
             static_cast<void>(session.setParameterValue(
                 *id, static_cast<std::int64_t>(QRandomGenerator::global()->bounded(1000000U)),
-                QCoreApplication::translate("RowInlineControls", "Randomise Seed")));
+                QCoreApplication::translate("RowInlineControls", "Randomize Seed")));
     });
     return button;
 }

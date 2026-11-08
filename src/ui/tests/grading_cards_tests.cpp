@@ -845,7 +845,7 @@ void filmGrainCard() {
 // #512: the Camera Shake card draws the roll amount and the shutter angle as dials on their own
 // rows (the roll after Amplitude Y, the shutter angle inside the motion blur's rows), its Randomise
 // seed button on the Seed row, and shows the shutter only with its motion blur on, the loop length
-// only with Loop and the octaves not under Impact; Randomise seed is one command that gives the node
+// only with Loop and the octaves not under Impact; Randomize seed is one command that gives the node
 // a new seed. A new node already has a seed of its own, not the definition's.
 void cameraShakeCard() {
     CardFixture fixture(document::kCameraShakeNodeType);
@@ -912,14 +912,14 @@ void cameraShakeCard() {
                "an animatable Camera Shake value has a keyframe diamond");
     }
 
-    // Randomise seed sits on the Seed row beside its field.
+    // Randomize seed sits on the Seed row beside its field.
     auto* seedRow = rowOf("seed");
     auto* randomise = seedRow ? seedRow->findChild<ui::kit::KButton*>(QStringLiteral("randomiseSeed"))
                               : nullptr;
     auto* seedField = seedRow ? seedRow->findChild<ui::kit::KValueField*>() : nullptr;
     expect(randomise != nullptr && randomise->isEnabled() && seedField != nullptr &&
                randomise->x() > seedField->x(),
-           "Randomise seed is on the Seed row, after its field");
+           "Randomize seed is on the Seed row, after its field");
     if (randomise != nullptr) {
         const auto commands = fixture.stack.size();
         randomise->click();
@@ -927,7 +927,7 @@ void cameraShakeCard() {
         const auto second = seedOf();
         expect(fixture.stack.size() == commands + 1 && second && first && *second != *first &&
                    *second >= 0,
-               "Randomise seed is one command that sets a new seed");
+               "Randomize seed is one command that sets a new seed");
         expect(fixture.session.undo() && seedOf() == first, "undo restores the seed");
     }
 

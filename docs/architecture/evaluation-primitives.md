@@ -444,7 +444,7 @@ frequency is the motion's noise at that frame's own frequency: a changing freque
 noise rather than integrating a phase); `octaves` (1 to 4, default 2), `seed` (integer 0 to 999999, default 1 in the
 definition; AddNode stores a seed hashed from the new node's id modulo 1000000, so two new nodes in a
 project differ and the seed is an ordinary saved constant. The project's own id is a constant (1) in
-today's files, so it is not mixed in: the first shake of two projects can share a seed, and Randomise
+today's files, so it is not mixed in: the first shake of two projects can share a seed, and Randomize
 seed gives a different one. A duplicated node copies its parameters, so a copy keeps the seed and
 shakes the same), `loop` (default off), `loopLength` (seconds, default 4),
 `overscan` (default on) and the motion blur parameters are constants.
