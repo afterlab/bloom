@@ -6,6 +6,7 @@
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/auto_exposure_definition.hpp>
+#include <bloom/document/audio_effect_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -438,6 +439,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeParameterValueValid(schemaKey, constant.value);
+    // #569 audio effects: every parameter within its document domain.
+    if (audioEffectParameterSpec(schemaKey) != nullptr)
+        return isAudioEffectParameterValueValid(schemaKey, constant.value);
     // #566 Auto Exposure: every parameter within its document domain.
     if (autoExposureParameterSpec(schemaKey) != nullptr)
         return isAutoExposureParameterValueValid(schemaKey, constant.value);
@@ -628,6 +632,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isFilmGrainConstantSchemaKey(schemaKey) ||
          bloom::document::isCodecDegradeConstantSchemaKey(schemaKey) ||
          bloom::document::isAutoExposureConstantSchemaKey(schemaKey) ||
+         bloom::document::isAudioEffectConstantSchemaKey(schemaKey) ||
          bloom::document::isLensDistortionConstantSchemaKey(schemaKey) ||
          bloom::document::isRollingShutterConstantSchemaKey(schemaKey) ||
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
@@ -712,7 +717,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
            isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) ||
-           isAutoExposureScalarSchemaKey(schemaKey) ||
+           isAutoExposureScalarSchemaKey(schemaKey) || isAudioEffectScalarSchemaKey(schemaKey) ||
            isLensDistortionScalarSchemaKey(schemaKey) ||
            isChromaticAberrationScalarSchemaKey(schemaKey) ||
            isLightRaysScalarSchemaKey(schemaKey) ||
@@ -796,6 +801,9 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);
+    // #569 audio effects (audio_effect_nodes.hpp).
+    if (audioEffectParameterSpec(schemaKey) != nullptr)
+        return isAudioEffectScalarWithinDomain(schemaKey, value);
     // #566 Auto Exposure (auto_exposure_nodes.hpp).
     if (autoExposureParameterSpec(schemaKey) != nullptr)
         return isAutoExposureScalarWithinDomain(schemaKey, value);

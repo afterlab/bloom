@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
+#include <string>
+#include <system_error>
 #include <thread>
 
 namespace bloom::scripting {
@@ -150,6 +153,13 @@ std::string_view unavailableCode(const host::ExportUnavailableCode code) {
     return names[static_cast<std::size_t>(code)];
 }
 
+std::string formatLevel(const double value) {
+    std::array<char, 32> text{};
+    const auto [end, error] = std::to_chars(text.data(), text.data() + text.size(), value,
+                                            std::chars_format::fixed, 2);
+    return error == std::errc{} ? std::string(text.data(), end) : std::string("null");
+}
+
 void writeCheckValue(Json& json, const host::ExportCheckValue& value) {
     std::visit(
         [&](const auto& item) {
@@ -244,6 +254,26 @@ void writeVerification(Json& json, const host::ExportOutputVerification& output)
             .key("meanError")
             .number(quality->meanError)
             .end('}');
+    }
+    if (const auto& loudness = output.loudness) {
+        // Levels that could not be measured (silence) are null.
+        const auto level = [&](const char* name, const bool present, const double value) {
+            json.key(name);
+            if (present && std::isfinite(value))
+                json.raw(formatLevel(value));
+            else
+                json.raw("null");
+        };
+        json.key("loudness").begin('{');
+        json.key("targetLufs").raw(formatLevel(loudness->targetLufs));
+        json.key("truePeakLimitDbtp").raw(formatLevel(loudness->truePeakLimitDbtp));
+        level("measuredLufs", loudness->measured, loudness->measuredLufs);
+        level("measuredTruePeakDbtp", true, loudness->measuredTruePeakDbtp);
+        json.key("gainDb").raw(formatLevel(loudness->gainDb));
+        level("finalLufs", loudness->finalMeasured, loudness->finalLufs);
+        level("finalTruePeakDbtp", true, loudness->finalTruePeakDbtp);
+        json.key("limiterReductionDb").raw(formatLevel(loudness->limiterReductionDb));
+        json.end('}');
     }
     json.end('}');
 }

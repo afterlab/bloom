@@ -20,6 +20,9 @@ firstImageInput(const document::NodeRecord& node) const {
     // twin in document/render_reachability.cpp applies the identical rule.
     if (definition == nullptr)
         return std::nullopt;
+    // #569: a muted audio effect is bypassed, so the audio it carries still reaches the mix.
+    if (definition->lowering == runtime::NodeLoweringKind::AudioEffect)
+        return document::NodeInputRef{node.id, std::string(document::kAudioEffectInputPort)};
     const bool maskOnly =
         !hasImageOutput(*definition) &&
         std::ranges::any_of(definition->outputs, [](const auto& output) {

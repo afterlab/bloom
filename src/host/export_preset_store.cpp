@@ -2,6 +2,7 @@
 
 #include <bloom/output/media_output.hpp>
 
+#include <array>
 #include <charconv>
 #include <cstdio>
 #include <fstream>
@@ -269,6 +270,20 @@ std::optional<document::ExportOutputSettings> settingsFrom(const Json& json) {
             return std::nullopt;
         out.useCachedFrames = *cached;
     }
+    // Optional (#570): the targets are strings because this reader has no negative numbers.
+    if (const auto* loudness = json.find("loudness")) {
+        const auto* target = string(*loudness, "targetLufs");
+        const auto* peak = string(*loudness, "truePeakDbtp");
+        if (!target || !peak)
+            return std::nullopt;
+        document::ExportLoudness parsed;
+        if (std::from_chars(target->data(), target->data() + target->size(), parsed.targetLufs)
+                    .ec != std::errc{} ||
+            std::from_chars(peak->data(), peak->data() + peak->size(), parsed.truePeakDbtp).ec !=
+                std::errc{})
+            return std::nullopt;
+        out.loudness = parsed;
+    }
     out.audioSampleRate = static_cast<std::uint32_t>(*rate);
     out.encoder = *parsedEncoder;
     if (const auto* start = string(*naming, "startFrame")) {
@@ -307,6 +322,15 @@ std::string exportSettingsJson(const document::ExportOutputSettings& settings) {
     out += std::string(",\"bakeLook\":") + (settings.bakeLook ? "true" : "false");
     out += std::string(",\"includeAudio\":") + (settings.includeAudio ? "true" : "false");
     out += std::string(",\"useCachedFrames\":") + (settings.useCachedFrames ? "true" : "false");
+    if (settings.loudness) {
+        const auto text = [](const double value) {
+            std::array<char, 32> buffer{};
+            const auto end = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value).ptr;
+            return std::string(buffer.data(), end);
+        };
+        out += ",\"loudness\":{\"targetLufs\":\"" + text(settings.loudness->targetLufs) +
+               "\",\"truePeakDbtp\":\"" + text(settings.loudness->truePeakDbtp) + "\"}";
+    }
     out += ",\"audioSampleRate\":" + std::to_string(settings.audioSampleRate);
     out += ",\"encoder\":";
     quote(out, document::exportEncoderToken(settings.encoder));

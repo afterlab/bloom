@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bloom/host/testing/fake_export_runner.hpp>
 
 #include <fstream>
@@ -164,6 +165,24 @@ class FakeRun final : public ExportRun {
         if (script_.workerPeakBytes != 0)
             result.workerMemory = ExportWorkerMemory{
                 true, script_.workerPeakBytes, request_.workerLimits.memoryCapBytes, 0, 0};
+        // #570: an output asked to normalize reports a programme measured at -20 LUFS with a -3 dBTP
+        // peak, brought to the target and held under the ceiling.
+        for (const auto& run : request_.outputs) {
+            if (run.record.id != output.output || !run.record.settings.loudness || !passed)
+                continue;
+            const auto& wanted = *run.record.settings.loudness;
+            const double gain = wanted.targetLufs - -20.0;
+            result.loudness = ExportLoudnessReport{wanted.targetLufs,
+                                                   wanted.truePeakDbtp,
+                                                   true,
+                                                   -20.0,
+                                                   -3.0,
+                                                   gain,
+                                                   true,
+                                                   wanted.targetLufs,
+                                                   std::min(-3.0 + gain, wanted.truePeakDbtp),
+                                                   std::max(0.0, -3.0 + gain - wanted.truePeakDbtp)};
+        }
         return result;
     }
 

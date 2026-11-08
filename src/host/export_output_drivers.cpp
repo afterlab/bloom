@@ -1557,6 +1557,9 @@ class MediaDriver final : public DriverBase {
         request.gpuProvider = dependencies_.gpu;
         request.owner = input_.owner;
         request.useCachedFrames = settings.useCachedFrames;
+        if (settings.loudness)
+            request.loudness = output::AudioLoudnessTargetV1{settings.loudness->targetLufs,
+                                                             settings.loudness->truePeakDbtp};
         const auto rule = existingFileRule(input_.output, input_.output.destination.firstPath);
         request.overwritePolicy = rule.policy;
         request.confirmedExisting = rule.confirmed;
@@ -1663,6 +1666,13 @@ class MediaDriver final : public DriverBase {
         if (const auto* analysis = runner_->analysis())
             provenance.implementationNote = analysis->implementationNote;
         provenance.encoder = result.encoder;
+        if (result.loudness) {
+            const auto& l = *result.loudness;
+            report_.verification.loudness = ExportLoudnessReport{
+                l.targetLufs,       l.truePeakLimitDbtp, l.measured,       l.measuredLufs,
+                l.measuredTruePeakDbtp, l.gainDb,        l.finalMeasured,  l.finalLufs,
+                l.finalTruePeakDbtp, l.limiterReductionDb};
+        }
         report_.verification.workerMemory = ExportWorkerMemory{
             result.workerMemory.measured,
             result.workerMemory.peakResidentBytes,

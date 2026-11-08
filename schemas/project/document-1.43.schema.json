@@ -4048,6 +4048,26 @@
                 "useCachedFrames": {
                     "type": "boolean"
                 },
+                "loudness": {
+                    "type": "object",
+                    "required": [
+                        "targetLufs",
+                        "truePeakDbtp"
+                    ],
+                    "properties": {
+                        "targetLufs": {
+                            "type": "number",
+                            "minimum": -40,
+                            "maximum": -5
+                        },
+                        "truePeakDbtp": {
+                            "type": "number",
+                            "minimum": -12,
+                            "maximum": 0
+                        }
+                    },
+                    "unevaluatedProperties": false
+                },
                 "audioSampleRate": {
                     "type": "integer",
                     "minimum": 8000,

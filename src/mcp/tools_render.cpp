@@ -162,9 +162,11 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     const auto& stop = call.control.stop;
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
-             "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads"},
+             "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
+             "truePeakDbtp"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
+    const auto loudness = loudnessArguments(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = string(member(arguments, "preset"), 128);
     const auto requested = string(member(arguments, "destination"));
@@ -199,7 +201,8 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     if (!compositionExport && !still)
         throw InvalidInput("Use export for media presets and encoding settings");
     if (still && (member(arguments, "profile") || member(arguments, "audio") ||
-                  member(arguments, "sampleRate") || workerLimits.any()))
+                  member(arguments, "sampleRate") || member(arguments, "loudnessLufs") ||
+                  member(arguments, "truePeakDbtp") || workerLimits.any()))
         throw InvalidInput("Still presets do not accept media encoding or worker settings");
     // #453: nothing is replaced unless overwrite is "replace". Headless has no confirmation, so
     // "ask" (the default) refuses like "refuse". Every file the render would write is checked: each
@@ -241,6 +244,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     std::uint64_t gpuFrames = 0;
     std::string report;
     std::optional<host::ExportWorkerMemory> workerMemory;
+    std::optional<host::ExportLoudnessReport> loudnessReport;
     if (still) {
         const auto result = scripting::Render::run(
             session, scheduler, compiler,
@@ -307,6 +311,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
              .ocioConfigRevision = colorIntent->ocioConfigRevision,
              .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
              .gpuProvider = gpuExportProvider,
+             .loudness = loudness ? std::optional(output::AudioLoudnessTargetV1{
+                                        loudness->targetLufs, loudness->truePeakDbtp})
+                                  : std::nullopt,
              .overwritePolicy = replace ? platform::ArtifactOverwritePolicy::CreateOrReplace
                                         : platform::ArtifactOverwritePolicy::CreateOnly},
             *retirement);
@@ -334,6 +341,12 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             throw std::runtime_error(runner.result()->failure ? runner.result()->failure->detail
                                                               : "Export was not published");
         }
+        if (const auto& measured = runner.result()->loudness)
+            loudnessReport = host::ExportLoudnessReport{
+                measured->targetLufs,       measured->truePeakLimitDbtp, measured->measured,
+                measured->measuredLufs,     measured->measuredTruePeakDbtp, measured->gainDb,
+                measured->finalMeasured,    measured->finalLufs,         measured->finalTruePeakDbtp,
+                measured->limiterReductionDb};
         frames = runner.result()->encodedFrames;
         gpuFrames = runner.result()->gpuEvaluatedFrames;
         const auto& memory = runner.result()->workerMemory;
@@ -347,6 +360,8 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     out.set(result, "preservationReport", out.text(report));
     if (workerMemory)
         out.set(result, "workerMemory", workerMemoryValue(out, *workerMemory));
+    if (loudnessReport)
+        out.set(result, "loudness", loudnessValue(out, *loudnessReport));
     auto* files = out.array();
     const auto add = [&](const std::filesystem::path& path) {
         auto* file = out.object();
@@ -371,9 +386,11 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments, const bool compositionExport) {
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
-             "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads"},
+             "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
+             "truePeakDbtp"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
+    const auto loudness = loudnessArguments(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = string(member(arguments, "preset"), 128);
     const auto requested = string(member(arguments, "destination"));
@@ -404,7 +421,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     if (!compositionExport && !found->still)
         throw InvalidInput("Use export for media presets and encoding settings");
     if (found->still && (member(arguments, "profile") || member(arguments, "audio") ||
-                         member(arguments, "sampleRate") || workerLimits.any()))
+                         member(arguments, "sampleRate") || member(arguments, "loudnessLufs") ||
+                  member(arguments, "truePeakDbtp") || workerLimits.any()))
         throw InvalidInput("Still presets do not accept media encoding or worker settings");
     auto preset = host::builtInExportPreset(found->builtIn);
     if (!preset)
@@ -424,6 +442,11 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     }
     if (auto* audio = member(arguments, "audio"))
         request.settings.includeAudio = boolean(audio);
+    if (loudness) {
+        if (request.settings.includeAudio == false && member(arguments, "audio"))
+            throw InvalidInput("Loudness normalization needs audio");
+        request.settings.loudness = loudness;
+    }
     if (auto* rate = member(arguments, "sampleRate")) {
         const auto value = integer(rate);
         if (value < 8000 || value > 192000)
@@ -442,6 +465,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     out.set(value, "preservationReport", out.text(result.report));
     if (result.workerMemory)
         out.set(value, "workerMemory", workerMemoryValue(out, *result.workerMemory));
+    if (result.loudness)
+        out.set(value, "loudness", loudnessValue(out, *result.loudness));
     out.set(value, "job", out.text(std::to_string(result.job)));
     out.set(value, "log", logEntries(out, result.log));
     auto* files = out.array();

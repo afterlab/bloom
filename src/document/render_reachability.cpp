@@ -1,5 +1,6 @@
 #include <bloom/document/render_reachability.hpp>
 
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -217,6 +218,9 @@ class GraphView final {
                        return output.valueKind == kind;
                    });
         };
+        // #569: a muted audio effect is bypassed, so the audio it carries still reaches the mix.
+        if (definition != nullptr && definition->lowering == NodeLoweringKind::AudioEffect)
+            return NodeInputRef{node.id, std::string(kAudioEffectInputPort)};
         const bool imageOutput = hasOutput(SocketValueKind::Image);
         // A Mask-only node (#337 Matte Blur) carries its first Mask input, as the compiler does.
         const bool maskOnly = !imageOutput && hasOutput(SocketValueKind::Mask);

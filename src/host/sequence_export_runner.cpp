@@ -405,7 +405,10 @@ struct detail::SequenceExportWorkV1 {
                          "Missing exact audio origin");
             encoder = std::make_unique<output::CompositionOutputStreamV1>(
                 output::CompositionOutputSourceV1{request.composition.snapshot, plan, origin,
-                                                  request.assetBaseDirectory, analysis->display},
+                                                  request.assetBaseDirectory, analysis->display,
+                                                  settings().audioCodec.empty()
+                                                      ? std::nullopt
+                                                      : request.loudness},
                 settings(), std::move(worker), queueReservation,
                 [this] { return isCancelled() || taskCancellation.isCancellationRequested(); });
         }
@@ -467,6 +470,7 @@ struct detail::SequenceExportWorkV1 {
         // providers ahead of it in the platform chain did not serve (ADR 0035).
         const auto served = encoder->handshake();
         auto provenance = encoder->provenance();
+        const auto loudnessReport = encoder->loudnessReport();
         if (provenance.fellBack())
             std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';
         require(qc.frames == settings().frames && qc.audioSamples == settings().audioSamples &&
@@ -545,6 +549,7 @@ struct detail::SequenceExportWorkV1 {
         checkpoint();
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
+        outcome.loudness = loudnessReport;
         outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
         outcome.encoder = encoderToken(served);
         outcome.expectedColourTags =

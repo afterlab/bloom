@@ -4,7 +4,7 @@ project(
     Bloom
     VERSION 0.1.0
     DESCRIPTION "Artist-focused motion graphics and visual effects software"
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 set(CMAKE_CXX_EXTENSIONS OFF)

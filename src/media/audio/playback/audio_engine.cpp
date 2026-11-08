@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <numeric>
 #include <utility>
 
@@ -324,7 +325,7 @@ AudioEngine::AudioEngine(std::unique_ptr<Backend> backend)
 AudioEngine::AudioEngine(std::unique_ptr<Backend> backend, const Config config)
     : backend_(std::move(backend)), config_(config),
       ring_(std::make_unique<SpscRing>(config.ringBufferFrames, config.channels)),
-      mixScratch_(kMixerBlockFrames * config.channels) {
+      mixScratch_(kMixerBlockFrames * config.channels), effectFrame_(config.channels), warmFrame_(config.channels) {
     clockState_.store(std::make_shared<const ClockState>(), std::memory_order_release);
     // Built here, never on the mixer.
     static_cast<void>(sincTable());
@@ -351,6 +352,10 @@ AudioEngine::ClipMix AudioEngine::clipMix(const AudioClip& clip) const {
         mix.rampStart = timeToFrames(clip.levelRamp->start, config_.rate);
         mix.rampEnd = timeToFrames(clip.levelRamp->end, config_.rate);
     }
+    if (clip.effectRamp) {
+        mix.effectRampStart = timeToFrames(clip.effectRamp->start, config_.rate);
+        mix.effectRampEnd = timeToFrames(clip.effectRamp->end, config_.rate);
+    }
     return mix;
 }
 
@@ -362,6 +367,32 @@ void AudioEngine::reserveScratchLocked(const AudioClip& clip, const ClipMix& mix
         streamScratch_.resize(taps * clip.buffer->channels);
 }
 
+void AudioEngine::attachChainsLocked(std::vector<AudioClip>& clips, std::vector<ClipMix>& mixes) {
+    if (config_.channels == 0 || config_.channels > effects::kMaxEffectChannels)
+        return;
+    std::vector<const effects::EffectChain*> taken;
+    for (std::size_t index = 0; index < clips.size(); ++index) {
+        if (clips[index].effects.empty())
+            continue;
+        std::shared_ptr<effects::EffectChain> chain;
+        for (std::size_t old = 0; old < clips_.size() && old < clipMixes_.size(); ++old) {
+            const auto& candidate = clipMixes_[old].chain;
+            if (candidate && clips_[old].effectKey == clips[index].effectKey &&
+                candidate->matches(clips[index].effects) &&
+                std::ranges::find(taken, candidate.get()) == taken.end()) {
+                chain = candidate;
+                break;
+            }
+        }
+        if (!chain) {
+            chain = std::make_shared<effects::EffectChain>(config_.rate, config_.channels);
+            chain->configure(clips[index].effects);
+        }
+        taken.push_back(chain.get());
+        mixes[index].chain = std::move(chain);
+    }
+}
+
 AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
     auto mix = clipMix(clip);
     ClipId id = 0;
@@ -370,6 +401,14 @@ AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
         std::scoped_lock lock(controlMutex_);
         clipMixes_.reserve(clips_.size() + 1U);
         reserveScratchLocked(clip, mix);
+        std::vector<AudioClip> added;
+        std::vector<ClipMix> addedMix;
+        if (!clip.effects.empty()) {
+            added.push_back(clip);
+            addedMix.push_back(mix);
+            attachChainsLocked(added, addedMix);
+            mix.chain = std::move(addedMix.front().chain);
+        }
         clips_.push_back(std::move(clip));
         clipMixes_.push_back(std::move(mix));
         id = clips_.size() - 1U;
@@ -392,6 +431,7 @@ void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
         std::scoped_lock lock(controlMutex_);
         for (std::size_t index = 0; index < clips.size(); ++index)
             reserveScratchLocked(clips[index], mixes[index]);
+        attachChainsLocked(clips, mixes);
         clips_.swap(clips);
         clipMixes_.swap(mixes);
         // Audio already queued for the device was mixed from the old clips; re-mix it (#459).
@@ -818,17 +858,157 @@ bool AudioEngine::produceBlock(const std::size_t frames) noexcept {
     return true;
 }
 
-void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
-                           const std::span<float> output) noexcept {
-    std::fill(output.begin(), output.end(), 0.0F);
+bool AudioEngine::clipFrame(const std::size_t clipIndex, const std::int64_t absoluteFrame,
+                            float* const target) noexcept {
     const auto generation = mixGeneration_.load(std::memory_order_acquire);
     const CancelAudioWork cancelled = [this, generation] {
         return !playing_.load(std::memory_order_acquire) ||
                generation != mixGeneration_.load(std::memory_order_acquire);
     };
+    const auto& table = sincTable();
+    const auto& clip = clips_[clipIndex];
+    const auto position = clipSourcePosition(clip, absoluteFrame, config_.rate);
+    if (!position)
+        return false;
+    // Gains are output-major: gains[output * sourceChannels + source].
+    const auto& mix = clipMixes_[clipIndex];
+    const auto& gains = mix.gains;
+    const auto& buffer = *clip.buffer;
+    const std::size_t sourceChannels = buffer.channels;
+    if (gains.size() != sourceChannels * config_.channels)
+        return false;
+    auto level = clip.level;
+    if (mix.rampEnd > mix.rampStart && clip.levelRamp) {
+        const auto progress = std::clamp(
+            (static_cast<double>(absoluteFrame) - static_cast<double>(mix.rampStart)) /
+                static_cast<double>(mix.rampEnd - mix.rampStart),
+            0.0, 1.0);
+        level = static_cast<float>(
+            static_cast<double>(clip.level) +
+            progress * static_cast<double>(clip.levelRamp->endLevel - clip.level));
+    }
+    // Exact: an output-rate clip on a whole source frame plays that sample unchanged.
+    const bool exact = position->fraction == 0.0 && buffer.rate == config_.rate;
+    const auto available = static_cast<std::int64_t>(
+        buffer.stream
+            ? buffer.frames
+            : std::min<std::uint64_t>(buffer.frames, buffer.planes.front().size()));
+    std::int64_t firstTap = position->frame;
+    std::size_t tapCount = 1;
+    if (!exact) {
+        // Taps past either end of the source repeat its edge sample, so the filter keeps
+        // unity gain up to the clip's first and last frames. Weights are normalized to sum
+        // to one, which makes a constant signal pass exactly.
+        const auto halfWidth = static_cast<std::int64_t>(mix.halfWidthFrames);
+        const auto lowest = position->frame - halfWidth + 1;
+        const auto highest = position->frame + halfWidth;
+        firstTap = std::clamp<std::int64_t>(lowest, 0, available - 1);
+        const auto lastTap = std::clamp<std::int64_t>(highest, 0, available - 1);
+        tapCount = static_cast<std::size_t>(lastTap - firstTap + 1);
+        if (tapCount > tapScratch_.size())
+            return false;
+        std::fill_n(tapScratch_.begin(), tapCount, 0.0);
+        double weightSum = 0.0;
+        for (auto tap = lowest; tap <= highest; ++tap) {
+            const auto distance =
+                static_cast<double>(tap - position->frame) - position->fraction;
+            const auto weight = sincWeight(table, distance, mix.cutoff);
+            weightSum += weight;
+            tapScratch_[static_cast<std::size_t>(
+                std::clamp<std::int64_t>(tap, firstTap, lastTap) - firstTap)] += weight;
+        }
+        if (!(weightSum > 0.0))
+            return false;
+        for (std::size_t tap = 0; tap < tapCount; ++tap)
+            tapScratch_[tap] /= weightSum;
+    }
+    const float* streamed = nullptr;
+    if (buffer.stream && !exact) {
+        const auto window =
+            std::span<float>(streamScratch_.data(), streamScratch_.size())
+                .first(std::min(streamScratch_.size(), tapCount * sourceChannels));
+        if (window.size() != tapCount * sourceChannels ||
+            buffer.stream->probe().channels != sourceChannels)
+            return false;
+        const auto read = buffer.stream->readInterleaved(
+            static_cast<std::uint64_t>(firstTap), window, cancelled);
+        if (!read || *read.value() != tapCount)
+            return false;
+        streamed = window.data();
+    }
+    for (std::size_t source = 0; source < sourceChannels; ++source) {
+        bool audible = false;
+        for (std::size_t channel = 0; channel < config_.channels; ++channel)
+            audible = audible || gains[channel * sourceChannels + source] != 0.0F;
+        if (!audible)
+            continue;
+        float sample = 0.0F;
+        if (exact) {
+            if (buffer.stream) {
+                const auto value =
+                    buffer.stream->sample(static_cast<std::uint64_t>(position->frame),
+                                          static_cast<std::uint32_t>(source), cancelled);
+                if (!value)
+                    continue;
+                sample = *value;
+            } else if (source < buffer.planes.size() &&
+                       static_cast<std::size_t>(position->frame) <
+                           buffer.planes[source].size()) {
+                sample = buffer.planes[source][static_cast<std::size_t>(position->frame)];
+            } else {
+                continue;
+            }
+        } else {
+            double sum = 0.0;
+            if (streamed != nullptr) {
+                for (std::size_t tap = 0; tap < tapCount; ++tap)
+                    sum += tapScratch_[tap] *
+                           static_cast<double>(streamed[tap * sourceChannels + source]);
+            } else if (source < buffer.planes.size() &&
+                       static_cast<std::size_t>(firstTap) + tapCount <=
+                           buffer.planes[source].size()) {
+                const auto* plane =
+                    buffer.planes[source].data() + static_cast<std::size_t>(firstTap);
+                for (std::size_t tap = 0; tap < tapCount; ++tap)
+                    sum += tapScratch_[tap] * static_cast<double>(plane[tap]);
+            } else {
+                continue;
+            }
+            sample = static_cast<float>(sum);
+        }
+        for (std::size_t channel = 0; channel < config_.channels; ++channel)
+            if (const auto gain = gains[channel * sourceChannels + source]; gain != 0.0F)
+                target[channel] += sample * (gain * level);
+    }
+    return true;
+}
+
+void AudioEngine::warmEffects(const std::size_t clipIndex,
+                              const std::int64_t absoluteFrame) noexcept {
+    auto& clip = clips_[clipIndex];
+    auto& mix = clipMixes_[clipIndex];
+    mix.chain->reset();
+    const auto warm = static_cast<std::int64_t>(effects::kEffectWarmupSeconds *
+                                                static_cast<double>(config_.rate));
+    for (auto frame = absoluteFrame - warm; frame < absoluteFrame; ++frame) {
+        std::fill(warmFrame_.begin(), warmFrame_.end(), 0.0F);
+        if (!clipFrame(clipIndex, frame, warmFrame_.data()))
+            continue;
+        const auto progress =
+            mix.effectRampEnd > mix.effectRampStart && clip.effectRamp
+                ? std::clamp((static_cast<double>(frame) - static_cast<double>(mix.effectRampStart)) /
+                                 static_cast<double>(mix.effectRampEnd - mix.effectRampStart),
+                             0.0, 1.0)
+                : 0.0;
+        mix.chain->process(warmFrame_.data(), frame, clip.effects, progress);
+    }
+}
+
+void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
+                           const std::span<float> output) noexcept {
+    std::fill(output.begin(), output.end(), 0.0F);
     const auto firstAbsoluteFrame = timeToFrames(clockOrigin_, config_.rate) +
                                     saturatingFrameOffset(firstProducedFrame, playbackRate_);
-    const auto& table = sincTable();
     const auto anySolo = std::any_of(clips_.begin(), clips_.end(), [](const AudioClip& clip) {
         return clip.solo && !clip.muted;
     });
@@ -836,123 +1016,35 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
          ++outputFrame) {
         const auto absoluteFrame =
             loopedFrame(firstAbsoluteFrame + saturatingFrameOffset(outputFrame, playbackRate_));
+        float* const frame = output.data() + outputFrame * config_.channels;
         for (std::size_t clipIndex = 0; clipIndex < clips_.size(); ++clipIndex) {
             const auto& clip = clips_[clipIndex];
             if (anySolo && !clip.solo)
                 continue;
-            const auto position = clipSourcePosition(clip, absoluteFrame, config_.rate);
-            if (!position)
+            auto& mix = clipMixes_[clipIndex];
+            if (mix.chain == nullptr || clip.effects.empty()) {
+                static_cast<void>(clipFrame(clipIndex, absoluteFrame, frame));
                 continue;
-            // Gains are output-major: gains[output * sourceChannels + source].
-            const auto& mix = clipMixes_[clipIndex];
-            const auto& gains = mix.gains;
-            const auto& buffer = *clip.buffer;
-            const std::size_t sourceChannels = buffer.channels;
-            if (gains.size() != sourceChannels * config_.channels)
+            }
+            // A clip with effects is mixed into a frame of its own, run through its chain, then
+            // added to the output.
+            std::fill(effectFrame_.begin(), effectFrame_.end(), 0.0F);
+            if (!clipFrame(clipIndex, absoluteFrame, effectFrame_.data())) {
+                mix.chain->skip();
                 continue;
-            auto level = clip.level;
-            if (mix.rampEnd > mix.rampStart && clip.levelRamp) {
-                const auto progress = std::clamp(
-                    (static_cast<double>(absoluteFrame) - static_cast<double>(mix.rampStart)) /
-                        static_cast<double>(mix.rampEnd - mix.rampStart),
-                    0.0, 1.0);
-                level = static_cast<float>(
-                    static_cast<double>(clip.level) +
-                    progress * static_cast<double>(clip.levelRamp->endLevel - clip.level));
             }
-            // Exact: an output-rate clip on a whole source frame plays that sample unchanged.
-            const bool exact = position->fraction == 0.0 && buffer.rate == config_.rate;
-            const auto available = static_cast<std::int64_t>(
-                buffer.stream
-                    ? buffer.frames
-                    : std::min<std::uint64_t>(buffer.frames, buffer.planes.front().size()));
-            std::int64_t firstTap = position->frame;
-            std::size_t tapCount = 1;
-            if (!exact) {
-                // Taps past either end of the source repeat its edge sample, so the filter keeps
-                // unity gain up to the clip's first and last frames. Weights are normalized to sum
-                // to one, which makes a constant signal pass exactly.
-                const auto halfWidth = static_cast<std::int64_t>(mix.halfWidthFrames);
-                const auto lowest = position->frame - halfWidth + 1;
-                const auto highest = position->frame + halfWidth;
-                firstTap = std::clamp<std::int64_t>(lowest, 0, available - 1);
-                const auto lastTap = std::clamp<std::int64_t>(highest, 0, available - 1);
-                tapCount = static_cast<std::size_t>(lastTap - firstTap + 1);
-                if (tapCount > tapScratch_.size())
-                    continue;
-                std::fill_n(tapScratch_.begin(), tapCount, 0.0);
-                double weightSum = 0.0;
-                for (auto tap = lowest; tap <= highest; ++tap) {
-                    const auto distance =
-                        static_cast<double>(tap - position->frame) - position->fraction;
-                    const auto weight = sincWeight(table, distance, mix.cutoff);
-                    weightSum += weight;
-                    tapScratch_[static_cast<std::size_t>(
-                        std::clamp<std::int64_t>(tap, firstTap, lastTap) - firstTap)] += weight;
-                }
-                if (!(weightSum > 0.0))
-                    continue;
-                for (std::size_t tap = 0; tap < tapCount; ++tap)
-                    tapScratch_[tap] /= weightSum;
-            }
-            const float* streamed = nullptr;
-            if (buffer.stream && !exact) {
-                const auto window =
-                    std::span<float>(streamScratch_.data(), streamScratch_.size())
-                        .first(std::min(streamScratch_.size(), tapCount * sourceChannels));
-                if (window.size() != tapCount * sourceChannels ||
-                    buffer.stream->probe().channels != sourceChannels)
-                    continue;
-                const auto read = buffer.stream->readInterleaved(
-                    static_cast<std::uint64_t>(firstTap), window, cancelled);
-                if (!read || *read.value() != tapCount)
-                    continue;
-                streamed = window.data();
-            }
-            for (std::size_t source = 0; source < sourceChannels; ++source) {
-                bool audible = false;
-                for (std::size_t channel = 0; channel < config_.channels; ++channel)
-                    audible = audible || gains[channel * sourceChannels + source] != 0.0F;
-                if (!audible)
-                    continue;
-                float sample = 0.0F;
-                if (exact) {
-                    if (buffer.stream) {
-                        const auto value =
-                            buffer.stream->sample(static_cast<std::uint64_t>(position->frame),
-                                                  static_cast<std::uint32_t>(source), cancelled);
-                        if (!value)
-                            continue;
-                        sample = *value;
-                    } else if (source < buffer.planes.size() &&
-                               static_cast<std::size_t>(position->frame) <
-                                   buffer.planes[source].size()) {
-                        sample = buffer.planes[source][static_cast<std::size_t>(position->frame)];
-                    } else {
-                        continue;
-                    }
-                } else {
-                    double sum = 0.0;
-                    if (streamed != nullptr) {
-                        for (std::size_t tap = 0; tap < tapCount; ++tap)
-                            sum += tapScratch_[tap] *
-                                   static_cast<double>(streamed[tap * sourceChannels + source]);
-                    } else if (source < buffer.planes.size() &&
-                               static_cast<std::size_t>(firstTap) + tapCount <=
-                                   buffer.planes[source].size()) {
-                        const auto* plane =
-                            buffer.planes[source].data() + static_cast<std::size_t>(firstTap);
-                        for (std::size_t tap = 0; tap < tapCount; ++tap)
-                            sum += tapScratch_[tap] * static_cast<double>(plane[tap]);
-                    } else {
-                        continue;
-                    }
-                    sample = static_cast<float>(sum);
-                }
-                for (std::size_t channel = 0; channel < config_.channels; ++channel)
-                    if (const auto gain = gains[channel * sourceChannels + source]; gain != 0.0F)
-                        output[outputFrame * config_.channels + channel] += sample * (gain * level);
-            }
+            if (!mix.chain->continuous(absoluteFrame))
+                warmEffects(clipIndex, absoluteFrame);
+            const auto progress =
+                mix.effectRampEnd > mix.effectRampStart && clip.effectRamp
+                    ? std::clamp((static_cast<double>(absoluteFrame) -
+                                  static_cast<double>(mix.effectRampStart)) /
+                                     static_cast<double>(mix.effectRampEnd - mix.effectRampStart),
+                                 0.0, 1.0)
+                    : 0.0;
+            mix.chain->process(effectFrame_.data(), absoluteFrame, clip.effects, progress);
+            for (std::size_t channel = 0; channel < config_.channels; ++channel)
+                frame[channel] += effectFrame_[channel];
         }
     }
 }

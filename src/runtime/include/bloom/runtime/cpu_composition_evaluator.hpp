@@ -57,6 +57,16 @@ struct AudioClipLevelRamp final {
 
     friend bool operator==(const AudioClipLevelRamp&, const AudioClipLevelRamp&) = default;
 };
+// #569: one audio effect of a clip at a time: its kind and its parameter values in the node's
+// definition order.
+struct AudioEffectDescription final {
+    AudioEffectKind kind = AudioEffectKind::Mono;
+    std::vector<double> values;
+    // The values at the end of the clip's effect ramp (empty: they hold `values`).
+    std::vector<double> endValues{};
+    friend bool operator==(const AudioEffectDescription&, const AudioEffectDescription&) = default;
+};
+
 struct AudioClipDescription final {
     document::NodeId sourceNodeId;
     document::AssetId assetId;
@@ -76,6 +86,12 @@ struct AudioClipDescription final {
     std::optional<FootageAudioTiming> footage{};
     // #471: set by the interactive playback mix on a clip whose level is automated.
     std::optional<AudioClipLevelRamp> levelRamp{};
+    // #569: the effect chain the clip's sound runs through after its level, nearest the source
+    // first.
+    std::vector<AudioEffectDescription> effects{};
+    // #569: set by the interactive playback mix on a clip whose effect parameters move: the effects'
+    // `endValues` are those at `end` (the ramp's endLevel is not used).
+    std::optional<AudioClipLevelRamp> effectRamp{};
 
     friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
 };

@@ -1,3 +1,4 @@
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/layer_source.hpp>
 
 #include <bloom/document/project.hpp>
@@ -91,7 +92,10 @@ std::optional<LayerSource> layerSource(const Composition& composition,
              ++step) {
             if (auto source = sourceOfNode(composition, *node))
                 return source;
-            node = feedingNode(composition, node->id, kLayerOutputContentInputPort);
+            // #569: an audio effect continues up its own audio input.
+            node = feedingNode(composition, node->id,
+                               isAudioEffectNodeType(node->typeId) ? kAudioEffectInputPort
+                                                                   : kLayerOutputContentInputPort);
         }
     }
     return std::nullopt;

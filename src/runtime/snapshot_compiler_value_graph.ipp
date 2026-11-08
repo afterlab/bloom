@@ -688,6 +688,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::ImageEffect:
     case runtime::NodeLoweringKind::ImageSource:
     case runtime::NodeLoweringKind::AudioSource:
+    case runtime::NodeLoweringKind::AudioEffect:
     case runtime::NodeLoweringKind::Text:
     case runtime::NodeLoweringKind::LayerOutput:
     case runtime::NodeLoweringKind::LayerStack:

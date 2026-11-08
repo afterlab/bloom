@@ -178,6 +178,7 @@ archive digest, the selection, the processing steps and every file digest are in
 | dr_wav | 0.14.6 (commit `019e75ba8e9ac47222dfb87671029812069f68dc`) | MIT-0 OR public domain | `src/media/third_party/dr_wav/` | `dependencies/licenses/dr_wav/` |
 | minimp3 | 2026-07-27 snapshot (commit `ea99364f61c14656440e8d77e9c233ccf3124633`) | CC0 1.0 | `src/media/third_party/minimp3/` | `dependencies/licenses/minimp3/` |
 | miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | MIT-0 OR public domain | `src/media/third_party/miniaudio/` | `dependencies/licenses/miniaudio/` |
+| libebur128 | 1.2.6 (commit `67b33abe1558160ed76ada1322329b0e9e058b02`) | MIT (bundled `queue.h`: BSD-3-Clause) | `src/media/third_party/ebur128/` | `dependencies/licenses/ebur128/` |
 
 | stb_image | 2.30 (commit `013ac3beddff3dbffafd5177e7972067cd2b5083`) | MIT OR Unlicense | `src/media/third_party/stb_image/` | `dependencies/licenses/stb_image/` |
 
@@ -206,3 +207,16 @@ component records under `dependencies/licenses/{dr_wav,minimp3,miniaudio}/` reta
 bytes, per-file SHA-256 provenance, license review, and in-process security disposition. The audio
 security boundary is deliberately narrow: only WAV/MP3 paths reach the bounded file decoders, and
 the device backend receives decoded samples rather than media paths.
+
+### libebur128
+
+Copyright (c) 2011 Jan Kokemüller. Released under the MIT License; its bundled `queue.h` is the
+University of California BSD three-clause list header. Bloom vendors the unmodified C source
+(`ebur128.c`, `ebur128.h`, `queue/sys/queue.h`) and compiles it as C through one private
+object-library target for the export loudness normalization (EBU R128 / ITU-R BS.1770 integrated
+loudness and true peak). It is not a superbuild dependency and has no entry in
+`dependencies/dependencies.lock.json`. The license texts are at
+`src/media/third_party/ebur128/LICENSE` and `src/media/third_party/ebur128/queue/LICENSE`,
+byte-identical to the upstream files at the pinned commit, and again under
+`dependencies/licenses/ebur128/`, with the acquisition provenance, license review, and security
+review. The library only measures samples Bloom has already mixed; it reads no files.

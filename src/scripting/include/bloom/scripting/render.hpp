@@ -40,6 +40,8 @@ struct RenderRequest final {
     // Issue #581: opt-in limits on the media worker processes (movie and WAV presets). The default
     // applies none.
     host::ExportWorkerLimits workerLimits = {};
+    // #570: normalize the audio of a movie or WAV preset to this loudness.
+    std::optional<document::ExportLoudness> loudness = std::nullopt;
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
@@ -75,6 +77,8 @@ struct RenderResult final {
     RenderDiagnosticCode diagnosticCode = RenderDiagnosticCode::None;
     // Issue #581: the media worker's measured memory; absent for an image preset (no worker).
     std::optional<host::ExportWorkerMemory> workerMemory = std::nullopt;
+    // #570: the measured and delivered loudness of a normalizing render.
+    std::optional<host::ExportLoudnessReport> loudness = std::nullopt;
 };
 
 // Own the effective working-space/config identity before dispatching an asynchronous export.

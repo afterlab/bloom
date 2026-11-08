@@ -2,6 +2,7 @@
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
+#include <bloom/output/composition_output_stream.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
@@ -113,6 +114,9 @@ struct SequenceExportRequestV1 {
     // GPU display-only transform for a cached frame is available
     // (detail::compositeFrameReuseAvailableV1); every other frame is evaluated.
     bool useCachedFrames = false;
+    // #570: normalize the audio to this loudness (two passes over the mix). Absent exports the audio
+    // as mixed. Ignored without audio.
+    std::optional<output::AudioLoudnessTargetV1> loudness = std::nullopt;
     // #453: what an existing destination may be. CreateOnly (the default) never replaces a file;
     // CreateOrReplace replaces it, only the confirmed file when `confirmedExisting` is set. A
     // refused or changed destination fails with failureStage Destination and is never replaced.
@@ -192,6 +196,9 @@ struct SequenceExportResultV1 {
     std::string cpuDisplayReason;
     // Frames taken from the composite cache instead of being evaluated (useCachedFrames).
     std::uint64_t framesReused = 0;
+    // #570: measured and delivered loudness of a normalizing export; absent when the audio was not
+    // normalized.
+    std::optional<output::AudioLoudnessReportV1> loudness;
     // Issue #369: what the output colour intent and preset asked the container to carry, for the
     // ColourTags and Container checks against the reopened artifact (evidence).
     media::provider::ColourTags expectedColourTags;

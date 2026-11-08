@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/media/audio/effects.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -82,6 +83,13 @@ struct AudioLevelRamp final {
     float endLevel = 1.0F;
 };
 
+// The span of transport time over which a clip's effect parameters move from their `values` to their
+// `endValues` (#569), the same way a level ramp moves the level.
+struct AudioEffectRamp final {
+    core::RationalTime start{};
+    core::RationalTime end{};
+};
+
 struct AudioClip final {
     // Null means "no sample": the clip contributes silence. Shared so the engine never
     // deep-copies decoded audio (a shared decode can be tens of megabytes) -- callers hand in
@@ -97,6 +105,13 @@ struct AudioClip final {
     std::function<std::optional<core::RationalTime>(core::RationalTime)> mapTime{};
     // Evaluated at the transport position after any loop wrap and before mapTime.
     std::optional<AudioLevelRamp> levelRamp{};
+    // #569: the effects the clip's audio runs through after its level, in order. `effectKey`
+    // names the clip across replaceClips() calls so a chain keeps its state while its parameters
+    // change; clips with effects need distinct keys. Evaluated at the transport position after any
+    // loop wrap, on the same sample grid in playback and in an offline mix.
+    std::uint64_t effectKey = 0;
+    std::vector<effects::EffectSettings> effects{};
+    std::optional<AudioEffectRamp> effectRamp{};
 };
 
 // A transport loop in timeline time, half-open: [start, end).
@@ -222,6 +237,14 @@ class AudioEngine final {
     [[nodiscard]] std::int64_t loopedFrame(std::int64_t absoluteFrame) const noexcept;
     void resetTransportLocked() noexcept;
     void mixBlock(std::uint64_t firstProducedFrame, std::span<float> output) noexcept;
+    // Adds clip `clipIndex`'s audio at `absoluteFrame` (its level applied, channel-mixed to the
+    // output layout) to `target`, one frame of the output channels. False when the clip is silent
+    // there.
+    [[nodiscard]] bool clipFrame(std::size_t clipIndex, std::int64_t absoluteFrame,
+                                 float* target) noexcept;
+    // #569: restarts a clip's effect chain at `absoluteFrame` after a jump, running it over the
+    // warm-up window before so its dynamics start from what came just before.
+    void warmEffects(std::size_t clipIndex, std::int64_t absoluteFrame) noexcept;
     // What the mixer needs per clip, resolved off the mixer so mixBlock never allocates: the
     // source-to-output channel mix (see channelMixMatrix; empty without a buffer) and the
     // band-limited sample-rate conversion filter for the clip's source rate.
@@ -235,8 +258,16 @@ class AudioEngine final {
         // transport position; rampEnd > rampStart when the clip has one.
         std::int64_t rampStart = 0;
         std::int64_t rampEnd = 0;
+        // #569: the clip's effect state, kept across clip replacements by AudioClip::effectKey,
+        // and its effect ramp on the same grid.
+        std::shared_ptr<effects::EffectChain> chain;
+        std::int64_t effectRampStart = 0;
+        std::int64_t effectRampEnd = 0;
     };
     [[nodiscard]] ClipMix clipMix(const AudioClip& clip) const;
+    // Requires controlMutex_: gives each of `clips` its chain, taking over the one an earlier
+    // clip with the same key has.
+    void attachChainsLocked(std::vector<AudioClip>& clips, std::vector<ClipMix>& mixes);
     // Requires controlMutex_: grows the mixer's interpolation scratch to cover `mix`.
     void reserveScratchLocked(const AudioClip& clip, const ClipMix& mix);
     void wakeMixer() noexcept;
@@ -246,6 +277,10 @@ class AudioEngine final {
     Config config_;
     std::unique_ptr<SpscRing> ring_;
     std::vector<float> mixScratch_;
+    // One frame of one clip's audio on its way through its effects; sized to the channel count.
+    std::vector<float> effectFrame_;
+    // The same for the frames a restarted chain is warmed over, so the current frame is not touched.
+    std::vector<float> warmFrame_;
     mutable std::mutex controlMutex_;
     std::vector<AudioClip> clips_;
     // Parallel to clips_, guarded by controlMutex_.

@@ -181,10 +181,19 @@ void AudioPlaybackSession::submitPending() {
                                             return !std::holds_alternative<double>(
                                                 source.level.source);
                                         }) ||
+                    std::ranges::any_of(audio.layers,
+                                        [](const auto& layer) {
+                                            return layer.time && layer.time->timeRemap &&
+                                                   std::holds_alternative<runtime::ValueOutputIndex>(
+                                                       layer.time->timeRemap->source);
+                                        }) ||
+                    // #569: an animated audio effect parameter is re-evaluated with the transport.
                     std::ranges::any_of(audio.layers, [](const auto& layer) {
-                        return layer.time && layer.time->timeRemap &&
-                               std::holds_alternative<runtime::ValueOutputIndex>(
-                                   layer.time->timeRemap->source);
+                        return std::ranges::any_of(layer.effects, [](const auto& effect) {
+                            return std::ranges::any_of(effect.parameters, [](const auto& parameter) {
+                                return !std::holds_alternative<double>(parameter.source);
+                            });
+                        });
                     });
                 prepared->mix = evaluator->evaluateAudioMix(compiled.plan, request.time,
                                                             context.cancellation());
@@ -203,6 +212,22 @@ void AudioPlaybackSession::submitPending() {
                                 next.audioStream == clip.audioStream && next.level != clip.level)
                                 clip.levelRamp = runtime::AudioClipLevelRamp{
                                     .start = request.time, .end = *end, .endLevel = next.level};
+                            // #569: animated effect parameters ramp across the same span.
+                            if (next.sourceNodeId == clip.sourceNodeId &&
+                                next.effects.size() == clip.effects.size()) {
+                                bool moves = false;
+                                for (std::size_t at = 0; at < clip.effects.size(); ++at)
+                                    if (next.effects[at].kind == clip.effects[at].kind &&
+                                        next.effects[at].values.size() ==
+                                            clip.effects[at].values.size()) {
+                                        clip.effects[at].endValues = next.effects[at].values;
+                                        moves = moves ||
+                                                next.effects[at].values != clip.effects[at].values;
+                                    }
+                                if (moves)
+                                    clip.effectRamp = runtime::AudioClipLevelRamp{
+                                        .start = request.time, .end = *end, .endLevel = 1.0};
+                            }
                         }
                 }
             } else {
@@ -260,7 +285,8 @@ std::vector<media::audio::playback::AudioClip> AudioPlaybackSession::engineClips
     if (!mix_)
         return clips;
     clips.reserve(mix_->clips.size());
-    for (const auto& description : mix_->clips) {
+    for (std::size_t index = 0; index < mix_->clips.size(); ++index) {
+        const auto& description = mix_->clips[index];
         auto buffer = audioBuffer(description.assetId, description.audioStream);
         if (buffer == nullptr)
             continue;
@@ -278,6 +304,17 @@ std::vector<media::audio::playback::AudioClip> AudioPlaybackSession::engineClips
             clips.back().levelRamp = media::audio::playback::AudioLevelRamp{
                 description.levelRamp->start, description.levelRamp->end,
                 static_cast<float>(description.levelRamp->endLevel)};
+        // #569: the layer's audio effects, ramped over the same span when they move.
+        if (!description.effects.empty()) {
+            clips.back().effectKey = description.sourceNodeId.value() * 1'000'003ULL + index;
+            for (const auto& effect : description.effects)
+                clips.back().effects.push_back(media::audio::effects::makeEffectSettings(
+                    static_cast<media::audio::effects::EffectKind>(effect.kind), effect.values,
+                    effect.endValues));
+            if (description.effectRamp)
+                clips.back().effectRamp = media::audio::playback::AudioEffectRamp{
+                    description.effectRamp->start, description.effectRamp->end};
+        }
     }
     return clips;
 }

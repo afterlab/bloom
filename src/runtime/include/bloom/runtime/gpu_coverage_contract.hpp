@@ -622,6 +622,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     // through the Viewer's GPU preview route.
     case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::AudioSource:
+    case NodeLoweringKind::AudioEffect:
     case NodeLoweringKind::Unsupported:
     case NodeLoweringKind::ValueConstant:
     case NodeLoweringKind::ValueTime:
@@ -684,6 +685,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::CompositionOutput:
         return "operation.CompiledCompositionOutput";
     case NodeLoweringKind::AudioSource:
+    case NodeLoweringKind::AudioEffect:
         return "scope.audio";
     case NodeLoweringKind::Unsupported:
         return "scope.unsupported";

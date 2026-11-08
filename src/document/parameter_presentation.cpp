@@ -5,6 +5,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -652,6 +653,17 @@ std::optional<ParameterPresentation> autoExposurePresentation(const std::string_
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #569 audio effects: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> audioEffectPresentation(const std::string_view schemaKey) {
+    const auto* spec = audioEffectParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    if (spec->kind == AudioEffectParameterKind::Count)
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->unit);
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit, spec->displayScale);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -669,6 +681,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *codec;
     if (auto autoExposure = autoExposurePresentation(schemaKey))
         return *autoExposure;
+    if (auto audioEffect = audioEffectPresentation(schemaKey))
+        return *audioEffect;
     if (auto lens = lensDistortionPresentation(schemaKey))
         return *lens;
     if (auto aberration = chromaticAberrationPresentation(schemaKey))

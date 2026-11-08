@@ -164,6 +164,26 @@ struct Line final {
                 .arg(provenance.framesReused)
                 .arg(provenance.gpuFrames + provenance.cpuReferenceFrames + provenance.framesReused),
             StatusTone::Neutral);
+    if (const auto& loudness = verification.loudness; loudness.has_value()) {
+        // Measured is the mix as rendered; delivered is what the file carries after the gain and
+        // the true-peak limiter. Silence has no loudness to normalize.
+        if (!loudness->measured)
+            add(tr("Audio is silent, so its loudness was not changed"), StatusTone::Neutral);
+        else
+            add(loudness->finalMeasured
+                    ? tr("Loudness %1 LUFS, measured %2 LUFS before normalizing")
+                          .arg(loudness->finalLufs, 0, 'f', 1)
+                          .arg(loudness->measuredLufs, 0, 'f', 1)
+                    : tr("Loudness normalized from %1 LUFS").arg(loudness->measuredLufs, 0, 'f', 1),
+                StatusTone::Neutral,
+                tr("Target %1 LUFS. True peak %2 dBTP (limit %3 dBTP, was %4). The limiter reduced "
+                   "the level by up to %5 dB.")
+                    .arg(loudness->targetLufs, 0, 'f', 1)
+                    .arg(loudness->finalTruePeakDbtp, 0, 'f', 1)
+                    .arg(loudness->truePeakLimitDbtp, 0, 'f', 1)
+                    .arg(loudness->measuredTruePeakDbtp + loudness->gainDb, 0, 'f', 1)
+                    .arg(loudness->limiterReductionDb, 0, 'f', 1));
+    }
     return lines;
 }
 

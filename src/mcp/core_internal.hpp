@@ -216,8 +216,17 @@ struct WorkerLimitArguments final {
 // {measured, peakBytes, capBytes, waits, waitedMs}
 [[nodiscard]] yyjson_mut_val* workerMemoryValue(Json& out, const host::ExportWorkerMemory& memory);
 
+// Reads loudnessLufs (-40..-5) and truePeakDbtp (-12..0, default -1) of an audio-carrying export
+// (#570). Absent when loudnessLufs is not given; truePeakDbtp alone is refused. Throws InvalidInput.
+[[nodiscard]] std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments);
+// {targetLufs, truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, finalMeasured,
+// finalLufs, finalTruePeakDbtp, limiterReductionDb}; a level that was not measurable (silence) is
+// null.
+[[nodiscard]] yyjson_mut_val* loudnessValue(Json& out, const host::ExportLoudnessReport& report);
+
 struct TransientResult final {
     std::optional<host::ExportWorkerMemory> workerMemory;
+    std::optional<host::ExportLoudnessReport> loudness;
     std::uint64_t job = 0;
     std::vector<host::ExportLogEntry> log;
     std::uint64_t frames = 0;

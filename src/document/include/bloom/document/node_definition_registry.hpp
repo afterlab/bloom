@@ -328,6 +328,8 @@ enum class NodeLoweringKind {
     ImageEffect,
     VideoSource,
     AudioSource,
+    // #569: an audio effect between an audio source and a Layer's audio input.
+    AudioEffect,
     CompositionSource,
     LayerOutput,
     LayerStack,
@@ -425,6 +427,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ImageSource:
     case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::AudioSource:
+    case NodeLoweringKind::AudioEffect:
     case NodeLoweringKind::CompositionSource:
     case NodeLoweringKind::LayerOutput:
     case NodeLoweringKind::LayerStack:

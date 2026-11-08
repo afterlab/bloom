@@ -1291,6 +1291,18 @@ struct CompiledAudioSource final {
     friend bool operator==(const CompiledAudioSource&, const CompiledAudioSource&) = default;
 };
 
+// #569: the audio effects a layer's sound runs through, nearest the source first.
+enum class AudioEffectKind : std::uint8_t { Equalizer, Compressor, AutoLevel, Mono, Hiss };
+
+struct CompiledAudioEffect final {
+    document::NodeId nodeId;
+    AudioEffectKind kind = AudioEffectKind::Mono;
+    // One per parameter of the node, in the node's definition order (audio_effect_nodes.hpp).
+    std::vector<CompiledScalarParameter> parameters;
+
+    friend bool operator==(const CompiledAudioEffect&, const CompiledAudioEffect&) = default;
+};
+
 struct CompiledAudioLayer final {
     document::NodeId layerOutputNodeId;
     document::LayerId layerId;
@@ -1301,6 +1313,8 @@ struct CompiledAudioLayer final {
     core::RationalTime outPoint{};
     // ADR 0024: the layer's own time mapping; audio follows exactly the picture mapping.
     std::optional<CompiledLayerTime> time{};
+    // #569: the effect chain between the source and this layer, nearest the source first.
+    std::vector<CompiledAudioEffect> effects{};
 
     friend bool operator==(const CompiledAudioLayer&, const CompiledAudioLayer&) = default;
 };

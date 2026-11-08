@@ -1,3 +1,4 @@
+#include <bloom/document/audio_effect_nodes.hpp>
 #include "auto_exposure_image_effect.hpp"
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
@@ -1917,6 +1918,24 @@ std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& c
     return time;
 }
 
+namespace {
+[[nodiscard]] std::string_view audioEffectNodeType(const AudioEffectKind kind) noexcept {
+    switch (kind) {
+    case AudioEffectKind::Equalizer:
+        return document::kAudioEqualizerNodeType;
+    case AudioEffectKind::Compressor:
+        return document::kAudioCompressorNodeType;
+    case AudioEffectKind::AutoLevel:
+        return document::kAudioAutoLevelNodeType;
+    case AudioEffectKind::Mono:
+        return document::kAudioMonoNodeType;
+    case AudioEffectKind::Hiss:
+        return document::kAudioHissNodeType;
+    }
+    return {};
+}
+} // namespace
+
 std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
     const std::shared_ptr<const CompiledCompositionPlan>& plan, const core::RationalTime time,
     const CancellationToken& cancellation) const {
@@ -1940,6 +1959,13 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         std::ranges::any_of(plan->audioMix().layers, [](const auto& layer) {
             return layer.time && layer.time->timeRemap &&
                    std::holds_alternative<ValueOutputIndex>(layer.time->timeRemap->source);
+        }) ||
+        std::ranges::any_of(plan->audioMix().layers, [](const auto& layer) {
+            return std::ranges::any_of(layer.effects, [](const auto& effect) {
+                return std::ranges::any_of(effect.parameters, [](const auto& parameter) {
+                    return std::holds_alternative<ValueOutputIndex>(parameter.source);
+                });
+            });
         });
     if (needsValueGraph) {
         ValueGraphMemoization memoization;
@@ -1953,6 +1979,21 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
             return std::nullopt;
     }
 
+    const auto sampleScalar =
+        [&](const CompiledScalarParameter& parameter) -> std::optional<double> {
+        if (const auto* constant = std::get_if<double>(&parameter.source))
+            return std::isfinite(*constant) ? std::optional{*constant} : std::nullopt;
+        if (const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source)) {
+            if (curve->value() >= plan->scalarCurves().size())
+                return std::nullopt;
+            return sampleAnimationCurve(plan->scalarCurves()[curve->value()], time).value;
+        }
+        const auto index = std::get<ValueOutputIndex>(parameter.source).value();
+        if (!valueGraph || index >= valueGraph->outputs.size())
+            return std::nullopt;
+        const auto* value = std::get_if<double>(&valueGraph->outputs[index]);
+        return value ? std::optional{*value} : std::nullopt;
+    };
     AudioMixDescription description{.outputNodeId = plan->audioMix().outputNodeId, .clips = {}};
     description.clips.reserve(plan->audioMix().layers.size());
     for (const auto& layer : plan->audioMix().layers) {
@@ -1991,6 +2032,21 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         description.clips.back().sourceLoopExtent = source.loopExtent;
         description.clips.back().audioStream = source.audioStream;
         description.clips.back().footage = source.footage;
+        for (const auto& effect : layer.effects) {
+            AudioEffectDescription described{effect.kind, {}};
+            const auto specs = document::audioEffectParameters(audioEffectNodeType(effect.kind));
+            if (specs.size() != effect.parameters.size())
+                return std::nullopt;
+            for (std::size_t index = 0; index < specs.size(); ++index) {
+                const auto sampled = sampleScalar(effect.parameters[index]);
+                if (!sampled || !std::isfinite(*sampled))
+                    return std::nullopt;
+                // A curve may overshoot the parameter's domain; the processor never sees that.
+                described.values.push_back(
+                    std::clamp(*sampled, specs[index].minimum, specs[index].maximum));
+            }
+            description.clips.back().effects.push_back(std::move(described));
+        }
         if (!layer.time) {
             // #354: identity timing still gates the layer's in/out window (a trimmed head is
             // silent), through the same range test a retimed layer uses.
@@ -2034,21 +2090,6 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
                                          .plan = plan});
         }
     }
-    const auto sampleScalar =
-        [&](const CompiledScalarParameter& parameter) -> std::optional<double> {
-        if (const auto* constant = std::get_if<double>(&parameter.source))
-            return std::isfinite(*constant) ? std::optional{*constant} : std::nullopt;
-        if (const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source)) {
-            if (curve->value() >= plan->scalarCurves().size())
-                return std::nullopt;
-            return sampleAnimationCurve(plan->scalarCurves()[curve->value()], time).value;
-        }
-        const auto index = std::get<ValueOutputIndex>(parameter.source).value();
-        if (!valueGraph || index >= valueGraph->outputs.size())
-            return std::nullopt;
-        const auto* value = std::get_if<double>(&valueGraph->outputs[index]);
-        return value ? std::optional{*value} : std::nullopt;
-    };
     const bool anySolo =
         std::ranges::any_of(plan->audioMix().layers,
                             [](const auto& layer) { return layer.solo && layer.enabled; }) ||

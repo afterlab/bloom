@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -197,6 +198,19 @@ ValidationResult validateExportOutput(const ExportOutput& output) {
     if (settings.audioSampleRate < 8000 || settings.audioSampleRate > 192000)
         result.add(ValidationCode::InvalidValue, "settings.audioSampleRate",
                    "Audio sample rate must be 8000..192000 Hz");
+    if (settings.loudness) {
+        const auto& loudness = *settings.loudness;
+        if (!std::isfinite(loudness.targetLufs) ||
+            loudness.targetLufs < kExportLoudnessTargetMinimumLufs ||
+            loudness.targetLufs > kExportLoudnessTargetMaximumLufs)
+            result.add(ValidationCode::InvalidValue, "settings.loudness.targetLufs",
+                       "The loudness target must be -40..-5 LUFS");
+        if (!std::isfinite(loudness.truePeakDbtp) ||
+            loudness.truePeakDbtp < kExportTruePeakMinimumDbtp ||
+            loudness.truePeakDbtp > kExportTruePeakMaximumDbtp)
+            result.add(ValidationCode::InvalidValue, "settings.loudness.truePeakDbtp",
+                       "The true-peak limit must be -12..0 dBTP");
+    }
     if (exportEncoderToken(settings.encoder).empty())
         result.add(ValidationCode::InvalidValue, "settings.encoder", "Unknown encoder preference");
     if (settings.naming.framePadding < 1 || settings.naming.framePadding > 12)

@@ -39,6 +39,15 @@
     if (!settings.useCachedFrames &&
         (!state.ok(writer.memberName("useCachedFrames")) || !state.ok(writer.booleanValue(false))))
         return false;
+    // Optional (#570): absent means the audio is exported as mixed, so older files stay canonical.
+    if (settings.loudness &&
+        (!state.ok(writer.memberName("loudness")) || !state.ok(writer.beginObject()) ||
+         !state.ok(writer.memberName("targetLufs")) ||
+         !state.ok(writer.float64Value(settings.loudness->targetLufs)) ||
+         !state.ok(writer.memberName("truePeakDbtp")) ||
+         !state.ok(writer.float64Value(settings.loudness->truePeakDbtp)) ||
+         !state.ok(writer.endObject())))
+        return false;
     if (!state.ok(writer.memberName("audioSampleRate")) ||
         !state.ok(writer.integerValue(settings.audioSampleRate)) ||
         !emitStringMember(state, "encoder", exportEncoderToken(settings.encoder)) ||

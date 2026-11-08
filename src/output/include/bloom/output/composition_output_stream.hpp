@@ -5,12 +5,40 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 namespace bloom::output {
+// #570: what the export is asked to do to the programme's loudness.
+struct AudioLoudnessTargetV1 final {
+    // Integrated loudness in LUFS (EBU R128 / ITU-R BS.1770).
+    double targetLufs = -16.0;
+    // The true-peak ceiling in dBTP.
+    double truePeakDbtp = -1.0;
+};
+// #570: what a loudness export measured and delivered. Loudness values are negative infinity for
+// audio with nothing above the BS.1770 absolute gate (silence), and `measured` / `finalMeasured`
+// say so.
+struct AudioLoudnessReportV1 final {
+    double targetLufs = -16.0;
+    double truePeakLimitDbtp = -1.0;
+    // The mix as rendered, before the gain and the limiter.
+    bool measured = false;
+    double measuredLufs = 0.0;
+    double measuredTruePeakDbtp = 0.0;
+    // The gain applied to reach the target, in dB (zero when nothing was measurable).
+    double gainDb = 0.0;
+    // The audio as delivered to the encoder.
+    bool finalMeasured = false;
+    double finalLufs = 0.0;
+    double finalTruePeakDbtp = 0.0;
+    // The largest gain reduction the true-peak limiter applied, in dB (zero when it never acted).
+    double limiterReductionDb = 0.0;
+};
 struct CompositionOutputSourceV1 {
     document::Snapshot snapshot;
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     core::RationalTime origin;
     std::filesystem::path assetBaseDirectory;
     std::shared_ptr<const PreparedOutputDisplayV1> display = {};
+    // Normalize the programme's loudness (#570); absent exports the audio as mixed.
+    std::optional<AudioLoudnessTargetV1> loudness = {};
 };
 // Blocking output adapter. Owns the isolated encoder and offline mix clients. The caller
 // serializes calls on an I/O executor and retains the admission reservation through close.
@@ -40,6 +68,9 @@ class CompositionOutputStreamV1 final {
     // True after an audio source failed to read or decode for the mix (#428): the failure that
     // writeFrame returned belongs to the audio source stage, not the encoder.
     [[nodiscard]] bool audioSourceFailed() const noexcept;
+    // #570: the measured and delivered loudness of a normalizing export, once every audio block has
+    // been written; absent otherwise.
+    [[nodiscard]] std::optional<AudioLoudnessReportV1> loudnessReport() const;
     [[nodiscard]] const media::provider::Handshake& handshake() const;
     [[nodiscard]] const media::provider::MediaProviderProvenanceV1& provenance() const;
     // The encode worker's measured memory so far (peak, cap, waits); see EncodeWorkerMemoryV1.

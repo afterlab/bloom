@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -196,6 +197,9 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     // The media worker's measured memory (issue #581); absent for an image output (no worker).
     if (verification.workerMemory)
         out.set(value, "workerMemory", workerMemoryValue(out, *verification.workerMemory));
+    // Present when the output normalized its audio loudness (#570).
+    if (verification.loudness)
+        out.set(value, "loudness", loudnessValue(out, *verification.loudness));
     // A published movie's reopen measurements (issue #424), named as in ExportReopenQuality;
     // absent for an output without a tolerance profile.
     if (const auto& quality = verification.reopenQuality) {
@@ -388,6 +392,48 @@ host::ExportWorkerLimits applyWorkerLimits(host::ExportWorkerLimits base,
     return base;
 }
 
+std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments) {
+    auto* target = member(arguments, "loudnessLufs");
+    auto* peak = member(arguments, "truePeakDbtp");
+    if (!target) {
+        if (peak)
+            throw InvalidInput("truePeakDbtp needs loudnessLufs");
+        return std::nullopt;
+    }
+    if (!yyjson_is_num(target) || (peak && !yyjson_is_num(peak)))
+        throw InvalidInput("loudnessLufs and truePeakDbtp are numbers");
+    document::ExportLoudness loudness;
+    loudness.targetLufs = yyjson_get_num(target);
+    if (peak)
+        loudness.truePeakDbtp = yyjson_get_num(peak);
+    if (!(loudness.targetLufs >= document::kExportLoudnessTargetMinimumLufs &&
+          loudness.targetLufs <= document::kExportLoudnessTargetMaximumLufs))
+        throw InvalidInput("loudnessLufs is -40 to -5");
+    if (!(loudness.truePeakDbtp >= document::kExportTruePeakMinimumDbtp &&
+          loudness.truePeakDbtp <= document::kExportTruePeakMaximumDbtp))
+        throw InvalidInput("truePeakDbtp is -12 to 0");
+    return loudness;
+}
+
+yyjson_mut_val* loudnessValue(Json& out, const host::ExportLoudnessReport& report) {
+    auto* value = out.object();
+    out.set(value, "targetLufs", out.real(report.targetLufs));
+    out.set(value, "truePeakLimitDbtp", out.real(report.truePeakLimitDbtp));
+    out.set(value, "measured", out.boolean(report.measured));
+    out.set(value, "measuredLufs", report.measured ? out.real(report.measuredLufs) : out.null());
+    out.set(value, "measuredTruePeakDbtp",
+            std::isfinite(report.measuredTruePeakDbtp) ? out.real(report.measuredTruePeakDbtp)
+                                                       : out.null());
+    out.set(value, "gainDb", out.real(report.gainDb));
+    out.set(value, "finalMeasured", out.boolean(report.finalMeasured));
+    out.set(value, "finalLufs", report.finalMeasured ? out.real(report.finalLufs) : out.null());
+    out.set(value, "finalTruePeakDbtp",
+            std::isfinite(report.finalTruePeakDbtp) ? out.real(report.finalTruePeakDbtp)
+                                                    : out.null());
+    out.set(value, "limiterReductionDb", out.real(report.limiterReductionDb));
+    return value;
+}
+
 yyjson_mut_val* workerMemoryValue(Json& out, const host::ExportWorkerMemory& memory) {
     auto* value = out.object();
     out.set(value, "measured", out.boolean(memory.measured));
@@ -571,6 +617,8 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 result.frames += output.verification->artifacts.publishedArtifacts;
                 if (output.verification->workerMemory)
                     result.workerMemory = output.verification->workerMemory;
+                if (output.verification->loudness)
+                    result.loudness = output.verification->loudness;
                 for (auto& file : publishedFiles(output.verification->artifacts))
                     result.files.push_back(std::move(file));
             }

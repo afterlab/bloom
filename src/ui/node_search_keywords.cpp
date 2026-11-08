@@ -96,6 +96,11 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.offset", "Add|Arithmetic"},
     {"bloom.multiply", "Arithmetic|Gain"},
     {"bloom.colorize", "Fill|Tint|Tritone|Colorama"},
+    {"bloom.audio-equalizer", "EQ|Equalizer|High Pass|Low Pass|Shelf|Parametric|Audio Filter"},
+    {"bloom.audio-compressor", "Compressor|Dynamics|Limiter|Squash|Audio Level"},
+    {"bloom.audio-auto-level", "AGC|Automatic Gain|Leveler|Normalize|Audio Level"},
+    {"bloom.audio-mono", "Mono|Fold Down|Downmix|Sum Channels|Stereo to Mono"},
+    {"bloom.audio-hiss", "Noise|Hiss|Tape|Static|Room Tone"},
     {"bloom.auto-exposure", "Auto White Balance|Auto Gain|Auto Levels|Camera Hunting|AWB"},
     // Color Management
     {"bloom.ocio-colour-space-transform", "OCIOColorSpace|Colorspace|Color Profile Converter"},

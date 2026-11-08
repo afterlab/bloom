@@ -18,6 +18,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <tuple>
 
 namespace bloom::ui::exportpanel {
@@ -166,6 +167,27 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     includeAudio_ = check(this, QStringLiteral("exportIncludeAudio"), tr("Include audio"));
     (void)qualityLeft->addCheckRow(tr("Audio"), *includeAudio_, tr("Include audio"));
     audioRow_ = includeAudio_;
+    // #570: bring the programme to a loudness target (EBU R128) under a true-peak ceiling.
+    normalizeLoudness_ = check(this, QStringLiteral("exportNormalizeLoudness"), tr("Normalize loudness"));
+    (void)qualityLeft->addCheckRow(tr("Loudness"), *normalizeLoudness_, tr("Normalize loudness"));
+    loudnessTarget_ = new kit::KValueField(this);
+    loudnessTarget_->setObjectName(QStringLiteral("exportLoudnessTarget"));
+    loudnessTarget_->setAccessibleName(tr("Loudness target"));
+    loudnessTarget_->setIntegerMode(true);
+    loudnessTarget_->setIntegerRange(-40, -5);
+    loudnessTarget_->setUnit(tr("LUFS"));
+    loudnessTarget_->setFixedWidth(kit::px(kit::Size::DropdownWidth));
+    loudnessTargetRow_ = fieldRow(this, {loudnessTarget_});
+    (void)qualityLeft->addRow(tr("Target"), loudnessTargetRow_);
+    truePeak_ = new kit::KValueField(this);
+    truePeak_->setObjectName(QStringLiteral("exportTruePeak"));
+    truePeak_->setAccessibleName(tr("True peak limit"));
+    truePeak_->setIntegerMode(true);
+    truePeak_->setIntegerRange(-12, 0);
+    truePeak_->setUnit(tr("dBTP"));
+    truePeak_->setFixedWidth(kit::px(kit::Size::DropdownWidth));
+    truePeakRow_ = fieldRow(this, {truePeak_});
+    (void)qualityLeft->addRow(tr("True peak"), truePeakRow_);
     colourSpace_ = dropdown(this, QStringLiteral("exportColourSpace"), tr("Color space"));
     colourSpaceRow_ = fieldRow(this, {colourSpace_});
     (void)qualityRight->addRow(tr("Color space"), colourSpaceRow_);
@@ -211,6 +233,7 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
 
     connect(format_, &kit::KDropdown::activated, this, [this](int) { formatChosen(); });
     connect(savePreset_, &QAbstractButton::clicked, this, [this] { (void)promptPresetName(); });
+    connect(normalizeLoudness_, &QAbstractButton::toggled, this, [this](bool) { updateLoudnessRows(base_.format); });
     connect(frameNumbers_, &QAbstractButton::toggled, this,
             [this](const bool on) { startNumber_->setEnabled(!on); });
     connect(display_, &kit::KDropdown::activated, this, [this](int) {
@@ -427,6 +450,11 @@ void OutputModuleDialog::showSettings(const document::ExportOutputSettings& sett
     bakeLook_->setChecked(settings.bakeLook);
     includeAudio_->setChecked(settings.includeAudio);
     cachedFrames_->setChecked(settings.useCachedFrames);
+    normalizeLoudness_->setChecked(settings.loudness.has_value());
+    loudnessTarget_->setIntegerValue(std::llround(settings.loudness.value_or({}).targetLufs));
+    truePeak_->setIntegerValue(std::llround(settings.loudness.value_or({}).truePeakDbtp));
+    qualityLeft_->setRowVisible(normalizeLoudness_, movie || format == ExportFormat::Wav);
+    updateLoudnessRows(format);
     numbering_->setVisible(image);
     frameNumbers_->setChecked(!settings.naming.startFrame.has_value());
     startNumber_->setIntegerValue(static_cast<std::int64_t>(settings.naming.startFrame.value_or(1)));
@@ -434,6 +462,12 @@ void OutputModuleDialog::showSettings(const document::ExportOutputSettings& sett
     padding_->setIntegerValue(settings.naming.framePadding);
 
     refreshing_ = false;
+}
+
+void OutputModuleDialog::updateLoudnessRows(const document::ExportFormat format) {
+    const bool applies = normalizeLoudness_->isChecked() && (isMovie(format) || format == ExportFormat::Wav);
+    qualityLeft_->setRowVisible(loudnessTargetRow_, applies);
+    qualityLeft_->setRowVisible(truePeakRow_, applies);
 }
 
 QString OutputModuleDialog::presetId() const {
@@ -465,6 +499,19 @@ document::ExportOutputSettings OutputModuleDialog::settings() const {
     if (isMovie(format))
         settings.includeAudio = includeAudio_->isChecked();
     settings.useCachedFrames = cachedFrames_->isChecked();
+    if (isMovie(format) || format == ExportFormat::Wav) {
+        if (!normalizeLoudness_->isChecked()) {
+            settings.loudness.reset();
+        } else {
+            // An unchanged field keeps the saved value, which may be finer than a whole number.
+            auto loudness = base_.loudness.value_or(document::ExportLoudness{});
+            if (!base_.loudness || std::llround(loudness.targetLufs) != loudnessTarget_->integerValue())
+                loudness.targetLufs = static_cast<double>(loudnessTarget_->integerValue());
+            if (!base_.loudness || std::llround(loudness.truePeakDbtp) != truePeak_->integerValue())
+                loudness.truePeakDbtp = static_cast<double>(truePeak_->integerValue());
+            settings.loudness = loudness;
+        }
+    }
     if (isImage(format)) {
         settings.naming.startFrame =
             frameNumbers_->isChecked() ? std::nullopt

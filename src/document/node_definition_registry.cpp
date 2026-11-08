@@ -8,6 +8,7 @@
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/auto_exposure_definition.hpp>
+#include <bloom/document/audio_effect_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
@@ -840,6 +841,10 @@ template <typename Definition>
                             ParameterValueKind::Integer) &&
                hasParameter(definition, 2, "level", kAudioLevelParameterSchemaKey,
                             ParameterValueKind::Float64, true);
+    case NodeLoweringKind::AudioEffect:
+        // #569 audio effects: the exact generated shape.
+        return isAudioEffectNodeType(definition.key.typeId) &&
+               definition == audioEffectDefinition(definition.key.typeId);
     case NodeLoweringKind::Text:
         // Parameter ORDER is part of the shape, like every other lowering here: content, size,
         // colour, typography, font reference, and the box layout controls. Font remains optional
@@ -1702,6 +1707,11 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         filmGrainDefinition(),
         codecDegradeDefinition(),
         autoExposureDefinition(),
+        audioEffectDefinition(kAudioEqualizerNodeType),
+        audioEffectDefinition(kAudioCompressorNodeType),
+        audioEffectDefinition(kAudioAutoLevelNodeType),
+        audioEffectDefinition(kAudioMonoNodeType),
+        audioEffectDefinition(kAudioHissNodeType),
         lensDistortionDefinition(),
         chromaticAberrationDefinition(),
         rollingShutterDefinition(),

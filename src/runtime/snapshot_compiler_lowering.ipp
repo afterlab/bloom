@@ -462,7 +462,8 @@ lower(const std::vector<document::NodeId>& order) {
         // Audio sources are compiled into the sibling audio mix below. They must remain in the
         // reachable/topological set so audio edges participate in graph validation, but never enter
         // the image operation variant or alter image evaluation semantics.
-        if (definition->second->lowering == runtime::NodeLoweringKind::AudioSource)
+        if (definition->second->lowering == runtime::NodeLoweringKind::AudioSource ||
+            definition->second->lowering == runtime::NodeLoweringKind::AudioEffect)
             continue;
         if (definition->second->lowering == runtime::NodeLoweringKind::CompositionSource &&
             std::ranges::none_of(reachableEdges_, [&](const auto* edge) {
@@ -1019,6 +1020,104 @@ lower(const std::vector<document::NodeId>& order) {
     return edge == edges.end() ? nullptr : &*edge;
 }
 
+// #569: the node an audio chain ends in, walking up from `start` through the audio effects (a muted
+// effect is bypassed). Nullopt when an unmuted effect's audio input is unwired, so the chain is
+// silent.
+[[nodiscard]] std::optional<document::NodeId> audioChainEnd(document::NodeId start) const {
+    for (std::size_t step = 0; step <= composition_->graph().nodes().size(); ++step) {
+        const auto* node = findNode(start);
+        if (node == nullptr || !document::isAudioEffectNodeType(node->typeId))
+            return start;
+        const auto* upstream = audioInputEdge(node->id, document::kAudioEffectInputPort);
+        if (upstream == nullptr)
+            return std::nullopt;
+        start = upstream->source.nodeId;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] static std::optional<runtime::AudioEffectKind>
+audioEffectKindOf(const std::string_view typeId) noexcept {
+    using Kind = runtime::AudioEffectKind;
+    if (typeId == document::kAudioEqualizerNodeType)
+        return Kind::Equalizer;
+    if (typeId == document::kAudioCompressorNodeType)
+        return Kind::Compressor;
+    if (typeId == document::kAudioAutoLevelNodeType)
+        return Kind::AutoLevel;
+    if (typeId == document::kAudioMonoNodeType)
+        return Kind::Mono;
+    if (typeId == document::kAudioHissNodeType)
+        return Kind::Hiss;
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<runtime::CompiledAudioEffect>
+compileAudioEffect(const document::NodeRecord& node) {
+    const auto kind = audioEffectKindOf(node.typeId);
+    runtime::CompiledAudioEffect effect{node.id, kind.value_or(runtime::AudioEffectKind::Mono), {}};
+    bool ok = kind.has_value();
+    for (const auto& spec : document::audioEffectParameters(node.typeId)) {
+        const auto* binding = findParameterBinding(node, std::string(spec.role));
+        if (spec.kind == document::AudioEffectParameterKind::Scalar) {
+            const auto parameter = compiledScalarParameter(binding);
+            if (!parameter) {
+                ok = false;
+                break;
+            }
+            effect.parameters.push_back(*parameter);
+        } else {
+            const auto* constant = parameterConstant<std::int64_t>(binding);
+            if (constant == nullptr) {
+                ok = false;
+                break;
+            }
+            effect.parameters.push_back({binding->parameterId, static_cast<double>(*constant)});
+        }
+    }
+    if (!ok) {
+        addTopologyFailure(node.id, "Audio effect parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return effect;
+}
+
+// #569: resolves the audio chain feeding a layer or the output from `start`: the source node it
+// ends in and the effects between, nearest the source first. `node` is null for a chain that ends
+// unwired (silent); `ok` is false after a lowering failure.
+struct AudioChain final {
+    const document::NodeRecord* node = nullptr;
+    std::vector<runtime::CompiledAudioEffect> effects;
+    bool ok = true;
+};
+
+[[nodiscard]] AudioChain resolveAudioChain(document::NodeId start) {
+    AudioChain chain;
+    for (std::size_t step = 0; step <= composition_->graph().nodes().size(); ++step) {
+        const auto* node = findNode(start);
+        if (node == nullptr || !document::isAudioEffectNodeType(node->typeId)) {
+            chain.node = node;
+            std::ranges::reverse(chain.effects);
+            return chain;
+        }
+        if (!isMuted(node->id)) {
+            auto effect = compileAudioEffect(*node);
+            if (!effect) {
+                chain.ok = false;
+                return chain;
+            }
+            chain.effects.push_back(std::move(*effect));
+        }
+        const auto* upstream = audioInputEdge(node->id, document::kAudioEffectInputPort);
+        if (upstream == nullptr)
+            return chain;
+        start = upstream->source.nodeId;
+    }
+    addTopologyFailure(start, "Audio effects form a cycle.");
+    chain.ok = false;
+    return chain;
+}
+
 // #436: the audio mix lowers only what is audible. A Layer is audible exactly when its audio
 // reaches Composition Output through the edges the picture consumes -- so a disabled or muted
 // Merge, and a disabled, muted or solo-excluded layer, are silent, as they are absent from the
@@ -1042,8 +1141,12 @@ void collectAudibleLayers() {
             return;
         // A muted Layer Output consumes only its image input, so its audio edge is unreached.
         const auto* audio = audioInputEdge(layerNodeId, document::kLayerOutputAudioInputPort);
-        if (audio != nullptr && reachableEdge(*audio) && !isMuted(audio->source.nodeId))
-            audibleLayers_.insert(layerNodeId);
+        // #569: the source is what the chain of audio effects ends in; a muted effect is bypassed.
+        if (audio != nullptr && reachableEdge(*audio)) {
+            const auto end = audioChainEnd(audio->source.nodeId);
+            if (end && !isMuted(*end))
+                audibleLayers_.insert(layerNodeId);
+        }
     };
     const auto feedNodeId = outputEdge->source.nodeId;
     const auto* stack = graph.merge(feedNodeId);
@@ -1154,8 +1257,20 @@ void collectAudibleLayers() {
             });
         if (layerAudioEdgeIterator == graph.edges().end())
             return true;
-        const auto* audioSource = findNode(layerAudioEdgeIterator->source.nodeId);
+        auto chain = resolveAudioChain(layerAudioEdgeIterator->source.nodeId);
+        if (!chain.ok)
+            return false;
+        // An effect whose audio input is unwired plays nothing, like a Layer with no audio input.
+        if (chain.node == nullptr)
+            return true;
+        const auto* audioSource = chain.node;
         if (audioSource && audioSource->typeId == document::kCompositionSourceNodeType) {
+            if (!chain.effects.empty()) {
+                addTopologyFailure(audioSource->id,
+                                   "Audio effects need an Audio or Video source; a nested "
+                                   "composition's sound has no effects of its own.");
+                return false;
+            }
             const auto source = lowerCompositionSource(*audioSource);
             if (!source)
                 return false;
@@ -1180,7 +1295,7 @@ void collectAudibleLayers() {
             return false;
         mix.layers.push_back({layerNodeId, boundary->layerId, *sourceIndex, true, boundary->solo,
                               boundary->inPoint, boundary->endPoint(composition_->duration()),
-                              *time});
+                              *time, std::move(chain.effects)});
         return true;
     };
 
@@ -1205,7 +1320,18 @@ void collectAudibleLayers() {
         }
         return mix;
     }
-    const auto* feed = findNode(feedNodeId);
+    auto feedChain = resolveAudioChain(feedNodeId);
+    if (!feedChain.ok)
+        return std::nullopt;
+    // An effect chain that ends unwired is silent; a missing node is a topology failure below.
+    if (feedChain.node == nullptr && findNode(feedNodeId) != nullptr)
+        return mix;
+    const auto* feed = feedChain.node;
+    if (!feedChain.effects.empty() && feed->typeId != document::kAudioSourceNodeType &&
+        feed->typeId != "bloom.video-source") {
+        addTopologyFailure(feed->id, "Audio effects need an Audio or Video source.");
+        return std::nullopt;
+    }
     if (feed != nullptr && feed->typeId == document::kLayerOutputNodeType) {
         // A Layer wired straight into the output is a one-layer mix.
         if (!appendLayer(feedNodeId))
@@ -1213,7 +1339,7 @@ void collectAudibleLayers() {
         return mix;
     }
     // A muted source wired straight into the output is silent, as it is behind a Layer.
-    if (feed != nullptr && isMuted(feedNodeId) &&
+    if (feed != nullptr && isMuted(feed->id) &&
         (feed->typeId == document::kCompositionSourceNodeType ||
          feed->typeId == document::kAudioSourceNodeType || feed->typeId == "bloom.video-source"))
         return mix;
@@ -1230,8 +1356,9 @@ void collectAudibleLayers() {
         const auto sourceIndex = appendSource(*feed);
         if (!sourceIndex)
             return std::nullopt;
-        mix.layers.push_back({feedNodeId, document::LayerId{}, *sourceIndex, true, false,
-                              core::RationalTime{}, composition_->duration()});
+        mix.layers.push_back({feed->id, document::LayerId{}, *sourceIndex, true, false,
+                              core::RationalTime{}, composition_->duration(), std::nullopt,
+                              std::move(feedChain.effects)});
         return mix;
     }
     addTopologyFailure(feedNodeId,
@@ -1259,6 +1386,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ImageSource:
         return lowerImageSource(node);
     case NodeLoweringKind::AudioSource:
+    case NodeLoweringKind::AudioEffect:
         break;
     case NodeLoweringKind::Text:
         return lowerText(node);

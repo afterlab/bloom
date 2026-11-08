@@ -211,6 +211,24 @@ struct ExportFacetState final {
     output::OutputPreservationStateV1 state = output::OutputPreservationStateV1::Exact;
 };
 
+// What a loudness-normalizing output measured and delivered (#570). Loudness is integrated, in LUFS
+// (EBU R128 / ITU-R BS.1770); peaks are true peaks in dBTP. A `*Measured` flag is false when the
+// audio held nothing above the absolute gate (silence), and the value beside it is then not a level.
+struct ExportLoudnessReport final {
+    double targetLufs = 0.0;
+    double truePeakLimitDbtp = 0.0;
+    bool measured = false;
+    double measuredLufs = 0.0;
+    double measuredTruePeakDbtp = 0.0;
+    // The programme gain applied to reach the target, in dB.
+    double gainDb = 0.0;
+    bool finalMeasured = false;
+    double finalLufs = 0.0;
+    double finalTruePeakDbtp = 0.0;
+    // The deepest gain reduction the true-peak limiter applied, in dB (zero when it never acted).
+    double limiterReductionDb = 0.0;
+};
+
 // One output's verification. Present in the snapshot from the moment the output reaches a
 // terminal output state, and carried by the job's terminal event.
 struct ExportOutputVerification final {
@@ -229,6 +247,8 @@ struct ExportOutputVerification final {
     std::optional<ExportReopenQuality> reopenQuality;
     // Present for an output that launched a media worker (movie, WAV); absent for image outputs.
     std::optional<ExportWorkerMemory> workerMemory;
+    // Present for an output that normalized its audio loudness (#570).
+    std::optional<ExportLoudnessReport> loudness;
 };
 
 // Problems known before Start. Destination facts (exists, writable, free space, the existing

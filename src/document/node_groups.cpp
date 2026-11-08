@@ -10,10 +10,14 @@ namespace {
 // compositor would look for it; ask rather than invent a group.
 //
 // Planned: Gradient (one node replacing Linear Gradient and Radial Gradient).
-constexpr std::array<std::string_view, 9> kSources{
+//
+// The audio effects (#569) are not in the tree; they sit beside the Audio source they follow.
+constexpr std::array<std::string_view, 14> kSources{
     "bloom.image-source",       "bloom.video-source",   "bloom.audio-source",
     "bloom.composition-source", "bloom.solid-source",   "bloom.checker-source",
-    "bloom.linear-gradient",    "bloom.radial-gradient", "bloom.test-card"};
+    "bloom.linear-gradient",    "bloom.radial-gradient", "bloom.test-card",
+    "bloom.audio-equalizer",    "bloom.audio-compressor", "bloom.audio-auto-level",
+    "bloom.audio-mono",         "bloom.audio-hiss"};
 // Planned: Image Switch, Edge Extend.
 constexpr std::array<std::string_view, 7> kCompositing{
     "bloom.layer-stack", "bloom.adjustment",     "bloom.layer-output",     "bloom.image-mix",

@@ -210,6 +210,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     output.id = document::ExportOutputId::fromRaw(1);
     output.settings.format = *format;
     output.settings.includeAudio = !document::isImageExportFormat(*format);
+    if (output.settings.includeAudio)
+        output.settings.loudness = request.loudness;
     const auto destination = std::filesystem::absolute(request.destination).lexically_normal();
     const auto uri = core::fileUriFromAbsolutePath(destination);
     if (!uri)
@@ -345,6 +347,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             result.gpuEncodedPayloadBytes = provenance.gpuEncodedPayloadBytes;
             result.gpuDeviceOwnershipEpoch = provenance.gpuDeviceOwnershipEpoch;
             result.workerMemory = verification.workerMemory;
+            result.loudness = verification.loudness;
         }
         if (!result.succeeded) {
             if (runner.stopped()) {

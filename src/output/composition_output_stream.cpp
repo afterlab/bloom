@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/media/audio/loudness.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -42,6 +43,37 @@ Rational fraction(std::uint64_t numerator, std::uint64_t denominator) {
             static_cast<std::int64_t>(denominator / gcd)};
 }
 
+static_assert(static_cast<int>(runtime::AudioEffectKind::Equalizer) ==
+                  static_cast<int>(media::audio::effects::EffectKind::Equalizer) &&
+              static_cast<int>(runtime::AudioEffectKind::Compressor) ==
+                  static_cast<int>(media::audio::effects::EffectKind::Compressor) &&
+              static_cast<int>(runtime::AudioEffectKind::AutoLevel) ==
+                  static_cast<int>(media::audio::effects::EffectKind::AutoLevel) &&
+              static_cast<int>(runtime::AudioEffectKind::Mono) ==
+                  static_cast<int>(media::audio::effects::EffectKind::Mono) &&
+              static_cast<int>(runtime::AudioEffectKind::Hiss) ==
+                  static_cast<int>(media::audio::effects::EffectKind::Hiss));
+
+// #569: a clip's effect chain for the mixer, with the parameters at the block's end when they differ.
+[[nodiscard]] std::vector<media::audio::effects::EffectSettings>
+effectSettings(const runtime::AudioClipDescription& start, const runtime::AudioClipDescription* end,
+               bool& moves) {
+    std::vector<media::audio::effects::EffectSettings> settings;
+    settings.reserve(start.effects.size());
+    for (std::size_t index = 0; index < start.effects.size(); ++index) {
+        const auto& effect = start.effects[index];
+        const bool paired = end != nullptr && index < end->effects.size() &&
+                            end->effects[index].kind == effect.kind &&
+                            end->effects[index].values.size() == effect.values.size();
+        settings.push_back(media::audio::effects::makeEffectSettings(
+            static_cast<media::audio::effects::EffectKind>(effect.kind), effect.values,
+            paired ? std::span<const double>(end->effects[index].values)
+                   : std::span<const double>(effect.values)));
+        moves = moves || (paired && end->effects[index].values != effect.values);
+    }
+    return settings;
+}
+
 struct AudioBackingBytes final {
     std::uint64_t allocated = 0;
     std::uint64_t initialized = 0;
@@ -80,13 +112,7 @@ struct CompositionOutputStreamV1::State {
     std::shared_ptr<ExportResourceReservationV1> queueReservation;
     platform::ProcessCancellation cancellation;
     std::unique_ptr<EncodeSessionV1> encoder;
-    std::unique_ptr<AudioEngine> mixer;
-    NullBackend* audioSink = nullptr;
     std::map<runtime::AudioStreamKey, OwnedAudioBuffer> audioBuffers;
-    std::uint64_t samples = 0;
-    // The mix evaluated at the end of the last block (sample `samples`), reused as the next
-    // block's start mix.
-    std::optional<runtime::AudioMixDescription> blockEndMix;
     bool started = false;
     // An audio source failed to read or decode (#428); see loadSource.
     bool audioSourceFailed = false;
@@ -96,11 +122,6 @@ struct CompositionOutputStreamV1::State {
         : source(std::move(input)), encoding(std::move(settings)),
           queueReservation(std::move(reservation)), cancellation(std::move(cancel)),
           encoder(std::make_unique<EncodeSessionV1>(std::move(worker), cancellation)) {}
-    ~State() {
-        // AudioEngine keeps shared clip buffers. Drop those before their ledger owners.
-        mixer.reset();
-        audioBuffers.clear();
-    }
     const EncodeSettingsV1& settings() const { return encoding; }
     void checkpoint() const {
         require(!cancellation || !cancellation(), "Composition output cancelled", Error::Cancelled);
@@ -206,21 +227,45 @@ struct CompositionOutputStreamV1::State {
                                   " couldn't be decoded for the export (" + error.detail + ")."};
         }
     }
-    void audio(runtime::TaskContext& context, std::uint64_t through) {
-        if (settings().audioCodec.empty())
-            return;
+    // One run of the offline mix over the programme, from the export's origin: the mixer, the clock
+    // and the mix evaluated at the end of the last block (reused as the next block's start mix).
+    // Pass one of a loudness export only measures; pass two is what the encoder is given.
+    struct MixPass final {
+        std::unique_ptr<AudioEngine> mixer;
+        NullBackend* sink = nullptr;
+        std::uint64_t position = 0;
+        std::optional<runtime::AudioMixDescription> blockEndMix;
+    };
+    ~State() {
+        // AudioEngine keeps shared clip buffers. Drop those before their ledger owners.
+        pass.mixer.reset();
+        audioBuffers.clear();
+    }
+    MixPass pass;
+    // #570: the loudness stage of an export that normalizes the programme.
+    std::optional<media::audio::loudness::Meter> measuredAfter;
+    std::unique_ptr<media::audio::loudness::Limiter> limiter;
+    std::optional<AudioLoudnessReportV1> loudnessResult;
+    bool loudnessMeasured = false;
+    bool limiterFlushed = false;
+    std::uint64_t emitted = 0;
+
+    void startPass(MixPass& next) {
+        auto backend = std::make_unique<NullBackend>();
+        next.sink = backend.get();
+        next.mixer = std::make_unique<AudioEngine>(
+            std::move(backend),
+            AudioEngine::Config{settings().sampleRate, settings().channels, 16384});
+        next.position = 0;
+        next.blockEndMix.reset();
+        require(!next.mixer->play(source.origin), "Offline mixer failed");
+    }
+    // Renders the next `count` frames of the programme: interleaved stereo float.
+    std::vector<float> renderBlock(MixPass& run, runtime::TaskContext& context,
+                                   const std::uint32_t count) {
         const auto cancel = [&] {
             return (cancellation && cancellation()) || context.isCancellationRequested();
         };
-        if (!mixer) {
-            auto backend = std::make_unique<NullBackend>();
-            audioSink = backend.get();
-            mixer = std::make_unique<AudioEngine>(
-                std::move(backend),
-                AudioEngine::Config{settings().sampleRate, settings().channels, 16384});
-            const auto origin = source.origin;
-            require(!mixer->play(origin), "Offline mixer failed");
-        }
         const auto sampleTime = [&](const std::uint64_t sample) {
             const auto origin = source.origin;
             return core::RationalTime::create(origin.numerator() * settings().sampleRate +
@@ -228,73 +273,159 @@ struct CompositionOutputStreamV1::State {
                                                       origin.denominator(),
                                               origin.denominator() * settings().sampleRate);
         };
-        while (samples < through) {
-            checkpoint();
-            const auto time = required(sampleTime(samples), "Audio sample timestamp overflow");
-            const auto mix = blockEndMix
-                                 ? std::move(*blockEndMix)
-                                 : required(runtime::CpuCompositionEvaluator{}.evaluateAudioMix(
-                                                source.plan, time, context.cancellation()),
-                                            "Composition audio graph is unavailable");
-            blockEndMix.reset();
-            const auto count =
-                static_cast<std::uint32_t>(std::min<std::uint64_t>(512, through - samples));
-            // Level automation ramps linearly from this block's start to its end (#459), so a
-            // fade is continuous instead of stepping once per block. Without an end mix (for
-            // example past a representable time) the block holds its start level.
-            const auto endTime = sampleTime(samples + count);
-            std::optional<runtime::AudioMixDescription> endMix;
-            if (endTime)
-                endMix = runtime::CpuCompositionEvaluator{}.evaluateAudioMix(
-                    source.plan, *endTime, context.cancellation());
-            const bool ramped = endMix && endMix->clips.size() == mix.clips.size();
-            std::vector<media::audio::playback::AudioClip> clips;
-            clips.reserve(mix.clips.size());
-            for (std::size_t index = 0; index < mix.clips.size(); ++index) {
-                const auto& description = mix.clips[index];
-                auto found = audioBuffers.find({description.assetId, description.audioStream});
-                if (found == audioBuffers.end())
-                    found = loadSource(context, description, cancel);
-                require(found->second.buffer != nullptr, "Audio source buffer unavailable",
-                        Error::Unavailable);
-                clips.push_back({.buffer = found->second.buffer,
-                                 .startTime = description.startTime,
-                                 .level = static_cast<float>(description.level),
-                                 .muted = description.muted,
-                                 .solo = description.solo,
-                                 .endTime = description.endTime,
-                                 .mapTime = {}});
-                if (!description.timeMappings.empty())
-                    clips.back().mapTime = [description](core::RationalTime at) {
-                        return runtime::mapAudioClipTime(description, at);
-                    };
-                if (ramped) {
-                    const auto& end = endMix->clips[index];
-                    if (end.sourceNodeId == description.sourceNodeId &&
-                        end.assetId == description.assetId &&
-                        end.audioStream == description.audioStream &&
-                        end.level != description.level)
-                        clips.back().levelRamp = media::audio::playback::AudioLevelRamp{
-                            time, *endTime, static_cast<float>(end.level)};
-                }
+        const auto time = required(sampleTime(run.position), "Audio sample timestamp overflow");
+        const auto mix = run.blockEndMix
+                             ? std::move(*run.blockEndMix)
+                             : required(runtime::CpuCompositionEvaluator{}.evaluateAudioMix(
+                                            source.plan, time, context.cancellation()),
+                                        "Composition audio graph is unavailable");
+        run.blockEndMix.reset();
+        // Level automation ramps linearly from this block's start to its end (#459), so a
+        // fade is continuous instead of stepping once per block. Without an end mix (for
+        // example past a representable time) the block holds its start level.
+        const auto endTime = sampleTime(run.position + count);
+        std::optional<runtime::AudioMixDescription> endMix;
+        if (endTime)
+            endMix = runtime::CpuCompositionEvaluator{}.evaluateAudioMix(source.plan, *endTime,
+                                                                         context.cancellation());
+        const bool ramped = endMix && endMix->clips.size() == mix.clips.size();
+        std::vector<media::audio::playback::AudioClip> clips;
+        clips.reserve(mix.clips.size());
+        for (std::size_t index = 0; index < mix.clips.size(); ++index) {
+            const auto& description = mix.clips[index];
+            auto found = audioBuffers.find({description.assetId, description.audioStream});
+            if (found == audioBuffers.end())
+                found = loadSource(context, description, cancel);
+            require(found->second.buffer != nullptr, "Audio source buffer unavailable",
+                    Error::Unavailable);
+            clips.push_back({.buffer = found->second.buffer,
+                             .startTime = description.startTime,
+                             .level = static_cast<float>(description.level),
+                             .muted = description.muted,
+                             .solo = description.solo,
+                             .endTime = description.endTime,
+                             .mapTime = {}});
+            if (!description.timeMappings.empty())
+                clips.back().mapTime = [description](core::RationalTime at) {
+                    return runtime::mapAudioClipTime(description, at);
+                };
+            if (!description.effects.empty()) {
+                bool moves = false;
+                clips.back().effectKey = description.sourceNodeId.value() * 1'000'003ULL + index;
+                clips.back().effects = effectSettings(
+                    description, ramped ? &endMix->clips[index] : nullptr, moves);
+                if (moves)
+                    clips.back().effectRamp =
+                        media::audio::playback::AudioEffectRamp{time, *endTime};
             }
-            mixer->replaceClips(std::move(clips));
-            audioSink->clearCaptured();
-            require(!mixer->renderForTesting(count), "Offline mix failed");
-            AudioBlock block;
-            block.sampleRate = settings().sampleRate;
-            block.channelLayout = {"FL", "FR"};
-            block.pts = fraction(samples, settings().sampleRate);
-            block.channels.resize(2, std::vector<float>(count));
-            const auto captured = audioSink->captured();
-            require(captured.size() == static_cast<std::size_t>(count) * 2U,
-                    "Offline mix sample count differs");
-            for (unsigned i = 0; i < count; ++i)
-                for (unsigned c = 0; c < 2; ++c)
-                    block.channels[c][i] = captured[static_cast<std::size_t>(i) * 2 + c];
-            checked(encoder->audio(std::move(block)));
-            samples += count;
-            blockEndMix = std::move(endMix);
+            if (ramped) {
+                const auto& end = endMix->clips[index];
+                if (end.sourceNodeId == description.sourceNodeId &&
+                    end.assetId == description.assetId &&
+                    end.audioStream == description.audioStream && end.level != description.level)
+                    clips.back().levelRamp = media::audio::playback::AudioLevelRamp{
+                        time, *endTime, static_cast<float>(end.level)};
+            }
+        }
+        run.mixer->replaceClips(std::move(clips));
+        run.sink->clearCaptured();
+        require(!run.mixer->renderForTesting(count), "Offline mix failed");
+        const auto captured = run.sink->captured();
+        require(captured.size() == static_cast<std::size_t>(count) * 2U,
+                "Offline mix sample count differs");
+        run.position += count;
+        run.blockEndMix = std::move(endMix);
+        return {captured.begin(), captured.end()};
+    }
+    void deliver(const std::vector<float>& interleaved) {
+        const auto count = interleaved.size() / 2;
+        if (count == 0)
+            return;
+        AudioBlock block;
+        block.sampleRate = settings().sampleRate;
+        block.channelLayout = {"FL", "FR"};
+        block.pts = fraction(emitted, settings().sampleRate);
+        block.channels.resize(2, std::vector<float>(count));
+        for (std::size_t i = 0; i < count; ++i)
+            for (std::size_t c = 0; c < 2; ++c)
+                block.channels[c][i] = interleaved[i * 2 + c];
+        checked(encoder->audio(std::move(block)));
+        emitted += count;
+    }
+    // #570 pass one: the whole programme through the same mixer, into the meter alone. The mix is
+    // deterministic, so pass two hears exactly what was measured.
+    void measureProgramme(runtime::TaskContext& context) {
+        const auto total = settings().audioSamples;
+        media::audio::loudness::Meter meter(settings().sampleRate, 2);
+        require(meter.valid(), "Loudness measurement is unavailable for this sample rate",
+                Error::Unavailable);
+        MixPass measuring;
+        startPass(measuring);
+        std::uint64_t blocks = 0;
+        while (measuring.position < total) {
+            checkpoint();
+            const auto count =
+                static_cast<std::uint32_t>(std::min<std::uint64_t>(512, total - measuring.position));
+            const auto block = renderBlock(measuring, context, count);
+            require(meter.add(block), "Loudness measurement failed");
+            if (++blocks % 256 == 0)
+                context.reportProgress({"Measuring loudness", "", measuring.position, total});
+        }
+        measuring.mixer.reset();
+        const auto before = meter.measurement();
+        const auto& wanted = *source.loudness;
+        const media::audio::loudness::Target target{wanted.targetLufs, wanted.truePeakDbtp};
+        AudioLoudnessReportV1 report;
+        report.targetLufs = wanted.targetLufs;
+        report.truePeakLimitDbtp = wanted.truePeakDbtp;
+        report.measured = before.loudnessMeasured;
+        report.measuredLufs = before.integratedLufs;
+        report.measuredTruePeakDbtp = before.truePeakDbtp;
+        report.gainDb = media::audio::loudness::gainToTarget(before, target);
+        loudnessResult = report;
+        limiter = std::make_unique<media::audio::loudness::Limiter>(
+            settings().sampleRate, 2, report.gainDb, wanted.truePeakDbtp);
+        measuredAfter.emplace(settings().sampleRate, 2);
+        loudnessMeasured = true;
+    }
+    void audio(runtime::TaskContext& context, std::uint64_t through) {
+        if (settings().audioCodec.empty())
+            return;
+        const bool normalize = source.loudness.has_value();
+        if (normalize && !loudnessMeasured)
+            measureProgramme(context);
+        if (!pass.mixer)
+            startPass(pass);
+        const auto total = settings().audioSamples;
+        // The limiter looks ahead, so the mix runs that far past what the encoder is owed.
+        const auto wanted = normalize ? std::min<std::uint64_t>(total, through + limiter->latencyFrames())
+                                      : through;
+        std::vector<float> limited;
+        while (pass.position < wanted) {
+            checkpoint();
+            const auto count = static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(512, wanted - pass.position));
+            const auto block = renderBlock(pass, context, count);
+            if (!normalize) {
+                deliver(block);
+                continue;
+            }
+            limited.clear();
+            limiter->process(block, limited);
+            require(measuredAfter->add(limited), "Loudness measurement failed");
+            deliver(limited);
+        }
+        if (normalize && !limiterFlushed && pass.position >= total) {
+            limited.clear();
+            limiter->flush(limited);
+            require(measuredAfter->add(limited), "Loudness measurement failed");
+            deliver(limited);
+            limiterFlushed = true;
+            const auto after = measuredAfter->measurement();
+            loudnessResult->finalMeasured = after.loudnessMeasured;
+            loudnessResult->finalLufs = after.integratedLufs;
+            loudnessResult->finalTruePeakDbtp = after.truePeakDbtp;
+            loudnessResult->limiterReductionDb = limiter->maximumReductionDb();
         }
     }
 };
@@ -356,6 +487,9 @@ Result<EncodedChunkV1> CompositionOutputStreamV1::read(std::uint64_t offset) {
     return state_->encoder->read(offset);
 }
 std::optional<Unavailable> CompositionOutputStreamV1::close() { return state_->encoder->close(); }
+std::optional<AudioLoudnessReportV1> CompositionOutputStreamV1::loudnessReport() const {
+    return state_->loudnessResult;
+}
 bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
     return state_->audioSourceFailed;
 }

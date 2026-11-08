@@ -121,6 +121,19 @@ struct ExportSequenceNaming final {
     friend bool operator==(const ExportSequenceNaming&, const ExportSequenceNaming&) = default;
 };
 
+// #570: normalize the programme's loudness at export. The mix is measured per EBU R128 / ITU-R
+// BS.1770, turned to `targetLufs` integrated loudness, and held under `truePeakDbtp` by a true-peak
+// limiter. Absent means the audio is exported as mixed.
+inline constexpr double kExportLoudnessTargetMinimumLufs = -40.0;
+inline constexpr double kExportLoudnessTargetMaximumLufs = -5.0;
+inline constexpr double kExportTruePeakMinimumDbtp = -12.0;
+inline constexpr double kExportTruePeakMaximumDbtp = 0.0;
+struct ExportLoudness final {
+    double targetLufs = -16.0;
+    double truePeakDbtp = -1.0;
+    friend bool operator==(const ExportLoudness&, const ExportLoudness&) = default;
+};
+
 // Everything an output needs to encode, independent of any preset still existing. Empty strings
 // mean "the format's or configuration's default", never "unknown". Members that do not apply to
 // the chosen format are kept (so switching format back restores them) and ignored by the runner.
@@ -149,6 +162,8 @@ struct ExportOutputSettings final {
     // matches exactly. Persisted only when false: a 1.29 file without the member means true.
     bool useCachedFrames = true;
     std::uint32_t audioSampleRate = 48000;
+    // Persisted only when set: a file without the member exports the audio as mixed.
+    std::optional<ExportLoudness> loudness;
     ExportEncoderPreference encoder = ExportEncoderPreference::Automatic;
     ExportSequenceNaming naming;
     friend bool operator==(const ExportOutputSettings&, const ExportOutputSettings&) = default;

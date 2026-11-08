@@ -23,6 +23,7 @@
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>

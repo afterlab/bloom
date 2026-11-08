@@ -75,6 +75,7 @@ class OutputModuleDialog final : public kit::KDialog {
     [[nodiscard]] kit::KDropdown* view() const noexcept { return view_; }
     [[nodiscard]] kit::KCheckBox* bakeLook() const noexcept { return bakeLook_; }
     [[nodiscard]] kit::KCheckBox* includeAudio() const noexcept { return includeAudio_; }
+    [[nodiscard]] kit::KCheckBox* normalizeLoudness() const noexcept { return normalizeLoudness_; }
     [[nodiscard]] kit::KCheckBox* cachedFrames() const noexcept { return cachedFrames_; }
     [[nodiscard]] kit::KCheckBox* importIntoAssets() const noexcept { return import_; }
     [[nodiscard]] kit::KValueField* startNumber() const noexcept { return startNumber_; }
@@ -91,6 +92,7 @@ class OutputModuleDialog final : public kit::KDialog {
   private:
     void fillFormats();
     void showSettings(const document::ExportOutputSettings& settings);
+    void updateLoudnessRows(document::ExportFormat format);
     void fillColour(const document::ExportOutputSettings& settings);
     void formatChosen();
     void showPresetRefusal(const QString& reason);
@@ -122,6 +124,11 @@ class OutputModuleDialog final : public kit::KDialog {
     kit::KDropdown* view_ = nullptr;
     kit::KCheckBox* bakeLook_ = nullptr;
     kit::KCheckBox* includeAudio_ = nullptr;
+    kit::KCheckBox* normalizeLoudness_ = nullptr;
+    kit::KValueField* loudnessTarget_ = nullptr;
+    kit::KValueField* truePeak_ = nullptr;
+    QWidget* loudnessTargetRow_ = nullptr;
+    QWidget* truePeakRow_ = nullptr;
     kit::KValueField* startNumber_ = nullptr;
     kit::KCheckBox* frameNumbers_ = nullptr;
     kit::KValueField* padding_ = nullptr;

@@ -37,6 +37,17 @@ bool boolean(const JsonValue& node, DecodeState& state, const std::string& path,
     return true;
 }
 
+bool float64(const JsonValue& node, DecodeState& state, const std::string& path, double& out) {
+    const auto token = node.kind() == JsonValueKind::Number ? node.asNumberToken() : std::nullopt;
+    if (!token)
+        return fail(state, path, DocumentDecodeError::WrongValueKind);
+    const auto parsed = parseKnownFloat64(*token);
+    if (!parsed)
+        return fail(state, path, DocumentDecodeError::InvalidFloat64);
+    out = *parsed.value();
+    return true;
+}
+
 bool decimal(const JsonValue& node, DecodeState& state, const std::string& path,
              std::uint64_t& out) {
     std::string_view value;
@@ -85,6 +96,10 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     const bool hasCachedFrames = node.findMember("useCachedFrames") != nullptr;
     if (hasCachedFrames)
         keys.push_back("useCachedFrames");
+    // Optional (#570): absent means the audio is exported as mixed.
+    const bool hasLoudness = node.findMember("loudness") != nullptr;
+    if (hasLoudness)
+        keys.push_back("loudness");
     for (const auto* key : {"audioSampleRate", "encoder", "naming"})
         keys.push_back(key);
     std::vector<const JsonValue*> fields;
@@ -119,6 +134,20 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     if (hasCachedFrames &&
         !boolean(*fields[at++], state, joinPath(path, "useCachedFrames"), out.useCachedFrames))
         return false;
+    if (hasLoudness) {
+        const auto loudnessPath = joinPath(path, "loudness");
+        const auto& loudness = *fields[at++];
+        std::vector<const JsonValue*> parts;
+        constexpr std::array<std::string_view, 2> loudnessKeys{"targetLufs", "truePeakDbtp"};
+        if (!closed(loudness, loudnessKeys, state, loudnessPath, parts))
+            return false;
+        document::ExportLoudness decoded;
+        if (!float64(*parts[0], state, joinPath(loudnessPath, "targetLufs"), decoded.targetLufs) ||
+            !float64(*parts[1], state, joinPath(loudnessPath, "truePeakDbtp"),
+                     decoded.truePeakDbtp))
+            return false;
+        out.loudness = decoded;
+    }
     if (!decodeUInt32Member(*fields[at++], state, joinPath(path, "audioSampleRate"),
                             std::numeric_limits<std::uint32_t>::max(), out.audioSampleRate) ||
         !token(*fields[at++], state, joinPath(path, "encoder"), document::parseExportEncoder,
