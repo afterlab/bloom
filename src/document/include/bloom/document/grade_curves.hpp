@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <initializer_list>
 #include <span>
+#include <string>
+#include <string_view>
 
 namespace bloom::document {
 
@@ -36,6 +38,14 @@ namespace bloom::document {
 // The same check by schema key; false for a key that is not a Curves curve.
 [[nodiscard]] bool isGradeCurveValueValid(std::string_view schemaKey,
                                           const PathValue& value) noexcept;
+// #547: an Auto anchor with no handles is a plain point of a curve: its handles are derived, and a
+// curve is interpolated through its points whatever the mode. It is stored as the Corner point
+// every curve holds, so the same points compare and persist the same however they were spelled.
+[[nodiscard]] PathValue normalizedGradeCurveValue(PathValue value);
+// Why `value` is not a valid `curve`: the first problem found, naming the field, the shape a curve
+// takes and what was received. Empty when the value is valid.
+[[nodiscard]] std::string gradeCurveValueProblem(GradeCurve curve, const PathValue& value);
+[[nodiscard]] std::string gradeCurveValueProblem(std::string_view schemaKey, const PathValue& value);
 // The output range drawn by the graph and the domain a dragged point is kept inside.
 struct GradeCurveRange final {
     double minimum = 0.0;

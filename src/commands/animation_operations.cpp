@@ -564,11 +564,19 @@ setValueAtTime(document::Draft& draft, document::Composition& composition,
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Path keyframe value is invalid");
         // #493: a Curves key is a point list within its curve's domain, like its constant.
-        if (const auto* owner = curveOwner(composition, curveId);
-            owner != nullptr && document::isGradeCurveSchemaKey(owner->schemaKey) &&
-            !document::isGradeCurveValueValid(owner->schemaKey, *path))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Curve key is outside its curve's domain");
+        // #547: an auto anchor with no handles is a plain point.
+        const auto* keyOwner = curveOwner(composition, curveId);
+        const bool curveKey = keyOwner != nullptr && document::isGradeCurveSchemaKey(keyOwner->schemaKey);
+        const auto normalized =
+            curveKey ? document::normalizedGradeCurveValue(*path) : document::PathValue{};
+        if (curveKey) {
+            if (const auto problem = document::gradeCurveValueProblem(keyOwner->schemaKey, normalized);
+                !problem.empty())
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Curve key cannot take this point list: " +
+                                                     problem + ".");
+            path = &normalized;
+        }
         const auto existing =
             std::ranges::find(curve->keyframes, time, &document::PathKeyframe::time);
         if (existing != curve->keyframes.end()) {

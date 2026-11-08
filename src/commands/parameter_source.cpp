@@ -7,6 +7,7 @@
 // Font assets listed, instead of being stored and silently rendered in the fallback face. Replacing
 // an animated source retires the parameter's animation curve in the same edit.
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
@@ -199,11 +200,16 @@ std::optional<document::ParameterValue> coerce(const document::ParameterValue& v
              std::string_view(record.schemaKey).ends_with(".asset")))
             return document::ParameterValue(std::to_string(*whole));
         return value;
+    case document::ParameterValueKind::Path:
+        // #547: a Curves point list takes an auto anchor with no handles as a plain point.
+        if (const auto* path = std::get_if<document::PathValue>(&value);
+            path != nullptr && document::isGradeCurveSchemaKey(record.schemaKey))
+            return document::ParameterValue(document::normalizedGradeCurveValue(*path));
+        return value;
     case document::ParameterValueKind::Boolean:
     case document::ParameterValueKind::Color4d:
     case document::ParameterValueKind::Vec2d:
     case document::ParameterValueKind::Vec3d:
-    case document::ParameterValueKind::Path:
     case document::ParameterValueKind::Gradient:
         return value;
     }
@@ -235,6 +241,12 @@ std::string valueText(const document::ParameterValue& value) {
 OperationResult refusedValue(const document::ParameterRecord& record, const ParameterOwner& owner,
                              const document::ParameterValue& value,
                              const document::Project& project) {
+    if (const auto* path = std::get_if<document::PathValue>(&value);
+        path != nullptr && document::isGradeCurveSchemaKey(record.schemaKey))
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            describe(record, owner) + " cannot take this point list: " +
+                document::gradeCurveValueProblem(record.schemaKey, *path) + ".");
     return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                      describe(record, owner) + " cannot take " + valueText(value) +
                                          "; it takes " + accepts(record, owner, project) + ".");

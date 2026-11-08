@@ -56,6 +56,12 @@ there rather than quietly using the first contour:
 | Layer mask `path` | Simple | A mask's feather, expansion and handles are defined for one outline |
 | Curves, field remap, shutter and depth fog curves | One open contour | A curve is a function of its input |
 
+A curve point is a plain point: an anchor with no handles. An Auto anchor whose handles are null is
+accepted as one and stored as Corner (its handles would be derived, and a curve is interpolated
+through its points whatever the mode), so MCP, Python and scripts may send either spelling. A curve
+anchor with a handle, a Mirrored, Aligned or Free mode, a point outside the curve's domain, a closed
+or compound value is refused naming the anchor, the shape a curve takes and what was received.
+
 The viewer's pen and anchor tools edit simple values. A compound value on a Shape Source is drawn and
 shown in Properties (as its contour and anchor counts) but not edited, so no tool can silently drop a
 contour.
