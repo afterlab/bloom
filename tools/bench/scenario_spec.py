@@ -15,7 +15,8 @@ area, and its layers from the bottom up. A layer is one of:
 - an adjustment layer: {"name", "adjustment": [effects]} (filters the stack below it);
 - a procedural layer: {"name", "generator": [node type, {role: value}], "port": <its raster
   output, "image" by default>, "keys": {role: [[frame, value], ...]}, "transform", "blend",
-  "effects": [...]} (a generator node drawn as a layer, with no media).
+  "effects": [...], "pathNode": {"keys": [[frame, path value], ...]}} (a generator node drawn as a
+  layer, with no media; "pathNode" drives its `path` from a keyed Path node, #589).
 
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
@@ -446,6 +447,30 @@ SCENARIOS["light-rays-2k"] = {
          "effects": [["bloom.light-rays",
                       {"source": "Luminance"},
                       {"keys": {"length": [[0, 0.4], [23, 0.9]]}}]]},
+    ],
+}
+
+# #589: a Shape Source whose path arrives through the Path socket: a Path node holding a compound value
+# of 64 contours, keyed so that every frame flattens and covers a new shape, read by the shape. No media
+# is read. Written, not run.
+def _ring(index, shift):
+    """One small closed square of the Path node's value, on a grid of the composition."""
+    left, top = 40 + (index % 8) * 220 + shift, 40 + (index // 8) * 120
+    return {"closed": True, "anchors": [
+        {"point": point, "inHandle": None, "outHandle": None, "mode": "corner"}
+        for point in ([left, top], [left + 160, top], [left + 160, top + 80], [left, top + 80])]}
+
+
+SCENARIOS["path-value-compound-2k"] = {
+    "description": "A Shape Source reading a keyed 64-contour path from a Path node.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Shape",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "pathNode": {"keys": [
+             [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}],
+             [24, {"contours": [_ring(i, 40) for i in range(64)], "fillRule": "evenOdd"}]]}},
     ],
 }
 

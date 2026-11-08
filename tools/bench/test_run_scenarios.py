@@ -514,6 +514,17 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[1]["source"], "Luminance")
         self.assertIn("length", effect[2]["keys"])
 
+    def test_path_value_scenario_keys_a_compound_path_into_a_shape(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["path-value-compound-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        layer = scenario["layers"][0]
+        self.assertEqual(layer["generator"][0], "bloom.shape-source")
+        keys = layer["pathNode"]["keys"]
+        self.assertEqual([frame for frame, _ in keys], [0, 24])
+        self.assertEqual(len(keys[0][1]["contours"]), 64)
+        self.assertNotEqual(keys[0][1], keys[1][1])
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]

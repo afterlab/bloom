@@ -589,6 +589,13 @@ class Builder:
                                nodeType=node_type)["node"]
         self.set_values(source, node_type, values)
         self.set_keys(source, layer.get("keys") or {})
+        if "pathNode" in layer:
+            driver = self.transact("bloom.node.add", composition=self.composition,
+                                   nodeType="bloom.value-path")["node"]
+            self.set_keys(driver, {"value": layer["pathNode"]["keys"]})
+            self.transact("bloom.parameter.set-source", composition=self.composition,
+                          parameter=self.parameter_id(source, "path"), driverNode=driver,
+                          driverPort="value")
         port = layer.get("port", "image")
         last = self.chain(source, port, layer.get("effects") or ())
         holder = self.transact("bloom.node.add-fed-by", composition=self.composition,
