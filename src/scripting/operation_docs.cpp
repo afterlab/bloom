@@ -22,6 +22,15 @@ using namespace std::string_view_literals;
 constexpr std::string_view kTimeUnit =
     "frames at the composition's frame rate (an integer), or exact seconds as "
     "[numerator, denominator]";
+// Keyframe operations: the unit depends on who owns the parameter or curve being keyed.
+constexpr std::string_view kKeyTimeUnit =
+    "frames at the composition's frame rate (an integer), or exact seconds as [numerator, "
+    "denominator], in the unit of the key's owner: LAYER time for a layer's own parameters "
+    "(query:layers .parameters: position, opacity, blend mode, Time Remap), which is the "
+    "composition time minus the layer's start, times its speed (a layer starting at frame 48 "
+    "shows its frame 0 at composition frame 48); COMPOSITION time for every other parameter (a "
+    "node's, a source's, an effect's). A layer key outside the layer's range never plays; the "
+    "edit succeeds and returns a warning naming the range";
 constexpr std::string_view kColorUnit =
     "straight (unpremultiplied) RGBA in the composition's working colour space; red, green and "
     "blue are finite and may exceed 1, alpha is 0..1";
@@ -58,7 +67,10 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.animation.create-for-parameter",
         "Makes a constant parameter animated: creates its curve with one key holding the current "
         "value at `time`, as the first click on a key diamond does. Pass `component` to animate "
-        "one axis or channel of a vector or colour parameter.",
+        "one axis or channel of a vector or colour parameter. `time` is in layer time for a "
+        "layer's own parameters (the composition frame minus the layer's start) and in "
+        "composition time for every other parameter; a key outside the layer's range succeeds "
+        "with a warning naming the range.",
         "animationCurve, keyframe",
         "bloom.animation.set-keyframe-at-time-for-parameter bloom.animation.convert-to-constant "
         "query:keyframes",
@@ -101,23 +113,47 @@ constexpr std::array kNotes{
         "Sets a curve's value at `time`: updates the key there, or inserts one. The value has the "
         "curve's own width (a number, [x, y], [x, y, z] or [r, g, b, a]).",
         "keyframe", "bloom.animation.set-keyframe-at-time-for-parameter query:keyframes", ""},
+    OperationNotes{"bloom.animation.set-keys",
+        "Sets a parameter's whole list of keys in one undo step: a key at an existing time takes "
+        "the new value, any other time gets a new key, and a constant parameter becomes "
+        "animated. With `replace` the existing keys go first and the parameter returns to the "
+        "constant it was animated from, so an empty list with `replace` leaves it constant. "
+        "Each key is [time, value] or [time, value, interpolation]; the last key's "
+        "interpolation is always linear. Key times are in layer time for a layer's own "
+        "parameters (the composition frame minus the layer's start) and in composition time for "
+        "every other parameter; keys outside the layer's range succeed with a warning naming "
+        "the range.",
+        "animationCurve (when created), keyframe (one per key, in the order given)",
+        "bloom.animation.set-keyframe-at-time-for-parameter bloom.animation.convert-to-constant "
+        "query:keyframes",
+        "[invalid-argument] A key is not [time, value, interpolation] => the message names the "
+        "key index and the part to fix.\nTwo keys share a time => give each key its own time.\n"
+        "The parameter is driven by a value node => give it a constant with "
+        "bloom.parameter.set-source first.\nThe value does not fit the parameter => the message "
+        "names the key index; query {kind:\"parameter\"} reports valueKind and range."},
     OperationNotes{"bloom.animation.set-keyframe-at-time-for-parameter",
         "Sets an animated parameter's value at `time`: updates the key there or inserts one. The "
         "parameter must already be animated; make a constant one animated first with "
         "bloom.animation.create-for-parameter (in the same transaction is fine). The value has "
-        "the parameter's own width (query {kind:\"parameter\"} reports valueKind).",
+        "the parameter's own width (query {kind:\"parameter\"} reports valueKind). `time` is in "
+        "layer time for a layer's own parameters (the composition frame minus the layer's start) "
+        "and in composition time for every other parameter; a key outside the layer's range "
+        "succeeds with a warning naming the range.",
         "keyframe",
         "bloom.animation.create-for-parameter "
         "bloom.animation.set-keyframe-at-time-for-parameter-component query:keyframes "
         "bloom.parameter.set-source",
-        "The parameter is not animated (\"Parameter does not have an animation source\") => run "
+        "The parameter is not animated (\"Parameter N is not animated\") => run "
         "bloom.animation.create-for-parameter first.\nThe value has the wrong width => match the "
         "parameter's valueKind: scalar is a number, vector2 is [x, y], vector3 [x, y, z], color "
         "[r, g, b, a]."},
     OperationNotes{"bloom.animation.set-keyframe-at-time-for-parameter-component",
         "Keys one axis or channel of an animated vector or colour parameter at `time`, leaving "
         "the other components as they are. Make a constant parameter animated first with "
-        "bloom.animation.create-for-parameter.",
+        "bloom.animation.create-for-parameter. `time` is in layer time for a layer's own "
+        "parameters (the composition frame minus the layer's start) and in composition time for "
+        "every other parameter; a key outside the layer's range succeeds with a warning naming "
+        "the range.",
         "keyframe",
         "bloom.animation.create-for-parameter "
         "bloom.animation.set-keyframe-at-time-for-parameter query:keyframes",
@@ -596,9 +632,11 @@ void range(ArgumentSchema& argument, const double minimum, const double maximum)
 void refine(const std::string& op, ArgumentSchema& argument) {
     const auto& name = argument.name;
     const bool layerOp = op.starts_with("bloom.layer.") || op.starts_with("bloom.composition.");
+    // A key time is in the unit of its owner (layer time for a layer's own parameters).
+    const bool keyed = op.starts_with("bloom.animation.") && name == "time";
     switch (argument.kind) {
     case ValueKind::Time:
-        argument.unit = kTimeUnit;
+        argument.unit = keyed ? kKeyTimeUnit : kTimeUnit;
         break;
     case ValueKind::Color4:
         argument.unit = kColorUnit;
@@ -805,6 +843,9 @@ void refine(const std::string& op, ArgumentSchema& argument) {
     } else if (name == "workingColorSpace") {
         argument.unit = "a scene-linear colour space name of the project's OCIO config; empty "
                         "follows the project";
+    } else if (name == "keys" && op == "bloom.animation.set-keys") {
+        argument.unit = "list of [time, value, interpolation?]; times in " +
+                        std::string(kKeyTimeUnit);
     } else if (name == "projectDirectory") {
         argument.unit = "directory path; relative locators are made relative to it";
     } else if (name == "digest") {

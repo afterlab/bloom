@@ -26,9 +26,10 @@ struct NestedTime final {
     std::string_view argument;
     std::size_t index;
 };
-constexpr std::array<NestedTime, 2> kNestedTimes{{
+constexpr std::array<NestedTime, 3> kNestedTimes{{
     {"bloom.animation.move-keyframes", "keys", 2},
     {"bloom.animation.paste-keyframes", "keys", 1},
+    {"bloom.animation.set-keys", "keys", 0},
 }};
 
 bool isFrameCount(const Value& value) {

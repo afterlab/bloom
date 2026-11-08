@@ -678,6 +678,41 @@ class SetKeyframeValues final : public Operation {
     document::CompositionId composition_;
     std::vector<KeyframeValueEdit> values_;
 };
+// One key of SetParameterKeys: its time (in the unit of the parameter's owner, see
+// docs/user-guide/mcp.md "Key times"), its value in the parameter's own width and the interpolation
+// leaving it.
+struct ParameterKey {
+    core::RationalTime time;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue,
+                 document::GradientValue>
+        value;
+    document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
+};
+// Sets a parameter's whole list of keys in one undo step: a key at an existing time takes the new
+// value, any other time gets a new key, and a constant parameter becomes animated. With `replace`
+// the existing keys go first (the parameter is returned to the constant it was animated from), so
+// an empty list with `replace` leaves the parameter constant. The key after the last time has no
+// outgoing segment, so the last key's interpolation always stays linear. Outputs "animationCurve"
+// when the curve was created and "keyframe" once per key, in the order given.
+class SetParameterKeys final : public Operation {
+  public:
+    SetParameterKeys(document::CompositionId composition, document::ParameterId parameter,
+                     std::vector<ParameterKey> keys, bool replace)
+        : composition_(composition), parameter_(parameter), keys_(std::move(keys)),
+          replace_(replace) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::ParameterId parameter_;
+    std::vector<ParameterKey> keys_;
+    bool replace_ = false;
+};
 class PasteKeyframes final : public Operation {
   public:
     PasteKeyframes(document::CompositionId composition, std::vector<KeyframePaste> keys)
