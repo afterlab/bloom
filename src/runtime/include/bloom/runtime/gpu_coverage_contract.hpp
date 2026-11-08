@@ -177,6 +177,11 @@ BLOOM_GPU_REQUIRED_EFFECT(CodecDegradeKernel,
                           "the DCT block quantiser of a keyframe or a predicted frame with 4:2:0 "
                           "chroma, block motion from optical flow and P-frame persistence (#563)");
 
+BLOOM_GPU_REQUIRED_EFFECT(AutoExposureKernel,
+                          "Auto Exposure: the bounded mean reduction of a frame by tile sums and "
+                          "the recursive attack/release filter of a look-back window's means and "
+                          "its exposure and white balance gain (#566)");
+
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
 

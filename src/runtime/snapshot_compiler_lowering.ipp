@@ -753,6 +753,18 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *masked);
             continue;
         }
+        // #566 Auto Exposure: its look-back window of reductions, filter and gain, then the effect
+        // mask.
+        if (node->typeId == document::kAutoExposureNodeType) {
+            const auto lowered = lowerAutoExposure(*node, operations, indices);
+            if (!lowered)
+                return {};
+            const auto masked = applyEffectMask(*node, *lowered, indices);
+            if (!masked)
+                return {};
+            indices.emplace(nodeId, *masked);
+            continue;
+        }
         // #483 Z Defocus and Depth Fog: a depth map and its gather or fog mix, then the effect
         // mask.
         if (document::isDepthEffectNodeType(node->typeId)) {

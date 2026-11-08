@@ -6,6 +6,7 @@
 #include "depth_effect_recipes.hpp"
 #include "motion_blur_recipes.hpp"
 #include "codec_degrade_recipes.hpp"
+#include "auto_exposure_recipes.hpp"
 #include "motion_shutter.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"
@@ -21,6 +22,7 @@
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>

@@ -3,6 +3,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -764,6 +765,13 @@ struct TimeSampleKernel final {
     std::int64_t gopLength = 0;
     std::int64_t gopStep = 0;
     std::int64_t gopLag = 0;
+    // #566 the look-back window (shared by every node that reads the frames before its own): with
+    // `lookBack` set the sample is on the frame `max(frame - lagFrames, 0)` of the `rate` grid, this
+    // clock's frame counted as a Time node's frame is. A sample therefore never reads before the
+    // composition's first frame, and the same source time is shared by every frame whose window
+    // reaches it. The offset, the posterize fields and the group of pictures are then unused.
+    bool lookBack = false;
+    std::int64_t lagFrames = 0;
     // Frame Rate Hold's irregular cadence: with `cadenceChance` positive (in thousandths) a held
     // frame, counted on the posterize grid, is a repeat of the one before it when its seeded draw
     // falls under the chance and the previous frame was not itself a repeat; the source frame that
@@ -922,6 +930,24 @@ struct CodecDegradeKernel final {
     friend bool operator==(const CodecDegradeKernel&, const CodecDegradeKernel&) = default;
 };
 
+// #566 Auto Exposure (docs/architecture/image-filters.md, "Auto Exposure"): one pass of the node's
+// measurement of the footage and its lagged gain. The node lowers to the look-back window of time
+// samples of its input, each reduced to its mean colour, then
+//   Reduce  a mean reduction by tiles: the frame to at most `grid` by `grid` tile sums of the
+//           premultiplied colour, each already divided by the frame's pixel count (`grid` 64), then
+//           those to one pixel (`grid` 1), the frame's mean colour;
+//   Filter  the recursive filter over the window's means (the input is the newest, fieldImages the
+//           older ones oldest first): one pixel holding the exposure and white balance gains in
+//           stops. `values` are the node's scalars, in autoExposureScalarIndex order;
+//   Apply   the input times the gains of the Filter pixel in fieldImages[0].
+enum class AutoExposureRole : std::uint8_t { Reduce, Filter, Apply };
+struct AutoExposureKernel final {
+    AutoExposureRole role = AutoExposureRole::Reduce;
+    std::int64_t grid = 1;
+    std::array<CompiledScalarParameter, document::kAutoExposureScalarCount> values{};
+    friend bool operator==(const AutoExposureKernel&, const AutoExposureKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -932,7 +958,7 @@ using ImageEffectKernel =
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
-                 CodecDegradeKernel>;
+                 CodecDegradeKernel, AutoExposureKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1112,6 +1138,13 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
                 visit(value);
         return true;
     }
+    // #566: the scalars of the filter; a reduction and an application have no operands.
+    if (const auto* autoExposure = std::get_if<AutoExposureKernel>(&kernel)) {
+        if (autoExposure->role == AutoExposureRole::Filter)
+            for (const auto& value : autoExposure->values)
+                visit(value);
+        return true;
+    }
     return isMotionKernel(kernel);
 }
 
@@ -1130,7 +1163,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<LensFlareKernel>(kernel) ||
            std::holds_alternative<FilmGrainKernel>(kernel) ||
            std::holds_alternative<SharpenKernel>(kernel) ||
-           std::holds_alternative<CodecDegradeKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<CodecDegradeKernel>(kernel) ||
+           std::holds_alternative<AutoExposureKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

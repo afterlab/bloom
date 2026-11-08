@@ -49,6 +49,9 @@ enum class ColorGradeKind : std::uint8_t {
     // #563: one pass of Codec Degrade (codec_degrade_image_effect.hpp), the geometry of the images it
     // reads appended where it is applied.
     CodecDegrade,
+    // #566: one pass of Auto Exposure (auto_exposure_image_effect.hpp), the geometry of the images
+    // it reads appended where it is applied.
+    AutoExposure,
     // #484: every motion kernel (motion_blur_image_effect.hpp): the pass table of one pass of the
     // motion kernel, planned where it is applied.
     Motion,

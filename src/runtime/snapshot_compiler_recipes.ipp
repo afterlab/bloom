@@ -85,6 +85,43 @@ lowerCodecDegrade(const document::NodeRecord& node,
         emitter, *input, {blockPixels, gopFrames, *chroma, *quality, *persistence});
 }
 
+// #566 Auto Exposure: the look-back window of reductions, the filter over their means and the gain.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerAutoExposure(const document::NodeRecord& node,
+                  std::vector<runtime::CompiledOperation>& operations,
+                  std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::detail::AutoExposureOperands operands;
+    bool valid = true;
+    for (const auto& spec : document::autoExposureParameters()) {
+        if (spec.kind != document::AutoExposureParameterKind::Scalar)
+            continue;
+        const auto scalar = compiledScalarParameter(findParameterBinding(node, spec.role));
+        if (!scalar) {
+            valid = false;
+            continue;
+        }
+        operands.values[document::autoExposureScalarIndex(spec.role)] = *scalar;
+    }
+    const auto* lookBack =
+        parameterConstant<std::int64_t>(findParameterBinding(node, "lookBack"));
+    if (!valid || lookBack == nullptr || *lookBack < document::kMinimumAutoExposureLookBack ||
+        *lookBack > document::kMaximumAutoExposureLookBack) {
+        addTopologyFailure(node.id, "Auto Exposure parameters could not be lowered.");
+        return std::nullopt;
+    }
+    operands.lookBackFrames = *lookBack;
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    const auto lowered = runtime::detail::appendAutoExposure(emitter, *input, operands);
+    if (!lowered)
+        addTopologyFailure(node.id, "Auto Exposure look-back window is out of bounds.");
+    return lowered;
+}
+
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {

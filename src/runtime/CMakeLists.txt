@@ -67,6 +67,8 @@ target_sources(
         depth_effect_recipes.cpp
         motion_blur_recipes.cpp
         codec_degrade_recipes.cpp
+        look_back_recipes.cpp
+        auto_exposure_recipes.cpp
         compositing_recipes.hpp
         plan_time_scopes.cpp
         motion_shutter.cpp
@@ -165,6 +167,7 @@ target_sources(
         lens_flare_image_effect.cpp
         film_grain_image_effect.cpp
         codec_degrade_image_effect.cpp
+        auto_exposure_image_effect.cpp
         motion_blur_image_effect.cpp
         motion_blur_planner.cpp
         sharpen_image_effect.cpp

@@ -98,6 +98,16 @@ std::optional<core::RationalTime> offsetTime(const core::RationalTime parent,
                                              const TimeSampleKernel& sample,
                                              const document::FrameRate rate) {
     using Wide = __int128;
+    // #566: the frame `max(frame - lag, 0)` of the grid, the look-back window's sample.
+    if (sample.lookBack) {
+        const auto frame = valueGraphFrameIndex(parent, rate);
+        if (!frame || sample.lagFrames < 0)
+            return std::nullopt;
+        const std::int64_t target = std::max<std::int64_t>(*frame - sample.lagFrames, 0);
+        return core::RationalTime::create(
+            target * static_cast<std::int64_t>(rate.denominator()),
+            static_cast<std::int64_t>(rate.numerator()));
+    }
     // #563: the frame `keyframe + max(min(step, position) - lag, 0)` of the group of pictures the
     // parent's frame lies in; a keyframe is every multiple of the group's length.
     if (sample.gopLength > 0) {

@@ -6,6 +6,7 @@
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
 #include "codec_degrade_image_effect.hpp"
+#include "auto_exposure_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
@@ -944,6 +945,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return filmGrainProgramText();
     case ColorGradeKind::CodecDegrade:
         return codecDegradeProgramText();
+    case ColorGradeKind::AutoExposure:
+        return autoExposureProgramText();
     case ColorGradeKind::Motion:
         return {}; // One program per pass: the caller asks with the pass (motionProgramText).
     case ColorGradeKind::Sharpen: {
@@ -1071,6 +1074,16 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
             return std::nullopt;
         values.push_back(static_cast<double>(*frame));
     }
+    // #566: the filter converts its lags in seconds to per-frame coefficients with the length of a
+    // frame of the composition, in seconds.
+    if (const auto* autoExposure = std::get_if<AutoExposureKernel>(&kernel);
+        autoExposure != nullptr && autoExposure->role == AutoExposureRole::Filter) {
+        const auto rate = plan.format().frameRate();
+        if (rate.numerator() == 0)
+            return std::nullopt;
+        values.push_back(static_cast<double>(rate.denominator()) /
+                         static_cast<double>(rate.numerator()));
+    }
     // #486: Film Grain then reads the frame it is drawn for, by the same exact arithmetic as a Time
     // node's frame output, so one instant always names one frame's grain. Held grain reads none.
     if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel)) {
@@ -1118,6 +1131,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareFilmGrainGrade(*grain, values);
     if (const auto* codec = std::get_if<CodecDegradeKernel>(&kernel))
         return prepareCodecDegradeGrade(*codec, values);
+    if (const auto* autoExposure = std::get_if<AutoExposureKernel>(&kernel))
+        return prepareAutoExposureGrade(*autoExposure, values);
     if (isMotionKernel(kernel))
         return prepareMotionGrade(kernel, values);
     if (const auto* sharpen = std::get_if<SharpenKernel>(&kernel))
@@ -1154,7 +1169,7 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
         grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
         grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::CodecDegrade ||
-        grade.kind == ColorGradeKind::Motion ||
+        grade.kind == ColorGradeKind::AutoExposure || grade.kind == ColorGradeKind::Motion ||
         grade.kind == ColorGradeKind::Sharpen)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
@@ -1284,6 +1299,8 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::FilmGrain ? validFilmGrainProgramData(data)
                         : kind == ColorGradeKind::CodecDegrade
                             ? validCodecDegradeProgramData(data)
+                        : kind == ColorGradeKind::AutoExposure
+                            ? validAutoExposureProgramData(data)
                         : kind == ColorGradeKind::Motion ? validMotionProgramData(data)
                             : data.size() == kHueSaturationFloats;
     if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) ||
@@ -1367,6 +1384,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_codec_degrade";
         program.resourcePrefix = "bloom_codec_degrade_";
         program.semanticsId = "bloom.render.codec-degrade.v1";
+        break;
+    case ColorGradeKind::AutoExposure:
+        program.functionName = "bloom_auto_exposure";
+        program.resourcePrefix = "bloom_auto_exposure_";
+        program.semanticsId = "bloom.render.auto-exposure.v1";
         break;
     case ColorGradeKind::Motion:
         program.functionName = "bloom_motion";

@@ -1,3 +1,4 @@
+#include "auto_exposure_image_effect.hpp"
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -592,6 +593,18 @@ enum class ScalarDomain : std::uint8_t {
                                       (codec->role == CodecDegradeRole::Step && codec->step > 0
                                            ? 2U
                                            : 0U) &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
+                } else if (const auto* autoExposure =
+                               std::get_if<AutoExposureKernel>(&effect.kernel)) {
+                    // #566: a reduction reads nothing beside its input; a filter its window's older
+                    // means (at most kAutoExposureMaxCells in all); an application its one gain pixel.
+                    const auto count = effect.fieldImages.size();
+                    validKernel = validKernel &&
+                                  (autoExposure->role == AutoExposureRole::Reduce
+                                       ? count == 0
+                                   : autoExposure->role == AutoExposureRole::Apply
+                                       ? count == 1
+                                       : count >= 1 && count < detail::kAutoExposureMaxCells) &&
                                   std::ranges::all_of(effect.fieldImages, earlier);
                 } else {
                     validKernel =
@@ -2311,6 +2324,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<DefocusKernel>(effect->kernel) ||
                                std::holds_alternative<LensFlareKernel>(effect->kernel) ||
                                std::holds_alternative<CodecDegradeKernel>(effect->kernel) ||
+                               // #566 the mean of a frame is the whole frame's.
+                               std::holds_alternative<AutoExposureKernel>(effect->kernel) ||
                                // #486 a field raster that reads images (Lens Distortion's warp)
                                // reads them wherever the position field points.
                                (std::holds_alternative<FieldRasterKernel>(effect->kernel) &&
@@ -3589,8 +3604,20 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                               defocus->slotImages[slot])]
                                                           .value()]
                                                     .get();
+                                // #566: a filter reads a window's worth of means.
+                                std::vector<const render::Rgba32fImage*> autoExposureSlots;
+                                if (gradeKind == detail::ColorGradeKind::AutoExposure)
+                                    for (const auto image : effect.fieldImages)
+                                        autoExposureSlots.push_back(slots[image.value()].get());
                                 auto result =
-                                    gradeKind == detail::ColorGradeKind::CodecDegrade
+                                    gradeKind == detail::ColorGradeKind::AutoExposure
+                                        ? detail::applyAutoExposure(
+                                              *preparedEffect->colorGrade, slots[index].get(),
+                                              std::span<const render::Rgba32fImage* const>(
+                                                  autoExposureSlots),
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::CodecDegrade
                                         ? detail::applyCodecDegrade(
                                               *preparedEffect->colorGrade, slots[index].get(),
                                               effect.fieldImages.empty()
