@@ -1074,7 +1074,7 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
     // #486: Film Grain then reads the frame it is drawn for, by the same exact arithmetic as a Time
     // node's frame output, so one instant always names one frame's grain. Held grain reads none.
     if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel)) {
-        if (grain->animation == document::kFilmGrainHeld) {
+        if (!grain->drawsPerFrame()) {
             values.push_back(0.0);
         } else {
             if (!time)

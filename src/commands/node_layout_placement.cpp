@@ -347,9 +347,19 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         thumbnail = kPadMaxHeight + kDialSide + 2.0 * kControl + 9.0 * (kControl + kSmall) +
                     4.0 * kSmall + kPadding;
     // #486: the Film Grain card's response graph and its eight slider rows, each a value over a
-    // slider.
-    if (node->typeId == document::kFilmGrainNodeType)
-        thumbnail = kFilmGrainGraphHeight + kSmall + 8.0 * (kControl + kSmall) + kPadding;
+    // slider. #565: Sensor Noise shows nine (Shadow weighting, Chroma blotches, Blotch size and
+    // Fixed pattern in place of the three response rows).
+    if (node->typeId == document::kFilmGrainNodeType) {
+        double grainRows = 8.0;
+        for (const auto& binding : node->parameters)
+            if (binding.role == "mode")
+                if (const auto* record = composition.parameters().find(binding.parameterId))
+                    if (const auto* constant = std::get_if<document::ConstantValueSource>(&record->source))
+                        if (const auto* mode = std::get_if<std::int64_t>(&constant->value);
+                            mode != nullptr && *mode == document::kFilmGrainSensorNoise)
+                            grainRows = 9.0;
+        thumbnail = kFilmGrainGraphHeight + kSmall + grainRows * (kControl + kSmall) + kPadding;
+    }
     // #484: the Spin and Zoom Blur cards' centre pad.
     if (node->typeId == document::kSpinBlurNodeType || node->typeId == document::kZoomBlurNodeType)
         thumbnail = kPadMaxHeight + kSmall + kPadding;

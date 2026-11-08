@@ -23,12 +23,13 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
+#include <variant>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace bloom::runtime {
@@ -694,6 +695,24 @@ struct FilmGrainKernel final {
     bool monochrome = false;
     std::int64_t mode = document::kFilmGrainFilm;
     std::array<CompiledScalarParameter, document::kFilmGrainScalarCount> values{};
+    // Whether the picture follows the frame: Every Frame draws anew for each, except a Sensor Noise
+    // whose grain and blotches are constant zero, which leaves only the fixed pattern (the same on
+    // every frame). An animated or driven amount counts as not zero, so it still varies.
+    [[nodiscard]] bool drawsPerFrame() const {
+        if (animation == document::kFilmGrainHeld)
+            return false;
+        if (mode != document::kFilmGrainSensorNoise)
+            return true;
+        const auto zero = [this](const std::string_view role) {
+            const auto* constant =
+                std::get_if<double>(&values[document::filmGrainScalarIndex(role)].source);
+            return constant != nullptr && *constant == 0.0;
+        };
+        const bool grainless = zero("intensity") || (zero("redAmount") && zero("greenAmount") &&
+                                                     zero("blueAmount"));
+        const bool blotchless = zero("intensity") || zero("chromaBlotches");
+        return !(grainless && blotchless);
+    }
     friend bool operator==(const FilmGrainKernel&, const FilmGrainKernel&) = default;
 };
 

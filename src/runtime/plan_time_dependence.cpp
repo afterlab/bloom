@@ -134,7 +134,7 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         bool animated = field != nullptr && field->program.usesTime;
                         // #486: grain drawn anew for every frame.
                         if (const auto* grain = std::get_if<FilmGrainKernel>(&step.kernel))
-                            animated = animated || grain->animation != document::kFilmGrainHeld;
+                            animated = animated || grain->drawsPerFrame();
                         // #563: a step is drawn for its frame's place in the group of pictures.
                         if (const auto* codec = std::get_if<CodecDegradeKernel>(&step.kernel))
                             animated = animated || codec->role == CodecDegradeRole::Step;

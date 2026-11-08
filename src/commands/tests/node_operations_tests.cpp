@@ -1,5 +1,6 @@
 #include "command_test_support.hpp"
 
+#include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/grade_curves.hpp>
 
@@ -973,6 +974,18 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{2}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainSeed,
                                ConstantValueSource{std::int64_t{-1}});
+    // #565: the mode and the Sensor Noise values edit within their domains and refuse outside them.
+    const auto grainMode = grain.outputId<ParameterId>("parameter.mode");
+    const auto grainBlotchSize = grain.outputId<ParameterId>("parameter.blotchSize");
+    if (!grainMode || !grainBlotchSize)
+        throw std::logic_error("Film Grain exposes its Sensor Noise control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *grainMode,
+                                       ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *grainBlotchSize, ConstantValueSource{48.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainMode,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainBlotchSize,
+                               ConstantValueSource{0.5});
 
     // #563 Codec Degrade: its two values and three constants edit within their domains and refuse
     // outside them.
@@ -1663,6 +1676,29 @@ void testParameterSocketDrivers(TestContext& test) {
         InputPortRef{NodeInputRef{kFirstLayerNodeId, std::string(kBlendModeParameterRole)}});
 }
 
+// #565: the card's estimated height follows the Film Grain mode: Sensor Noise shows one row more.
+void testFilmGrainCardEstimate(TestContext& test) {
+    Fixture fixture;
+    const auto added = exercise<AddNode>(test, fixture, "bloom.film-grain", Vec2d{});
+    const auto node = added.outputId<NodeId>(kAddNodeOutput);
+    const auto mode = added.outputId<ParameterId>("parameter.mode");
+    if (!node || !mode)
+        throw std::logic_error("Film Grain exposes its identity and mode");
+    const auto height = [&] {
+        return estimatedNodeCardSize(*fixture.document.snapshot().project().findComposition(
+                                         kCompositionId),
+                                     *node)
+            .height;
+    };
+    const double film = height();
+    (void)exercise<SetParameterSource>(test, fixture, *mode, ConstantValueSource{std::int64_t{1}});
+    const double sensor = height();
+    test.expect(sensor > film && sensor - film < 60.0,
+                "a Film Grain in Sensor Noise mode is estimated one row taller");
+    (void)exercise<SetParameterSource>(test, fixture, *mode, ConstantValueSource{std::int64_t{0}});
+    test.expect(height() == film, "back in Film mode the estimate is Film's again");
+}
+
 void testNodeGroups(TestContext& test) {
     Fixture fixture;
     const auto composition = [&fixture] {
@@ -2134,6 +2170,7 @@ int main() {
         bloom::commands::test::testDeepDuplication(test);
         bloom::commands::test::testDuplicationOwnershipEdges(test);
         bloom::commands::test::testParameterSocketDrivers(test);
+        bloom::commands::test::testFilmGrainCardEstimate(test);
         bloom::commands::test::testNodeGroups(test);
         bloom::commands::test::testRenderAffectingClassification(test);
         bloom::commands::test::testLayerRangeTimeFootprint(test);
