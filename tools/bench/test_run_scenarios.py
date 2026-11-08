@@ -447,6 +447,14 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[1]["mode"], "Redistort")
         self.assertIn("k1", effect[2]["keys"])
 
+    def test_chromatic_aberration_scenario_keys_its_amount(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["chromatic-aberration-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.chromatic-aberration")
+        self.assertIn("amount", effect[2]["keys"])
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]

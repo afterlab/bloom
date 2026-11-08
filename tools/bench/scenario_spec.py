@@ -348,6 +348,19 @@ SCENARIOS["lens-distortion-2k"] = {
     ],
 }
 
+# #486: Chromatic Aberration over a plate, its amount keyed so every frame is new.
+SCENARIOS["chromatic-aberration-2k"] = {
+    "description": "A PNG16 plate under Chromatic Aberration, its amount keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.chromatic-aberration",
+                      {},
+                      {"keys": {"amount": [[0, 0.01], [23, 0.04]]}}]]},
+    ],
+}
+
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
 # is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
 # the render's camera depth and read as data), the focus racking from the near pillars to the back;

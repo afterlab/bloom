@@ -85,7 +85,7 @@ command, carries the geometry; a keyed parameter changes only data, never the pr
 
 ### Lens Warp
 
-Lens Distortion (`image-filters.md`) lowers to field rasters, and adds one instruction and two small
+Lens Distortion (`image-filters.md`; Chromatic Aberration lowers to the same instruction) lowers to field rasters, and adds one instruction and two small
 extensions to the vocabulary below (`core::field::FieldOp::LensWarp`, a Required GPU coverage feature as
 every operation is). **Lens Warp** takes a coordinate and returns the position to read: the Brown-Conrady
 model about a centre in normalised units (the scale a length in field pixels), forward, or inverted by

@@ -98,6 +98,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   smearing: quality, block size, GOP length and P-frame persistence.
 - [Lens Distortion](user-guide/lens-distortion.md) — undistort or redistort a picture with the standard
   radial and tangential lens model, and an ST map of the same warp.
+- [Chromatic Aberration](user-guide/chromatic-aberration.md) — pull red and blue apart radially about a
+  centre, growing towards the edges, with green left in place.
 - [Motion blur](user-guide/motion-blur.md) — which motion blur to use, the shared shutter, sub-frame
   Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
   Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of

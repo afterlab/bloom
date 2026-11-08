@@ -423,6 +423,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `camera-shake-2k` | 1920×1080 | 24 | A PNG16 plate under a Handheld Camera Shake (#512) of 24 by 16 pixels and 1° of roll, three octaves, auto overscan on and its motion blur on, so every frame is new and resamples the plate once per shutter sample |
 | `codec-degrade-2k` | 1920×1080 | 24 | A PNG16 plate under Codec Degrade (#563) with 16 px blocks, a 12-frame GOP and 75% P-frame persistence, its quality keyed from 60 to 15 so every frame is new and renders its chain from the last keyframe, optical flow included. Written, not yet run: it has no recorded numbers and no budget |
 | `lens-distortion-2k` | 1920×1080 | 24 | A PNG16 plate under Lens Distortion (#486) in Redistort mode, its radial `k1` keyed from -0.1 to -0.3 so every frame is new. Only the warped image is read, so the ST map is not built. Written, not yet run: it has no recorded numbers and no budget |
+| `chromatic-aberration-2k` | 1920×1080 | 24 | A PNG16 plate under Chromatic Aberration (#486), its amount keyed from 1% to 4% so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -948,6 +949,14 @@ measure it end to end. Suspicions to check against it, not findings: Redistort s
 source by twelve Newton steps, so it should cost several times what Undistort does per pixel; and on the
 GPU the input is moved beside the canvas in the field raster's atlas, one more full-frame copy and a larger
 dispatched image than the output alone.
+
+### Chromatic Aberration (#486)
+
+Chromatic Aberration has no recorded numbers and no budget yet. The scenario `chromatic-aberration-2k` is
+written to measure it end to end. Suspicions to check against it, not findings: each pixel reads the input
+three times, so it should cost about three bilinear reads where Lens Distortion's Undistort costs one; and
+on the GPU the input is moved beside the canvas in the field raster's atlas, one more full-frame copy and a
+larger dispatched image than the output alone.
 
 ## Platform notes
 

@@ -1694,6 +1694,60 @@ to the whole frame's pixels, the pixel budget and cancellation. `effect.FieldRas
 harness holds the node to the CPU oracle on a device. [Benchmarks](../development/benchmarks.md#lens-distortion-486)
 names the scenario and the suspected cost.
 
+## Chromatic Aberration
+
+`bloom.chromatic-aberration`, schema 1, under Distort (issue #486), has one Image in, `input`, and one Image
+output, `image`: the picture with red and blue pulled apart along the line from a centre, by an amount
+that grows with the distance from it, and green left where it is. It takes no effect mask.
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `amount` | 0 | -0.2 to 0.2 | The offset of red and blue as a fraction of half the composition's diagonal, reached at that distance from the centre; negative swaps the two |
+| `center` | 0, 0 | within 1e6 px | The point the colours spread from, pixels from the composition's centre with y down |
+
+Both have a socket and can be keyed or driven. The default amount is 0, so a new node leaves the picture
+exactly as it is.
+
+**The model.** Coordinates `(x, y)` are normalised about the centre by half the composition's diagonal (as
+for Lens Distortion), and `r2 = x x + y y`. Red is read at `(x, y) (1 + amount r2)`, blue at
+`(x, y) (1 - amount r2)` and green at `(x, y)`: the radial term of the Brown-Conrady lens model
+(`k1 = amount`) forward for red and mirrored through the pixel for blue, so red and blue move the same
+distance in opposite directions. The offset is `amount r2` times the distance from the centre, so it is
+nothing at the centre and grows quickly towards the edges; a frame corner of a centred pad is at `r = 1`.
+Because the offset is measured in half diagonals, an amount means the same on a proxy as at full size.
+
+**Lowering.** One field raster (`docs/architecture/fields.md`) over the input's data window. The program is
+`Coordinate`, one `Lens Warp` instruction (mode 0, `k1` the amount, the other coefficients constant zero) for
+the red position, the blue position `2 p - red` (a Swizzle and a Subtract), three `Image` instructions
+reading the input at the red, green and blue positions (bilinear over premultiplied texels, transparent
+outside the input, selector 3, the texel as stored), a Swizzle each to bring green and blue to the first
+lane, two Max instructions and a Swizzle for the alpha, and a Combine of red, green, blue and alpha into a
+Premultiplied result. It adds no field instruction: the Lens Warp, the Image selector and the Premultiplied
+result kind are Lens Distortion's, in `src/core/field_kernel.glsl`, the one kernel the CPU reference and the
+GPU program both run. With the amount a constant zero the output is the input itself and the node adds no
+operation; a muted node is the same.
+
+**HDR and alpha.** Each channel is taken from the premultiplied texel at its own position and nothing is
+divided by alpha or clamped, so values above one and negative values pass through in proportion and a
+picture with no fringe to make (a flat colour) is unchanged. The output's alpha is the largest of the three
+alphas, so a channel is never cut off by an alpha that is smaller than the one it was read with; at an edge
+of partial alpha the fringe is a colour at the alpha of the widest of the three reads. Outside the input a
+read is transparent black. Because the raster reads the input wherever the offset points, a region of
+interest or a proxy gives the whole frame's pixels (the input is required whole behind a region).
+
+**On the GPU.** The field raster's program, unchanged: the input is moved beside the canvas in an atlas,
+one dispatch of the fixed field program reads it three times, and the canvas is cut back out. Nothing is
+read back. The amount and the centre change only the program's data, not the program.
+
+**Evidence.** `src/runtime/tests/snapshot_compiler_chromatic_aberration_tests.ipp` holds the lowering (which
+operation, the program, the operands, mute, identity, time dependence) and, on the CPU reference over a
+checker grid, each of the four output channels against an independent double-precision reading of the
+input, green untouched, the colours pulled apart, HDR and partial alpha kept, a region of interest equal
+to the whole frame's pixels, the pixel budget and cancellation. `node.bloom.chromatic-aberration` prepares
+through the production builder at full frame and ROI, and the native harness holds the program to the CPU
+oracle on a device. [Benchmarks](../development/benchmarks.md#chromatic-aberration-486) names the scenario
+and the suspected cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,
