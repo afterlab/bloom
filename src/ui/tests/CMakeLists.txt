@@ -1048,7 +1048,8 @@ bloom_add_test(
 add_executable(bloom_ui_multi_selection_test composition_session_multi_selection_tests.cpp)
 target_link_libraries(bloom_ui_multi_selection_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_multi_selection_test)
-bloom_add_test(NAME bloom.ui.multi-selection COMMAND bloom_ui_multi_selection_test LABELS unit ui)
+bloom_add_test(NAME bloom.ui.multi-selection COMMAND bloom_ui_multi_selection_test LABELS unit ui
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_node_interaction_test node_interaction_tests.cpp node_connection_tests.cpp node_search_keyboard_tests.cpp)
 target_include_directories(bloom_node_interaction_test PRIVATE ..)
@@ -1713,7 +1714,8 @@ add_executable(bloom_assets_organization_test asset_organization_tests.cpp)
 target_include_directories(bloom_assets_organization_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_assets_organization_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_organization_test)
-bloom_add_test(NAME bloom.ui.asset-organization COMMAND bloom_assets_organization_test LABELS unit ui)
+bloom_add_test(NAME bloom.ui.asset-organization COMMAND bloom_assets_organization_test LABELS unit ui
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_import_progress_test import_progress_tests.cpp)
 target_include_directories(bloom_import_progress_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1764,6 +1766,7 @@ bloom_add_test(
     COMMAND bloom_network_share_paths_test
     LABELS unit ui media integration
     TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
 # ADR 0034: an MCP transaction over Streamable HTTP lands in the artist's undo history.
