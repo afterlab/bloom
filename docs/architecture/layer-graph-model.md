@@ -1446,6 +1446,16 @@ of the generic connection-refused text `graph.addEdge` would otherwise produce. 
 removes a slot only once neither edge remains, so removing just the audio link off an otherwise-fed
 Layer leaves its image row exactly where it was.
 
+## Audio Effects
+
+The Sources group also holds five audio-effect nodes (`bloom.audio-equalizer`,
+`bloom.audio-compressor`, `bloom.audio-auto-level`, `bloom.audio-mono`, `bloom.audio-hiss`). Each takes
+an optional `audio` input and gives an `audio` output, so they sit between an Audio source (or a
+Video source's embedded audio) and the Layer Output's `audio` input. Their parameters are animatable
+Scalars, plus a constant `seed` on Hiss. The compiler records the chain on the compiled audio layer;
+a muted effect is bypassed and an effect with no input is silent. See
+[Media I/O, "Audio Effects"](media-io.md#audio-effects-569).
+
 ## Shape Sources
 
 `bloom.shape-source` v1 is one Sources node with an `image` output. Its `kind` Integer selects

@@ -96,9 +96,16 @@ frames**: **Use cached frames**), **Quality** and, for image sequences, **Number
 number**, or **Use the frame numbers**, and **Digits**). **Quality** shows only what the chosen
 format has: **Profile** where a format has several, **Compression** for OpenEXR, **Color space** for
 OpenEXR and DPX, **Display** and **View** for movies, PNG and TIFF, **Bake in the look**, and
-**Include audio** for movies. H.264 and HEVC formats also show **Bit rate**, the target in kb/s
+**Include audio** and **Normalize loudness** for movies and WAV. H.264 and HEVC formats also show **Bit rate**, the target in kb/s
 (12000 kb/s is 12 Mb/s); it starts at the codec's default, 30000 kb/s for H.264 and 20000 kb/s for
-HEVC, and the file's average rate lands near it. **Color space**, **Display** and **View** are lists of what the
+HEVC, and the file's average rate lands near it. **Normalize loudness** brings the sound to a target loudness. **Target** is in LUFS (-16 is a common
+streaming level, -23 a broadcast level) and **True peak** is the ceiling in dBTP that the sound is never
+allowed to pass (-1 by default). Bloom first measures the whole mix, then gives it the gain that reaches
+the target and holds the ceiling with a limiter, so a loud peak is turned down instead of clipping. The
+job's details report the loudness measured before and delivered after, the true peak and how far the
+limiter reduced it. Silent audio is left alone. Normalizing renders the sound twice, which adds time to
+an export with a lot of audio.
+**Color space**, **Display** and **View** are lists of what the
 project's color setup offers, with **Project default** first, so a name cannot be mistyped.
 **Project default** is the Viewer's starting view (plain sRGB, **Un-tone-mapped** under ACES CG); the
 output stores that name, so the result never depends on the configuration's own default view. The

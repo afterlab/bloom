@@ -432,6 +432,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 
 | `test-card-2k` | 1920×1080 | 24 | A Zone Plate Test Card (#587), moving so every frame is new, drawn at the composition's size with 16 sub-samples per pixel; no media is read. Written, not yet run: it has no recorded numbers and no budget |
 | `path-value-compound-2k` | 1920×1080 | 24 | A Shape Source whose `path` comes from a Path node (#589): 64 contours, keyed so every frame flattens and covers a new shape; no media is read. Written, not yet run. |
+| `audio-effects-wav` | 1280×720 | 240 | A test card with ten seconds of generated stereo sound through the five audio effects, exported as WAV as mixed and normalized to -16 LUFS (#569, #570). Written, not yet run: it has no recorded numbers and no budget |
 | `auto-exposure-2k` | 1920×1080 | 24 | A PNG16 plate under an Exposure driven by a seeded Light Flicker, then Auto Exposure (#566) over its 48-frame look-back, so every frame measures a window of changed frames. Written, not yet run: it has no recorded numbers and no budget |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
@@ -1020,6 +1021,17 @@ the filter and the gain. The gain is applied through an atlas of the frame and t
 pads and crops the frame, so it costs more than a plain pointwise pass. The first reduction pass
 dispatches over the whole frame to fill at most 64 by 64 tile sums, so most of its invocations return
 at once. These are suspicions to check against the scenario, not findings.
+
+### Audio effects and export loudness (#569, #570)
+
+The audio effects and the loudness export have no recorded numbers and no budget yet. The scenario
+`audio-effects-wav` is written to measure them end to end: ten seconds of generated stereo sound
+through Equalizer, Compressor, Auto Level, Mono and Hiss, exported as WAV as mixed and then normalized
+to -16 LUFS, with the wall time of each and the loudness report of the second. The effects run per
+frame inside the mixer with one filter state per clip, and the normalizing export renders the mix
+twice (one measuring pass, one delivering pass), so its cost is expected to be about two mixes plus the
+limiter. These are suspicions to check against the scenario, not findings.
+lists the scenario.
 
 ## Platform notes
 

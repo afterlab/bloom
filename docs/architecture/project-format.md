@@ -2089,9 +2089,14 @@ never reused.
 | job | `id`, `composition`, `name`, `range`, `outputs`, `enabled`, optional `labelColor` |
 | range | `kind` (`"work-area"`, `"composition"`, `"custom"`, `"frame"`), `first`, and `last` only for `custom` (decimal strings) |
 | output | `id`, `preset`, `settings`, `destination`, `enabled`, `importIntoAssets` |
-| settings | `format`, `codecProfile`, optional `videoBitrateKbps`, `compression`, `outputColorSpace`, `display`, `view`, `bakeLook`, `includeAudio`, `audioSampleRate`, `encoder` (`"automatic"`, `"software"`, `"hardware"`), `naming` |
+| settings | `format`, `codecProfile`, optional `videoBitrateKbps`, `compression`, `outputColorSpace`, `display`, `view`, `bakeLook`, `includeAudio`, optional `useCachedFrames` (only `false` is written), optional `loudness`, `audioSampleRate`, `encoder` (`"automatic"`, `"software"`, `"hardware"`), `naming` |
 | naming | optional `startFrame` (decimal string), `framePadding`, `pattern` |
 | destination | `portability` (`"project-relative"`, `"external"`), `path`, `overwrite` (`"ask"`, `"replace"`, `"refuse"`) |
+
+`loudness` (optional, #570) is present only when the output normalizes its programme loudness:
+`targetLufs` (Float64, `-40..-5`, EBU R128 integrated loudness) and `truePeakDbtp` (Float64,
+`-12..0`, the true-peak ceiling). It joins document `1.43` as an optional member, like
+`useCachedFrames`: a file without it exports the audio as mixed and re-saves unchanged.
 
 `labelColor` uses the layer label representation (three integers `0..255`). `format` is the closed
 1.29 vocabulary `png`, `exr`, `tiff`, `dpx`, `prores-mov`, `dnxhr-mxf`, `h264-mov`, `h264-mp4`,

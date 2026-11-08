@@ -750,6 +750,67 @@ frame numbers. A source member changing invalidates only the affected identities
 caches, but a final render with an unapproved gap or stale member fails rather than silently using an
 old cached frame.
 
+## Audio Effects (#569)
+
+Five Sources-group nodes edit an audio layer's sound: `bloom.audio-equalizer`, `bloom.audio-compressor`,
+`bloom.audio-auto-level`, `bloom.audio-mono` and `bloom.audio-hiss`. Each has an optional `audio`
+input, an `audio` output and one animatable Scalar socket per parameter, so a chain is ordinary
+graph wiring: Audio Source, effects, Layer Output. The snapshot compiler walks the edges from a
+Layer's audio input back to its source and records the effects in order on the layer
+(`CompiledAudioLayer::effects`); an effect in front of a composition source is refused with a
+topology diagnostic, and an effect with nothing wired in is silent. A muted effect is bypassed, not
+silenced. `CpuCompositionEvaluator::evaluateAudioMix()` samples each parameter at the time asked and
+clamps it to its document domain.
+
+The processors live in `bloom::media::audio::effects` and run inside `AudioEngine`, one frame at a
+time after the clip's level, so interactive playback and the offline export mix run the same code on
+the same absolute sample positions. The equalizer's high-pass, low-pass, peaking and shelving bands
+are the bundled audio library's standard biquad filters (`ma_hpf`, `ma_lpf` of order 4, `ma_peak2`,
+`ma_loshelf2`, `ma_hishelf2`); the bands run high-pass, low shelf, mid peak, high shelf, low-pass, and
+a band at its neutral setting (high-pass at or below 20.5 Hz, low-pass at or above 19999.5 Hz, a gain
+of 0 dB) is skipped. The other three are small fixed algorithms with no library equivalent:
+
+- Compressor: a peak-hold detector with a release decay, a soft-knee static curve in decibels, and gain
+  reduction smoothed with the attack (the gain falls over the attack and recovers at once), then the
+  makeup gain. Both channels share one gain.
+- Auto Level: a 0.3 second power detector, a gate below which the gain holds, and a gain toward the
+  target clamped to plus or minus the maximum gain, rising over the response time and falling four
+  times as fast.
+- Mono: each channel moves toward the mean of all channels by the amount.
+- Hiss: uniform noise scaled to the RMS level, optionally high-passed at the tone frequency. The noise
+  is counter based (a hash of the seed, the channel and the absolute sample), so it is the same
+  whatever the block sizes are.
+
+State is kept per clip, keyed by `AudioClip::effectKey`, across `replaceClips`. When playback starts
+or jumps, the dynamics run over the preceding 0.5 second (`kEffectWarmupSeconds`) before the first
+frame, so starting mid-clip sounds the same as playing from earlier. Filter coefficients update on a
+32-sample grid of absolute positions. Animated parameters move linearly across an `AudioEffectRamp`
+span: the exporter evaluates each 512-frame block at its start and end, as it does for level
+automation (#459), which makes automation continuous at sample resolution. Interactive playback
+re-evaluates the mix when the transport time changes and holds each value until the next refresh;
+smooth interactive following of animated values shares the open level-automation gap (#471), and
+static parameters are identical in playback and export.
+
+## Export Loudness (#570)
+
+An output can carry a `loudness` setting: a target integrated loudness in LUFS (-40 to -5) and a
+true-peak ceiling in dBTP (-12 to 0), defaulting to -16 LUFS and -1 dBTP. Measurement is EBU R128
+(ITU-R BS.1770) through libebur128, vendored under `src/media/third_party/ebur128` with its notices
+under `dependencies/licenses/ebur128`. The export stream (`CompositionOutputStreamV1`) then runs the
+audio in two passes over the same deterministic mix: the first renders the whole programme into the
+meter alone (cancellable, reporting "Measuring loudness"); the gain is the target minus the measured
+integrated loudness; the second renders again and passes each block through the gain and a lookahead
+true-peak limiter before the encoder, while a second meter measures what is delivered. The limiter
+mirrors the meter's 4x (below 96 kHz) or 2x (below 192 kHz) sinc interpolator, looks ahead about one
+millisecond, releases over 80 ms and keeps 0.1 dB of headroom; it adds a fixed latency that the stream
+absorbs by rendering ahead and flushing at the end, so the programme keeps its length. Audio with
+nothing above the absolute gate (silence) is left unchanged and reported as not measurable.
+`SequenceExportResultV1::loudness` carries the report to `ExportOutputVerification::loudness`:
+target and ceiling, measured integrated loudness and true peak, the gain, delivered loudness and true
+peak, and the deepest limiter reduction. Every audio-carrying route uses it: the Export panel, the
+queue's saved outputs, the `export` and `render` MCP tools (`loudnessLufs`, `truePeakDbtp`), the
+headless path and scripting. Loudness is an optional member of the 1.43 output settings.
+
 ## Disk cache
 
 Task CACHE-2 adds `src/media/cache` (Qt-free): a bounded, content-addressed, on-disk store of

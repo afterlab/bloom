@@ -535,6 +535,16 @@ class DepthScenario(unittest.TestCase):
         self.assertIn("stops", effects[0][2]["drives"], "the plate's brightness changes every frame")
         self.assertEqual(effects[1][1]["lookBack"], 48)
 
+    def test_audio_effects_scenario_chains_every_effect_and_exports_wav(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["audio-effects-wav"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        voice = next(layer for layer in scenario["layers"] if "audio" in layer)
+        self.assertEqual([effect[0] for effect in voice["audio"]["effects"]],
+                         ["bloom.audio-equalizer", "bloom.audio-compressor",
+                          "bloom.audio-auto-level", "bloom.audio-mono", "bloom.audio-hiss"])
+        self.assertEqual(scenario["audioExport"]["loudnessLufs"], -16.0)
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]

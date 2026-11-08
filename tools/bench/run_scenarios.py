@@ -411,8 +411,9 @@ class Builder:
                                              projectDirectory=str(self.directory))["asset"]
         return self.assets[fmt]
 
-    def chain(self, source, port, effects, background=None):
-        """Feeds `effects` from (source, port); returns the last node."""
+    def chain(self, source, port, effects, background=None, out_port="image"):
+        """Feeds `effects` from (source, port); returns the last node. `out_port` is the port the
+        effects chain on (an audio chain is "audio" all the way)."""
         node = source
         for effect in effects:
             node_type, values = effect[0], effect[1]
@@ -420,7 +421,7 @@ class Builder:
             fed_by = node
             node = self.transact("bloom.node.add-fed-by", composition=self.composition,
                                  nodeType=node_type, node=node, port=port)["node"]
-            port = "image"
+            port = out_port
             if node_type == "bloom.light-wrap" and background is not None:
                 self.transact("bloom.node.connect", composition=self.composition,
                               sourceNode=background, sourcePort="image", targetNode=node,
@@ -607,6 +608,24 @@ class Builder:
         self.layer_controls(holder, layer)
         return holder
 
+    def audio(self, layer):
+        """#569: a generated stereo tone with seeded noise as an audio layer, fed through the layer's
+        audio effects before its Layer Output's audio input."""
+        spec = layer["audio"]
+        path = self.directory / f"{layer['name']}.wav"
+        write_tone(path, spec.get("seconds", 10))
+        asset = self.transact("bloom.asset.import", paths=[str(path)],
+                              projectDirectory=str(self.directory))["asset"]
+        added = self.transact("bloom.layer.add-audio", composition=self.composition,
+                              asset=asset)["layer"]
+        record = next(r for r in self.records()["records"] if r["id"] == added)
+        source, output = record["sourceNode"], record["layerOutputNode"]
+        last = self.chain(source, "audio", spec.get("effects") or (), out_port="audio")
+        if last != source:
+            self.transact("bloom.node.connect", composition=self.composition, sourceNode=last,
+                          sourcePort="audio", targetNode=output, port="audio")
+        self.layers[layer["name"]] = {"source": source, "output": output}
+
     def output_merge(self):
         entries = self.records()["entries"]
         found = [entry["merge"] for entry in entries if entry.get("outputMerge")]
@@ -633,6 +652,8 @@ class Builder:
                 self.nested(layer, merge or self.output_merge())
             elif "generator" in layer:
                 self.generator(layer, merge or self.output_merge())
+            elif "audio" in layer:
+                self.audio(layer)
             elif "adjustment" in layer:
                 merge = merge or self.output_merge()
                 added = self.transact("bloom.merge.add-adjustment-layer",
@@ -644,6 +665,27 @@ class Builder:
         self.transact("bloom.composition.set-work-area", composition=self.composition, start=0,
                       end=frames)
         return self.composition
+
+
+def write_tone(path, seconds, rate=48000):
+    """A deterministic stereo test sound: two slowly modulated tones and seeded noise, 16-bit."""
+    import array  # noqa: PLC0415
+    import math  # noqa: PLC0415
+    import random  # noqa: PLC0415
+    import wave  # noqa: PLC0415
+    noise = random.Random(7)
+    samples = array.array("h")
+    for index in range(int(seconds * rate)):
+        t = index / rate
+        swell = 0.25 + 0.2 * math.sin(2 * math.pi * 0.4 * t)
+        for tone in (220.0, 330.0):
+            value = swell * math.sin(2 * math.pi * tone * t) + 0.02 * (noise.random() - 0.5)
+            samples.append(int(max(-1.0, min(1.0, value)) * 32767))
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(samples.tobytes())
 
 
 def build_scenario(args, name, scenario, media, project, log):
@@ -948,6 +990,35 @@ def measure_export(args, shot, media_files, out, log):
                         "verification": verification.get("overall")})
         row.update(stream_summary(samples, args.claim_capacity_percent / 100))
         row["files"] = sorted(str(path) for path in out.glob("frame.*.exr"))
+    return row
+
+
+def measure_audio_export(args, shot, out, log):
+    """#569, #570: the composition's sound exported as WAV as mixed, then normalized. Seconds are the
+    wall time of each export; the normalized one reports the measured and delivered loudness."""
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    spec = shot["audioExport"]
+    row = {"kind": "audio-export", "runs": []}
+    with Instance(args.bloom, args.scratch, args.driver_cache, log) as instance:
+        client = instance.client
+        open_project(client, shot["project"])
+        for label, extra in (("mixed", {}),
+                             ("normalized", {"loudnessLufs": spec["loudnessLufs"],
+                                             "truePeakDbtp": spec["truePeakDbtp"]})):
+            started = time.monotonic()
+            result = client.call("export", {
+                "composition": shot["composition"], "first": 0, "last": shot["frames"] - 1,
+                "preset": "PcmWavV1", "destination": str(out / f"{label}.wav"),
+                "overwrite": "replace", "audio": True, **extra},
+                timeout=args.export_timeout, check=False, progress=True)
+            run = {"label": label, "seconds": round(time.monotonic() - started, 3),
+                   "succeeded": bool(result.get("files"))}
+            if result.get("loudness"):
+                run["loudness"] = result["loudness"]
+            if not run["succeeded"]:
+                run["error"] = json.dumps(result)[:2000]
+            row["runs"].append(run)
     return row
 
 
@@ -1360,7 +1431,7 @@ def command_run(args):
             try:
                 built = build_scenario(args, name, scenario, media, project, log)
                 entry["build"] = built
-                shot = dict(built, project=project,
+                shot = dict(built, project=project, audioExport=scenario.get("audioExport"),
                             knownFailures=scenario.get("knownFailures") or {},
                             keyedAlpha=scenario_spec.keyed_alpha(scenario))
                 steps = [("fill", lambda: measure_fill(args, shot, files, log)),
@@ -1369,6 +1440,9 @@ def command_run(args):
                 if not args.no_export:
                     steps.append(("export", lambda: measure_export(
                         args, shot, files, work / "exports" / name, log)))
+                if shot["audioExport"] and not args.no_export:
+                    steps.append(("audio-export", lambda: measure_audio_export(
+                        args, shot, work / "exports" / name, log)))
                 for kind, step in steps:
                     print(f"[{name}] {kind}", flush=True)
                     try:
