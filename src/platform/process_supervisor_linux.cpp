@@ -361,6 +361,13 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->reaped = true;
 }
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
+std::optional<ProcessExit> ProcessSupervisor::waitExit(const std::chrono::milliseconds grace) {
+    if (!state_->waitUntil(Clock::now() + grace))
+        return std::nullopt;
+    if (WIFSIGNALED(state_->status))
+        return ProcessExit{true, WTERMSIG(state_->status)};
+    return ProcessExit{false, WIFEXITED(state_->status) ? WEXITSTATUS(state_->status) : 0};
+}
 bool processWorkerBootstrap() {
     char ready = 0;
     ssize_t n = 0;

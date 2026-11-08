@@ -1203,6 +1203,9 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
               crashed.failure->reason == media::provider::Error::Crashed &&
               !std::filesystem::exists(directory / "crash.mov"),
           "crash publishes nothing");
+    check(crashed.failure && crashed.failure->detail.find("Media worker exited") !=
+                                 std::string::npos,
+          "a crashed export worker is named in the failure");
     verify(f.run(f.request(directory / "retry.mov", output::OutputPresetV1::ProResMovV1)),
            directory / "retry.mov", true);
     // Closing the authoring client abandons an in-flight worker without waiting on the UI.

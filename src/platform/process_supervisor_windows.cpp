@@ -464,6 +464,15 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
 
 std::int64_t ProcessSupervisor::processId() const { return state_->pid; }
 
+std::optional<ProcessExit> ProcessSupervisor::waitExit(const std::chrono::milliseconds grace) {
+    if (!state_->process.valid() || !state_->waitUntil(Clock::now() + grace))
+        return std::nullopt;
+    DWORD code = 1;
+    if (!GetExitCodeProcess(state_->process.get(), &code))
+        return ProcessExit{false, 1};
+    return ProcessExit{false, static_cast<int>(code)};
+}
+
 bool processWorkerBootstrap() {
     wchar_t value[32] = {};
     const DWORD length = GetEnvironmentVariableW(kGateVariable, value, 32);

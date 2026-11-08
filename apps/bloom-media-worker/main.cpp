@@ -132,8 +132,12 @@ int main(int argc, char** argv) {
             auto incoming = worker::read(retainedVideo && ready ? std::chrono::seconds(45)
                                                                 : std::chrono::milliseconds{0});
             const auto* message = std::get_if<provider::Message>(&incoming);
-            if (!message)
-                return 3;
+            // Idle retirement: a retained worker nobody has called for its whole idle window
+            // ends cleanly (exit 0) so the host can tell it from a failure (#583).
+            if (!message) {
+                const auto* idle = std::get_if<provider::Unavailable>(&incoming);
+                return idle && idle->reason == provider::Error::Timeout ? 0 : 3;
+            }
             if (message->sequence != sequence + 1 || (ready && message->session != session))
                 return 4;
             session = message->session;

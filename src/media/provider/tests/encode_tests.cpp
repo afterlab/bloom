@@ -2,6 +2,7 @@
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/media_workers.hpp>
+#include <cerrno>
 #include <cmath>
 #include <csignal>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <sys/wait.h>
 #include <tuple>
 #include <unistd.h>
 #include <utility>
@@ -461,6 +463,14 @@ void tests(const std::filesystem::path& directory) {
             failure = *error;
     }
     test::check(failure && failure->reason == Error::Crashed, "typed encode crash");
+    test::check(failure && failure->detail.find("signal 9") != std::string::npos,
+                "the encode crash names how the worker ended");
+    {
+        int status = 0;
+        errno = 0;
+        test::check(::waitpid(static_cast<pid_t>(pid), &status, WNOHANG) == -1 && errno == ECHILD,
+                    "the crashed encode worker is reaped");
+    }
     EncodeSessionV1 retry({});
     ok(retry.begin(settings));
     ok(retry.video(image(settings, 0)));

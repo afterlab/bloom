@@ -45,7 +45,7 @@ Unavailable processFailure(const platform::ProcessFailure& e) {
     case platform::ProcessError::Timeout:
         return {Error::Timeout, "Encode watchdog expired"};
     case platform::ProcessError::Crashed:
-        return {Error::Crashed, "Media worker crashed during encode"};
+        return {Error::Crashed, "Media worker exited during encode"};
     case platform::ProcessError::ResourceLimit:
         return {Error::Oversized, "Media worker resource limit"};
     case platform::ProcessError::Spawn:
@@ -78,6 +78,15 @@ struct EncodeSessionV1::State {
     std::optional<Unavailable> terminal;
     explicit State(EncodeSessionOptionsV1 o, platform::ProcessCancellation c)
         : options(std::move(o)), cancel(std::move(c)) {}
+    // A worker that vanished mid-session is reaped here so the error names how it ended.
+    Unavailable crash(const platform::ProcessFailure& e) {
+        auto error = processFailure(e);
+        if (e.code == platform::ProcessError::Crashed && process)
+            if (const auto exit = process->waitExit(std::chrono::milliseconds(250)))
+                error.detail = "Media worker exited during encode (" +
+                               platform::describeProcessExit(*exit) + ")";
+        return error;
+    }
     Payload stop(Unavailable e) {
         terminal = e;
         if (process)
@@ -106,7 +115,7 @@ struct EncodeSessionV1::State {
             return std::get<Unavailable>(stop(*e));
         const auto written = process->write(std::get<Bytes>(request), deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&written))
-            return std::get<Unavailable>(stop(processFailure(*e)));
+            return std::get<Unavailable>(stop(crash(*e)));
         return std::nullopt;
     }
     Payload receive(MessageKind request, MessageKind expected) {
@@ -116,7 +125,7 @@ struct EncodeSessionV1::State {
         std::array<std::byte, 4> prefix{};
         auto received = process->read(prefix, deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&received))
-            return stop(processFailure(*e));
+            return stop(crash(*e));
         const auto length = messageLength(prefix);
         if (const auto* e = std::get_if<Unavailable>(&length))
             return stop(*e);
@@ -128,7 +137,7 @@ struct EncodeSessionV1::State {
         response.resize(4U + std::get<std::uint32_t>(length));
         received = process->read(std::span(response).subspan(4), deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&received))
-            return stop(processFailure(*e));
+            return stop(crash(*e));
         auto message = protocol->receive(response, expected);
         if (const auto* e = std::get_if<Unavailable>(&message))
             return stop(*e);
@@ -322,7 +331,7 @@ std::optional<Unavailable> EncodeSessionV1::close() {
     const auto ended =
         state_->process->finish(std::chrono::steady_clock::now() + state_->options.timeout);
     if (const auto* e = std::get_if<platform::ProcessFailure>(&ended))
-        return processFailure(*e);
+        return state_->crash(*e);
     state_->process.reset();
     return std::nullopt;
 }

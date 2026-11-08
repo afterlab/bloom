@@ -4,9 +4,12 @@
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/shared_frame_arena.hpp>
+#include <condition_variable>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <random>
+#include <thread>
 
 namespace bloom::media::provider {
 namespace {
@@ -24,7 +27,7 @@ Unavailable failure(const platform::ProcessFailure& p) {
     case platform::ProcessError::Cancelled:
         return {Error::Cancelled, "Worker call cancelled"};
     case platform::ProcessError::Crashed:
-        return {Error::Crashed, "Worker exited during call"};
+        return {Error::Crashed, "Media worker exited during the call"};
     case platform::ProcessError::ResourceLimit:
         return {Error::Oversized, "Worker resource limits rejected"};
     case platform::ProcessError::Spawn:
@@ -32,6 +35,15 @@ Unavailable failure(const platform::ProcessFailure& p) {
         return {Error::Io, "Worker launch or pipe I/O failed"};
     }
     return {Error::Io, "Unknown process failure"};
+}
+// A worker that vanished mid-call is reaped here so the error names how it ended.
+Unavailable failure(const platform::ProcessFailure& p, platform::ProcessSupervisor& process) {
+    auto error = failure(p);
+    if (p.code == platform::ProcessError::Crashed)
+        if (const auto exit = process.waitExit(std::chrono::milliseconds(250)))
+            error.detail = "Media worker exited during the call (" +
+                           platform::describeProcessExit(*exit) + ")";
+    return error;
 }
 std::string diagnosticCode(Error e) {
     switch (e) {
@@ -59,11 +71,11 @@ class Connection final {
             return std::get<Unavailable>(encoded);
         auto written = process_.write(*bytes, deadline_, cancel_);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&written))
-            return failure(*e);
+            return failure(*e, process_);
         std::array<std::byte, 4> prefix{};
         auto read = process_.read(prefix, deadline_, cancel_);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&read))
-            return failure(*e);
+            return failure(*e, process_);
         const auto size = messageLength(prefix);
         if (const auto* e = std::get_if<Unavailable>(&size))
             return *e;
@@ -71,9 +83,12 @@ class Connection final {
         response.resize(4U + std::get<std::uint32_t>(size));
         read = process_.read(std::span(response).subspan(4), deadline_, cancel_);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&read)) {
-            if (e->code == platform::ProcessError::Crashed)
-                return Unavailable{Error::Truncated, "Worker closed an incomplete frame"};
-            return failure(*e);
+            if (e->code == platform::ProcessError::Crashed) {
+                auto error = failure(*e, process_);
+                error.reason = Error::Truncated;
+                return error;
+            }
+            return failure(*e, process_);
         }
         return host.receive(response, expected);
     }
@@ -197,7 +212,7 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
     }
     auto finished = (*process)->finish(deadline);
     if (const auto* e = std::get_if<platform::ProcessFailure>(&finished))
-        return failure(*e);
+        return failure(*e, **process);
     // Cancellation arriving during orderly close also prevents product publication.
     if (cancel())
         return Unavailable{Error::Cancelled, "Cancelled before product publication"};
@@ -245,10 +260,66 @@ struct MediaWorkerPool::State {
     std::atomic<std::size_t> active{0};
     std::mutex retainedMutex;
     std::unique_ptr<Retained> retained;
+    // A retained worker that ended abnormally while idle: the next call that needed it fails once
+    // with this cause; later calls start a fresh worker. Guarded by retainedMutex.
+    struct Lost final {
+        std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
+        Unavailable error;
+    };
+    std::optional<Lost> lost;
+    // Reaps an idle retained worker as soon as it ends, so it is never left defunct and what it
+    // held (frame arena, source handle, Profiler entry) is released. Started with the first
+    // retained worker and joined by the pool's destructor.
+    std::thread monitor;
+    std::mutex monitorMutex;
+    std::condition_variable monitorWake;
+    bool monitorStop = false;
+    void reapIdle() {
+        std::unique_lock lock(retainedMutex, std::try_to_lock);
+        // A call in flight owns the worker and reports its own failure.
+        if (!lock.owns_lock() || !retained)
+            return;
+        const auto exit = retained->process->waitExit(std::chrono::milliseconds(0));
+        if (!exit)
+            return;
+        // A clean exit is the worker's own idle retirement: not a failure.
+        if (exit->signaled || exit->code != 0)
+            lost = Lost{retained->snapshot,
+                        {Error::Crashed, "Media worker exited while idle (" +
+                                             platform::describeProcessExit(*exit) + ")"}};
+        retained.reset();
+    }
+    void startMonitor() {
+        if (monitor.joinable())
+            return;
+        monitor = std::thread([this] {
+            std::unique_lock lock(monitorMutex);
+            while (!monitorStop) {
+                monitorWake.wait_for(lock, std::chrono::milliseconds(200));
+                if (monitorStop)
+                    break;
+                lock.unlock();
+                reapIdle();
+                lock.lock();
+            }
+        });
+    }
+    void stopMonitor() {
+        {
+            const std::lock_guard lock(monitorMutex);
+            monitorStop = true;
+        }
+        monitorWake.notify_all();
+        if (monitor.joinable())
+            monitor.join();
+    }
 };
 MediaWorkerPool::MediaWorkerPool(WorkerPoolOptions options)
     : state_(std::make_shared<State>(std::move(options))) {}
-MediaWorkerPool::~MediaWorkerPool() { shutdown(); }
+MediaWorkerPool::~MediaWorkerPool() {
+    shutdown();
+    state_->stopMonitor();
+}
 void MediaWorkerPool::shutdown() { state_->stopping.store(true); }
 std::size_t MediaWorkerPool::workerProcessIds(const std::span<std::int64_t> out) const noexcept {
     std::array<core::telemetry::HelperProcess, core::telemetry::kHelperProcessSlots> helpers{};
@@ -325,6 +396,12 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
          request.capability.role == Role::DemuxIndex ||
          request.capability.role == Role::AudioDecode);
     try {
+        if (state_->lost) {
+            auto lost = std::move(*state_->lost);
+            state_->lost.reset();
+            if (retain && lost.snapshot == snapshot)
+                return lost.error;
+        }
         if (!retain) {
             state_->retained.reset();
             return execute(state_->options, request, snapshot, cancelled, state_.get());
@@ -380,6 +457,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
                                                                  state_->options.expected);
             state_->retained->listed = core::telemetry::HelperProcessRegistration(
                 pid, kRetainedMediaWorkerName, state_.get());
+            state_->startMonitor();
             state_->retained->addressSpace = addressSpace;
             state_->retained->arena = std::move(arena);
             if (state_->retained->arena)

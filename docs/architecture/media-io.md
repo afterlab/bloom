@@ -1894,6 +1894,19 @@ playback, which cancels requests all the time, start a new worker for almost eve
 long-GOP stream then decoded again from its keyframe (2160p HEVC with one keyframe in 240 frames
 played at 2.5 fps).
 
+Worker exits are always reaped and reported (#583). While no call is in flight the pool watches its
+retained worker, and as soon as the child ends it reaps it (no `<defunct>` child), releases what it
+held (frame arena, source handle, Profiler entry) and starts a fresh worker for later work. A
+retained worker unused for its whole idle window (45 seconds) retires itself with exit code 0; that
+is an intended retirement and is not reported. Any other idle exit (a signal or a non-zero code) is
+a failure: the next call that needed that worker fails once with a plain error naming the cause
+("Media worker exited while idle (killed by signal 9)"), and the call after it starts a fresh worker.
+A worker that dies during a call, retained or one-call or export encoder, fails that call or export
+with the same kind of cause ("Media worker exited during encode (exited with code 3)"), which the
+Export panel and `export.status` show. A worker that stops responding mid-call fails by the
+exchange watchdog. `ProcessSupervisor::waitExit` is the shared reaping primitive on Linux, macOS
+and Windows.
+
 A stream decoded in order (long-GOP) keeps at most two sessions per source
 (`kOrderedDecoderLanes`). A request goes to the decoder that reaches its frame without seeking back
 (`chooseOrderedDecoderLane`): the session with a frame nearest at or before it, counting the frame

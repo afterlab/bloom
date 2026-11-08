@@ -20,5 +20,8 @@ ProcessResult<int> ProcessSupervisor::finish(ProcessDeadline) {
 }
 void ProcessSupervisor::stop(std::span<const std::byte>) {}
 std::int64_t ProcessSupervisor::processId() const { return -1; }
+std::optional<ProcessExit> ProcessSupervisor::waitExit(std::chrono::milliseconds) {
+    return std::nullopt;
+}
 bool processWorkerBootstrap() { return false; }
 } // namespace bloom::platform

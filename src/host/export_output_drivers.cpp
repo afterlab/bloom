@@ -1639,6 +1639,7 @@ class MediaDriver final : public DriverBase {
                                     "export.publication.conflict",
                                     "The destination changed outside Bloom; it was not replaced"));
             auto code = ExportFailureCode::EncoderFailed;
+            bool workerEnded = false;
             if (result.failure) {
                 using media::provider::Error;
                 switch (result.failure->reason) {
@@ -1653,6 +1654,9 @@ class MediaDriver final : public DriverBase {
                     break;
                 case Error::Io:
                     code = ExportFailureCode::WriteFailed;
+                    break;
+                case Error::Crashed:
+                    workerEnded = true; // #583: the cause is plain and goes to the user
                     break;
                 default:
                     break;
@@ -1698,6 +1702,10 @@ class MediaDriver final : public DriverBase {
             const bool readable = !result.diagnostic.empty();
             log(runtime::DiagnosticSeverity::Error, "export.media.detail",
                 readable ? result.diagnostic : detail);
+            if (workerEnded && !readable)
+                return fail(failure(code, "export.media.worker-ended",
+                                    "The export stopped because a media worker ended unexpectedly: " +
+                                        detail + ". Nothing was published."));
             return fail(failure(code, "export.media.failed",
                                 readable ? detail
                                          : std::string(exportFailureSummary(code)) +

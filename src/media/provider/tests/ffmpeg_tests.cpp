@@ -6,11 +6,13 @@
 #include <bloom/media/provider/provider_chain.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <numeric>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 using namespace bloom::media::provider;
@@ -374,7 +376,11 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
     options.timeout = std::chrono::seconds(30);
     options.retainedVideo = true;
     std::atomic<int> launches{0};
-    options.launched = [&launches](std::int64_t) { ++launches; };
+    std::atomic<std::int64_t> lastPid{0};
+    options.launched = [&launches, &lastPid](std::int64_t pid) {
+        ++launches;
+        lastPid.store(pid);
+    };
     MediaWorkerPool pool(options);
     const auto declaration = [&](Role role, std::string_view codec) {
         const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
@@ -463,6 +469,37 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
     test::check(jumped.channels[0][0] ==
                     static_cast<float>(static_cast<int>(1234567 % 997) - 498) / 1024.0F,
                 "reopened audio request is sample exact");
+    // Issue #583: a retained worker killed while idle is reaped by the pool on its own (never left
+    // defunct), the next call that needed it fails once naming the cause, and the one after that
+    // starts a fresh worker.
+    const auto killed = lastPid.load();
+    test::check(killed > 0 && ::kill(static_cast<pid_t>(killed), SIGKILL) == 0,
+                "kill the idle retained worker");
+    bool reapedByPool = false;
+    for (const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+         std::chrono::steady_clock::now() < limit && !reapedByPool;) {
+        siginfo_t info{};
+        // WNOWAIT only looks: this test never reaps the child itself.
+        reapedByPool = ::waitid(P_PID, static_cast<id_t>(killed), &info,
+                                WEXITED | WNOHANG | WNOWAIT) < 0 &&
+                       errno == ECHILD;
+        if (!reapedByPool)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    test::check(reapedByPool, "an idle worker that died is reaped by the pool");
+    const auto lostCall = pool.call(
+        std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0, next,
+        snapshot, {}, true);
+    const auto* lostError = std::get_if<Unavailable>(&lostCall);
+    test::check(lostError && lostError->reason == Error::Crashed &&
+                    lostError->detail.find("signal 9") != std::string::npos,
+                "the job that needed the dead worker fails naming the cause");
+    const auto launchesBefore = launches.load();
+    test::check(std::holds_alternative<AudioBlock>(pool.call(
+                    std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0,
+                    next, snapshot, {}, true)) &&
+                    launches.load() == launchesBefore + 1,
+                "the next call starts a fresh worker and runs");
     std::filesystem::remove(path);
 }
 } // namespace

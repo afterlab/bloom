@@ -2,8 +2,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <variant>
@@ -18,6 +20,31 @@ struct ProcessFailure {
     ProcessError code = ProcessError::Io;
     int nativeCode = 0;
 };
+// How a child ended, once it has been reaped. `signaled` is a POSIX signal death (code is the
+// signal number); otherwise code is the exit code (the NT exit status on Windows).
+struct ProcessExit {
+    bool signaled = false;
+    int code = 0;
+};
+// A plain, platform-neutral cause for error messages ("killed by signal 9", "exited with code 3").
+[[nodiscard]] inline std::string describeProcessExit(const ProcessExit& exit) {
+    if (exit.signaled) {
+        const char* name = exit.code == 9    ? " (killed)"
+                           : exit.code == 11 ? " (segmentation fault)"
+                           : exit.code == 6  ? " (aborted)"
+                           : exit.code == 15 ? " (terminated)"
+                                             : "";
+        return "killed by signal " + std::to_string(exit.code) + name;
+    }
+    if (exit.code == 0)
+        return "exited normally";
+    if (static_cast<unsigned>(exit.code) >= 0xC0000000U) {
+        char text[16];
+        std::snprintf(text, sizeof text, "%08X", static_cast<unsigned>(exit.code));
+        return std::string("crashed with status 0x") + text;
+    }
+    return "exited with code " + std::to_string(exit.code);
+}
 template <typename T> using ProcessResult = std::variant<T, ProcessFailure>;
 using ProcessDeadline = std::chrono::steady_clock::time_point;
 using ProcessCancellation = std::function<bool()>;
@@ -59,6 +86,10 @@ class ProcessSupervisor final {
     // Cancellation message -> grace -> SIGTERM -> grace -> SIGKILL; always reaps the child.
     void stop(std::span<const std::byte> cancellationMessage = {});
     [[nodiscard]] std::int64_t processId() const;
+    // Reaps the child if it has ended, waiting up to `grace` for it to do so (zero: a single
+    // non-blocking check). Returns how it ended, or nothing while it is still running. Safe to
+    // call at any time, including while idle, so an exited worker is never left defunct.
+    [[nodiscard]] std::optional<ProcessExit> waitExit(std::chrono::milliseconds grace);
 
   private:
     struct State;
