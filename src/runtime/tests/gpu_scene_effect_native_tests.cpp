@@ -46,6 +46,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -2362,6 +2364,41 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
 // runs), a keyframe, 16 px blocks without chroma bleed, a full-frame proxy and a region of interest;
 // warm RAM reuse with zero dispatches; a later frame with parity; a changed value re-running with
 // parity.
+// The commands nothing reads from the scene output: a scene emits only what its output reads.
+[[nodiscard]] std::size_t unreachableCommandCount(const bloom::runtime::PreparedGpuScene& scene) {
+    using bloom::runtime::GpuSceneCommandIndex;
+    const auto& commands = scene.commands();
+    std::vector<bool> reached(commands.size(), false);
+    std::vector<GpuSceneCommandIndex> pending{scene.outputCommand()};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        if (index >= commands.size() || reached[index])
+            continue;
+        reached[index] = true;
+        std::visit(
+            [&](const auto& command) {
+                using Command = std::decay_t<decltype(command)>;
+                if constexpr (std::is_same_v<Command, bloom::runtime::GpuSceneMergeCommand>) {
+                    for (const auto foreground : command.foregrounds)
+                        pending.push_back(foreground);
+                } else if constexpr (std::is_same_v<Command, bloom::runtime::GpuSceneBlendCommand>) {
+                    pending.push_back(command.source);
+                    pending.push_back(command.destination);
+                    pending.push_back(command.mask);
+                } else if constexpr (std::is_same_v<Command,
+                                                    bloom::runtime::GpuSceneCryptomatteCommand>) {
+                    pending.push_back(command.input);
+                    pending.push_back(command.accumulator);
+                } else if constexpr (requires { command.input; }) {
+                    pending.push_back(command.input);
+                }
+            },
+            commands[index]);
+    }
+    return static_cast<std::size_t>(std::count(reached.begin(), reached.end(), false));
+}
+
 void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::codec_test::CodecValues;
     const CpuCompositionEvaluator evaluator;
@@ -2397,6 +2434,7 @@ void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCac
     }
     cases.push_back({CodecValues{}, "a region of interest", 6, false, true});
     std::uint64_t id = 56300;
+    std::uint64_t insideGopOcio = 0;
     for (const auto& item : cases) {
         cache.clear();
         const std::string name = std::string("codec degrade native (") + item.name + "): ";
@@ -2439,6 +2477,14 @@ void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCac
                             name + "data/display-window and PAR parity");
         expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
                             name + "resident dispatches and no per-operation readback");
+        expectations.expect(unreachableCommandCount(*prepared.scene) == 0,
+                            name + "the scene emits only what its output reads");
+        if (std::string_view{item.name} == "inside a GOP")
+            insideGopOcio = coldCounters.ocioEffectDispatches;
+        if (std::string_view{item.name} == "a keyframe")
+            expectations.expect(coldCounters.ocioEffectDispatches < insideGopOcio,
+                                name + "a keyframe runs fewer codec passes than a predicted "
+                                       "frame, whose Step dispatches stay");
         const auto warm = runScene(*executor.executor, prepared.scene);
         expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
                                 warm.pixels == cold.pixels &&

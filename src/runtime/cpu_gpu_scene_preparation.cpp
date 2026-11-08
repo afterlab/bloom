@@ -221,6 +221,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     std::move(message));
     }
     const detail::ResolvedEvaluation& frameResolved = *checked.resolved;
+    detail::pruneIdentityCodecInputs(*plan, frameResolved, request.time, request.output.value(),
+                                     reachable);
     if (frameResolved.imageDescriptor.dataWindow().extent().width() == 0) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "Preflight produced an invalid process descriptor");

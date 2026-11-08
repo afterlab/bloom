@@ -186,3 +186,42 @@ emitCodecDegradeCommand(const CompiledImageEffect& effect, const PreparedColorGr
     result.output = result.local;
     return std::nullopt;
 }
+
+// Narrows the reachable operations to what the output reads this frame. A Codec Degrade step after
+// the current frame in its group of pictures is an exact identity of its input, so the optical flow
+// and the coded colour that only it would read are not prepared: a keyframe emits only its own Encode
+// and Finish passes, and a predicted frame the steps up to its position.
+inline void pruneIdentityCodecInputs(const CompiledCompositionPlan& plan,
+                                     const ResolvedEvaluation& frameResolved,
+                                     const core::RationalTime requestTime,
+                                     const std::size_t outputIndex, std::vector<bool>& reachable) {
+    std::vector<bool> narrowed(reachable.size(), false);
+    std::vector<std::size_t> pending{outputIndex};
+    while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        if (index >= narrowed.size() || narrowed[index] || !reachable[index])
+            continue;
+        narrowed[index] = true;
+        const auto& operation = plan.operations()[index];
+        const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+        if (effect != nullptr && std::holds_alternative<CodecDegradeKernel>(effect->kernel)) {
+            const auto operationIndex = OperationIndex::fromRaw(index);
+            const auto clock = plan.operationClock(operationIndex);
+            const auto values = sampleColorGradeOperands(
+                effect->kernel, plan, resolvedForClock(frameResolved, clock),
+                timeForClock(frameResolved, requestTime, clock));
+            const auto grade = values ? prepareColorGrade(effect->kernel, *values) : std::nullopt;
+            if (grade && grade->identity) {
+                pending.push_back(effect->input.value());
+                continue;
+            }
+        }
+        forEachInput(operation,
+                     [&pending](const OperationIndex input) { pending.push_back(input.value()); });
+        if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation);
+            layer && layer->parent)
+            pending.push_back(layer->parent->value());
+    }
+    reachable = std::move(narrowed);
+}
