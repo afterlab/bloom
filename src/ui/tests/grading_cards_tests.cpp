@@ -52,6 +52,8 @@
 #include <bloom/ui/codec_degrade_widget.hpp>
 #include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
+#include <bloom/ui/test_card_widget.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -1088,6 +1090,63 @@ void chromaticAberrationCard() {
     expect(fixture.stack.size() == commands + 1 && amount && *amount > 0.0,
            "dragging the amount slider is one command");
     capture(fixture, QStringLiteral("chromatic-aberration-amount"));
+}
+
+// #587: the Test Card card shows only the controls of the chosen card (Width and Height only for a
+// Custom size), paints inside its card, and a Patch shows its signal and the display value the Viewer
+// should produce.
+void testCardCard() {
+    CardFixture fixture(document::kTestCardNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::TestCardCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Test Card draws its card widget");
+    if (card == nullptr)
+        return;
+    const auto set = [&](const std::string_view role, const document::ParameterValue& value) {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
+        expect(id && fixture.session.setParameterValue(*id, value, QStringLiteral("Set")),
+               "a Test Card value is set");
+        QApplication::processEvents();
+    };
+    expect(card->showsRole("card") && card->showsRole("sizeMode") && !card->showsRole("width") &&
+               !card->showsRole("patchValue") && !card->showsRole("gridSpacing") &&
+               !card->showsRole("label") && !card->showsReadout(),
+           "SD Bars shows only the card and the size");
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "test-card paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "test-card"))
+        ++failures;
+    capture(fixture, QStringLiteral("test-card-sd-bars"));
+    set("sizeMode", std::int64_t{1});
+    expect(card->showsRole("width") && card->showsRole("height"),
+           "a Custom size shows Width and Height");
+    set("sizeMode", std::int64_t{0});
+    set("card", std::int64_t{static_cast<std::int64_t>(document::TestCard::Grid)});
+    expect(card->showsRole("gridSpacing") && card->showsRole("gridWidth") && card->showsRole("label") &&
+               !card->showsRole("patchValue") && !card->showsRole("starSpokes"),
+           "Grid shows its own controls and no other card's");
+    set("card", std::int64_t{static_cast<std::int64_t>(document::TestCard::Patch)});
+    expect(card->showsRole("patchValue") && card->showsRole("patchWindow") &&
+               card->showsRole("patchSpace") && !card->showsRole("label") && card->showsReadout(),
+           "Patch shows its value, window and colour space, no label, and the readout");
+    set("patchStep", true);
+    expect(!card->showsRole("patchValue"), "a stepping Patch hides its single value");
+    set("patchStep", false);
+    QElapsedTimer wait;
+    wait.start();
+    while (card->expectedText().isEmpty() && wait.elapsed() < 5'000)
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    expect(!card->signalText().isEmpty() && !card->expectedText().isEmpty(),
+           "a Patch shows its signal and the expected display value");
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "test-card patch paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "test-card-patch"))
+        ++failures;
+    capture(fixture, QStringLiteral("test-card-patch"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -2210,6 +2269,7 @@ int main(int argc, char** argv) {
     codecDegradeCard();
     lensDistortionCard();
     chromaticAberrationCard();
+    testCardCard();
     cameraShakeCard();
     depthEffectCards();
     motionBlurCards();

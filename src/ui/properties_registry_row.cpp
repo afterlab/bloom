@@ -11,6 +11,7 @@
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <QCoreApplication>
 #include <QEvent>
@@ -188,6 +189,9 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #486 Lens Distortion: its table's own labels.
     if (const auto* lens = document::lensDistortionParameterSpec(schemaKey); lens != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(lens->label).c_str());
+    // #587 Test Card: its table's own labels.
+    if (const auto* card = document::testCardParameterSpec(schemaKey); card != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(card->label).c_str());
     // #486 Sharpen: its table's own labels.
     if (const auto* sharpen = document::sharpenParameterSpec(schemaKey); sharpen != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(sharpen->label).c_str());

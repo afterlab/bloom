@@ -579,6 +579,8 @@ target_sources(
         codec_degrade_widget.cpp
         lens_distortion_widget.cpp
         chromatic_aberration_widget.cpp
+        test_card_widget.cpp
+        test_card_expectation.cpp
         film_grain_widget.cpp
         motion_blur_widget.cpp
         sharpen_widget.cpp
@@ -785,6 +787,7 @@ target_sources(
             include/bloom/ui/codec_degrade_widget.hpp
             include/bloom/ui/lens_distortion_widget.hpp
             include/bloom/ui/chromatic_aberration_widget.hpp
+            include/bloom/ui/test_card_widget.hpp
             include/bloom/ui/film_grain_widget.hpp
             include/bloom/ui/motion_blur_widget.hpp
             include/bloom/ui/sharpen_widget.hpp

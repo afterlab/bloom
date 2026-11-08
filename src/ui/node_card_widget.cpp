@@ -7,6 +7,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
@@ -18,6 +19,7 @@
 #include <bloom/ui/codec_degrade_widget.hpp>
 #include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
+#include <bloom/ui/test_card_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
@@ -39,6 +41,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            typeId == document::kCodecDegradeNodeType ||
            typeId == document::kLensDistortionNodeType ||
            typeId == document::kChromaticAberrationNodeType ||
+           typeId == document::kTestCardNodeType ||
            document::isMotionBlurNodeType(typeId) ||
            isScalarSliderNodeType(typeId) ||
            hasNodeControlsWidget(typeId);
@@ -71,6 +74,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new LensDistortionCardWidget(session, node, card, parent);
     if (typeId == document::kChromaticAberrationNodeType)
         return new ChromaticAberrationCardWidget(session, node, card, parent);
+    if (typeId == document::kTestCardNodeType)
+        return new TestCardCardWidget(session, node, card, parent);
     if (document::isDepthEffectNodeType(typeId))
         return new DepthEffectCardWidget(session, node, card, parent);
     if (document::isMotionBlurNodeType(typeId))

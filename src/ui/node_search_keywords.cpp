@@ -5,6 +5,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
@@ -143,6 +144,11 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kChromaticAberrationNodeType)
         return QStringLiteral("chromatic aberration fringing fringe colour split rgb split lateral "
                               "lens dispersion red blue shift prism");
+    // #587.
+    if (typeId == document::kTestCardNodeType)
+        return QStringLiteral("test card bars colour bars color bars grid zone plate "
+                              "smpte ebu hdr hlg pq patch chart grey ramp pluge circle safe areas "
+                              "uv siemens star moving bar countdown alpha ramp chart");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     if (typeId == document::kFrameRateHoldNodeType)

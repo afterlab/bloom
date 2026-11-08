@@ -594,7 +594,7 @@ void testSearchKeyboardAndMenus() {
         };
         hasGroup("Sources",
                  {"Audio", "Checker", "Composition", "Image", "Linear Gradient", "Radial Gradient",
-                  "Solid", "Video"},
+                  "Solid", "Test Card", "Video"},
                  "Sources holds what makes an image");
         hasGroup("Compositing",
                  {"Adjustment", "Alpha Association", "Image Mix", "Layer", "Merge",
