@@ -6,10 +6,11 @@ bytes are checked in here and shipped inside the Bloom binary or its resources.
 
 Third-party libraries Bloom builds from pinned upstream source archives rather than vendoring are
 inventoried separately in `dependencies/dependencies.lock.json`, with their license texts,
-provenance, review, and security records under `dependencies/licenses/`. One vendored component --
-`stb_truetype` -- keeps its records in that same shape without a lock entry, because its bytes are
-checked in here rather than acquired by the superbuild; it is listed below like every other vendored
-component, and its own records explain why the lock cannot represent it.
+provenance, review, and security records under `dependencies/licenses/`. Six vendored components
+-- `stb_truetype`, `stb_image`, `dr_wav`, `minimp3`, `miniaudio`, and `libebur128` -- keep their
+records in that same shape without a lock entry, because their bytes are checked in here rather
+than acquired by the superbuild; each is listed below like every other vendored component, and its
+own records explain why the lock cannot represent it.
 
 ## Lock-managed dependency intake
 
@@ -179,8 +180,22 @@ archive digest, the selection, the processing steps and every file digest are in
 | minimp3 | 2026-07-27 snapshot (commit `ea99364f61c14656440e8d77e9c233ccf3124633`) | CC0 1.0 | `src/media/third_party/minimp3/` | `dependencies/licenses/minimp3/` |
 | miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | MIT-0 OR public domain | `src/media/third_party/miniaudio/` | `dependencies/licenses/miniaudio/` |
 | libebur128 | 1.2.6 (commit `67b33abe1558160ed76ada1322329b0e9e058b02`) | MIT (bundled `queue.h`: BSD-3-Clause) | `src/media/third_party/ebur128/` | `dependencies/licenses/ebur128/` |
-
 | stb_image | 2.30 (commit `013ac3beddff3dbffafd5177e7972067cd2b5083`) | MIT OR Unlicense | `src/media/third_party/stb_image/` | `dependencies/licenses/stb_image/` |
+
+### stb_image
+
+Copyright (c) 2017 Sean Barrett (<https://github.com/nothings/stb>). Dual-licensed at the
+recipient's choice under the MIT License or released into the public domain (Unlicense); Bloom
+distributes under the MIT alternative and ships the notice it requires. The complete license text is
+at `src/media/third_party/stb_image/LICENSE`, byte-identical to the upstream `LICENSE` at the
+pinned commit, and again at `dependencies/licenses/stb_image/LICENSE`.
+
+Bloom vendors the single `stb_image.h` header, unmodified, and compiles it through one Bloom-owned
+adapter (`src/media/image/stb_image_adapter.cpp`) for PNG and JPEG still-image import. It is not a
+superbuild dependency and has no entry in `dependencies/dependencies.lock.json`: nothing is
+downloaded by a build and nothing is installed into a qualified prefix. Unlike `stb_truetype`, this
+parser reads user-supplied files in process; its security review under
+`dependencies/licenses/stb_image/` records the accepted risk and the bounds that limit resource use.
 
 ### stb_truetype
 
