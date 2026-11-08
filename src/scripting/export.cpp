@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdio>
 #include <thread>
 
@@ -176,7 +177,7 @@ void writeCheckValue(Json& json, const host::ExportCheckValue& value) {
 void writeVerification(Json& json, const host::ExportOutputVerification& output) {
     json.begin('{')
         .key("output")
-        .number(output.output.value())
+        .string(std::to_string(output.output.value()))
         .key("overall")
         .string(outcome(output.overall));
     json.key("checks").begin('[');
@@ -269,7 +270,7 @@ void writePreflight(Json& json, const std::vector<host::ExportPreflightIssue>& i
 void writeImport(Json& json, const host::ExportAssetImportResult& result) {
     json.begin('{')
         .key("output")
-        .number(result.output.value())
+        .string(std::to_string(result.output.value()))
         .key("status")
         .string(importStatus(result.status));
     if (result.asset)
@@ -277,6 +278,24 @@ void writeImport(Json& json, const host::ExportAssetImportResult& result) {
     if (!result.code.empty())
         json.key("code").string(result.code).key("reason").string(result.reason);
     json.end('}');
+}
+
+// A job or output id: an integer, or the decimal string the reports use (ids above 2^53 do not
+// survive a JSON double).
+std::optional<std::uint64_t> integerArgument(const Arguments& arguments, std::string_view name);
+
+std::optional<std::uint64_t> idArgument(const Arguments& arguments, std::string_view name) {
+    const auto found = arguments.find(name);
+    if (found == arguments.end())
+        return std::nullopt;
+    if (const auto* text = std::get_if<std::string>(&found->second.storage)) {
+        std::uint64_t parsed = 0;
+        const auto [end, error] = std::from_chars(text->data(), text->data() + text->size(), parsed);
+        if (text->empty() || error != std::errc{} || end != text->data() + text->size())
+            return std::nullopt;
+        return parsed;
+    }
+    return integerArgument(arguments, name);
 }
 
 std::optional<std::uint64_t> integerArgument(const Arguments& arguments, std::string_view name) {
@@ -333,7 +352,7 @@ std::string exportSnapshotJson(const host::ExportQueueSnapshot& snapshot) {
     for (const auto& job : snapshot.jobs) {
         json.begin('{')
             .key("id")
-            .number(job.id.value())
+            .string(std::to_string(job.id.value()))
             .key("revision")
             .number(job.revision)
             .key("name")
@@ -368,7 +387,7 @@ std::string exportSnapshotJson(const host::ExportQueueSnapshot& snapshot) {
         for (const auto& output : job.outputs) {
             json.begin('{')
                 .key("id")
-                .number(output.id.value())
+                .string(std::to_string(output.id.value()))
                 .key("format")
                 .string(document::exportFormatToken(output.record.settings.format))
                 .key("state")
@@ -415,7 +434,7 @@ std::string exportEventsJson(const host::ExportQueueEventBatch& batch) {
                         .key("importFailures")
                         .number(payload.importFailures);
                 } else {
-                    json.key("job").number(payload.job.value()).key("run").number(payload.run);
+                    json.key("job").string(std::to_string(payload.job.value())).key("run").number(payload.run);
                     if constexpr (std::is_same_v<T, host::ExportJobSucceeded>)
                         json.key("type").string(payload.withWarnings ? "succeeded-with-warnings"
                                                                      : "succeeded");
@@ -443,7 +462,7 @@ std::string exportEventsJson(const host::ExportQueueEventBatch& batch) {
 ExportCallResult ExportCalls::call(const std::string_view name, const Arguments& arguments,
                                    const bool headless) {
     const auto job = [&]() -> std::optional<document::ExportJobId> {
-        if (const auto id = integerArgument(arguments, "job"))
+        if (const auto id = idArgument(arguments, "job"))
             return document::ExportJobId::fromRaw(*id);
         return lastAdded_;
     };
@@ -475,7 +494,7 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
     }
     if (name == "export.confirm-replace") {
         const auto id = job();
-        const auto output = integerArgument(arguments, "output");
+        const auto output = idArgument(arguments, "output");
         if (!id || !output)
             return missing("job and output");
         return fromCommand(
@@ -531,7 +550,7 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
         const auto timeout =
             std::chrono::milliseconds(integerArgument(arguments, "timeoutMs").value_or(600000));
         const auto deadline = std::chrono::steady_clock::now() + timeout;
-        const auto target = integerArgument(arguments, "job");
+        const auto target = idArgument(arguments, "job");
         while (std::chrono::steady_clock::now() < deadline) {
             service_.pump();
             const auto snapshot = service_.snapshot();
@@ -549,7 +568,7 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
         const auto catalogue = service_.presets().snapshot();
         // #435: with a job, availability also reflects its composition's sources.
         std::optional<std::string> audioRefusal;
-        if (const auto id = integerArgument(arguments, "job")) {
+        if (const auto id = idArgument(arguments, "job")) {
             const auto snapshot = service_.snapshot();
             const auto found = std::ranges::find_if(snapshot->jobs, [&](const auto& view) {
                 return view.id == document::ExportJobId::fromRaw(*id) && !view.transient;

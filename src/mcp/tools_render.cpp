@@ -399,7 +399,7 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     auto* value = out.object();
     out.set(value, "publishedFrames", out.number(result.frames));
     out.set(value, "preservationReport", out.text(result.report));
-    out.set(value, "job", out.number(result.job));
+    out.set(value, "job", out.text(std::to_string(result.job)));
     out.set(value, "log", logEntries(out, result.log));
     auto* files = out.array();
     for (const auto& path : result.files) {
@@ -529,7 +529,7 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
     out.set(value, "width", out.number(composition->format().width()));
     out.set(value, "height", out.number(composition->format().height()));
     if (transient) {
-        out.set(value, "job", out.number(transient->job));
+        out.set(value, "job", out.text(std::to_string(transient->job)));
         out.set(value, "log", logEntries(out, transient->log));
     }
     const auto uri = core::fileUriFromAbsolutePath(std::filesystem::absolute(path));

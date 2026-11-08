@@ -583,7 +583,7 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
         members(arguments, {"job"});
         std::optional<document::ExportJobId> job;
         if (auto* value = member(arguments, "job")) {
-            const auto id = integer(value);
+            const auto id = identifier(value);
             if (id == 0)
                 throw InvalidInput("job must be an export job id (export.status lists them)");
             job = document::ExportJobId::fromRaw(id);
@@ -722,7 +722,7 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
             out.set(item, "canCancel", out.boolean(job.canCancel));
             out.set(item, "cancellationRequested", out.boolean(job.cancellationRequested));
             out.set(item, "exportJob",
-                    job.exportJob ? out.number(job.exportJob->value()) : out.null());
+                    job.exportJob ? out.text(std::to_string(job.exportJob->value())) : out.null());
             out.append(list, item);
         }
         out.set(value, "jobs", list);

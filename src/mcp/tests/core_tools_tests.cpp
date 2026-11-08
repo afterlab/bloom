@@ -604,7 +604,7 @@ void exportReveal() {
         const auto entry = listed.substr(at, listed.find(R"({"name":)", at + 1) - at);
         expect(contains(entry, R"("readOnlyHint":true)") &&
                    contains(entry, R"("openWorldHint":false)") &&
-                   contains(entry, R"("job":{"type":"integer","minimum":1)"),
+                   contains(entry, R"("job":{"type":["integer","string"],"minimum":1)"),
                "export.reveal is read-only with an optional job id: " + entry);
         // A port bound on stdio would still not be reached: there is no window.
         bool reached = false;
@@ -655,8 +655,13 @@ void exportReveal() {
 
 // The id after the first `"job":` of a response.
 std::uint64_t jobOf(const std::string& response) {
-    const auto at = response.find(R"("job":)");
-    return at == std::string::npos ? 0 : std::stoull(response.substr(at + 6));
+    auto at = response.find(R"("job":)");
+    if (at == std::string::npos)
+        return 0;
+    at += 6;
+    if (at < response.size() && response[at] == '"') // ids are reported as decimal strings
+        ++at;
+    return std::stoull(response.substr(at));
 }
 
 // A finished transient render/export/capture job stays readable after its call returned and the
@@ -724,7 +729,7 @@ void retiredTransientJobs() {
     expect(contains(after, R"("entries":[)") && !contains(after, R"("sequence":1,)"),
            "export.log honors afterSequence on a retired job: " + after);
     auto status = server.call("export.status", "{}");
-    expect(contains(status, R"("recentTransientJobs":[{"id":)" + id) &&
+    expect(contains(status, R"("recentTransientJobs":[{"id":")" + id + '"') &&
                contains(status, R"("transient":true)"),
            "export.status lists the retired transient job: " + status);
     // The refusal codes are named by enumerator, not by position: ADR 0035 retired value 23, and
@@ -734,6 +739,39 @@ void retiredTransientJobs() {
            "export.status names the codes after the retired gap correctly: " + status);
     const auto wait = server.call("export.wait", R"({"job":)" + id + R"(,"timeoutMs":1000})");
     expect(contains(wait, R"("finished":true)"), "export.wait finds the retired job: " + wait);
+
+    // Ids round-trip exactly through JSON (#584): transient ids sit above 2^53, so they are reported
+    // as strings, and a double-based client still tells two jobs apart and targets each one.
+    fake->push({.outcome = host::testing::FakeExportScript::Outcome::FailRendering});
+    const auto secondFailed = server.call("render", R"({"composition":1,"frame":0,)"
+                                                    R"("preset":"PngRgba8SrgbV1","destination":")" +
+                                                        destination + R"("})");
+    const auto secondId = std::to_string(jobOf(secondFailed));
+    expect(secondId != "0" && secondId != id && contains(secondFailed, R"("job":")" + secondId + '"'),
+           "a second render reports its own string job id: " + secondFailed);
+    const auto asDouble = [](const std::string& text) {
+        char buffer[64];
+        std::snprintf(buffer, sizeof buffer, "%.0f", std::stod(text));
+        return std::string(buffer);
+    };
+    expect(asDouble(id) == asDouble(secondId),
+           "the fixture ids really collide when parsed as doubles");
+    expect(std::stoull(id) > (1ULL << 53U), "transient ids exceed 2^53");
+    expect(contains(status, R"("id":")" + id + '"') &&
+               contains(server.call("export.status", "{}"), R"("id":")" + secondId + '"'),
+           "export.status reports both ids as exact strings");
+    const auto logOf = [&](const std::string& argument) {
+        return server.call("export.log", R"({"job":)" + argument + "}");
+    };
+    const auto firstLog = logOf('"' + id + '"');
+    const auto secondLog = logOf('"' + secondId + '"');
+    expect(contains(firstLog, R"("entries":[{)") && contains(secondLog, R"("entries":[{)") &&
+               contains(logOf(id), R"("entries":[{)") && !contains(firstLog, R"("isError":true)"),
+           "export.log targets the job named by a string or integer id: " + firstLog);
+    const auto stopped = server.call("export.stop", R"({"job":")" + secondId + R"("})");
+    const auto malformed = server.call("export.log", R"({"job":"abc"})");
+    expect(!contains(stopped, "Expected an id") && contains(malformed, "Expected an id"),
+           "export.stop accepts a string id; a malformed id is refused: " + stopped + malformed);
 
     fake->push({.writeDestinations = true});
     const auto capture = server.call("capture", R"({"composition":1,"frame":0})");

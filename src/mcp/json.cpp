@@ -1,6 +1,7 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <set>
 
@@ -144,6 +145,19 @@ std::uint64_t integer(yyjson_val* value) {
     if (!yyjson_is_uint(value)) {
         throw InvalidInput("Expected a nonnegative integer");
     }
+    return yyjson_get_uint(value);
+}
+std::uint64_t identifier(yyjson_val* value) {
+    if (yyjson_is_str(value)) {
+        const std::string_view text(yyjson_get_str(value), yyjson_get_len(value));
+        std::uint64_t parsed = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+        if (text.empty() || error != std::errc{} || end != text.data() + text.size())
+            throw InvalidInput("Expected an id as a nonnegative integer or decimal string");
+        return parsed;
+    }
+    if (!yyjson_is_uint(value))
+        throw InvalidInput("Expected an id as a nonnegative integer or decimal string");
     return yyjson_get_uint(value);
 }
 bool boolean(yyjson_val* value) {

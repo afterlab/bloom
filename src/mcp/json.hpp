@@ -57,6 +57,9 @@ void members(yyjson_val* object, std::initializer_list<std::string_view> allowed
 [[nodiscard]] yyjson_val* member(yyjson_val* object, const char* name);
 [[nodiscard]] std::string string(yyjson_val* value, std::size_t limit = 4096);
 [[nodiscard]] std::uint64_t integer(yyjson_val* value);
+// An id: a nonnegative integer, or the same value as a decimal string. Bloom reports ids as strings
+// because some (transient export job and output ids) exceed 2^53 and do not survive a double parse.
+[[nodiscard]] std::uint64_t identifier(yyjson_val* value);
 [[nodiscard]] bool boolean(yyjson_val* value);
 
 } // namespace bloom::mcp

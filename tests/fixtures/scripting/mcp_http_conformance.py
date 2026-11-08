@@ -272,7 +272,8 @@ class Conformance(unittest.TestCase):
             failed = json.loads(body)['result']
             self.assertTrue(failed['isError'], failed)
             content = failed['structuredContent']
-            self.assertIsInstance(content.get('job'), int, content)
+            self.assertIsInstance(content.get('job'), str, content)  # exact id: a string (#584)
+            self.assertTrue(content['job'].isdigit(), content)
             self.assertTrue(content['log'], content)
             self.assertTrue(all({'severity', 'code', 'message'} <= set(row)
                                 for row in content['log']))

@@ -191,7 +191,7 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
 
 yyjson_mut_val* jobValue(Json& out, const host::ExportJobView& job) {
     auto* value = out.object();
-    out.set(value, "id", out.number(job.id.value()));
+    out.set(value, "id", out.text(std::to_string(job.id.value())));
     out.set(value, "transient", out.boolean(job.transient));
     out.set(value, "name", out.text(job.displayName));
     out.set(value, "composition", out.number(job.record.composition.value()));
@@ -226,7 +226,7 @@ yyjson_mut_val* jobValue(Json& out, const host::ExportJobView& job) {
     auto* outputs = out.array();
     for (const auto& output : job.outputs) {
         auto* row = out.object();
-        out.set(row, "id", out.number(output.id.value()));
+        out.set(row, "id", out.text(std::to_string(output.id.value())));
         out.set(row, "state", out.text(outputStateName(output.state)));
         out.set(row, "preset", out.text(output.record.presetId));
         out.set(row, "format",
@@ -519,7 +519,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                                   const McpTool tool, yyjson_val* arguments) {
     const auto& stop = call.control.stop;
     const auto jobArgument = [&](const char* name = "job") {
-        return host::ExportJobId::fromRaw(integer(member(arguments, name)));
+        return host::ExportJobId::fromRaw(identifier(member(arguments, name)));
     };
     yyjson_mut_val* result = nullptr;
     bool missing = false;
@@ -547,7 +547,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         std::vector<host::ExportJobId> jobs;
         yyjson_arr_iter iterator = yyjson_arr_iter_with(list);
         while (auto* item = yyjson_arr_iter_next(&iterator))
-            jobs.push_back(host::ExportJobId::fromRaw(integer(item)));
+            jobs.push_back(host::ExportJobId::fromRaw(identifier(item)));
         call.summary = std::to_string(jobs.size()) + " job(s)";
         return command([&](host::ExportQueueService& queue) { return queue.start(jobs); });
     }
@@ -582,7 +582,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
     case McpTool::ExportConfirmReplace: {
         members(arguments, {"job", "output"}, {"job", "output"});
         const auto job = jobArgument();
-        const auto output = host::ExportOutputId::fromRaw(integer(member(arguments, "output")));
+        const auto output = host::ExportOutputId::fromRaw(identifier(member(arguments, "output")));
         return command(
             [&](host::ExportQueueService& queue) { return queue.confirmReplace(job, output); });
     }
@@ -687,15 +687,15 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                                 using T = std::decay_t<decltype(payload)>;
                                 if constexpr (std::is_same_v<T, host::ExportJobSucceeded>) {
                                     out.set(row, "kind", out.text("succeeded"));
-                                    out.set(row, "job", out.number(payload.job.value()));
+                                    out.set(row, "job", out.text(std::to_string(payload.job.value())));
                                     out.set(row, "withWarnings", out.boolean(payload.withWarnings));
                                 } else if constexpr (std::is_same_v<T, host::ExportJobFailed>) {
                                     out.set(row, "kind", out.text("failed"));
-                                    out.set(row, "job", out.number(payload.job.value()));
+                                    out.set(row, "job", out.text(std::to_string(payload.job.value())));
                                     out.set(row, "reason", out.text(payload.reason.reason));
                                 } else if constexpr (std::is_same_v<T, host::ExportJobCancelled>) {
                                     out.set(row, "kind", out.text("cancelled"));
-                                    out.set(row, "job", out.number(payload.job.value()));
+                                    out.set(row, "job", out.text(std::to_string(payload.job.value())));
                                 } else {
                                     out.set(row, "kind", out.text("drained"));
                                     out.set(row, "succeeded", out.number(payload.succeeded));

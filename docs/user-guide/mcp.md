@@ -481,6 +481,14 @@ returns, but Bloom keeps the newest 32 finished ones: `export.status` lists them
 `recentTransientJobs`, and `export.log` and `export.wait` still read each one by its id. Opening or
 creating another project releases them.
 
+Export job and output ids (`export.status`, `export.events`, the `job` of a failure, `jobs.list`'s
+`exportJob`) are reported as decimal strings, such as `"4611686018427387905"`: a transient job's id
+is above 2^53, which a JSON client that parses numbers as doubles cannot hold exactly. Pass the
+string back as `job` or `output` (or in the `jobs` list of `export.start`) to `export.start`,
+`export.pause`, `export.resume`, `export.stop`, `export.retry`, `export.confirm-replace`,
+`export.log`, `export.wait`, `export.presets`, `export.script` and `export.reveal`. A plain integer
+is still accepted where it is exact (a client that sends the literal digits unchanged).
+
 Output keeps alpha: a composition's `backgroundColor`
 (`bloom.composition.set-background-color`; `query` with `kind` compositions reads it back as
 straight `[red, green, blue, alpha]` display values) is the Viewer's display backdrop only, so `render`,

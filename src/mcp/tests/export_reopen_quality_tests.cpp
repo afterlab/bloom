@@ -180,8 +180,13 @@ struct Live final {
 
 // The id after the first `"job":` of a response.
 std::uint64_t jobOf(const std::string& response) {
-    const auto at = response.find(R"("job":)");
-    return at == std::string::npos ? 0 : std::stoull(response.substr(at + 6));
+    auto at = response.find(R"("job":)");
+    if (at == std::string::npos)
+        return 0;
+    at += 6;
+    if (at < response.size() && response[at] == '"') // ids are reported as decimal strings
+        ++at;
+    return std::stoull(response.substr(at));
 }
 
 // The first output's verification of `job` in an export.status response's recentTransientJobs.
@@ -194,7 +199,7 @@ yyjson_val* verificationOf(yyjson_doc* document, const std::uint64_t job) {
     std::size_t count = 0;
     yyjson_val* entry = nullptr;
     yyjson_arr_foreach(jobs, index, count, entry) {
-        if (yyjson_get_uint(yyjson_obj_get(entry, "id")) != job)
+        if (std::stoull(yyjson_get_str(yyjson_obj_get(entry, "id"))) != job)
             continue;
         return yyjson_obj_get(yyjson_arr_get_first(yyjson_obj_get(entry, "outputs")),
                               "verification");
