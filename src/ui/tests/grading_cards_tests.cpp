@@ -27,6 +27,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
