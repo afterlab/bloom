@@ -95,7 +95,12 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
         "pass it as `expectedRevision` to transact or history, and use the result's `revision` "
         "for the next call. When someone else (the artist, a script, another agent) edits in "
         "between, the call fails with bloom.scripting.stale-revision and nothing is applied: "
-        "re-query what you depend on and retry with the new revision.");
+        "re-query what you depend on and retry with the new revision. A revision counts the "
+        "edits made to the open project since it was opened or created: opening a project "
+        "file (project.open) starts it again at 0, whatever revision the file was saved at, "
+        "and so does project.new. It is not kept increasing per file, so a revision read "
+        "before a project was replaced says nothing about the new one: read it again after "
+        "project.open, and treat an events cursor that reports resetRequired as void.");
     addRelated(revisions, {"transact", "history", "events"});
     out.push_back(std::move(revisions));
 
@@ -232,7 +237,28 @@ void addTools(std::vector<ReferenceEntry>& out) {
                    .summary = "For parameter-value: the most bytes to return.",
                    .unit = "UTF-8 bytes",
                    .range = "4..131072",
-                   .defaultValue = "131072"}});
+                   .defaultValue = "131072"},
+                  {.name = "idPrefix",
+                   .type = "string",
+                   .summary = "For operations: only the operations whose id starts with this "
+                              "text, such as \"bloom.animation.\". Default: every operation.",
+                   .unit = "operation id prefix",
+                   .range = "at most 128 characters"},
+                  {.name = "layer",
+                   .type = "integer",
+                   .summary = "For layers and nodes: only this layer (its record and entries), "
+                              "or only its Layer Output node (or its entry's source) and "
+                              "everything upstream of it. Default: every layer.",
+                   .unit = "layer id (query:layers .id)",
+                   .range = ">= 1"},
+                  {.name = "fields",
+                   .type = "array of strings",
+                   .summary = "For the kinds that return records: keep only these members of "
+                              "every record, such as [\"id\", \"name\"]. A name the records "
+                              "do not have is refused, listing the ones they do. Default: every "
+                              "member.",
+                   .unit = "member names of the records",
+                   .range = "1 to 64 names"}});
     query.result = "{revision, ...}: see the query:<kind> entries.";
     query.errors = {
         makeError("-32602", "an unknown kind, or an argument the kind does not take",
@@ -536,12 +562,42 @@ void addTools(std::vector<ReferenceEntry>& out) {
                             .summary = "The frame to capture.",
                             .unit = "composition frame index",
                             .range = ">= 0",
-                            .defaultValue = "the context time (frame 0 on stdio)"}});
+                            .defaultValue = "the context time (frame 0 on stdio)"},
+                           {.name = "statistics",
+                            .type = "boolean",
+                            .summary = "Return statistics instead of a picture: luma (Rec.709 "
+                                       "weights) and red, green and blue mean, min, max and "
+                                       "histogram, measured on the frame as the production still "
+                                       "export route renders it, in the project's working colour "
+                                       "space (named in the result), before any display or view "
+                                       "transform.",
+                            .defaultValue = "false"},
+                           {.name = "last",
+                            .type = "integer",
+                            .summary = "With statistics: the last frame of an inclusive range "
+                                       "starting at frame. The result adds one row of means and "
+                                       "luma extremes per frame.",
+                            .unit = "composition frame index",
+                            .range = ">= frame"},
+                           {.name = "region",
+                            .type = "array",
+                            .summary = "With statistics: [x, y, width, height] in pixels from the "
+                                       "top-left corner, inside the composition.",
+                            .defaultValue = "the whole frame"},
+                           {.name = "bins",
+                            .type = "integer",
+                            .summary = "With statistics: histogram bins over 0..1. Values below 0 "
+                                       "and above 1 are counted in below and above.",
+                            .range = "2..256",
+                            .defaultValue = "32"}});
     capture.result = "MCP image content (image/png, or a resource_link when too large) plus "
-                     "{composition, frame, path, bytes, digest, width, height, inline}.";
+                     "{composition, frame, path, bytes, digest, width, height, inline}. With "
+                     "statistics: {composition, first, last, region, colorSpace, luma, route, "
+                     "provenance, statistics {pixels, luma, red, green, blue, alphaMean}, frames}.";
     capture.errors = renderErrors;
     addExamples(capture,
-                {{"mcp", R"({"name":"capture","arguments":{"composition":1,"frame":12}})"}});
+                {{"mcp", R"({"name":"capture","arguments":{"composition":1,"frame":12}})"},
+                 {"mcp", R"({"name":"capture","arguments":{"composition":1,"frame":0,"last":23,"statistics":true,"region":[0,0,960,540]}})"}});
     addRelated(capture, {"render", "query:context"});
     out.push_back(std::move(capture));
 

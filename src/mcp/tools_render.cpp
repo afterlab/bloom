@@ -2,6 +2,7 @@
 // (scripting::Render::run and the sequence runner) with its byte parity; the live host submits
 // transient export queue jobs (tools_export.cpp).
 #include "core_internal.hpp"
+#include "frame_statistics.hpp"
 
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
@@ -12,6 +13,8 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/image.hpp>
+#include <bloom/render/image.hpp>
 #include <fstream>
 
 #include <array>
@@ -458,10 +461,193 @@ yyjson_mut_val* renderTool(McpServerCore::State& core, Json& out, McpCall& call,
                                 : renderHeadless(core, out, call, arguments, compositionExport);
 }
 
+namespace {
+
+yyjson_mut_val* channelJson(Json& out, const ChannelStatistics& channel) {
+    auto* value = out.object();
+    out.set(value, "mean", out.real(channel.mean));
+    out.set(value, "min", out.real(channel.min));
+    out.set(value, "max", out.real(channel.max));
+    auto* histogram = out.array();
+    for (const auto count : channel.histogram)
+        out.append(histogram, out.number(count));
+    out.set(value, "histogram", histogram);
+    out.set(value, "below", out.number(channel.below));
+    out.set(value, "above", out.number(channel.above));
+    return value;
+}
+
+yyjson_mut_val* statisticsJson(Json& out, const FrameStatistics& statistics) {
+    auto* value = out.object();
+    out.set(value, "pixels", out.number(statistics.pixels));
+    out.set(value, "luma", channelJson(out, statistics.luma));
+    out.set(value, "red", channelJson(out, statistics.red));
+    out.set(value, "green", channelJson(out, statistics.green));
+    out.set(value, "blue", channelJson(out, statistics.blue));
+    out.set(value, "alphaMean", out.real(statistics.alphaMean));
+    return value;
+}
+
+// Renders the frames to a scratch Flat OpenEXR sequence through the production still route (the
+// working colour space, written without a display transform), reads them back and measures them.
+yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall& call,
+                                  yyjson_val* arguments, const document::Composition& composition,
+                                  const std::uint64_t first) {
+    const auto last = member(arguments, "last") ? integer(member(arguments, "last")) : first;
+    if (first > last || last - first >= core.dependencies.limits.renderFrames)
+        throw InvalidInput("frame..last must contain 1..10000 frames");
+    const auto bins = member(arguments, "bins") ? integer(member(arguments, "bins")) : 32U;
+    if (bins < 2 || bins > 256)
+        throw InvalidInput("bins is 2..256");
+    const auto width = composition.format().width();
+    const auto height = composition.format().height();
+    std::uint64_t regionX = 0;
+    std::uint64_t regionY = 0;
+    std::uint64_t regionWidth = width;
+    std::uint64_t regionHeight = height;
+    if (auto* region = member(arguments, "region")) {
+        if (!yyjson_is_arr(region) || yyjson_arr_size(region) != 4)
+            throw InvalidInput("region is [x, y, width, height] in pixels from the top-left");
+        std::array<std::uint64_t, 4> values{};
+        for (std::size_t index = 0; index < 4; ++index)
+            values[index] = integer(yyjson_arr_get(region, index));
+        regionX = values[0];
+        regionY = values[1];
+        regionWidth = values[2];
+        regionHeight = values[3];
+        if (regionWidth == 0 || regionHeight == 0 || regionX + regionWidth > width ||
+            regionY + regionHeight > height)
+            throw InvalidInput("region must be inside the " + std::to_string(width) + " x " +
+                               std::to_string(height) + " frame and not empty");
+    }
+    const auto source = call.session.renderSourceSnapshot();
+    const auto colorIntent = scripting::captureRenderColorIntent(source, composition);
+    if (!colorIntent)
+        throw std::runtime_error("Project color settings are unavailable");
+
+    const auto scratch = nextCapturePath(core).replace_extension("");
+    struct Scratch final {
+        std::filesystem::path folder;
+        ~Scratch() {
+            std::error_code error;
+            std::filesystem::remove_all(folder, error);
+        }
+    } cleanup{scratch};
+    std::error_code error;
+    std::filesystem::create_directories(scratch, error);
+    const auto destination = scratch / "stats.exr";
+    const bool range = last != first;
+    std::optional<TransientResult> transient;
+    std::string provenance = "cpu-reference";
+    if (call.live != nullptr) {
+        auto preset = host::builtInExportPreset("builtin:exr-sequence");
+        if (!preset)
+            throw std::runtime_error("The OpenEXR preset is not available");
+        host::ExportTransientJobRequest request;
+        request.composition = composition.id();
+        request.range = range ? document::ExportRange{document::ExportRangeKind::Custom, first, last}
+                              : document::ExportRange{document::ExportRangeKind::Frame, first, first};
+        request.settings = preset->settings;
+        request.presetId = preset->id;
+        request.name = "MCP capture statistics";
+        request.destination = transientDestination(destination.string(), nullptr);
+        transient = runTransientJob(core, call, std::move(request));
+        provenance = "export-queue";
+    } else {
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto& stop = call.control.stop;
+        const auto result = scripting::Render::run(
+            call.session, core.dependencies.scheduler, compiler,
+            {.composition = composition.id(),
+             .frame = range ? std::nullopt : std::optional(first),
+             .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
+             .preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+             .destination = destination,
+             .cancelled = [stop] { return stop.stop_requested(); }},
+            {}, core.gpuExportProvider);
+        if (!result.succeeded)
+            throw std::runtime_error(result.diagnostic);
+    }
+    StatisticsAccumulator all(bins);
+    auto* frames = out.array();
+    for (auto index = first;; ++index) {
+        const auto path = range ? host::FrameRangeRunnerV1::sequenceFramePath(destination, index, last)
+                                : destination;
+        media::ImageInterpretation raw;
+        raw.colorSpace = media::ImageColorSpace::Raw;
+        auto decoded = media::decodeImage(path, raw);
+        if (!decoded)
+            throw std::runtime_error("Frame " + std::to_string(index) +
+                                     " could not be read back: " + decoded.diagnostic);
+        const auto& image = **decoded.value;
+        const auto* descriptor = image.descriptor();
+        if (descriptor == nullptr)
+            throw std::runtime_error("Frame " + std::to_string(index) + " has no pixels");
+        const auto& window = descriptor->dataWindow();
+        StatisticsAccumulator one(bins);
+        const auto pixels = image.pixels();
+        const auto imageWidth = window.extent().width();
+        for (auto y = regionY; y < regionY + regionHeight; ++y) {
+            for (auto x = regionX; x < regionX + regionWidth; ++x) {
+                const auto at = y * imageWidth + x;
+                if (at >= pixels.size())
+                    throw std::runtime_error("The rendered frame is smaller than the composition");
+                const auto& pixel = pixels[at];
+                one.addPixel(pixel.red(), pixel.green(), pixel.blue(), pixel.alpha());
+                all.addPixel(pixel.red(), pixel.green(), pixel.blue(), pixel.alpha());
+            }
+        }
+        if (range) {
+            const auto result = one.result();
+            auto* row = out.object();
+            out.set(row, "frame", out.number(index));
+            out.set(row, "lumaMean", out.real(result.luma.mean));
+            out.set(row, "lumaMin", out.real(result.luma.min));
+            out.set(row, "lumaMax", out.real(result.luma.max));
+            out.set(row, "redMean", out.real(result.red.mean));
+            out.set(row, "greenMean", out.real(result.green.mean));
+            out.set(row, "blueMean", out.real(result.blue.mean));
+            out.append(frames, row);
+        }
+        if (index == last)
+            break;
+    }
+    call.summary = "statistics of composition " + std::to_string(composition.id().value()) +
+                   " frames " + std::to_string(first) + ".." + std::to_string(last);
+    auto* value = out.object();
+    out.set(value, "composition", out.number(composition.id().value()));
+    out.set(value, "first", out.number(first));
+    out.set(value, "last", out.number(last));
+    auto* regionJson = out.array();
+    for (const auto item : {regionX, regionY, regionWidth, regionHeight})
+        out.append(regionJson, out.number(item));
+    out.set(value, "region", regionJson);
+    out.set(value, "colorSpace", out.text(std::string(colorIntent->workingColorSpaceId)));
+    out.set(value, "luma", out.text("Rec.709 weights (0.2126, 0.7152, 0.0722) of the working-space "
+                                    "red, green and blue"));
+    out.set(value, "route", out.text("production still export to a scratch OpenEXR, working space"));
+    out.set(value, "provenance", out.text(provenance));
+    out.set(value, "statistics", statisticsJson(out, all.result()));
+    if (range)
+        out.set(value, "frames", frames);
+    if (transient) {
+        out.set(value, "job", out.text(std::to_string(transient->job)));
+        out.set(value, "log", logEntries(out, transient->log));
+    }
+    return value;
+}
+
+} // namespace
+
 yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call,
                             yyjson_val* arguments) {
     if (arguments != nullptr)
-        members(arguments, {"composition", "frame"});
+        members(arguments, {"composition", "frame", "statistics", "last", "region", "bins"});
+    const bool statistics = arguments && member(arguments, "statistics") &&
+                            boolean(member(arguments, "statistics"));
+    if (!statistics && arguments &&
+        (member(arguments, "last") || member(arguments, "region") || member(arguments, "bins")))
+        throw InvalidInput("last, region and bins need statistics=true");
     const auto snapshot = call.session.snapshot();
     const auto compositionId = arguments && member(arguments, "composition")
                                    ? integer(member(arguments, "composition"))
@@ -480,6 +666,8 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
         if (mapping)
             frame = mapping.value()->nearestFrameIndex(*call.context.time);
     }
+    if (statistics)
+        return statisticsCapture(core, out, call, arguments, *composition, frame);
     const auto path = nextCapturePath(core);
     // The live capture's transient job (job id and run log, as render and export carry).
     std::optional<TransientResult> transient;
