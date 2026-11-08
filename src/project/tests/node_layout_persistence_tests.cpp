@@ -1,5 +1,6 @@
 #include "zip_container_test_support.hpp"
 
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/document.hpp>
@@ -180,7 +181,7 @@ void blurNodeReopen() {
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade",
+          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure",
           "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
           "bloom.test-card"}) {
         const auto node = draft.ids().allocateNode();
@@ -300,6 +301,15 @@ void blurNodeReopen() {
                     ? document::ParameterValue{false}
                 : parameter.schemaKey.starts_with("bloom.codec-degrade.")
                     ? document::ParameterValue{0.625}
+                // #566 Auto Exposure: a 20-frame look-back and every value moved off its default
+                // within its domain.
+                : parameter.schemaKey == "bloom.auto-exposure.lookBack"
+                    ? document::ParameterValue{std::int64_t{20}}
+                : parameter.schemaKey.starts_with("bloom.auto-exposure.")
+                    ? document::ParameterValue{
+                          document::autoExposureParameterSpec(parameter.schemaKey)->minimum +
+                          0.4 * (document::autoExposureParameterSpec(parameter.schemaKey)->maximum -
+                                   document::autoExposureParameterSpec(parameter.schemaKey)->minimum)}
                 // #486 Lens Distortion: Redistort, moved coefficients and a moved centre.
                 : parameter.schemaKey == "bloom.lens-distortion.mode"
                     ? document::ParameterValue{std::int64_t{1}}

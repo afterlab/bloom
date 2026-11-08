@@ -1062,6 +1062,35 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aberrationCenter,
                                ConstantValueSource{Vec2d{2.0e6, 0.0}});
 
+    // #566 Auto Exposure: its values and the look-back edit within their domains and refuse outside
+    // them.
+    const auto autoExposure = addRecipe("bloom.auto-exposure");
+    const auto aeTarget = autoExposure.outputId<ParameterId>("parameter.target");
+    const auto aeAttack = autoExposure.outputId<ParameterId>("parameter.attack");
+    const auto aeMinGain = autoExposure.outputId<ParameterId>("parameter.minGain");
+    const auto aeMaxGain = autoExposure.outputId<ParameterId>("parameter.maxGain");
+    const auto aeLookBack = autoExposure.outputId<ParameterId>("parameter.lookBack");
+    if (!aeTarget || !aeAttack || !aeMinGain || !aeMaxGain || !aeLookBack)
+        throw std::logic_error("Auto Exposure exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *aeTarget, ConstantValueSource{0.25});
+    (void)exercise<SetParameterSource>(test, fixture, *aeAttack, ConstantValueSource{0.0});
+    (void)exercise<SetParameterSource>(test, fixture, *aeMinGain, ConstantValueSource{-6.0});
+    (void)exercise<SetParameterSource>(test, fixture, *aeMaxGain, ConstantValueSource{6.0});
+    (void)exercise<SetParameterSource>(test, fixture, *aeLookBack,
+                                       ConstantValueSource{std::int64_t{64}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeTarget,
+                               ConstantValueSource{0.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeAttack,
+                               ConstantValueSource{-1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeMinGain,
+                               ConstantValueSource{1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeMaxGain,
+                               ConstantValueSource{-1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeLookBack,
+                               ConstantValueSource{std::int64_t{65}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeLookBack,
+                               ConstantValueSource{std::int64_t{3}});
+
     // #486 Sharpen: its values edit within their domains and refuse outside them.
     const auto sharpen = addRecipe("bloom.sharpen");
     const auto sharpenAmount = sharpen.outputId<ParameterId>("parameter.amount");

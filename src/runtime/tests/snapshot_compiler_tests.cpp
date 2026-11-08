@@ -8,6 +8,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/document.hpp>
@@ -1975,6 +1976,7 @@ int main() {
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);
         testCodecDegradeLowering(expectations);
+        testAutoExposureLowering(expectations);
         testMotionBlurLowering(expectations);
         testCameraShake(expectations);
         testLensDistortionLowering(expectations);

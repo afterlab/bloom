@@ -966,6 +966,104 @@ void testCodecDegradeLowering(Expectations& expectations) {
     }
 }
 
+// #566 Auto Exposure lowers to a look-back window: one time sample for each frame before the current
+// (the current is the input itself), two reduction passes for each frame of the window, one filter
+// that reads every mean with the node's values on it, and the gain on the input. A muted node passes
+// its Image through.
+void testAutoExposureLowering(Expectations& expectations) {
+    using namespace document;
+    for (const std::int64_t lookBack : {std::int64_t{4}, std::int64_t{12}, std::int64_t{64}}) {
+        auto fixture = recipeFixture(kAutoExposureNodeType, {{"lookBack", lookBack},
+                                                             {"target", 0.25},
+                                                             {"attack", 0.5},
+                                                             {"release", 2.0},
+                                                             {"minGain", -2.0},
+                                                             {"maxGain", 4.0},
+                                                             {"exposure", 0.75},
+                                                             {"whiteBalance", 0.5},
+                                                             {"balanceLag", 3.0},
+                                                             {"balanceLimit", 2.0}});
+        const auto node = fixture.node;
+        const auto params = fixture.parameters;
+        const auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Auto Exposure compiles");
+        if (!result.plan)
+            continue;
+        std::size_t samples = 0;
+        std::size_t reductions = 0;
+        std::size_t tiles = 0;
+        std::vector<const runtime::CompiledImageEffect*> filters;
+        std::vector<const runtime::CompiledImageEffect*> gains;
+        for (const auto& operation : result.plan->operations()) {
+            const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+            if (effect == nullptr || effect->sourceNodeId != node)
+                continue;
+            if (const auto* sample = std::get_if<runtime::TimeSampleKernel>(&effect->kernel)) {
+                samples += sample->lookBack && sample->lagFrames >= 1 &&
+                                   sample->lagFrames < lookBack
+                               ? 1
+                               : 0;
+            } else if (const auto* kernel = std::get_if<runtime::AutoExposureKernel>(&effect->kernel)) {
+                if (kernel->role == runtime::AutoExposureRole::Reduce) {
+                    ++reductions;
+                    tiles += kernel->grid == 64 ? 1 : 0;
+                } else if (kernel->role == runtime::AutoExposureRole::Filter) {
+                    filters.push_back(effect);
+                } else {
+                    gains.push_back(effect);
+                }
+            }
+        }
+        const auto frames = static_cast<std::size_t>(lookBack);
+        expectations.expect(samples == frames - 1, "one time sample for each frame before the current");
+        expectations.expect(reductions == 2 * frames && tiles == frames,
+                            "two reductions for each frame of the window, the first by tiles");
+        expectations.expect(filters.size() == 1 && gains.size() == 1,
+                            "one filter and one gain pass");
+        if (filters.size() != 1 || gains.size() != 1)
+            continue;
+        const auto& filter = *filters.front();
+        const auto& kernel = std::get<runtime::AutoExposureKernel>(filter.kernel);
+        expectations.expect(filter.fieldImages.size() == frames - 1,
+                            "the filter reads the window's older means beside the newest");
+        const auto value = [&](const char* role) -> const runtime::CompiledScalarParameter& {
+            return kernel.values[autoExposureScalarIndex(role)];
+        };
+        expectations.expect(value("target").id == params.at("target") &&
+                                std::get<double>(value("target").source) == 0.25 &&
+                                std::get<double>(value("attack").source) == 0.5 &&
+                                std::get<double>(value("release").source) == 2.0 &&
+                                std::get<double>(value("minGain").source) == -2.0 &&
+                                std::get<double>(value("maxGain").source) == 4.0 &&
+                                std::get<double>(value("exposure").source) == 0.75 &&
+                                std::get<double>(value("whiteBalance").source) == 0.5 &&
+                                std::get<double>(value("balanceLag").source) == 3.0 &&
+                                std::get<double>(value("balanceLimit").source) == 2.0 &&
+                                value("release").id == params.at("release"),
+                            "the filter owns the node's values");
+        const auto& gain = *gains.front();
+        expectations.expect(gain.fieldImages.size() == 1 &&
+                                gain.fieldImages[0].value() < result.plan->operations().size() &&
+                                std::get_if<runtime::CompiledImageEffect>(
+                                    &result.plan->operations()[gain.fieldImages[0].value()]) !=
+                                    nullptr,
+                            "the gain reads the filter's pixel");
+    }
+    {
+        auto fixture = recipeFixture(kAutoExposureNodeType);
+        fixture.project.findComposition(kCompositionId)->nodeLayout()[fixture.node].muted = true;
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        bool any = false;
+        if (result.plan)
+            for (const auto& operation : result.plan->operations())
+                if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation))
+                    any = any || (effect->sourceNodeId == node &&
+                                  std::holds_alternative<runtime::AutoExposureKernel>(effect->kernel));
+        expectations.expect(result.plan != nullptr && !any, "a muted Auto Exposure passes its Image through");
+    }
+}
+
 // #486 Sharpen lowers to the Gaussian blur of its input, frame edge clamped, and one kernel over the
 // input and that blur, each value's identity on the operation it drives. A muted node passes its Image
 // through.

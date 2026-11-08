@@ -512,6 +512,16 @@ bloom_enable_warnings(bloom_runtime_codec_degrade_test)
 bloom_enable_strict_floating_point(bloom_runtime_codec_degrade_test)
 bloom_add_test(NAME bloom.runtime.codec-degrade COMMAND bloom_runtime_codec_degrade_test LABELS unit runtime render)
 
+# #566 Auto Exposure: the mean reduction on every grid shape, the filter against an independent
+# reading of the specification, the gain, the fixed program, the pixel budget and cancellation, and the
+# look-back window through the evaluator.
+add_executable(bloom_runtime_auto_exposure_test auto_exposure_tests.cpp)
+target_include_directories(bloom_runtime_auto_exposure_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_auto_exposure_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_auto_exposure_test)
+bloom_enable_strict_floating_point(bloom_runtime_auto_exposure_test)
+bloom_add_test(NAME bloom.runtime.auto-exposure COMMAND bloom_runtime_auto_exposure_test LABELS unit runtime render)
+
 # #486 Sharpen: the pixel against an independent reading, the promises, the plan's two operations,
 # region of interest, proxy, identity, the pixel budget and cancellation.
 add_executable(bloom_runtime_sharpen_test sharpen_tests.cpp)

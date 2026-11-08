@@ -37,6 +37,7 @@
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
+#include "auto_exposure_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -2116,6 +2117,58 @@ displayProofRunner(const bool customView) {
                 return runCodec({{CodecValues{}, 6}}, 564000,
                                 "production Codec Degrade node: the defaults on a moving frame "
                                 "inside a GOP, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #566 Auto Exposure: a flare mid-window (the reduction, the filter over the window's means and
+    // the gain), a warm shot and a window reaching before the first frame, full frame and ROI.
+    {
+        using bloom::exposure_test::ExposureValues;
+        const auto runExposure = [](const std::vector<std::pair<ExposureValues, std::int64_t>>& variants,
+                                    std::uint64_t idBase, std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& [values, frame] : variants) {
+                const auto plan = bloom::exposure_test::exposurePlan(values, idBase).plan;
+                idBase += 200;
+                auto request = requestFor(*plan);
+                request.time = *bloom::core::RationalTime::create(frame, 24);
+                auto run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(6, 4, 20, 14);
+                request.roi = *roiWindow.value();
+                run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+        ExposureValues warm;
+        warm.steady = true;
+        warm.before = {0.3, 0.2, 0.1};
+        warm.lookBack = 8;
+        ExposureValues start;
+        start.lookBack = 40;
+        add(
+            "effect.AutoExposureKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime auto exposure tests",
+            [runExposure, warm, start] {
+                return runExposure({{ExposureValues{}, 15}, {warm, 3}, {start, 6}}, 566000,
+                                   "production Auto Exposure: a flare mid-window, a warm shot and "
+                                   "a window reaching before the first frame, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.auto-exposure", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime auto exposure tests",
+            [runExposure] {
+                return runExposure({{ExposureValues{}, 15}}, 567000,
+                                   "production Auto Exposure node: the defaults on a flare "
+                                   "mid-window, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }

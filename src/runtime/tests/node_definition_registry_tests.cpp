@@ -157,8 +157,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path.
-    expectations.expect(registry.definitions().size() == 197,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure.
+    expectations.expect(registry.definitions().size() == 198,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -309,7 +309,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Aberration; #587 adds Test Card.
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
-                    "bloom.sharpen", "bloom.codec-degrade"},
+                    "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure"},
                    document::NodeCategory::Filters);
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
@@ -483,6 +483,33 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             codecUnmasked->outputs.size() == 1 &&
             codecUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#563: Codec Degrade has its constants and an animatable socket per value");
+    // #566 Auto Exposure: an Image in and out, the look-back with no socket, and a socket for each of
+    // the nine values in table order; the effect mask follows.
+    const auto autoExposureUnmasked = withoutMask(registry.find("bloom.auto-exposure", 1));
+    bool autoExposureShaped = autoExposureUnmasked && autoExposureUnmasked->inputs.size() == 10 &&
+                              autoExposureUnmasked->parameters.size() == 10 &&
+                              autoExposureUnmasked->inputs[0].valueKind ==
+                                  runtime::SocketValueKind::Image &&
+                              autoExposureUnmasked->outputs.size() == 1 &&
+                              autoExposureUnmasked->outputs[0].valueKind ==
+                                  runtime::SocketValueKind::Image;
+    if (autoExposureShaped) {
+        std::size_t socket = 1;
+        for (const auto& parameter : autoExposureUnmasked->parameters) {
+            const bool scalar = parameter.role != "lookBack";
+            autoExposureShaped = autoExposureShaped && parameter.supportsAnimation == scalar;
+            if (scalar)
+                autoExposureShaped = autoExposureShaped &&
+                                     autoExposureUnmasked->inputs[socket++].name == parameter.role;
+        }
+        autoExposureShaped = autoExposureShaped &&
+            autoExposureUnmasked->parameters[0].defaultValue == document::ParameterValue{1.0} &&
+            autoExposureUnmasked->parameters[1].defaultValue == document::ParameterValue{0.18} &&
+            autoExposureUnmasked->parameters[9].defaultValue ==
+                document::ParameterValue{std::int64_t{48}};
+    }
+    expectations.expect(autoExposureShaped,
+                        "#566: Auto Exposure has a look-back constant and a socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
                     "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);
@@ -1176,7 +1203,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 26>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 27>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
@@ -1185,13 +1212,14 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                                          "bloom.z-defocus", "bloom.depth-fog", "bloom.film-grain",
                                          "bloom.motion-blur", "bloom.echo", "bloom.frame-rate-hold", "bloom.directional-blur",
                                          "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur",
-                                         "bloom.sharpen", "bloom.codec-degrade"},
+                                         "bloom.sharpen", "bloom.codec-degrade",
+                                         "bloom.auto-exposure"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 26,
+    expectations.expect(shaped && named && masked == 27,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);

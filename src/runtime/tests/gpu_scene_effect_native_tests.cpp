@@ -16,6 +16,7 @@
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
+#include "auto_exposure_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -2596,6 +2597,130 @@ void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCac
     }
 }
 
+// #566 Auto Exposure against the CPU oracle: a flare mid-window (the attack), a dimming light (the
+// release), a warm shot (the white balance), a full-frame proxy and a region of interest, at the
+// strict gate with exact alpha; resident dispatches with no readback; only what the output reads;
+// warm RAM reuse with zero dispatches; a later frame with parity, whose window shares the earlier
+// frame's measurements; a changed value re-running with parity.
+void runAutoExposures(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::exposure_test::ExposureValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        ExposureValues values;
+        const char* name;
+        std::int64_t frame = 15;
+        bool proxy = false;
+        bool roi = false;
+    };
+    std::vector<Case> cases;
+    cases.push_back({ExposureValues{}, "a flare"});
+    {
+        ExposureValues dimming;
+        dimming.before = {0.72, 0.72, 0.72};
+        dimming.after = {0.18, 0.18, 0.18};
+        cases.push_back({dimming, "a dimming light", 16});
+        ExposureValues warm;
+        warm.steady = true;
+        warm.before = {0.3, 0.2, 0.1};
+        warm.lookBack = 8;
+        cases.push_back({warm, "a warm shot", 3});
+        ExposureValues start;
+        start.lookBack = 40;
+        cases.push_back({start, "a window reaching before the first frame", 6});
+    }
+    cases.push_back({ExposureValues{}, "a proxy", 15, true});
+    cases.push_back({ExposureValues{}, "a region of interest", 15, false, true});
+    std::uint64_t id = 56600;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("auto exposure native (") + item.name + "): ";
+        const auto built = bloom::exposure_test::exposurePlan(item.values, id);
+        const auto plan = built.plan;
+        id += 200;
+        auto request = requestFor(*plan);
+        request.time = *RationalTime::create(item.frame, 24);
+        if (item.proxy) {
+            const auto extent = bloom::render::ImageExtent::create(16, 12);
+            request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        }
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(6, 4, 20, 14);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared) {
+            if (!prepared)
+                std::cerr << name << "prepare diagnostic: " << prepared.diagnostic.message << '\n';
+            continue;
+        }
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        expectations.expect(unreachableCommandCount(*prepared.scene) == 0,
+                            name + "the scene emits only what its output reads");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        auto nextRequest = request;
+        nextRequest.time = *RationalTime::create(item.frame + 1, 24);
+        auto nextOracleRequest = nextRequest;
+        nextOracleRequest.bypassOperationCache = true;
+        const auto next = builder.build(plan, nextRequest);
+        const auto nextOracle = evaluator.evaluate(plan, nextOracleRequest, {});
+        expectations.expect(next && nextOracle.frame(), name + "the next frame prepares");
+        if (!next || !nextOracle.frame())
+            continue;
+        const auto beforeNext = executor.executor->counters();
+        const auto rerun = runScene(*executor.executor, next.scene);
+        const auto afterNext = executor.executor->counters();
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, nextOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact),
+                            name + "the next frame matches the CPU: " + detail);
+        expectations.expect(afterNext.dispatches - beforeNext.dispatches < coldCounters.dispatches,
+                            name + "the next frame shares the earlier frame's measurements");
+        ExposureValues changedValues = item.values;
+        changedValues.target = 0.3;
+        const auto changedPlan = bloom::exposure_test::exposurePlan(changedValues, id - 200).plan;
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "a changed value re-runs with CPU parity: " + detail);
+    }
+}
+
 // #484 Motion blur: every kernel through the production chains over the moving HDR texture against
 // the CPU oracle at the strict gate (colour within 2e-6, alpha exact), at frame 4. The windows,
 // resident dispatches with no readback, warm reuse with zero dispatches and a changed value
@@ -2976,6 +3101,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runLensFlares(expectations, device, cache);
     runFilmGrains(expectations, device, cache);
     runCodecDegrades(expectations, device, cache);
+    runAutoExposures(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
     runFrameRateHold(expectations, device, cache);
     runSharpens(expectations, device, cache);
