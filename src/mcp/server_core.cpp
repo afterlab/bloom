@@ -479,11 +479,38 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             bool failed = false;
             std::vector<yyjson_mut_val*> content;
             try {
+                // `projectFile` points a tool at another project file, in a headless session of
+                // its own; the tool itself never sees the member.
+                std::optional<Parsed> withoutFile;
+                yyjson_val* toolArguments = member(params, "arguments");
+                const auto projectFile = projectFileArgument(toolArguments);
+                if (projectFile) {
+                    switch (*tool) {
+                    case McpTool::Query:
+                    case McpTool::Transact:
+                    case McpTool::History:
+                    case McpTool::Render:
+                    case McpTool::Export:
+                    case McpTool::Capture:
+                    case McpTool::ProjectSave:
+                    case McpTool::ProjectClose:
+                        break;
+                    default:
+                        throw InvalidInput("projectFile applies to query, transact, history, "
+                                           "render, export, capture, project.save and "
+                                           "project.close");
+                    }
+                    withoutFile.emplace(withoutProjectFile(toolArguments));
+                    toolArguments = withoutFile->root();
+                }
                 if (*tool == McpTool::ProfilerSnapshot) {
                     // Telemetry holds no lease: it answers while a project opens.
                     if (auto* arguments = member(params, "arguments"))
                         members(arguments, {});
                     value = profilerSnapshotTool(state, out, control);
+                } else if (projectFile &&
+                           (*tool == McpTool::ProjectSave || *tool == McpTool::ProjectClose)) {
+                    value = fileProjectTool(state, out, *tool, *projectFile, toolArguments, control);
                 } else if (toolUsesLiveUi(*tool)) {
                     // Window and project-lifecycle tools hold no lease: project.open must work
                     // while the old project is being replaced.
@@ -498,7 +525,12 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                     scripting::Session* target = nullptr;
                     scripting::OperationContext context;
                     std::uint64_t generation = 0;
-                    if (auto* live = state.liveHost()) {
+                    std::unique_lock<std::mutex> fileLock;
+                    if (projectFile) {
+                        fileLock = std::unique_lock(state.fileMutex);
+                        target = &fileSessionFor(state, *projectFile, control);
+                        context = target->operationContext();
+                    } else if (auto* live = state.liveHost()) {
                         state.syncEvents();
                         lease.emplace(live->acquire(
                             {.stop = control.stop,
@@ -533,7 +565,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                                  .summary = {},
                                  .notice = std::nullopt,
                                  .compileFailures = {}};
-                    auto* arguments = member(params, "arguments");
+                    auto* arguments = toolArguments;
                     switch (*tool) {
                     case McpTool::Query:
                         value = queryTool(state, out, call, arguments);

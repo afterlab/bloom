@@ -27,6 +27,8 @@ target_sources(
         core_internal.hpp
         embedded_guides.hpp
         "${bloom_mcp_guides_source}"
+        frame_statistics.cpp
+        frame_statistics.hpp
         json.cpp
         json.hpp
         projections.cpp
@@ -41,6 +43,7 @@ target_sources(
         tools_profiler.cpp
         tools_project.cpp
         tools_export.cpp
+        tools_file_session.cpp
         tools_readback.cpp
         tools_reference.cpp
         tools_render.cpp

@@ -4,6 +4,7 @@
 
 #include <bloom/document/project.hpp>
 #include <bloom/host/export_queue.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/testing/fake_export_runner.hpp>
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -16,6 +17,7 @@
 #include <bloom/scripting/session.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
@@ -65,7 +67,14 @@ struct Headless final {
     int nextId = 1;
 
     explicit Headless(mcp::McpLiveUiPort ui = {},
-                      std::function<bool(runtime::ProfilerSnapshot&)> profiler = {}) {
+                      std::function<bool(runtime::ProfilerSnapshot&)> profiler = {},
+                      std::filesystem::path captures = {}) {
+        std::shared_ptr<host::GpuExportProvider> renderProvider;
+        if (!captures.empty()) {
+            runtime::GpuProcessFrameEvaluatorOptions options;
+            options.enabled = false;
+            renderProvider = host::GpuExportProvider::create(std::move(options));
+        }
         core = std::make_unique<mcp::McpServerCore>(mcp::McpCoreDependencies{
             .session = std::ref(*session),
             // No export queue is bound, as in a desktop window that has not created one.
@@ -76,8 +85,8 @@ struct Headless final {
                             },
                         .callerIsOwner = true},
             .scheduler = scheduler,
-            .gpuProvider = nullptr,
-            .captureDirectory = {},
+            .gpuProvider = renderProvider,
+            .captureDirectory = std::move(captures),
             .ui = std::move(ui),
             .profilerSnapshot = std::move(profiler),
             .serverVersion = "test",
@@ -1307,6 +1316,166 @@ void stdioStopsWhileInputIdle() {
     expect(output.str().empty(), "nothing was answered without a request");
 }
 
+// Name and role references, query filters and projection, id strings, set-keys and frame statistics.
+void mcpFold() {
+    const auto captures = std::filesystem::temp_directory_path() /
+                          ("bloom-mcp-fold-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    {
+        Headless server({}, {}, captures);
+        const auto transact = [&](const std::string& operations) {
+            return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                               R"(,"operations":[)" + operations + "]}");
+        };
+        auto result = transact(R"({"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                               R"("name":"Wash","color":[0.25,0.5,0.75,1]}})");
+        expect(contains(result, R"("isError":false)"), "the solid applies: " + result);
+        const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+        const auto layer = firstMatch(layers, R"re("records":\[\{"id":(\d+))re");
+
+        // Ids as strings, and a layer by name.
+        result = transact(R"({"op":"bloom.layer.rename","args":{"composition":"1","layer":")" + layer +
+                          R"(","name":"Wash 2"}})");
+        expect(contains(result, R"("isError":false)"), "string ids apply: " + result);
+        result = transact(R"({"op":"bloom.layer.rename","args":{"composition":1,)"
+                          R"("layer":{"name":"Wash 2"},"name":"Wash"}})");
+        expect(contains(result, R"("isError":false)"), "a layer by name applies: " + result);
+        result = transact(R"({"op":"bloom.layer.rename","args":{"composition":1,)"
+                          R"("layer":{"name":"Missing"},"name":"Wash"}})");
+        expect(contains(result, "No layer is named") && contains(result, "Wash"),
+               "an unknown name lists the layers: " + result);
+
+        // A parameter by layer and role; set-keys is one step.
+        result = transact(R"({"op":"bloom.animation.set-keys","args":{"composition":1,)"
+                          R"("parameter":{"layer":"Wash","role":"opacity"},)"
+                          R"("keys":[[0,0.0],[12,1.0,"hold"]]}})");
+        expect(contains(result, R"("isError":false)"), "set-keys by role applies: " + result);
+
+        // Filters and projection.
+        const auto operations = server.call("query", R"({"kind":"operations","idPrefix":"bloom.layer."})");
+        expect(contains(operations, "bloom.layer.add-solid") &&
+                   !contains(operations, "bloom.animation.set-keys"),
+               "operations filter by id prefix");
+        const auto projected =
+            server.call("query", R"({"kind":"layers","composition":1,"fields":["id","name"]})");
+        expect(contains(projected, R"("records":[{"id":1,"name":"Wash"}])"),
+               "fields keeps only the named members: " + projected);
+        const auto badField =
+            server.call("query", R"({"kind":"layers","composition":1,"fields":["nope"]})");
+        expect(contains(badField, "Unknown field nope"),
+               "an unknown field is refused: " + badField);
+        const auto nodes = server.call("query", R"({"kind":"nodes","composition":1,"layer":")" +
+                                                    layer + R"("})");
+        expect(contains(nodes, R"("isError":false)"), "nodes filter by layer: " + nodes);
+
+        // Frame statistics on a known solid: the working-space values come back unchanged.
+        const auto stats = server.call("capture", R"({"composition":1,"frame":12,"last":13,)"
+                                                  R"("statistics":true,"region":[10,10,32,32],)"
+                                                  R"("bins":4})");
+        expect(contains(stats, R"("isError":false)"), "statistics render: " + stats);
+        const auto number = R"re(([0-9.eE+-]+))re";
+        const auto close = [&](const std::string& pattern, const double expected) {
+            const auto text = firstMatch(stats, pattern + number);
+            return !text.empty() && std::abs(std::stod(text) - expected) < 0.01;
+        };
+        expect(close(R"re("red":\{"mean":)re", 0.25) && close(R"re("green":\{"mean":)re", 0.5) &&
+                   close(R"re("blue":\{"mean":)re", 0.75) &&
+                   close(R"re("luma":\{"mean":)re", 0.46495),
+               "the channel means match the solid: " + stats);
+        expect(contains(stats, R"("pixels":2048)") && contains(stats, R"("colorSpace":")") &&
+                   contains(stats, R"("frames":[{"frame":12)"),
+               "the region, the working space and the per-frame rows are reported: " + stats);
+        const auto outside = server.call("capture", R"({"composition":1,"frame":0,"statistics":true,)"
+                                                    R"("region":[0,0,99999,10]})");
+        expect(contains(outside, "region must be inside"), "a region outside the frame is refused: " + outside);
+        const auto stray = server.call("capture", R"({"composition":1,"frame":0,"region":[0,0,1,1]})");
+        expect(contains(stray, "need statistics=true"), "region needs statistics: " + stray);
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(captures, ignored);
+}
+
+// A second project file edited, saved and exported in its own session while the server's own
+// project stays untouched; two sessions on one file are refused.
+void secondProjectFile() {
+    const auto folder = std::filesystem::temp_directory_path() /
+                        ("bloom-mcp-file-" +
+                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    const auto second = folder / "second.bloom";
+    const auto own = folder / "own.bloom";
+    {
+        auto created = scripting::Session::createNew("Second");
+        expect(static_cast<bool>(created), "the second project is created");
+        auto session = std::move(created).takeSession();
+        expect(session->saveAs(second).succeeded(), "the second project is saved");
+    }
+    {
+        Headless server({}, {}, folder / "captures");
+        expect(server.session->saveAs(own).succeeded(), "the server's own project is saved");
+        const auto file = [&](const std::string& rest) {
+            const auto path = second.generic_string();
+            return R"({"projectFile":")" + path + '"' + rest + "}";
+        };
+        const auto ownRevision = revisionOf(server);
+        const auto before = server.call("query", file(R"(,"kind":"project")"));
+        const auto revision = firstMatch(before, R"re("revision":(\d+))re");
+        expect(contains(before, R"("isError":false)") && !revision.empty(),
+               "a second project reads through projectFile: " + before);
+        const auto edited = server.call(
+            "transact",
+            file(R"(,"expectedRevision":)" + revision +
+                 R"(,"operations":[{"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                 R"("name":"Other","color":[0,1,0,1]}}])"));
+        expect(contains(edited, R"("isError":false)"), "the second project edits: " + edited);
+        expect(revisionOf(server) == ownRevision, "the server's own project is untouched");
+        const auto layers = server.call("query", file(R"(,"kind":"layers","composition":1)"));
+        expect(contains(layers, R"("name":"Other")"), "the edit is in the second session: " + layers);
+        expect(!contains(server.call("query", R"({"kind":"layers","composition":1})"), "Other"),
+               "and not in the server's project");
+        const auto undone = server.call("history", file(R"(,"action":"undo","expectedRevision":)" +
+                                                        firstMatch(edited, R"re("revision":(\d+))re")));
+        expect(contains(undone, R"("isError":false)") || contains(undone, "undo"),
+               "history reaches the second session: " + undone);
+        const auto redone = server.call(
+            "history", file(R"(,"action":"redo","expectedRevision":)" +
+                            firstMatch(undone, R"re("revision":(\d+))re")));
+        expect(contains(redone, R"("isError":false)"), "and redoes: " + redone);
+
+        const auto closeDirty = server.call("project.close", file(""));
+        expect(contains(closeDirty, "unsaved changes"), "closing unsaved edits is refused: " + closeDirty);
+        const auto exported = server.call(
+            "render", file(R"(,"composition":1,"frame":0,"preset":"PngRgba8SrgbV1","destination":")" +
+                           (folder / "out.png").generic_string() + R"(")"));
+        expect(contains(exported, R"("isError":false)") &&
+                   std::filesystem::exists(folder / "out.png"),
+               "the second project exports: " + exported);
+        const auto saved = server.call("project.save", file(""));
+        expect(contains(saved, R"("saved":true)"), "the second project saves: " + saved);
+        const auto closed = server.call("project.close", file(""));
+        expect(contains(closed, R"("closed":true)"), "and closes: " + closed);
+
+        // The file on disk carries the edit.
+        auto reopened = scripting::Session::open(second);
+        expect(static_cast<bool>(reopened), "the saved file opens");
+        if (reopened) {
+            const auto session = std::move(reopened).takeSession();
+            const auto* composition = session->snapshot().project().findComposition(
+                document::CompositionId::fromRaw(1));
+            expect(composition != nullptr && composition->graph().layerOutputs().size() == 1,
+                   "the saved file holds the new layer");
+        }
+
+        // The file the server itself has open is refused.
+        const auto ownFile = server.call(
+            "query", R"({"kind":"project","projectFile":")" + own.generic_string() + R"("})");
+        expect(contains(ownFile, "already open"), "a file open as the project is refused: " + ownFile);
+        const auto relative = server.call("query", R"({"kind":"project","projectFile":"a.bloom"})");
+        expect(contains(relative, "absolute path"), "a relative path is refused: " + relative);
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
+}
+
 int main() {
     try {
         exportWithoutQueue();
@@ -1316,6 +1485,8 @@ int main() {
         exportReveal();
         retiredTransientJobs();
         animationReadBack();
+        mcpFold();
+        secondProjectFile();
         mergeEntryReadBack();
         fieldTestArguments();
         gradientReadBack();
