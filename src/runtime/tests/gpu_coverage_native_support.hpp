@@ -320,7 +320,6 @@ runNativeFixture(bloom::render::GpuDevice& device,
                  const bloom::runtime::EvaluationRequest& request,
                  const std::shared_ptr<const bloom::runtime::PreparedGpuScene>& scene) {
     constexpr std::uint64_t kSceneBudget = 1U << 28U;
-    constexpr auto kDeadline = std::chrono::steady_clock::duration{std::chrono::seconds{10}};
     NativeFixtureOutcome outcome;
     outcome.ran = true;
     outcome.family = requiredFamily(*scene);
@@ -369,9 +368,13 @@ runNativeFixture(bloom::render::GpuDevice& device,
     }
     auto& executor = *executorResult.executor;
 
+    // The executor is polled until it reaches a terminal state: Ready, or the Failure its own
+    // deadlines (the job deadline for a native job) produce. The test sets no wall-clock limit of
+    // its own, because preparing a program (compiling a shader) takes as long as the machine lets
+    // it and a compiling machine made a fixed ten seconds fail with the executor still preparing
+    // (#623). A real hang is the test runner's timeout.
     const auto pollToReady = [&]() -> bool {
-        const auto deadline = std::chrono::steady_clock::now() + kDeadline;
-        while (std::chrono::steady_clock::now() < deadline) {
+        for (;;) {
             const auto poll = executor.poll();
             if (poll == bloom::runtime::GpuSceneExecutorPollResult::Ready) {
                 return true;
@@ -382,12 +385,10 @@ runNativeFixture(bloom::render::GpuDevice& device,
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return false;
     };
     const auto drain = [&]() {
         executor.cancel();
-        const auto deadline = std::chrono::steady_clock::now() + kDeadline;
-        while (executor.hasUnretiredSubmission() && std::chrono::steady_clock::now() < deadline) {
+        while (executor.hasUnretiredSubmission()) {
             (void)executor.poll();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -406,9 +407,7 @@ runNativeFixture(bloom::render::GpuDevice& device,
             return false;
         }
         if (!pollToReady()) {
-            outcome.evidence = executor.state() == bloom::runtime::GpuSceneExecutorJobState::Failure
-                                   ? "executor poll failed: " + executor.diagnostic().message
-                                   : "executor did not reach Ready before the deadline";
+            outcome.evidence = "executor poll failed: " + executor.diagnostic().message;
             drain();
             return false;
         }
@@ -495,7 +494,6 @@ runNativeFixture(bloom::render::GpuDevice& device,
     const bloom::runtime::EvaluationRequest& requestB,
     const std::shared_ptr<const bloom::runtime::PreparedGpuScene>& sceneB, std::string& evidence) {
     constexpr std::uint64_t kSceneBudget = 1U << 28U;
-    constexpr auto kDeadline = std::chrono::steady_clock::duration{std::chrono::seconds{10}};
     auto cacheResult = bloom::runtime::GpuSceneCache::create(device);
     if (!cacheResult) {
         evidence = "nested branch reuse: scene cache could not be created";
@@ -524,8 +522,7 @@ runNativeFixture(bloom::render::GpuDevice& device,
             result.why = "begin refused: " + diagnostic.message;
             return result;
         }
-        const auto deadline = std::chrono::steady_clock::now() + kDeadline;
-        while (std::chrono::steady_clock::now() < deadline) {
+        for (;;) { // terminal state only; see pollToReady in runNativeFixture
             const auto poll = executor.poll();
             if (poll == bloom::runtime::GpuSceneExecutorPollResult::Ready) {
                 break;

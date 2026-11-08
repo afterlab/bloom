@@ -60,12 +60,26 @@ bool drop(QWidget& target, const QMimeData& mime) {
     QApplication::sendEvent(&target, &event);
     return event.isAccepted();
 }
-template <typename Predicate> bool waitUntil(Predicate predicate) {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < 5000)
+// Waits for `predicate` with no wall-clock limit: the work it waits on takes as long as the machine
+// lets it, and a test of what that work does must not depend on how fast it ran (a compiling
+// machine made a fixed five seconds fail with the catalogue still being prepared). It gives up only
+// when the scheduler has been idle for three bridge poll intervals with the predicate still false,
+// which means nothing is left that could make it true. A real hang is the test runner's timeout.
+template <typename Predicate>
+bool waitUntil(runtime::TaskScheduler& scheduler, const ui::TaskUiBridge& bridge,
+               Predicate predicate) {
+    std::optional<std::chrono::steady_clock::time_point> idleSince;
+    while (!predicate()) {
+        if (!scheduler.isQuiescent()) {
+            idleSince.reset();
+        } else if (!idleSince) {
+            idleSince = std::chrono::steady_clock::now();
+        } else if (std::chrono::steady_clock::now() - *idleSince > 3 * bridge.pollingInterval()) {
+            return predicate();
+        }
         QTest::qWait(1);
-    return predicate();
+    }
+    return true;
 }
 class CatalogWorkerHold final {
   public:
@@ -92,9 +106,13 @@ class CatalogWorkerHold final {
     }
 
   private:
-    runtime::TaskSubmission<void> submission_;
+    // The flags are declared before the submission: its task starts on a worker as soon as it is
+    // submitted and sets `entered_`, and a flag initialized after that would overwrite it. A
+    // loaded machine often schedules the worker before this constructor finishes, which left the
+    // hold running while `entered()` stayed false.
     std::atomic<bool> entered_{false};
     std::atomic<bool> released_{false};
+    runtime::TaskSubmission<void> submission_;
 };
 void inputColorCatalogFollowsWorkingSpace() {
     auto config = runtime::TaskSchedulerConfig::defaults();
@@ -129,7 +147,8 @@ void inputColorCatalogFollowsWorkingSpace() {
 
     {
         CatalogWorkerHold hold(scheduler);
-        require(waitUntil([&] { return hold.entered(); }), "catalogue worker barrier starts");
+        require(waitUntil(scheduler, bridge, [&] { return hold.entered(); }),
+                "catalogue worker barrier starts");
         controller.requestInputColorSpaces();
         require(controller.inputColorSpaces() == nullptr, "initial catalogue request is pending");
         require(session.setWorkingColorSpaceOverride(std::string("Linear P3-D65")),
@@ -138,15 +157,16 @@ void inputColorCatalogFollowsWorkingSpace() {
                 "old pending catalogue is not exposed after working-space change");
         hold.release();
     }
-    require(waitUntil([&] {
-                const auto* spaces = controller.inputColorSpaces();
-                return spaces && !spaces->empty();
-            }),
+    require(waitUntil(scheduler, bridge,
+                      [&] {
+                          const auto* spaces = controller.inputColorSpaces();
+                          return spaces && !spaces->empty();
+                      }),
             "replacement working-space catalogue completes after old pending request is retired");
 
     {
         CatalogWorkerHold hold(scheduler);
-        require(waitUntil([&] { return hold.entered(); }),
+        require(waitUntil(scheduler, bridge, [&] { return hold.entered(); }),
                 "cached catalogue worker barrier starts");
         require(session.setWorkingColorSpaceOverride(std::nullopt),
                 "cached catalogue working-space override clears");
@@ -154,10 +174,11 @@ void inputColorCatalogFollowsWorkingSpace() {
                 "cached choices are invalidated synchronously on working-space change");
         hold.release();
     }
-    require(waitUntil([&] {
-                const auto* spaces = controller.inputColorSpaces();
-                return spaces && !spaces->empty();
-            }),
+    require(waitUntil(scheduler, bridge,
+                      [&] {
+                          const auto* spaces = controller.inputColorSpaces();
+                          return spaces && !spaces->empty();
+                      }),
             "catalogue prepares again after cached working-space change");
     const auto* stable = controller.inputColorSpaces();
     require(session.addSolidLayer("Unrelated", {0.1, 0.2, 0.3, 1.0}),
@@ -271,7 +292,8 @@ void partialBatchImport() {
                    QUrl::fromLocalFile(directory.filePath("valid.png"))});
     auto* tree = assets.findChild<QTreeWidget*>("assetsTree");
     require(tree && drop(*tree->viewport(), files), "mixed files drop onto Assets");
-    require(waitUntil([&] { return !controller.busy(); }), "partial import completes");
+    require(waitUntil(scheduler, bridge, [&] { return !controller.busy(); }),
+            "partial import completes");
     require(session.snapshot().project().assets().size() == 1,
             "the valid file imports despite the corrupt one");
     require(notices.size() == 1 && notices.front().contains("corrupt.png"),

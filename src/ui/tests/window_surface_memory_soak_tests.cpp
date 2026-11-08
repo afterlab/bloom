@@ -559,8 +559,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     int slowSettles = 0;
     const auto settle = [&] {
-        // Quiescent means: the Viewer shows the parked frame Current and no task is running.
-        if (!waitUntil([&] { return current() && scheduler.isQuiescent(); }, 20s))
+        // Quiescent means: the Viewer shows the parked frame Current and no task is running. The
+        // checks after a settle compare exact cache contents, which only mean something once the
+        // preview has finished, so a slow settle (a compiling machine) is waited out rather than
+        // abandoned; it is counted and reported.
+        while (!waitUntil([&] { return current() && scheduler.isQuiescent(); }, 20s))
             ++slowSettles;
         const auto until = std::chrono::steady_clock::now() + 150ms;
         while (std::chrono::steady_clock::now() < until)
@@ -705,7 +708,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         settle();
         window->hide();
         // A hidden Viewer paints nothing, so only the scheduler's quiescence is awaited here.
-        static_cast<void>(waitUntil([&] { return scheduler.isQuiescent(); }, 20s));
+        while (!waitUntil([&] { return scheduler.isQuiescent(); }, 20s))
+            ++slowSettles;
         window->show();
         restPointer();
         settle();

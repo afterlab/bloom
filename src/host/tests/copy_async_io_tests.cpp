@@ -202,9 +202,13 @@ class BlockingIoGate final {
         condition_.wait(lock, [&] { return released_ || context.isCancellationRequested(); });
     }
 
+    // Waits for the worker to take the gate with no wall-clock limit: how soon a loaded machine
+    // schedules the worker is not what this fixture proves. A real hang is the test runner's
+    // timeout.
     [[nodiscard]] bool waitUntilEntered() {
         std::unique_lock lock(mutex_);
-        return condition_.wait_for(lock, 2s, [&] { return entered_; });
+        condition_.wait(lock, [&] { return entered_; });
+        return true;
     }
 
     void release() {
@@ -234,26 +238,21 @@ void occupyBlockingIoWorker(Expectations& expectations, TaskScheduler& scheduler
                         "the blocking-I/O gate fixture occupies the single worker");
 }
 
+// The two waits below follow the real work with no wall-clock limit: a copy on a worker takes as
+// long as the machine lets it (a compiling machine made a fixed two seconds fail), and what the
+// tests assert is what the work did, not how fast. A real hang is the test runner's timeout.
 bool awaitQuiescence(const TaskScheduler& scheduler) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (scheduler.isQuiescent()) {
-            return true;
-        }
+    while (!scheduler.isQuiescent()) {
         std::this_thread::sleep_for(1ms);
     }
-    return false;
+    return true;
 }
 
 template <typename Handle> [[nodiscard]] bool pollUntilReady(const Handle& handle) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (handle.isReady()) {
-            return true;
-        }
+    while (!handle.isReady()) {
         std::this_thread::sleep_for(1ms);
     }
-    return false;
+    return true;
 }
 
 // ---------------------------------------------------------------------------------------------
