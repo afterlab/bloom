@@ -88,7 +88,7 @@ OperationResult createEntryLayer(document::Draft& draft, const document::Composi
     auto* composition = draft.project().findComposition(compositionId);
     const auto layerId = draft.ids().allocateLayer();
     if (!layerId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("layer");
     LayerOutputBoundary boundary{merge, *layerId, {}, std::string(document::kLayerStackOutputPort)};
     boundary.entrySlot = slot;
     boundary.pivot = document::LayerPivot::Frame;
@@ -99,7 +99,7 @@ OperationResult createEntryLayer(document::Draft& draft, const document::Composi
         const auto value = detail::entryLayerDefaultValue(*composition, role.role);
         const auto parameterId = draft.ids().allocateParameter();
         if (!parameterId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("parameter");
         if (!value || !composition->parameters().insert({*parameterId, std::string(role.schemaKey),
                                                           document::ConstantValueSource{*value}}))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -149,7 +149,7 @@ std::optional<Id> outputId(const OperationResult& result, const std::string_view
 OperationResult EnsureEntryLayer::apply(document::Draft& draft) const {
     const auto* composition = std::as_const(draft).project().findComposition(composition_);
     if (composition == nullptr)
-        return detail::invalidTarget();
+        return detail::missingComposition(composition_);
     const auto& graph = composition->graph();
     const auto* stack = graph.merge(merge_);
     if (stack == nullptr || stack->find(slot_) == nullptr)
@@ -215,7 +215,7 @@ std::optional<document::CompositionId> EntryLayerEdit::parameterEditScope() cons
 OperationResult InsertLayerNode::apply(document::Draft& draft) const {
     const auto* readable = std::as_const(draft).project().findComposition(composition_);
     if (readable == nullptr)
-        return detail::invalidTarget();
+        return detail::missingComposition(composition_);
     const auto* stack = readable->graph().merge(merge_);
     if (stack == nullptr || stack->find(slot_) == nullptr)
         return missingEntry();
@@ -225,7 +225,7 @@ OperationResult InsertLayerNode::apply(document::Draft& draft) const {
                                          "An entry without an image has no Layer node to insert");
     if (const auto* layer = document::mergeEntryLayer(readable->graph(), merge_, slot_);
         layer != nullptr && layer->locked)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return detail::lockedLayer(*layer);
     const auto edgeId = edge->id;
     const auto source = edge->source;
     const auto destination = edge->destination;
@@ -243,7 +243,7 @@ OperationResult InsertLayerNode::apply(document::Draft& draft) const {
     if (!node || !layer)
         return detail::invalidTarget();
     if (!inputEdge)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("edge");
     auto* composition = draft.project().findComposition(composition_);
     auto& graph = composition->graph();
     (void)graph.eraseEdge(edgeId);
@@ -278,7 +278,7 @@ OperationResult InsertLayerNode::apply(document::Draft& draft) const {
 OperationResult AddAdjustmentLayer::apply(document::Draft& draft) const {
     const auto* readable = std::as_const(draft).project().findComposition(composition_);
     if (readable == nullptr)
-        return detail::invalidTarget();
+        return detail::missingComposition(composition_);
     const auto* stack = readable->graph().merge(merge_);
     if (stack == nullptr)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
@@ -366,7 +366,7 @@ std::optional<OperationResult> duplicateEntryLayer(document::Draft& draft,
     const auto layerId = draft.ids().allocateLayer();
     const auto slotId = draft.ids().allocateLayerSlot();
     if (!layerId || !slotId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("layer and layer slot");
     boundary.layerId = *layerId;
     boundary.entrySlot = *slotId;
     boundary.name += " copy";
@@ -374,20 +374,20 @@ std::optional<OperationResult> duplicateEntryLayer(document::Draft& draft,
         const auto id =
             detail::copyParameterFrom(draft.ids(), *readable, *composition, binding.parameterId);
         if (!id)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("layer, layer slot and parameter");
         outputs.push_back({"parameter." + std::to_string(binding.parameterId.value()), *id});
         binding.parameterId = *id;
     }
     for (auto& mask : boundary.masks) {
         const auto maskId = draft.ids().allocateLayerMask();
         if (!maskId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("parameter and layer mask");
         mask.id = *maskId;
         for (auto* parameter : {&mask.path, &mask.feather, &mask.expansion, &mask.opacity}) {
             const auto id =
                 detail::copyParameterFrom(draft.ids(), *readable, *composition, *parameter);
             if (!id)
-                return detail::exhaustedIds();
+                return detail::exhaustedIds("layer mask and parameter");
             *parameter = *id;
         }
     }
@@ -399,7 +399,7 @@ std::optional<OperationResult> duplicateEntryLayer(document::Draft& draft,
     for (auto edge : edges) {
         const auto edgeId = draft.ids().allocateEdge();
         if (!edgeId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("edge");
         edge.id = *edgeId;
         std::get<document::LayerStackInputRef>(edge.destination).slotId = *slotId;
         if (!graph.addEdge(std::move(edge)))
@@ -509,8 +509,10 @@ class CompositionReconcile final {
         return std::as_const(after_).graph();
     }
 
-    static OperationIssue exhausted() {
-        return {OperationIssueCode::Unsupported, "Document ID space is exhausted"};
+    static OperationIssue exhausted(const std::string_view kinds) {
+        return {OperationIssueCode::Unsupported,
+                "The " + std::string(kinds) +
+                    " ID space is exhausted; the project cannot create another one"};
     }
 
     void retire(const LayerOutputBoundary& layer, const bool keepParameters) {
@@ -693,7 +695,7 @@ class CompositionReconcile final {
             return std::nullopt;
         const auto layerId = ids_.allocateLayer();
         if (!layerId)
-            return exhausted();
+            return exhausted("layer");
         auto copy = layer;
         copy.nodeId = entry.merge;
         copy.layerId = *layerId;
@@ -718,19 +720,19 @@ class CompositionReconcile final {
                 continue;
             }
             if (!id)
-                return exhausted();
+                return exhausted("parameter");
             copy.parameters.push_back({std::string(role.role), *id});
         }
         std::ranges::sort(copy.parameters, {}, &document::ParameterBinding::role);
         for (auto mask : layer.masks) {
             const auto maskId = ids_.allocateLayerMask();
             if (!maskId)
-                return exhausted();
+                return exhausted("layer mask");
             mask.id = *maskId;
             for (auto* parameter : {&mask.path, &mask.feather, &mask.expansion, &mask.opacity}) {
                 const auto id = detail::copyParameterFrom(ids_, source, after_, *parameter);
                 if (!id)
-                    return exhausted();
+                    return exhausted("layer mask and parameter");
                 *parameter = *id;
             }
             copy.masks.push_back(std::move(mask));

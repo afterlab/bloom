@@ -39,10 +39,14 @@ OperationResult SetLayerParent::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Layer must exist in the target composition");
+        return composition == nullptr
+                   ? detail::missingComposition(composition_)
+                   : OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                               "Layer " + std::to_string(layer_.value()) +
+                                                   " does not exist in composition " +
+                                                   std::to_string(composition_.value()));
     if (layer->locked)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return detail::lockedLayer(*layer);
     auto ancestor = parent_;
     std::size_t remaining = composition->graph().layerOutputs().size();
     while (ancestor) {
@@ -74,9 +78,9 @@ OperationResult SetLayerRange::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     if (layer->locked)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return detail::lockedLayer(*layer);
     if (in_ < core::RationalTime{} || in_ >= out_ || out_ > composition->duration())
         return invalidRange();
     const auto in = snap(in_, *composition), out = snap(out_, *composition);
@@ -172,9 +176,9 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     const auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     if (layer->locked)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return detail::lockedLayer(*layer);
     const auto original = *layer;
     if (time_ <= original.inPoint || time_ >= original.endPoint(composition->duration()))
         return invalidRange();
@@ -241,7 +245,7 @@ OperationResult SetLayerEnabled::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     // #502: an entry layer's switch is its own; the Merge it belongs to is never muted for it.
     if (layer->entryOwned()) {
         if (layer->enabled == value_)
@@ -262,7 +266,7 @@ OperationResult SetLayerSolo::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     if (layer->solo == value_)
         return OperationResult::noChange();
     layer->solo = value_;
@@ -273,7 +277,7 @@ OperationResult SetLayerLocked::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     if (layer->locked == value_)
         return OperationResult::noChange();
     layer->locked = value_;
@@ -284,7 +288,7 @@ OperationResult SetLayerShy::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     if (layer->shy == value_)
         return OperationResult::noChange();
     layer->shy = value_;
@@ -320,7 +324,7 @@ OperationResult SetLayerLabelColor::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
-        return detail::invalidTarget();
+        return detail::missingLayer(composition, composition_, layer_);
     if (layer->labelColor == color_)
         return OperationResult::noChange();
     layer->labelColor = color_;
@@ -330,7 +334,7 @@ std::string_view SetWorkArea::typeId() const noexcept { return "bloom.compositio
 OperationResult SetWorkArea::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(composition_);
     if (start_ < core::RationalTime{} || start_ >= end_ || end_ > composition->duration())
         return invalidRange();
     const auto start = snap(start_, *composition), end = snap(end_, *composition);
@@ -348,7 +352,7 @@ std::string_view ClearWorkArea::typeId() const noexcept {
 OperationResult ClearWorkArea::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(composition_);
     if (!composition->workArea())
         return OperationResult::noChange();
     composition->setWorkArea(std::nullopt);

@@ -15,9 +15,48 @@ inline OperationResult invalidTarget() {
     return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                      "Composition or node target does not exist");
 }
-inline OperationResult exhaustedIds() {
+// Missing-object refusals: each says which object was not found and where, so a caller that
+// addressed the wrong composition, layer or node learns which one.
+inline OperationResult missingComposition(const document::CompositionId composition) {
+    return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                     "Composition " + std::to_string(composition.value()) +
+                                         " does not exist");
+}
+inline OperationResult missingLayer(const document::Composition* composition,
+                                    const document::CompositionId compositionId,
+                                    const document::LayerId layer) {
+    if (composition == nullptr)
+        return missingComposition(compositionId);
+    return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                     "Layer " + std::to_string(layer.value()) +
+                                         " does not exist in composition " +
+                                         std::to_string(compositionId.value()));
+}
+inline OperationResult missingNode(const document::Composition* composition,
+                                   const document::CompositionId compositionId,
+                                   const document::NodeId node) {
+    if (composition == nullptr)
+        return missingComposition(compositionId);
+    return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                     "Node " + std::to_string(node.value()) +
+                                         " does not exist in composition " +
+                                         std::to_string(compositionId.value()));
+}
+inline OperationResult missingMask(const document::LayerId layer, const document::LayerMaskId mask) {
+    return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                     "Mask " + std::to_string(mask.value()) +
+                                         " does not exist on layer " +
+                                         std::to_string(layer.value()));
+}
+inline OperationResult lockedLayer(const document::LayerOutputBoundary& layer) {
+    return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                     "Layer " + std::to_string(layer.layerId.value()) + " \"" +
+                                         layer.name + "\" is locked; unlock it before editing");
+}
+// `kinds` names the ID spaces the failed allocation drew from ("keyframe", "node and parameter").
+inline OperationResult exhaustedIds(const std::string_view kinds) {
     return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                     "Document ID space is exhausted");
+                                     "The " + std::string(kinds) + " ID space is exhausted; the project cannot create another one");
 }
 inline bool finite(const document::Vec2d value) {
     return std::isfinite(value.x) && std::isfinite(value.y);

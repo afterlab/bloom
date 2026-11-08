@@ -27,9 +27,9 @@ struct Target final {
     target.composition = draft.project().findComposition(compositionId);
     target.layer = target.composition ? target.composition->graph().findLayer(layerId) : nullptr;
     if (target.layer == nullptr)
-        return detail::invalidTarget();
+        return detail::missingLayer(target.composition, compositionId, layerId);
     if (target.layer->locked)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return detail::lockedLayer(*target.layer);
     return std::nullopt;
 }
 
@@ -103,7 +103,7 @@ OperationResult AddLayerMask::apply(document::Draft& draft) const {
     const auto expansionId = draft.ids().allocateParameter();
     const auto opacityId = draft.ids().allocateParameter();
     if (!maskId || !pathId || !featherId || !expansionId || !opacityId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("layer mask and parameter");
     auto& parameters = composition.parameters();
     const bool inserted =
         parameters.insert({*pathId, std::string(document::kLayerMaskPathSchemaKey),
@@ -134,7 +134,7 @@ OperationResult RemoveLayerMask::apply(document::Draft& draft) const {
     auto& layer = *target.layer;
     const auto* mask = findMask(layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     const auto removed = *mask;
     std::erase_if(layer.masks, [&](const auto& m) { return m.id == mask_; });
     eraseMaskParameters(*target.composition, removed);
@@ -147,8 +147,14 @@ OperationResult MoveLayerMask::apply(document::Draft& draft) const {
     if (auto failure = findTarget(draft, composition_, layer_, target))
         return std::move(*failure);
     auto& layer = *target.layer;
-    if (findMask(layer, mask_) == nullptr || newIndex_ >= layer.masks.size())
-        return detail::invalidTarget();
+    if (findMask(layer, mask_) == nullptr)
+        return detail::missingMask(layer.layerId, mask_);
+    if (newIndex_ >= layer.masks.size())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Mask index " + std::to_string(newIndex_) +
+                                             " is past the last of layer " +
+                                             std::to_string(layer.layerId.value()) + "'s " +
+                                             std::to_string(layer.masks.size()) + " mask(s)");
     const auto found = std::ranges::find(layer.masks, mask_, &document::LayerMask::id);
     const auto oldIndex = static_cast<std::size_t>(std::distance(layer.masks.begin(), found));
     if (oldIndex == newIndex_)
@@ -167,7 +173,7 @@ OperationResult SetLayerMaskMode::apply(document::Draft& draft) const {
         return std::move(*failure);
     auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     using Mode = document::LayerMaskMode;
     if (mode_ != Mode::None && mode_ != Mode::Add && mode_ != Mode::Subtract &&
         mode_ != Mode::Intersect && mode_ != Mode::Difference)
@@ -187,7 +193,7 @@ OperationResult SetLayerMaskInverted::apply(document::Draft& draft) const {
         return std::move(*failure);
     auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     if (mask->inverted == inverted_)
         return OperationResult::noChange();
     mask->inverted = inverted_;
@@ -201,7 +207,7 @@ OperationResult RenameLayerMask::apply(document::Draft& draft) const {
         return std::move(*failure);
     auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     if (!document::isValidHumanFacingName(name_))
         return invalid("Mask name must be valid nonempty UTF-8");
     if (mask->name == name_)
@@ -221,7 +227,7 @@ OperationResult SetLayerMaskPath::apply(document::Draft& draft) const {
     auto& composition = *target.composition;
     const auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     if (!path_.isValid())
         return invalid("Mask path is invalid");
     const auto* record = composition.parameters().find(mask->path);
@@ -253,7 +259,7 @@ OperationResult SetLayerMaskPath::apply(document::Draft& draft) const {
     }
     const auto keyId = draft.ids().allocateKeyframe();
     if (!keyId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("keyframe");
     document::PathKeyframe key;
     key.id = *keyId;
     key.time = time_;
@@ -275,7 +281,7 @@ OperationResult AnimateLayerMaskPath::apply(document::Draft& draft) const {
     auto& composition = *target.composition;
     const auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     const auto* record = composition.parameters().find(mask->path);
     if (record == nullptr)
         return detail::invalidTarget();
@@ -288,7 +294,7 @@ OperationResult AnimateLayerMaskPath::apply(document::Draft& draft) const {
     const auto curveId = draft.ids().allocateAnimationCurve();
     const auto keyId = draft.ids().allocateKeyframe();
     if (!curveId || !keyId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("animation curve and keyframe");
     document::PathKeyframe key;
     key.id = *keyId;
     key.time = time_;
@@ -316,7 +322,7 @@ OperationResult StopAnimatingLayerMaskPath::apply(document::Draft& draft) const 
     auto& composition = *target.composition;
     const auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     if (!value_.isValid())
         return invalid("Mask path is invalid");
     const auto* record = composition.parameters().find(mask->path);
@@ -341,7 +347,7 @@ OperationResult SetLayerMaskMatte::apply(document::Draft& draft) const {
         return std::move(*failure);
     auto* mask = findMask(*target.layer, mask_);
     if (mask == nullptr)
-        return detail::invalidTarget();
+        return detail::missingMask(target.layer->layerId, mask_);
     if (mask->matte == matte_)
         return OperationResult::noChange();
     if (matte_)

@@ -23,7 +23,9 @@ OperationResult SetVideoAudioStream::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                          "The node is not a Video source");
     if (composition->nodeLocked(node_))
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Node " + std::to_string(node_.value()) +
+                                             " is locked with its layer; unlock the layer before editing");
     // The selected stream must exist on the node's asset.
     const auto assetBinding = std::ranges::find(node->parameters, std::string_view("asset"),
                                                 &document::ParameterBinding::role);

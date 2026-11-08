@@ -98,9 +98,9 @@ struct Target final {
     target.composition = draft.project().findComposition(compositionId);
     target.layer = target.composition ? target.composition->graph().findLayer(layerId) : nullptr;
     if (target.layer == nullptr)
-        return detail::invalidTarget();
+        return detail::missingLayer(target.composition, compositionId, layerId);
     if (target.layer->locked)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+        return detail::lockedLayer(*target.layer);
     return std::nullopt;
 }
 

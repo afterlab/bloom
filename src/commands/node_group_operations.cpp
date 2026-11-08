@@ -33,7 +33,7 @@ std::string_view GroupNodes::typeId() const noexcept { return "bloom.node-group.
 OperationResult GroupNodes::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     if (nodes_.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "A node group needs at least one node");
@@ -44,7 +44,7 @@ OperationResult GroupNodes::apply(document::Draft& draft) const {
             return detail::invalidTarget();
     const auto groupId = draft.ids().allocateNodeGroup();
     if (!groupId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("node group");
     // The new frame takes its members with it: a node belongs to exactly one group, so whatever
     // held them before loses them, and loses itself if that was all it held.
     (void)detail::detachFromNodeGroups(*composition, nodes_);

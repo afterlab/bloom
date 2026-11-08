@@ -340,16 +340,20 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         OperationResult operationResult = operation->apply(draft);
         ++work_.operationApplies;
         ++work_.lockedLayerChecks;
+        std::string lockedWhat;
         if (operationResult.status != OperationStatus::Rejected &&
-            detail::changesLockedLayers(before.project(), draft.project()))
-            operationResult = OperationResult::rejected(
-                OperationIssueCode::InvalidValue, "Layer is locked; unlock it before editing");
+            detail::changesLockedLayers(before.project(), draft.project(), &lockedWhat))
+            operationResult =
+                OperationResult::rejected(OperationIssueCode::InvalidValue, std::move(lockedWhat));
         if (operationResult.status == OperationStatus::Rejected) {
             auto result = makeResult(CommandAction::Execute, CommandStatus::Rejected, before,
                                      std::string(transaction.label()));
             if (operationResult.issues.empty()) {
                 operationResult.issues.push_back(
-                    {OperationIssueCode::InvalidValue, "Operation rejected the transaction"});
+                    {OperationIssueCode::InvalidValue,
+                     "Operation " + std::string(operation->typeId()) + " (number " +
+                         std::to_string(operationIndex) +
+                         " in the transaction) rejected the edit without naming a cause"});
             }
             for (auto& issue : operationResult.issues) {
                 result.operationFailures.push_back(
@@ -443,10 +447,11 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         work_.entryLayerReconcileSkips += reconcileWork.compositionsSkipped;
         work_.entryLayerReconcileCompositions += reconcileWork.compositionsReconciled;
         ++work_.lockedLayerChecks;
+        std::string lockedWhat;
         if (!reconciled.failure && reconciled.changed &&
-            detail::changesLockedLayers(before.project(), draft.project()))
-            reconciled.failure = OperationIssue{OperationIssueCode::InvalidValue,
-                                                "Layer is locked; unlock it before editing"};
+            detail::changesLockedLayers(before.project(), draft.project(), &lockedWhat))
+            reconciled.failure =
+                OperationIssue{OperationIssueCode::InvalidValue, std::move(lockedWhat)};
         if (reconciled.failure) {
             auto result = makeResult(CommandAction::Execute, CommandStatus::Rejected, before,
                                      std::string(transaction.label()));

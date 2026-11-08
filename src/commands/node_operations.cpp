@@ -36,7 +36,7 @@ OperationResult checkAddNodeEligibility(const document::Project& project,
                                         const document::NodeDefinitionRegistry& registry) {
     const auto* composition = project.findComposition(compositionId);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId);
     if (!detail::finite(layoutPosition))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node position must be finite");
@@ -61,12 +61,12 @@ OperationResult checkAddNodeEligibility(const document::Project& project,
                                              " node is allowed per composition");
     auto available = ids;
     if (!available.allocateNode())
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("node");
     for (std::size_t index = 0; index < definition->parameters.size(); ++index)
         if (!available.allocateParameter())
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("node and parameter");
     if (nodeTypeId == document::kLayerOutputNodeType && !available.allocateLayer())
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("node, parameter and layer");
     return OperationResult::applied();
 }
 
@@ -92,7 +92,7 @@ OperationResult SetNodeParameterValue::apply(document::Draft& draft) const {
                                          "The node has no such optional parameter");
     const auto parameterId = draft.ids().allocateParameter();
     if (!parameterId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("parameter");
     if (!composition->parameters().insert(
             {*parameterId, parameter->schemaKey, document::ConstantValueSource{value_}}))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -121,7 +121,7 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     }
     const auto nodeId = draft.ids().allocateNode();
     if (!nodeId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("node");
     document::NodeRecord node{*nodeId, definition->key.typeId, {}, definition->key.schemaVersion};
     std::vector<OperationOutput> outputs{{std::string(kAddNodeOutput), *nodeId}};
     for (const auto& parameter : definition->parameters) {
@@ -130,7 +130,7 @@ OperationResult AddNode::apply(document::Draft& draft) const {
             continue;
         const auto parameterId = draft.ids().allocateParameter();
         if (!parameterId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("node and parameter");
         auto value = parameter.defaultValue;
         if (parameter.schemaKey == document::kSolidWidthParameterSchemaKey)
             value = static_cast<double>(composition->format().width());
@@ -184,7 +184,7 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     if (nodeTypeId_ == document::kLayerOutputNodeType) {
         const auto layerId = draft.ids().allocateLayer();
         if (!layerId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("layer");
         const auto number = composition->graph().layerOutputs().size() + 1;
         if (!composition->graph().addLayerOutput({*nodeId, *layerId,
                                                   "Layer " + std::to_string(number),
@@ -345,14 +345,14 @@ std::string_view RemoveNodes::typeId() const noexcept { return "bloom.node.remov
 OperationResult RemoveNodes::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     if (nodes_.empty())
         return OperationResult::noChange();
     std::set<document::ParameterId> candidates;
     for (const auto id : nodes_) {
         const auto* node = composition->graph().findNode(id);
         if (!node)
-            return detail::invalidTarget();
+            return detail::missingNode(composition, compositionId_, id);
         if (detail::protectedNode(composition->graph(), id))
             return OperationResult::rejected(
                 OperationIssueCode::Unsupported,
@@ -405,7 +405,7 @@ std::string_view RenameLayer::typeId() const noexcept { return "bloom.layer.rena
 OperationResult RenameLayer::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     if (!document::isValidHumanFacingName(name_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Layer name must be valid nonempty UTF-8");
@@ -420,14 +420,14 @@ OperationResult RenameLayer::apply(document::Draft& draft) const {
             renamed->nameFollowsSource = false;
         return OperationResult::applied();
     }
-    return detail::invalidTarget();
+    return detail::missingLayer(composition, compositionId_, layerId_);
 }
 
 std::string_view ConnectPorts::typeId() const noexcept { return "bloom.node.connect"; }
 OperationResult ConnectPorts::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     auto& graph = composition->graph();
     const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const auto neutral = [&](OperationResult result) {
@@ -470,7 +470,7 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                     "Edit the gradient before linking one of its stops");
             const auto parameterId = draft.ids().allocateParameter();
             if (!parameterId)
-                return detail::exhaustedIds();
+                return detail::exhaustedIds("parameter");
             if (!composition->parameters().insert(
                     {*parameterId, std::string(document::gradientStopSchemaKey(stop->component)),
                      document::DriverBindingSource{source_.nodeId, source_.port}}))
@@ -532,12 +532,12 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         } else {
             const auto allocatedSlotId = draft.ids().allocateLayerSlot();
             if (!allocatedSlotId)
-                return detail::exhaustedIds();
+                return detail::exhaustedIds("layer slot");
             slotId = *allocatedSlotId;
         }
         const auto edgeId = draft.ids().allocateEdge();
         if (!edgeId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("layer slot and edge");
         if (existingSlot == nullptr) {
             if (!stack->append({slotId, layerId}))
                 return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -561,7 +561,7 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         return OperationResult::noChange();
     const auto edgeId = previous ? std::optional(previous->id) : draft.ids().allocateEdge();
     if (!edgeId)
-        return detail::exhaustedIds();
+        return detail::exhaustedIds("edge");
     if (previous)
         (void)graph.eraseEdge(*edgeId);
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&destination_)) {
@@ -635,7 +635,7 @@ std::string_view DisconnectInput::typeId() const noexcept { return "bloom.node.d
 OperationResult DisconnectInput::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     auto& graph = composition->graph();
     if (!graph.inputKind(input_, registry_))
         return detail::invalidTarget();
@@ -740,7 +740,7 @@ OperationResult RemapGradientStopLinks::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     auto* node = composition ? composition->graph().findNode(nodeId_) : nullptr;
     if (node == nullptr)
-        return detail::invalidTarget();
+        return detail::missingNode(composition, compositionId_, nodeId_);
     const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     std::vector<document::ParameterBinding> kept;
     std::vector<document::ParameterId> removed;
@@ -785,11 +785,11 @@ std::string_view DissolveNode::typeId() const noexcept { return "bloom.node.diss
 OperationResult DissolveNode::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     auto& graph = composition->graph();
     const auto* node = graph.findNode(nodeId_);
     if (!node)
-        return detail::invalidTarget();
+        return detail::missingNode(composition, compositionId_, nodeId_);
     if (detail::protectedNode(graph, nodeId_))
         return OperationResult::rejected(
             OperationIssueCode::Unsupported,

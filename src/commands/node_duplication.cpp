@@ -61,7 +61,7 @@ std::string_view DuplicateNodes::typeId() const noexcept { return "bloom.node.du
 OperationResult DuplicateNodes::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     if (!detail::finite(offset_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Duplicate offset must be finite");
@@ -98,7 +98,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         auto node = *original.graph().findNode(id);
         const auto newId = draft.ids().allocateNode();
         if (!newId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("node");
         nodeIds.emplace(id, *newId);
         node.id = *newId;
         for (auto& binding : node.parameters) {
@@ -107,13 +107,13 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                 auto parameter = *original.parameters().find(oldId);
                 const auto parameterId = draft.ids().allocateParameter();
                 if (!parameterId)
-                    return detail::exhaustedIds();
+                    return detail::exhaustedIds("node and parameter");
                 parameter.id = *parameterId;
                 if (auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source)) {
                     if (!curveIds.contains(source->curveId)) {
                         const auto curveId = copyCurve(draft, *composition, source->curveId);
                         if (!curveId)
-                            return detail::exhaustedIds();
+                            return detail::exhaustedIds("parameter and animation curve");
                         curveIds.emplace(source->curveId, *curveId);
                         outputs.push_back(
                             {"curve." + std::to_string(source->curveId.value()), *curveId});
@@ -145,7 +145,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             continue;
         const auto layerId = draft.ids().allocateLayer();
         if (!layerId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("layer");
         auto copy = boundary;
         copy.nodeId = nodeIds.at(boundary.nodeId);
         copy.layerId = *layerId;
@@ -155,7 +155,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         if (boundary.entryOwned()) {
             const auto slotId = draft.ids().allocateLayerSlot();
             if (!slotId)
-                return detail::exhaustedIds();
+                return detail::exhaustedIds("layer slot");
             slotIds.emplace(*boundary.entrySlot, *slotId);
             copy.entrySlot = *slotId;
             for (auto& binding : copy.parameters) {
@@ -165,12 +165,12 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                 auto parameter = *sourceParameter;
                 const auto parameterId = draft.ids().allocateParameter();
                 if (!parameterId)
-                    return detail::exhaustedIds();
+                    return detail::exhaustedIds("parameter");
                 parameter.id = *parameterId;
                 if (auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source)) {
                     const auto curveId = copyCurve(draft, *composition, source->curveId);
                     if (!curveId)
-                        return detail::exhaustedIds();
+                        return detail::exhaustedIds("parameter and animation curve");
                     source->curveId = *curveId;
                 }
                 if (!composition->parameters().insert(std::move(parameter)))
@@ -190,7 +190,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         for (auto& mask : copy.masks) {
             const auto maskId = draft.ids().allocateLayerMask();
             if (!maskId)
-                return detail::exhaustedIds();
+                return detail::exhaustedIds("layer mask");
             mask.id = *maskId;
             for (auto* parameterId : {&mask.path, &mask.feather, &mask.expansion, &mask.opacity}) {
                 const auto* sourceParameter = original.parameters().find(*parameterId);
@@ -199,12 +199,12 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                 auto parameter = *sourceParameter;
                 const auto newParameterId = draft.ids().allocateParameter();
                 if (!newParameterId)
-                    return detail::exhaustedIds();
+                    return detail::exhaustedIds("parameter");
                 parameter.id = *newParameterId;
                 if (auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source)) {
                     const auto curveId = copyCurve(draft, *composition, source->curveId);
                     if (!curveId)
-                        return detail::exhaustedIds();
+                        return detail::exhaustedIds("parameter and animation curve");
                     source->curveId = *curveId;
                 }
                 if (!composition->parameters().insert(std::move(parameter)))
@@ -251,7 +251,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                                     : draft.ids().allocateLayerSlot();
             const auto edgeId = draft.ids().allocateEdge();
             if (!slotId || !edgeId)
-                return detail::exhaustedIds();
+                return detail::exhaustedIds("layer slot and edge");
             const auto layerId =
                 layerIds.contains(entry.layerId) ? layerIds.at(entry.layerId) : entry.layerId;
             if (!target.append({*slotId, layerId}))
@@ -285,7 +285,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             continue;
         const auto edgeId = draft.ids().allocateEdge();
         if (!edgeId)
-            return detail::exhaustedIds();
+            return detail::exhaustedIds("edge");
         edge.id = *edgeId;
         if (internal)
             edge.source.nodeId = nodeIds.at(edge.source.nodeId);

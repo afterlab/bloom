@@ -7,19 +7,22 @@ std::string_view MoveNodes::typeId() const noexcept { return "bloom.node.move"; 
 OperationResult MoveNodes::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition)
-        return detail::invalidTarget();
+        return detail::missingComposition(compositionId_);
     for (const auto& [id, position] : positions_) {
         if (!composition->graph().findNode(id))
-            return detail::invalidTarget();
+            return detail::missingNode(composition, compositionId_, id);
         if (!detail::finite(position))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Node position must be finite");
     }
     for (const auto& [id, group] : membership_) {
         if (!composition->graph().findNode(id))
-            return detail::invalidTarget();
+            return detail::missingNode(composition, compositionId_, id);
         if (group && !composition->nodeGroups().contains(*group))
-            return detail::invalidTarget();
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "Node group " + std::to_string(group->value()) +
+                                                 " does not exist in composition " +
+                                                 std::to_string(compositionId_.value()));
     }
     bool changed = false;
     for (const auto& [id, position] : positions_) {
@@ -56,7 +59,7 @@ std::string_view SetNodeCollapsed::typeId() const noexcept { return "bloom.node.
 OperationResult SetNodeCollapsed::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition || !composition->graph().findNode(nodeId_))
-        return detail::invalidTarget();
+        return detail::missingNode(composition, compositionId_, nodeId_);
     auto record = detail::layoutFor(*composition, nodeId_);
     if (record.collapsed == collapsed_)
         return OperationResult::noChange();
@@ -69,7 +72,7 @@ std::string_view SetNodeMuted::typeId() const noexcept { return "bloom.node.set-
 OperationResult SetNodeMuted::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition || !composition->graph().findNode(nodeId_))
-        return detail::invalidTarget();
+        return detail::missingNode(composition, compositionId_, nodeId_);
     auto record = detail::layoutFor(*composition, nodeId_);
     if (record.muted == muted_)
         return OperationResult::noChange();
@@ -86,7 +89,7 @@ std::string_view SetNodeWidth::typeId() const noexcept { return "bloom.node.set-
 OperationResult SetNodeWidth::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (!composition || !composition->graph().findNode(nodeId_))
-        return detail::invalidTarget();
+        return detail::missingNode(composition, compositionId_, nodeId_);
     if (!std::isfinite(width_) || width_ <= 0.0)
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node width must be positive and finite");

@@ -99,7 +99,15 @@ void refuse(TestContext& test, Fixture& fixture, const OperationIssueCode code, 
     test.expect(result.status == CommandStatus::Rejected && !result.operationFailures.empty() &&
                     result.operationFailures.front().operationIndex == 1 &&
                     result.operationFailures.front().issue.code == code,
-                "invalid node operation reports its typed refusal");
+                "invalid node operation reports its typed refusal: " +
+                    (result.operationFailures.empty()
+                         ? std::string("(no failure)")
+                         : result.operationFailures.front().issue.message + " [index " +
+                               std::to_string(result.operationFailures.front().operationIndex) +
+                               ", code " +
+                               std::to_string(static_cast<int>(
+                                   result.operationFailures.front().issue.code)) +
+                               ", expected " + std::to_string(static_cast<int>(code)) + "]"));
     const auto after = fixture.document.snapshot();
     test.expect(sameTruth(after, before) && after.revision() == before.revision() &&
                     after.ids().highWater() == before.ids().highWater() &&
