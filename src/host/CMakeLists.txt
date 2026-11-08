@@ -363,8 +363,7 @@ if(BUILD_TESTING)
 
         add_executable(bloom_host_export_audio_formats_test tests/export_audio_formats_tests.cpp)
         target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
-                                                                           bloom_commands
-                                                                           bloom_media_audio)
+                                                                           bloom_commands)
         add_dependencies(bloom_host_export_audio_formats_test bloom-media-worker)
         bloom_enable_warnings(bloom_host_export_audio_formats_test)
         bloom_add_test(NAME bloom.host.export-audio-formats

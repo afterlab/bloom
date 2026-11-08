@@ -593,9 +593,10 @@ void testSearchKeyboardAndMenus() {
             expect(nodes == sorted, message);
         };
         hasGroup("Sources",
-                 {"Audio", "Checker", "Composition", "Image", "Linear Gradient", "Radial Gradient",
-                  "Solid", "Test Card", "Video"},
-                 "Sources holds what makes an image");
+                 {"Audio", "Audio Auto Level", "Audio Compressor", "Audio Equalizer", "Audio Hiss",
+                  "Audio Mono", "Checker", "Composition", "Image", "Linear Gradient",
+                  "Radial Gradient", "Solid", "Test Card", "Video"},
+                 "Sources holds what makes an image, and the audio effects beside the Audio source");
         hasGroup("Compositing",
                  {"Adjustment", "Alpha Association", "Image Mix", "Layer", "Merge",
                   "Multiply Alpha", "Set Alpha"},

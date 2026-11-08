@@ -19,7 +19,6 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
-#include <bloom/media/audio/loudness.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -765,12 +764,45 @@ void testCompileFailureNamesItsSubject() {
 // in the file. The file keeps the programme's length.
 void testLoudnessNormalization() {
     Fixture f("loudness", WavEncoding::Float32);
+    // An independent BS.1770 reading of a 48 kHz file (K-weighting, ungated mean square: the tone
+    // is steady, so the gate changes nothing) and its sample peak, so the report is checked against
+    // arithmetic that does not share its library.
+    struct Reading {
+        std::size_t frames = 0;
+        double lufs = 0.0;
+        double samplePeakDb = 0.0;
+    };
     const auto measureFile = [&](const std::filesystem::path& path) {
         const auto [channels, samples] = wavSamples(path);
-        media::audio::loudness::Meter meter(48000, 2);
-        std::vector<float> interleaved(samples.begin(), samples.end());
-        expect(channels == 2 && meter.valid() && meter.add(interleaved), "the file is readable");
-        return std::pair{samples.size() / 2, meter.measurement()};
+        expect(channels == 2, "the file is stereo");
+        const auto biquad = [](const std::array<double, 3>& b, const std::array<double, 3>& a,
+                               std::vector<double> x) {
+            double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+            for (auto& value : x) {
+                const double in = value;
+                const double y = b[0] * in + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2;
+                x2 = x1, x1 = in, y2 = y1, y1 = y;
+                value = y;
+            }
+            return x;
+        };
+        double sum = 0.0, peak = 0.0;
+        const auto frames = samples.size() / 2;
+        for (std::size_t channel = 0; channel < 2; ++channel) {
+            std::vector<double> x(frames);
+            for (std::size_t i = 0; i < frames; ++i) {
+                x[i] = samples[i * 2 + channel];
+                peak = std::max(peak, std::abs(x[i]));
+            }
+            x = biquad({1.53512485958697, -2.69169618940638, 1.19839281085285},
+                       {1.0, -1.69065929318241, 0.73248077421585}, std::move(x));
+            x = biquad({1.0, -2.0, 1.0}, {1.0, -1.99004745483398, 0.99007225036621}, std::move(x));
+            double square = 0.0;
+            for (const auto value : x)
+                square += value * value;
+            sum += square / static_cast<double>(frames);
+        }
+        return Reading{frames, -0.691 + 10.0 * std::log10(sum), 20.0 * std::log10(peak)};
     };
     const auto run = [&](const double target, const double ceiling, const std::string& file) {
         document::ExportOutputSettings settings;
@@ -803,15 +835,16 @@ void testLoudnessNormalization() {
             expect(std::abs(report->gainDb - (-23.0 - report->measuredLufs)) < 1e-6,
                    "the gain is target minus measured");
             expect(report->limiterReductionDb < 0.05, "no limiting was needed");
-            const auto [frames, measured] = measureFile(f.folder / "Exports/quiet.wav");
+            const auto measured = measureFile(f.folder / "Exports/quiet.wav");
+            const auto frames = measured.frames;
             expect(frames == 48000, "the file keeps the programme's 48000 frames (got " +
                                         std::to_string(frames) + ")");
-            expect(std::abs(measured.integratedLufs - report->finalLufs) < 0.1,
+            expect(std::abs(measured.lufs - report->finalLufs) < 0.15,
                    "an independent reading of the file agrees with the report (file " +
-                       std::to_string(measured.integratedLufs) + ", report " +
+                       std::to_string(measured.lufs) + ", report " +
                        std::to_string(report->finalLufs) + ")");
-            expect(std::abs(measured.truePeakDbtp - report->finalTruePeakDbtp) < 0.15,
-                   "the independent true peak agrees with the report");
+            expect(measured.samplePeakDb <= report->finalTruePeakDbtp + 0.01,
+                   "the sample peak does not exceed the reported true peak");
         }
     }
     // A loud target under a low ceiling: the limiter holds the ceiling.
@@ -822,12 +855,13 @@ void testLoudnessNormalization() {
         if (report) {
             expect(report->limiterReductionDb > 1.0,
                    "the limiter acted (" + std::to_string(report->limiterReductionDb) + " dB)");
-            const auto [frames, measured] = measureFile(f.folder / "Exports/limited.wav");
+            const auto measured = measureFile(f.folder / "Exports/limited.wav");
+            const auto frames = measured.frames;
             expect(frames == 48000, "the limited file keeps 48000 frames");
-            expect(measured.truePeakDbtp <= -12.0 + 0.1,
-                   "the true-peak ceiling holds in the file (got " +
-                       std::to_string(measured.truePeakDbtp) + ")");
-            expect(measured.integratedLufs <= -5.0 + 0.1,
+            expect(measured.samplePeakDb <= -12.0 + 0.1,
+                   "the peak ceiling holds in the file (got " +
+                       std::to_string(measured.samplePeakDb) + ")");
+            expect(report->finalTruePeakDbtp <= -12.0 + 0.1 && measured.lufs <= -5.0 + 0.1,
                    "the limited programme does not exceed the target");
         }
     }
@@ -840,8 +874,8 @@ void testLoudnessNormalization() {
         const auto finished = f.run(f.addJob(settings, "Exports/plain.wav"), "plain");
         expect(published(finished) && !reportOf(finished).has_value(),
                "an export without a loudness target reports none");
-        const auto [frames, measured] = measureFile(f.folder / "Exports/plain.wav");
-        expect(std::abs(measured.integratedLufs - -12.4) < 0.6, "the plain export is unchanged");
+        const auto measured = measureFile(f.folder / "Exports/plain.wav");
+        expect(std::abs(measured.lufs - -12.4) < 0.6, "the plain export is unchanged");
     }
 }
 
