@@ -4,6 +4,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
@@ -541,6 +542,19 @@ std::optional<ParameterPresentation> sharpenPresentation(const std::string_view 
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #486 Lens Distortion: one presentation per parameter, from its table; the centre a pixel offset.
+std::optional<ParameterPresentation> lensDistortionPresentation(const std::string_view schemaKey) {
+    if (schemaKey == kLensDistortionCenterSchemaKey)
+        return pixels(-kMaximumLensDistortionCenter, kMaximumLensDistortionCenter, 4096.0);
+    const auto* spec = lensDistortionParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    if (spec->kind == LensDistortionParameterKind::Choice)
+        return choice();
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals);
+}
+
 // #563 Codec Degrade: one presentation per parameter, from its table.
 std::optional<ParameterPresentation> codecDegradePresentation(const std::string_view schemaKey) {
     const auto* spec = codecDegradeParameterSpec(schemaKey);
@@ -569,6 +583,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *grain;
     if (auto codec = codecDegradePresentation(schemaKey))
         return *codec;
+    if (auto lens = lensDistortionPresentation(schemaKey))
+        return *lens;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
     for (const auto& entry : table())
