@@ -10,7 +10,6 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
 #include <QImage>
@@ -227,9 +226,8 @@ void assetTreeDropTest() {
         mime.setUrls({QUrl(QStringLiteral("smb://10.10.10.20/production/network-photo.png"))});
         require(drop(*tree->viewport(), mime), "an smb:// drop onto a mounted share is accepted");
     }
-    QElapsedTimer timer;
-    timer.start();
-    while (controller.busy() && timer.elapsed() < 15000)
+    // Wait for the import's own state; CTest's timeout bounds a hang, not a wall-clock guess.
+    while (controller.busy())
         QTest::qWait(10);
     require(session.snapshot().project().assets().size() == 1,
             "the resolved smb:// drop imported exactly one asset");
@@ -258,8 +256,7 @@ void assetTreeDropTest() {
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
-    timer.restart();
-    while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
+    while (!scheduler.isQuiescent())
         QTest::qWait(10);
     require(scheduler.isQuiescent(), "network-share drop test tasks shut down safely");
 }
