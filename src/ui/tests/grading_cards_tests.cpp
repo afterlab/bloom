@@ -950,6 +950,9 @@ void lensDistortionCard() {
     }
     if (!cardContentFits(*fixture.item, "lens-distortion"))
         ++failures;
+    expect(ui::node_editor::displayTypeName(document::kLensDistortionStMapPort) ==
+               QStringLiteral("ST Map"),
+           "the second output reads ST Map, its stored id unchanged");
     capture(fixture, QStringLiteral("lens-distortion"));
     expect(card->showsRole("mode") && card->showsRole("center") && !card->showsRole("k1") &&
                !card->showsRole("k2") && !card->showsRole("p1") && !card->showsRole("p2") &&

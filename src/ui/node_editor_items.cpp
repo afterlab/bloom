@@ -135,6 +135,9 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Process Space");
     if (typeId == "lut")
         return QCoreApplication::translate("node_editor", "LUT");
+    // Lens Distortion's second output; the stored port id stays "stMap".
+    if (typeId == "stMap")
+        return QCoreApplication::translate("node_editor", "ST Map");
     if (typeId == "timeOffset")
         return QCoreApplication::translate("node_editor", "Time Offset");
     if (typeId == "timeScale")
