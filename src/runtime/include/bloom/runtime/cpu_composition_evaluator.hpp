@@ -47,6 +47,16 @@ struct AudioCompositionTimeMapping final {
     friend bool operator==(const AudioCompositionTimeMapping&,
                            const AudioCompositionTimeMapping&) = default;
 };
+// #471: where an automated level is heading. The clip's `level` is the level at `start`; the level
+// at `end` is `endLevel`, and playback ramps linearly between them (in the playing transport's
+// time) so a keyed fade is continuous, as in export, instead of stepping once per mix.
+struct AudioClipLevelRamp final {
+    core::RationalTime start{};
+    core::RationalTime end{};
+    double endLevel = 1.0;
+
+    friend bool operator==(const AudioClipLevelRamp&, const AudioClipLevelRamp&) = default;
+};
 struct AudioClipDescription final {
     document::NodeId sourceNodeId;
     document::AssetId assetId;
@@ -64,6 +74,8 @@ struct AudioClipDescription final {
     std::uint32_t audioStream = 0;
     // #381: a conformed or looped video's audio timing, applied last (see FootageAudioTiming).
     std::optional<FootageAudioTiming> footage{};
+    // #471: set by the interactive playback mix on a clip whose level is automated.
+    std::optional<AudioClipLevelRamp> levelRamp{};
 
     friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
 };

@@ -793,24 +793,7 @@ int main(int argc, char* argv[]) try {
             playback.setAudioMix({}, {});
             return;
         }
-        std::vector<bloom::media::audio::playback::AudioClip> clips;
-        clips.reserve(mix->clips.size());
-        for (const auto& description : mix->clips) {
-            const auto buffer =
-                audioPlaybackSession.audioBuffer(description.assetId, description.audioStream);
-            if (buffer == nullptr)
-                continue;
-            clips.push_back({.buffer = buffer,
-                             .startTime = description.startTime,
-                             .level = static_cast<float>(description.level),
-                             .muted = description.muted,
-                             .solo = description.solo,
-                             .endTime = description.endTime});
-            if (!description.timeMappings.empty())
-                clips.back().mapTime = [description](const bloom::core::RationalTime time) {
-                    return bloom::runtime::mapAudioClipTime(description, time);
-                };
-        }
+        auto clips = audioPlaybackSession.engineClips();
         playback.setAudioMix(*mix, std::move(clips));
     };
     QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged, &playback,

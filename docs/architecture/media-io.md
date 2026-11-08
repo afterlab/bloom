@@ -2166,6 +2166,14 @@ them carries an `AudioLevelRamp` across the block, so level automation is a cont
 piecewise-linear ramp evaluated per sample rather than a step every block (#459). Mute and solo
 still change at block edges.
 
+Interactive playback follows the same automation (#471). `AudioPlaybackSession` re-evaluates the
+mix on every playhead tick while any level is animated or driven, and also at a twelfth of a second
+past that time; a clip whose level differs between the two carries an `AudioClipLevelRamp`, which
+`AudioPlaybackSession::engineClips()` hands the engine as the same `AudioLevelRamp` export uses.
+The chain of short ramps follows the keyed curve continuously, and a mix that arrives late still
+lands on the curve because each ramp ends at the true level. Layer enable and solo are not animated,
+so they change only with an edit.
+
 The worker closes its private artifact and decodes it again with the same provider. QC checks every
 video timestamp, frame count, duration, codec, dimensions and stream layout; first/last decoded
 pixel digests and error measurements; and every PCM sample against the quantized mix. It makes no

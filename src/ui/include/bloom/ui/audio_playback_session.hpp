@@ -2,6 +2,7 @@
 
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/runtime/audio_stream_key.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -13,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace bloom::ui {
 
@@ -50,6 +52,9 @@ class AudioPlaybackSession final : public QObject {
     [[nodiscard]] const std::optional<runtime::AudioMixDescription>& mix() const noexcept {
         return mix_;
     }
+    // The published mix as the playback engine's clips (clips whose audio is not delivered yet are
+    // left out): level, mute, solo, time mapping and, for an automated level, its ramp.
+    [[nodiscard]] std::vector<media::audio::playback::AudioClip> engineClips() const;
     void setAudioBufferSource(AssetController& source);
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
     audioBuffer(document::AssetId id, std::uint32_t stream = 0) const;

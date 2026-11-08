@@ -1,6 +1,8 @@
 #include <bloom/ui/audio_playback_session.hpp>
 
+#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/composition_time.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -12,6 +14,14 @@
 #include <utility>
 
 namespace bloom::ui {
+
+namespace {
+// #471: how far past the evaluated time the level is sampled again. A fresh mix is evaluated on
+// every playhead tick, so each one hands the engine a short linear ramp and the chain of them
+// follows the keyed curve continuously, as the export mix does; a mix that arrives late still
+// lands on the curve because the ramp ends at the true level.
+constexpr double kLevelLookaheadSeconds = 1.0 / 12.0;
+} // namespace
 
 struct AudioPlaybackSession::Preparation final {
     std::optional<runtime::AudioMixDescription> mix;
@@ -178,6 +188,23 @@ void AudioPlaybackSession::submitPending() {
                     });
                 prepared->mix = evaluator->evaluateAudioMix(compiled.plan, request.time,
                                                             context.cancellation());
+                if (prepared->mix && prepared->timeDependent) {
+                    const auto end = runtime::secondsToTime(request.time.toSeconds() +
+                                                            kLevelLookaheadSeconds);
+                    const auto ahead = end ? evaluator->evaluateAudioMix(compiled.plan, *end,
+                                                                         context.cancellation())
+                                           : std::nullopt;
+                    if (ahead && ahead->clips.size() == prepared->mix->clips.size())
+                        for (std::size_t index = 0; index < ahead->clips.size(); ++index) {
+                            auto& clip = prepared->mix->clips[index];
+                            const auto& next = ahead->clips[index];
+                            if (next.sourceNodeId == clip.sourceNodeId &&
+                                next.assetId == clip.assetId &&
+                                next.audioStream == clip.audioStream && next.level != clip.level)
+                                clip.levelRamp = runtime::AudioClipLevelRamp{
+                                    .start = request.time, .end = *end, .endLevel = next.level};
+                        }
+                }
             } else {
                 prepared->timeDependent = false;
             }
@@ -226,6 +253,33 @@ void AudioPlaybackSession::consumeReady() {
         }
         submitPending();
     }
+}
+
+std::vector<media::audio::playback::AudioClip> AudioPlaybackSession::engineClips() const {
+    std::vector<media::audio::playback::AudioClip> clips;
+    if (!mix_)
+        return clips;
+    clips.reserve(mix_->clips.size());
+    for (const auto& description : mix_->clips) {
+        auto buffer = audioBuffer(description.assetId, description.audioStream);
+        if (buffer == nullptr)
+            continue;
+        clips.push_back({.buffer = std::move(buffer),
+                         .startTime = description.startTime,
+                         .level = static_cast<float>(description.level),
+                         .muted = description.muted,
+                         .solo = description.solo,
+                         .endTime = description.endTime});
+        if (!description.timeMappings.empty())
+            clips.back().mapTime = [description](const core::RationalTime time) {
+                return runtime::mapAudioClipTime(description, time);
+            };
+        if (description.levelRamp)
+            clips.back().levelRamp = media::audio::playback::AudioLevelRamp{
+                description.levelRamp->start, description.levelRamp->end,
+                static_cast<float>(description.levelRamp->endLevel)};
+    }
+    return clips;
 }
 
 void AudioPlaybackSession::setMix(std::optional<runtime::AudioMixDescription> mix) {

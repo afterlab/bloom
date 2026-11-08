@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/audio_device_control.hpp>
@@ -137,18 +138,7 @@ int run(int argc, char** argv) {
             playback.setAudioMix({}, {});
             return;
         }
-        std::vector<media::audio::playback::AudioClip> clips;
-        for (const auto& description : mix->clips) {
-            const auto buffer = audioPlaybackSession.audioBuffer(description.assetId);
-            if (buffer == nullptr)
-                continue;
-            clips.push_back({.buffer = buffer,
-                             .startTime = description.startTime,
-                             .level = static_cast<float>(description.level),
-                             .muted = description.muted,
-                             .solo = description.solo,
-                             .endTime = description.endTime});
-        }
+        auto clips = audioPlaybackSession.engineClips();
         appliedClips = clips.size();
         playback.setAudioMix(*mix, std::move(clips));
     };
@@ -348,6 +338,70 @@ int run(int argc, char** argv) {
     };
     wire(layerNode, document::kLayerOutputAudioOutputPort, "stage 8: layer wired to output");
     wire(sourceNode, document::kAudioSourceOutputPort, "stage 9: source wired to output");
+    // #471: playback follows a keyed level over time, as export does. The level is keyed 0 at 0 s
+    // to 1 at 0.9 s; the mix evaluated at 0.2 s carries a ramp from that level to the level a
+    // twelfth of a second later, and an engine playing it is louder at the end of that span than at
+    // its start. Past the last key the level is constant and no ramp is carried.
+    {
+        std::optional<document::ParameterId> level;
+        for (const auto& binding :
+             fixture.session.composition()->graph().findNode(sourceNode)->parameters)
+            if (binding.role == "level")
+                level = binding.parameterId;
+        require(level.has_value(), "stage 11: the audio source has a level parameter");
+        commands::Transaction automate("Automate level", fixture.session.snapshot().revision());
+        automate.emplace<commands::CreateAnimationForParameter>(
+            fixture.session.compositionId(), *level, core::RationalTime{});
+        automate.emplace<commands::SetKeyframeAtTimeForParameter>(
+            fixture.session.compositionId(), *level, core::RationalTime{}, 0.0);
+        automate.emplace<commands::SetKeyframeAtTimeForParameter>(
+            fixture.session.compositionId(), *level, *core::RationalTime::create(9, 10), 1.0);
+        require(fixture.session.executeTransaction(std::move(automate)).succeeded(),
+                "stage 11: the level is keyed");
+        const auto mixAt = [&](const core::RationalTime time, const bool ramped) {
+            (void)fixture.session.setCurrentTime(time);
+            QElapsedTimer timer;
+            timer.start();
+            const auto ready = [&] {
+                const auto& current = audioPlaybackSession.mix();
+                if (!current || current->clips.size() != 1 ||
+                    audioPlaybackSession.revision() != fixture.session.snapshot().revision())
+                    return false;
+                const auto& clip = current->clips.front();
+                return ramped ? clip.levelRamp && clip.levelRamp->start == time
+                              : !clip.levelRamp && clip.level == 1.0;
+            };
+            while (!ready() && timer.elapsed() < 15000)
+                QTest::qWait(10);
+            require(ready(), "stage 11: the mix follows the playhead");
+        };
+        const auto start = *core::RationalTime::create(1, 5);
+        mixAt(start, true);
+        const auto& clip = audioPlaybackSession.mix()->clips.front();
+        require(std::abs(clip.level - 0.2 / 0.9) < 1e-6 &&
+                    std::abs(clip.levelRamp->endLevel - (0.2 + 1.0 / 12.0) / 0.9) < 1e-3,
+                "stage 11: the clip holds the level at the playhead and ramps to the next");
+        auto heardOwner = std::make_unique<media::audio::playback::NullBackend>();
+        auto* heardBackend = heardOwner.get();
+        media::audio::playback::AudioEngine heard(std::move(heardOwner));
+        heard.replaceClips(audioPlaybackSession.engineClips());
+        require(!heard.play(start), "stage 11: the engine plays from the playhead");
+        constexpr std::size_t kSpan = 4000; // a twelfth of a second at 48 kHz, rounded down
+        constexpr std::size_t kWindow = 480;
+        require(!heard.renderForTesting(kSpan).has_value(), "stage 11: render");
+        const auto captured = heardBackend->captured();
+        require(captured.size() == kSpan * 2, "stage 11: stereo samples");
+        float first = 0.0F;
+        float last = 0.0F;
+        for (std::size_t frame = 0; frame < kWindow; ++frame) {
+            first = std::max(first, std::abs(captured[frame * 2]));
+            last = std::max(last, std::abs(captured[(kSpan - 1 - frame) * 2]));
+        }
+        std::cout << "stage 11: peak " << first << " -> " << last << '\n';
+        require(first > 0.01F && last > first * 1.2F,
+                "stage 11: the keyed level rises while it plays");
+        mixAt(*core::RationalTime::create(19, 20), false);
+    }
     audioPlaybackSession.beginShutdown();
     playback.pause();
     audioDeviceControl.beginShutdown();
