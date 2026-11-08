@@ -222,4 +222,32 @@ class Builder final {
     return b.finish(read, FieldResultKind::Premultiplied);
 }
 
+// #486 Chromatic Aberration: the program its lowering builds over the 16 x 12 test composition,
+// mirroring snapshot_compiler_fields.ipp's lowerChromaticAberration (the snapshot compiler test holds
+// the two to the same instruction sequence).
+[[nodiscard]] inline FieldProgram chromaticAberrationProgram(const std::uint64_t idBase) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto red = b.add(FieldOp::LensWarp, {c}, {0}, {0.04, 0.0, 0.0, 0.0, 10.0},
+                           {Vec2d{1.5, -1.0}});
+    const auto twice = b.add(FieldOp::Swizzle, {c}, {0, 1, 4, 4}, {2.0, 2.0, 1.0, 1.0});
+    const auto blue = b.add(FieldOp::Math, {twice, red}, {1}, {0.1, 0.0});
+    const auto read = [&](const int where) {
+        const auto texel = b.add(FieldOp::Image, {where}, {0, 1, 3, 4, 0, 1});
+        b.last().slot = 0;
+        return texel;
+    };
+    const auto texelRed = read(red);
+    const auto texelGreen = read(c);
+    const auto texelBlue = read(blue);
+    const auto green = b.add(FieldOp::Swizzle, {texelGreen}, {1, 4, 4, 4});
+    const auto blueChannel = b.add(FieldOp::Swizzle, {texelBlue}, {2, 4, 4, 4});
+    const auto widest = b.add(FieldOp::Math, {texelRed, texelGreen}, {5}, {0.1, 0.0});
+    const auto widest3 = b.add(FieldOp::Math, {widest, texelBlue}, {5}, {0.1, 0.0});
+    const auto alpha = b.add(FieldOp::Swizzle, {widest3}, {3, 4, 4, 4});
+    const auto joined = b.add(FieldOp::Combine, {texelRed, green, blueChannel, alpha}, {},
+                              {0.0, 0.0, 0.0, 0.0});
+    return b.finish(joined, FieldResultKind::Premultiplied);
+}
+
 } // namespace bloom::field_test_programs

@@ -971,3 +971,93 @@ lowerLensDistortion(const document::NodeRecord& node,
     indices.emplace(node.id, *first);
     return true;
 }
+
+// #486 Chromatic Aberration: one field raster over the input's data window. Red is read at the lens
+// warp's position for the amount (the radial term k1 = amount about the centre), blue at the mirror
+// of it, 2 p - red, so the two move the same distance in opposite directions; green is read at p.
+// Each is the input's premultiplied texel (bilinear, transparent outside the input) and only its own
+// channel is kept, so HDR values and negative values pass through unchanged. The result's alpha is
+// the largest of the three alphas, so no premultiplied channel can exceed it. With a constant amount
+// of zero the picture is the input itself; a muted node is the same.
+[[nodiscard]] bool
+lowerChromaticAberration(const document::NodeRecord& node,
+                         std::vector<runtime::CompiledOperation>& operations,
+                         std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    using core::field::FieldOutputMode;
+    using core::field::FieldResultKind;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    auto amount = compiledScalarParameter(findParameterBinding(node, "amount"));
+    auto centre = compiledVec2Parameter(findParameterBinding(node, "center"));
+    if (!amount || !centre) {
+        addTopologyFailure(node.id, "Chromatic Aberration parameters could not be lowered.");
+        return false;
+    }
+    if (isMuted(node.id))
+        amount = fieldConstant(0.0);
+    const auto& format = composition_->format();
+    // Coordinates are normalised by half the composition's diagonal.
+    const auto scale = std::max(0.5 * std::hypot(static_cast<double>(format.width()),
+                                                 static_cast<double>(format.height())),
+                                1.0);
+    const auto* constant = std::get_if<double>(&amount->source);
+    if (constant != nullptr && *constant == 0.0) {
+        portOperations_.insert_or_assign({node.id, "image"}, *input);
+        indices.emplace(node.id, *input);
+        return true;
+    }
+    FieldBuild build;
+    build.operations = &operations;
+    build.indices = &indices;
+    const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+    const auto slot = fieldSlot(build, node, *input);
+    if (slot < 0)
+        return false;
+    const auto red = fieldEmit(build, FieldOp::LensWarp, {c, -1, -1, -1}, {0},
+                               {*amount, fieldConstant(0.0), fieldConstant(0.0), fieldConstant(0.0),
+                                fieldConstant(scale)},
+                               {*centre});
+    const auto twice = fieldSwizzle(build, c, {0, 1, 4, 4}, {2.0, 2.0, 1.0, 1.0});
+    const auto blue = fieldEmit(build, FieldOp::Math, {twice, red, -1, -1}, {1},
+                                {fieldConstant(0.1), fieldConstant(0.0)});
+    // Bilinear, transparent outside the input, the texel as stored (premultiplied).
+    const auto read = [&](const int where) {
+        FieldBuild::Step step;
+        step.instruction.op = static_cast<std::uint8_t>(FieldOp::Image);
+        step.instruction.choices = {0, 1, 3, 4, 0, 1};
+        step.instruction.slot = slot;
+        step.output = build.nextRegister++;
+        step.inputs = {where, -1, -1, -1};
+        build.steps.push_back(std::move(step));
+        return build.steps.back().output;
+    };
+    const auto texelRed = read(red);
+    const auto texelGreen = read(c);
+    const auto texelBlue = read(blue);
+    const auto green = fieldSwizzle(build, texelGreen, {1, 4, 4, 4});
+    const auto blueChannel = fieldSwizzle(build, texelBlue, {2, 4, 4, 4});
+    const auto widest = fieldEmit(build, FieldOp::Math, {texelRed, texelGreen, -1, -1}, {5},
+                                  {fieldConstant(0.1), fieldConstant(0.0)});
+    const auto widest3 = fieldEmit(build, FieldOp::Math, {widest, texelBlue, -1, -1}, {5},
+                                   {fieldConstant(0.1), fieldConstant(0.0)});
+    const auto alpha = fieldSwizzle(build, widest3, {3, 4, 4, 4});
+    const auto joined = fieldEmit(build, FieldOp::Combine, {texelRed, green, blueChannel, alpha}, {},
+                                  {fieldConstant(0.0), fieldConstant(0.0), fieldConstant(0.0),
+                                   fieldConstant(0.0)});
+    auto program = finishFieldProgram(build, joined, FieldResultKind::Premultiplied,
+                                      FieldOutputMode::Raw, node.id);
+    if (!program)
+        return false;
+    runtime::CompiledImageEffect effect{node.id, *input,
+                                        runtime::FieldRasterKernel{std::move(*program), 1}};
+    effect.fieldImages = std::move(build.images);
+    const auto index = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(std::move(effect));
+    portOperations_.insert_or_assign({node.id, "image"}, index);
+    indices.emplace(node.id, index);
+    return true;
+}

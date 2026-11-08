@@ -1781,6 +1781,12 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                      1U});
             id += 100;
         }
+    // #486 Chromatic Aberration: the program its lowering builds (three premultiplied reads of an
+    // HDR, partly transparent image through the atlas).
+    kernels.emplace_back("chromatic aberration",
+                         bloom::runtime::FieldRasterKernel{
+                             bloom::field_test_programs::chromaticAberrationProgram(id), 1U});
+    id += 100;
     for (const auto& [name, kernel] : kernels) {
         cache.clear();
         auto definition =

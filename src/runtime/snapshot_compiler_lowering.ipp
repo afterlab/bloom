@@ -518,6 +518,12 @@ lower(const std::vector<document::NodeId>& order) {
                 return {};
             continue;
         }
+        // #486 Chromatic Aberration: one field raster; muting is the identity, so it is handled here.
+        if (node->typeId == document::kChromaticAberrationNodeType) {
+            if (!lowerChromaticAberration(*node, operations, indices))
+                return {};
+            continue;
+        }
         // #364 Cryptomatte: the matte (Mask) and, with an input image, the image multiplied by
         // the matte (MultiplyAlpha, matte in alpha); without one the Image output is the matte.
         if (definition->second->lowering == runtime::NodeLoweringKind::Cryptomatte) {

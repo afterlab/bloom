@@ -155,8 +155,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
     // Fog; #507 adds Lens Flare; #486 adds Film Grain and Sharpen; #484 adds Motion Blur, Vector
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
-    // Zoom Blur; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens Distortion.
-    expectations.expect(registry.definitions().size() == 190,
+    // Zoom Blur; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens Distortion and Chromatic Aberration.
+    expectations.expect(registry.definitions().size() == 191,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -303,7 +303,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         "#504: Colorize has its constant choices and an animatable socket per value");
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
-    expectCategory({"bloom.camera-shake", "bloom.lens-distortion"}, document::NodeCategory::Transform);
+    expectCategory({"bloom.camera-shake", "bloom.lens-distortion", "bloom.chromatic-aberration"}, document::NodeCategory::Transform);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
                     "bloom.sharpen", "bloom.codec-degrade"},
@@ -397,6 +397,24 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             lens->outputs[1].name == "stMap" &&
             lens->outputs[1].valueKind == runtime::SocketValueKind::Image,
         "#486: Lens Distortion has an animatable socket per value and two Image outputs");
+    // #486 Chromatic Aberration: an Image in and out, a socket for the amount and the centre, in
+    // parameter order, both defaulting to no effect. It takes no effect mask.
+    const auto* aberration = registry.find("bloom.chromatic-aberration", 1);
+    expectations.expect(
+        aberration != nullptr && !document::hasEffectMask(*aberration) &&
+            aberration->inputs.size() == 3 && aberration->parameters.size() == 2 &&
+            aberration->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            aberration->inputs[1].name == "amount" &&
+            aberration->inputs[1].valueKind == runtime::SocketValueKind::Scalar &&
+            aberration->inputs[2].name == "center" &&
+            aberration->inputs[2].valueKind == runtime::SocketValueKind::Vector2 &&
+            aberration->parameters[0].role == "amount" &&
+            aberration->parameters[0].defaultValue == document::ParameterValue{0.0} &&
+            aberration->parameters[1].role == "center" &&
+            aberration->parameters[1].defaultValue == document::ParameterValue{document::Vec2d{}} &&
+            aberration->outputs.size() == 1 && aberration->outputs[0].name == "image" &&
+            aberration->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#486: Chromatic Aberration has an animatable socket per value and a default of no effect");
     // #563 Codec Degrade: an Image in and out, its block size, GOP length and chroma bleed with no
     // socket, and a socket for Quality and P-frame persistence; the effect mask follows.
     const auto codecUnmasked = withoutMask(registry.find("bloom.codec-degrade", 1));

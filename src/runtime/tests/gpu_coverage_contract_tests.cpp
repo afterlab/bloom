@@ -1691,6 +1691,15 @@ displayProofRunner(const bool customView) {
                  "production Lens Distortion lowering: the warped image in both modes and its ST "
                  "map in both modes, full frame and ROI");
         base += 1000;
+        // #486 Chromatic Aberration: the one program its lowering builds, three premultiplied image
+        // reads at the red, green and blue positions.
+        addField("node.bloom.chromatic-aberration",
+                 {bloom::runtime::FieldRasterKernel{
+                     bloom::field_test_programs::chromaticAberrationProgram(base), 1}},
+                 base + 100,
+                 "production Chromatic Aberration lowering: red and blue read at opposite radial "
+                 "offsets, full frame and ROI");
+        base += 1000;
         for (const auto& [type, ops] : nodes) {
             std::vector<bloom::runtime::ImageEffectKernel> kernels;
             for (const auto op : ops) {

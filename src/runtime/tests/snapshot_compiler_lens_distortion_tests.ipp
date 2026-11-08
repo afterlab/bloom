@@ -71,9 +71,10 @@ struct LensFixture final {
 // size of the composition.
 [[nodiscard]] LensFixture
 lensFixture(const std::unordered_map<std::string, document::ParameterValue>& values = {},
-            const std::string_view outputPort = "image", const bool throughLens = true) {
+            const std::string_view outputPort = "image", const bool throughLens = true,
+            const std::string_view nodeType = document::kLensDistortionNodeType) {
     using namespace document;
-    LensFixture fixture{recipeFixture(kLensDistortionNodeType, values, {}, outputPort, true),
+    LensFixture fixture{recipeFixture(nodeType, values, {}, outputPort, true),
                         NodeId::fromRaw(1380)};
     auto* composition = fixture.recipe.project.findComposition(kCompositionId);
     auto& graph = composition->graph();
