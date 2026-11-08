@@ -1617,7 +1617,7 @@ class NodeItem final : public QGraphicsObject {
             case document::ParameterValueKind::Float64:
                 return row.numeric[0] == nullptr
                            ? std::nullopt
-                           : std::optional(document::ParameterValue{row.numeric[0]->value()});
+                           : std::optional(document::ParameterValue{row.numeric[0]->storedValue()});
             case document::ParameterValueKind::Vec2d:
             case document::ParameterValueKind::Vec3d:
                 // Numeric component edits are handled above through the authoritative parameter.
@@ -1642,7 +1642,7 @@ class NodeItem final : public QGraphicsObject {
         const auto setComponent = [&row](const std::size_t component, const double value) {
             if (row.numeric[component] != nullptr) {
                 const QSignalBlocker blocker(row.numeric[component]);
-                row.numeric[component]->setValue(value);
+                row.numeric[component]->setValue(value * row.numeric[component]->displayScale());
             }
         };
         switch (row.kind) {
@@ -1826,7 +1826,7 @@ class NodeItem final : public QGraphicsObject {
                                                      const double value) {
                         if (row.numeric[component] != nullptr) {
                             const QSignalBlocker blocker(row.numeric[component]);
-                            row.numeric[component]->setValue(value);
+                            row.numeric[component]->setValue(value * row.numeric[component]->displayScale());
                         }
                     };
                     if constexpr (std::is_same_v<Held, bool>) {
