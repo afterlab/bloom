@@ -212,6 +212,9 @@ McpServerCore::McpServerCore(McpCoreDependencies dependencies)
     : state_(std::make_unique<State>(std::move(dependencies))) {
     auto& state = *state_;
     state.gpuExportProvider = state.dependencies.gpuProvider;
+    state.fileGpuProvider = state.dependencies.fileSessionGpuProvider
+                                ? state.dependencies.fileSessionGpuProvider
+                                : state.dependencies.gpuProvider;
     if (auto* headless =
             std::get_if<std::reference_wrapper<scripting::Session>>(&state.dependencies.session)) {
         scripting::Events events(headless->get());
@@ -525,7 +528,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                     scripting::Session* target = nullptr;
                     scripting::OperationContext context;
                     std::uint64_t generation = 0;
-                    std::unique_lock<std::mutex> fileLock;
+                    std::unique_lock<std::timed_mutex> fileLock;
                     if (projectFile) {
                         fileLock = std::unique_lock(state.fileMutex);
                         target = &fileSessionFor(state, *projectFile, control);
@@ -564,7 +567,10 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                                  .content = {},
                                  .summary = {},
                                  .notice = std::nullopt,
-                                 .compileFailures = {}};
+                                 .compileFailures = {},
+                                 .gpuProvider = projectFile ? state.fileGpuProvider
+                                                            : state.gpuExportProvider,
+                                 .fileSession = projectFile.has_value()};
                     auto* arguments = toolArguments;
                     switch (*tool) {
                     case McpTool::Query:

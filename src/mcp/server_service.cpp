@@ -391,6 +391,7 @@ McpServerService::McpServerService(McpServerServiceDependencies dependencies)
                     .callerIsOwner = false},
         .scheduler = s.dependencies.scheduler,
         .gpuProvider = nullptr,
+        .fileSessionGpuProvider = s.dependencies.fileSessionGpuProvider,
         .captureDirectory = s.dependencies.captureDirectory,
         .ui = s.dependencies.liveUi,
         .profilerSnapshot = s.dependencies.profilerSnapshot,

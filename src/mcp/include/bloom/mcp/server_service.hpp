@@ -524,6 +524,9 @@ struct McpServerServiceDependencies final {
     // When the queue is replaced the owner calls exportQueueReplaced().
     std::function<host::ExportQueueService*()> exportQueue;
     runtime::TaskScheduler& scheduler;
+    // The application's final-render provider, used only to render projectFile sessions; the open
+    // project renders through the export queue. The application retires it after the service.
+    std::shared_ptr<host::GpuExportProvider> fileSessionGpuProvider{};
     // The application's session and UI seams (live_ui_port.hpp): project lifecycle, editor.reveal,
     // selection, active composition, transport and Viewer settings. Called on the owner thread;
     // an empty member answers bloom.mcp.ui-unbound.

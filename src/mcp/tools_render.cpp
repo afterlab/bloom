@@ -131,11 +131,34 @@ RenderDestination renderDestination(const std::string& text, const std::string_v
     return {path, pattern};
 }
 
+// A projectFile render says which route rendered it, in the vocabulary the other provenance
+// fields use (gpuFrames, cpuReferenceFrames, "gpu", "cpu-reference"): a file render never turns
+// into a silent CPU render. Frames the provider did not evaluate on the GPU ran the CPU reference
+// path, whether no device was available or no provider was given.
+void reportFileRoute(Json& out, yyjson_mut_val* value, const McpCall& call,
+                     const std::uint64_t frames, const std::uint64_t gpuFrames,
+                     const bool withProvenance = true) {
+    if (!call.fileSession)
+        return;
+    const auto gpu = std::min(gpuFrames, frames);
+    const auto cpu = frames - gpu;
+    out.set(value, "gpuFrames", out.number(gpu));
+    out.set(value, "cpuReferenceFrames", out.number(cpu));
+    if (withProvenance)
+        out.set(value, "provenance", out.text(cpu == 0 && gpu > 0 ? "gpu" : "cpu-reference"));
+    if (cpu > 0)
+        out.set(value, "routeNote",
+                out.text(std::to_string(cpu) + " of " + std::to_string(frames) +
+                         " frames rendered on the CPU reference path: no GPU device was "
+                         "available to the project file's render, or the scene could not run "
+                         "on it."));
+}
+
 yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& call,
                                yyjson_val* arguments, const bool compositionExport) {
     auto& scheduler = core.dependencies.scheduler;
     auto& session = call.session;
-    const auto& gpuExportProvider = core.gpuExportProvider;
+    const auto& gpuExportProvider = call.gpuProvider;
     const auto& stop = call.control.stop;
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
@@ -214,6 +237,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         throw std::runtime_error("Project color settings are unavailable for export");
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     std::uint64_t frames = 0;
+    std::uint64_t gpuFrames = 0;
     std::string report;
     if (still) {
         const auto result = scripting::Render::run(
@@ -229,6 +253,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         if (!result.succeeded)
             throw std::runtime_error(result.diagnostic);
         frames = result.publishedFrames;
+        gpuFrames = result.gpuEvaluatedFrames;
         report = result.preservationReport;
     } else {
         const auto profile = member(arguments, "profile") ? string(member(arguments, "profile"), 32)
@@ -305,9 +330,11 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                                                               : "Export was not published");
         }
         frames = runner.result()->encodedFrames;
+        gpuFrames = runner.result()->gpuEvaluatedFrames;
     }
     auto* result = out.object();
     out.set(result, "publishedFrames", out.number(frames));
+    reportFileRoute(out, result, call, frames, gpuFrames);
     out.set(result, "preservationReport", out.text(report));
     auto* files = out.array();
     const auto add = [&](const std::filesystem::path& path) {
@@ -538,6 +565,8 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
     const bool range = last != first;
     std::optional<TransientResult> transient;
     std::string provenance = "cpu-reference";
+    std::uint64_t routeFrames = 0;
+    std::uint64_t routeGpuFrames = 0;
     if (call.live != nullptr) {
         auto preset = host::builtInExportPreset("builtin:exr-sequence");
         if (!preset)
@@ -563,9 +592,13 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
              .preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
              .destination = destination,
              .cancelled = [stop] { return stop.stop_requested(); }},
-            {}, core.gpuExportProvider);
+            {}, call.gpuProvider);
         if (!result.succeeded)
             throw std::runtime_error(result.diagnostic);
+        routeFrames = result.publishedFrames;
+        routeGpuFrames = result.gpuEvaluatedFrames;
+        if (call.fileSession && routeGpuFrames >= routeFrames && routeGpuFrames > 0)
+            provenance = "gpu";
     }
     StatisticsAccumulator all(bins);
     auto* frames = out.array();
@@ -612,6 +645,7 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
                                     "red, green and blue"));
     out.set(value, "route", out.text("production still export to a scratch OpenEXR, working space"));
     out.set(value, "provenance", out.text(provenance));
+    reportFileRoute(out, value, call, routeFrames, routeGpuFrames, false);
     out.set(value, "statistics", statisticsJson(out, all.result()));
     if (range)
         out.set(value, "frames", frames);
@@ -656,6 +690,8 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
     const auto path = nextCapturePath(core);
     // The live capture's transient job (job id and run log, as render and export carry).
     std::optional<TransientResult> transient;
+    std::uint64_t routeFrames = 0;
+    std::uint64_t routeGpuFrames = 0;
     call.summary =
         "composition " + std::to_string(compositionId) + " frame " + std::to_string(frame);
     if (call.live != nullptr) {
@@ -684,9 +720,11 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
                                     .preset = output::OutputPresetV1::PngRgba8SrgbV1,
                                     .destination = path,
                                     .cancelled = [stop] { return stop.stop_requested(); }},
-                                   {}, core.gpuExportProvider);
+                                   {}, call.gpuProvider);
         if (!result.succeeded)
             throw std::runtime_error(result.diagnostic);
+        routeFrames = result.publishedFrames;
+        routeGpuFrames = result.gpuEvaluatedFrames;
     }
     pruneCaptures(path.parent_path());
     std::error_code error;
@@ -699,6 +737,7 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
     out.set(value, "path", out.text(path.string()));
     out.set(value, "bytes", out.number(bytes));
     out.set(value, "digest", out.text(digestFile(path)));
+    reportFileRoute(out, value, call, routeFrames, routeGpuFrames);
     out.set(value, "width", out.number(composition->format().width()));
     out.set(value, "height", out.number(composition->format().height()));
     if (transient) {

@@ -83,6 +83,13 @@ struct McpCoreDependencies final {
     // composition root shares it with its headless export queue and retires it after the core).
     // The live host renders through the export queue, which owns its provider; leave it null.
     std::shared_ptr<host::GpuExportProvider> gpuProvider;
+    // The provider that renders projectFile sessions (another project file than the open one).
+    // The desktop application passes its own final-render provider here, never as gpuProvider: the
+    // open project's routes keep the export queue. Each final request carries its own source
+    // directory, so one provider serves any project. Empty falls back to gpuProvider (stdio) or
+    // the CPU reference path, and the result then reports cpu-reference provenance. It must
+    // outlive the core.
+    std::shared_ptr<host::GpuExportProvider> fileSessionGpuProvider{};
     // Where capture publishes its PNG before embedding it: a per-user cache folder (desktop:
     // <user cache>/mcp-captures; stdio: the same). Empty makes capture answer ExportUnavailable
     // with the reason "Bloom can't find a folder for captures." At most kMcpRetainedCaptures files

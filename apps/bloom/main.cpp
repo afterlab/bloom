@@ -712,6 +712,8 @@ int main(int argc, char* argv[]) try {
         // (the service then answers bloom.mcp.export-unavailable).
         .exportQueue = [&projectHost] { return projectHost.exportQueue(); },
         .scheduler = taskScheduler,
+        // Another project file's renders only; the open project keeps the export queue.
+        .fileSessionGpuProvider = gpuExportProvider,
         .liveUi = mcpLiveUi.port(),
         // profiler.snapshot (#423), on the UI thread: publish the UI-owned values, then take a
         // sample here unless the Profiler's sampler thread is running (then its newest sample).

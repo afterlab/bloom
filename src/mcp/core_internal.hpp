@@ -64,6 +64,12 @@ struct McpCall final {
     std::optional<McpToolErrorCode> notice;
     // transact: the compositions the edit left unable to compile (copied to McpHandled).
     std::vector<McpCompileFailureFact> compileFailures;
+    // The final-render provider this call renders through on the headless route: the stdio
+    // server's own provider, or for a projectFile call the file-session provider. Null renders on
+    // the CPU reference path, and the result then says so.
+    std::shared_ptr<host::GpuExportProvider> gpuProvider;
+    // True for a projectFile call: the result reports which route rendered it.
+    bool fileSession = false;
 };
 
 // A non-command fact the events tool reports beside command events: a project lifecycle step
@@ -111,6 +117,9 @@ struct McpServerCore::State {
 
     // stdio only: the server-lifetime GPU final-render provider (McpCoreDependencies).
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider;
+    // Used ONLY for renders of projectFile sessions (McpCoreDependencies::fileSessionGpuProvider,
+    // else the stdio provider). Never read by the open project's own routes.
+    std::shared_ptr<host::GpuExportProvider> fileGpuProvider;
 
     std::mutex captureMutex;
     std::uint64_t captureCounter = 0;
@@ -122,7 +131,7 @@ struct McpServerCore::State {
         std::unique_ptr<scripting::Session> session;
         document::Revision savedRevision;
     };
-    std::mutex fileMutex;
+    std::timed_mutex fileMutex;
     std::map<std::string, FileSession> fileSessions;
 
     // The newest kRetiredTransientJobs transient render/export/capture jobs, oldest first: each
@@ -156,10 +165,17 @@ inline constexpr std::size_t kMcpFileSessions = 4;
 [[nodiscard]] std::string withoutProjectFile(yyjson_val* arguments);
 // The headless session for `path`, opened on first use. The caller holds State::fileMutex. Refuses
 // a file that is open in the application or as the server's own project, and more than
-// kMcpFileSessions files at once.
+// kMcpFileSessions files at once. The open-in-Bloom check runs on every call (`recheck`; project.close
+// skips it), so a
+// file the artist opened after the session did is refused, and it fails closed when the
+// application cannot be asked in time.
 [[nodiscard]] scripting::Session& fileSessionFor(McpServerCore::State& core,
                                                  const std::filesystem::path& path,
-                                                 const McpRequestControl& control);
+                                                 const McpRequestControl& control,
+                                                 bool recheck = true);
+// True when a projectFile session holds `path` (project.open and project.save-as refuse it).
+// Waits at most two seconds for a file call in progress and answers true then (fail closed).
+[[nodiscard]] bool fileSessionHolds(McpServerCore::State& core, const std::filesystem::path& path);
 // project.save and project.close on such a file.
 [[nodiscard]] yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, McpTool tool,
                                               const std::filesystem::path& path,
