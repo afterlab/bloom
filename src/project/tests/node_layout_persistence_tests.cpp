@@ -265,6 +265,11 @@ void blurNodeReopen() {
                     ? document::ParameterValue{std::int64_t{1234}}
                 : parameter.schemaKey == "bloom.film-grain.monochrome"
                     ? document::ParameterValue{true}
+                // #565: Sensor Noise on, and a blotch size within its domain (1 to 512).
+                : parameter.schemaKey == "bloom.film-grain.mode"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.film-grain.blotchSize"
+                    ? document::ParameterValue{37.5}
                 : parameter.valueKind == document::ParameterValueKind::Float64 &&
                         parameter.schemaKey.starts_with("bloom.film-grain.")
                     ? document::ParameterValue{0.625}
