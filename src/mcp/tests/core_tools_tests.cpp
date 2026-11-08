@@ -910,6 +910,13 @@ void retiredTransientJobs() {
                    !contains(emptyStart, "-32602") && contains(emptyStart, "NothingToStart"),
                "export.start and export.start-all take the worker options: " + badStart +
                    emptyStart);
+        // #619: a job id is accepted as an integer or as a decimal string, with the same answer.
+        const auto numberStart = server.call("export.start", R"({"jobs":[1]})");
+        const auto textStart = server.call("export.start", R"({"jobs":["1"]})");
+        expect(!contains(numberStart, "-32602") && !contains(textStart, "-32602") &&
+                   contains(numberStart, "UnknownJob") && contains(textStart, "UnknownJob"),
+               "export.start answers a job id the same as an integer and as a string: " +
+                   numberStart + textStart);
     }
 }
 
