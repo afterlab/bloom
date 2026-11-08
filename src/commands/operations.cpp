@@ -794,9 +794,14 @@ OperationResult AddSolidLayer::apply(document::Draft& draft) const {
 OperationResult AddImageLayer::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     const auto* asset = draft.project().findAsset(asset_);
-    if (!composition || !asset)
+    if (!composition)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
+    if (!asset)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Image asset or composition does not exist");
+                                         "Asset " + std::to_string(asset_.value()) +
+                                             " does not exist in the project");
     // The layer shows its source's name and follows it (document 1.30).
     const std::string name =
         !asset->name.empty() ? asset->name

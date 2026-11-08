@@ -177,6 +177,29 @@ void testOrganization(TestContext& test) {
         "oversized tag refused");
     test.expect(execute<RenameAsset>(document, stack, a, "").status == CommandStatus::Rejected,
                 "empty asset name refused");
+    // #578: the refusals name the object that was addressed.
+    const auto refusal = [&](const auto& result) {
+        return result.operationFailures.empty() ? std::string("(not refused)")
+                                                : result.operationFailures.front().issue.message;
+    };
+    const auto missingAssetMessage =
+        refusal(execute<RenameAsset>(document, stack, AssetId::fromRaw(4242), "Name"));
+    test.expect(missingAssetMessage.find("Asset 4242") != std::string::npos,
+                "renaming a missing asset names it: " + missingAssetMessage);
+    const auto missingTagMessage = refusal(
+        execute<SetAssetTags>(document, stack, AssetId::fromRaw(4243), std::vector<std::string>{"x"}));
+    test.expect(missingTagMessage.find("Asset 4243") != std::string::npos,
+                "tagging a missing asset names it: " + missingTagMessage);
+    const auto repeatedTagMessage = refusal(
+        execute<SetAssetTags>(document, stack, Assets{a, a}, std::vector<std::string>{"x"}));
+    test.expect(repeatedTagMessage.find("is listed more than once") != std::string::npos &&
+                    repeatedTagMessage.find("Asset " + std::to_string(a.value())) !=
+                        std::string::npos,
+                "tagging an asset twice says which one: " + repeatedTagMessage);
+    const auto missingFolderMessage = refusal(
+        execute<RenameAssetFolder>(document, stack, AssetFolderId::fromRaw(4244), "Name"));
+    test.expect(missingFolderMessage.find("Folder 4244") != std::string::npos,
+                "renaming a missing folder names it: " + missingFolderMessage);
     test.expect(execute<RemoveAssetFolder>(document, stack, folder).changed(),
                 "folder removal publishes");
     auto removed = document.snapshot();

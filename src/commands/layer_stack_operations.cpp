@@ -21,8 +21,9 @@ boundaryNodes(const document::Draft& draft, const document::CompositionId compos
               std::vector<document::LayerId>* entryLayers = nullptr) {
     const auto* composition = draft.project().findComposition(compositionId);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(compositionId.value()) + " does not exist");
     if (layers.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue, "No layers were named");
     for (const auto layer : layers) {

@@ -74,7 +74,7 @@ OperationResult SetNodeParameterValue::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     auto* node = composition ? composition->graph().findNode(nodeId_) : nullptr;
     if (node == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget, "Node does not exist");
+        return detail::missingNode(composition, compositionId_, nodeId_);
     if (const auto binding = std::ranges::find(node->parameters, role_,
                                                &document::ParameterBinding::role);
         binding != node->parameters.end())
@@ -88,15 +88,19 @@ OperationResult SetNodeParameterValue::apply(document::Draft& draft) const {
             ? definition->parameters.end()
             : std::ranges::find(definition->parameters, role_, &document::ParameterDefinition::role);
     if (definition == nullptr || parameter == definition->parameters.end() || parameter->required)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The node has no such optional parameter");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Node " + std::to_string(nodeId_.value()) + " (" + node->typeId +
+                ") has no optional parameter \"" + role_ + "\"");
     const auto parameterId = draft.ids().allocateParameter();
     if (!parameterId)
         return detail::exhaustedIds("parameter");
     if (!composition->parameters().insert(
             {*parameterId, parameter->schemaKey, document::ConstantValueSource{value_}}))
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "The value violates the parameter schema");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            "The value for parameter \"" + role_ + "\" of node " +
+                std::to_string(nodeId_.value()) + " violates the parameter schema");
     node->parameters.push_back({role_, *parameterId});
     auto result = OperationResult::applied();
     result.outputs.push_back({"parameter", *parameterId});
@@ -356,7 +360,8 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         if (detail::protectedNode(composition->graph(), id))
             return OperationResult::rejected(
                 OperationIssueCode::Unsupported,
-                "Output and its directly connected Merge cannot be removed");
+                "Node " + std::to_string(id.value()) +
+                    " is the composition Output or the Merge connected to it and cannot be removed");
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
         // ADR 0028: a removed layer's masks own parameters (and curves) outside node bindings;
@@ -448,13 +453,24 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     const bool sourceIsKindlessReroute = !sourceKind && kindless(source_.nodeId);
     const bool destinationIsKindlessReroute =
         !inputKind && kindless(detail::destinationNode(destination_));
-    if ((!sourceKind && !sourceIsKindlessReroute) || (!inputKind && !destinationIsKindlessReroute))
+    if (!sourceKind && !sourceIsKindlessReroute)
         return OperationResult::rejected(
             OperationIssueCode::InvalidTarget,
-            "Connection requires existing registered source and destination ports");
+            "Output \"" + source_.port + "\" of node " + std::to_string(source_.nodeId.value()) +
+                " is not a registered output port in composition " +
+                std::to_string(compositionId_.value()));
+    if (!inputKind && !destinationIsKindlessReroute)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "The " + detail::describeInput(destination_) +
+                " is not a registered input port in composition " +
+                std::to_string(compositionId_.value()));
     if (sourceKind && inputKind && !graph.acceptsConnection(*sourceKind, destination_, registry_))
-        return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
-                                         "Connected socket kinds do not match");
+        return OperationResult::rejected(
+            OperationIssueCode::SocketKindMismatch,
+            "Output \"" + source_.port + "\" of node " + std::to_string(source_.nodeId.value()) +
+                " cannot connect to the " + detail::describeInput(destination_) +
+                ": their socket kinds do not match");
     // #543: the first link into a gradient stop's socket binds the stop's own link record: a
     // parameter holding only the driver, bound under the socket's name beside the gradient.
     if (const auto* fixed = std::get_if<document::NodeInputRef>(&destination_);
@@ -467,15 +483,20 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                 }))
                 return OperationResult::rejected(
                     OperationIssueCode::InvalidTarget,
-                    "Edit the gradient before linking one of its stops");
+                    "Node " + std::to_string(fixed->nodeId.value()) + " has no \"" + stop->role +
+                        "\" gradient; edit the gradient before linking the stop \"" +
+                        fixed->port + "\"");
             const auto parameterId = draft.ids().allocateParameter();
             if (!parameterId)
                 return detail::exhaustedIds("parameter");
             if (!composition->parameters().insert(
                     {*parameterId, std::string(document::gradientStopSchemaKey(stop->component)),
                      document::DriverBindingSource{source_.nodeId, source_.port}}))
-                return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                                 "Driver binding could not be applied");
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidValue,
+                    "The driver binding for the " + detail::describeInput(destination_) +
+                        " could not be inserted into composition " +
+                        std::to_string(compositionId_.value()));
             node->parameters.push_back({fixed->port, *parameterId});
             if (const auto failure = detail::validateGraph(*composition, registry_))
                 return *failure;
@@ -487,14 +508,19 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     if (const auto* binding = detail::parameterSocketBinding(graph, destination_)) {
         const auto* parameter = composition->parameters().find(binding->parameterId);
         if (parameter == nullptr)
-            return detail::invalidTarget();
+            return detail::brokenReference(
+                "The " + detail::describeInput(destination_) + " is bound to parameter " +
+                std::to_string(binding->parameterId.value()) + ", which composition " +
+                std::to_string(compositionId_.value()) + " does not hold");
         const document::DriverBindingSource driver{source_.nodeId, source_.port};
         if (std::holds_alternative<document::DriverBindingSource>(parameter->source) &&
             std::get<document::DriverBindingSource>(parameter->source) == driver)
             return OperationResult::noChange();
         if (!composition->parameters().setSource(binding->parameterId, driver))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Driver binding could not be applied");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The driver binding of parameter " + std::to_string(binding->parameterId.value()) +
+                    " could not be replaced for the " + detail::describeInput(destination_));
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
         return neutral(OperationResult::applied());
@@ -507,7 +533,9 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         slot != nullptr && !slot->slotId.isValid()) {
         auto* stack = graph.merge(slot->stackNodeId);
         if (!stack)
-            return detail::invalidTarget();
+            return detail::brokenReference("Merge node " + std::to_string(slot->stackNodeId.value()) +
+                                           " does not exist in composition " +
+                                           std::to_string(compositionId_.value()));
         const auto boundaries = graph.layerOutputs();
         // #502: a Merge's own entry layers share its node id; only a Layer node names a slot.
         const auto boundary = std::ranges::find_if(boundaries, [this](const auto& candidate) {
@@ -540,17 +568,26 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
             return detail::exhaustedIds("edge");
         if (existingSlot == nullptr) {
             if (!stack->append({slotId, layerId}))
-                return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                                 "Layer stack slot could not be inserted");
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidValue,
+                    "Slot " + std::to_string(slotId.value()) + " could not be added to Merge node " +
+                        std::to_string(slot->stackNodeId.value()) + " for layer " +
+                        std::to_string(layerId.value()));
             if (insertBefore_.has_value() && !stack->moveBefore(slotId, insertBefore_))
-                return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                                 "Layer stack slot could not be ordered");
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidValue,
+                    "Slot " + std::to_string(slotId.value()) +
+                        " could not be placed before the requested slot on Merge node " +
+                        std::to_string(slot->stackNodeId.value()));
         }
         if (!graph.addEdge({*edgeId, source_,
                             document::LayerStackInputRef{slot->stackNodeId, slotId, slot->role}},
                            registry_))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Layer stack connection could not be inserted");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The connection from node " + std::to_string(source_.nodeId.value()) + " to slot " +
+                    std::to_string(slotId.value()) + " of Merge node " +
+                    std::to_string(slot->stackNodeId.value()) + " could not be inserted");
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
         return neutral(OperationResult::applied(
@@ -567,7 +604,9 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&destination_)) {
         auto* stack = graph.merge(slot->stackNodeId);
         if (!stack || !stack->find(slot->slotId))
-            return detail::invalidTarget();
+            return detail::brokenReference("The " + detail::describeInput(destination_) +
+                                           " does not exist in composition " +
+                                           std::to_string(compositionId_.value()));
         const auto entries = stack->entries();
         const auto found =
             std::ranges::find(entries, slot->slotId, &document::LayerStackEntry::slotId);
@@ -587,14 +626,19 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                                  : document::LayerId{};
         (void)stack->erase(slot->slotId);
         if (!stack->append({slot->slotId, layerId}) || !stack->moveBefore(slot->slotId, next))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Merge slot source cannot be replaced");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The source of slot " + std::to_string(slot->slotId.value()) + " of Merge node " +
+                    std::to_string(slot->stackNodeId.value()) + " could not be replaced");
         if (replacedLayer != layerId)
             graph.clearTrackMattesOutsideMerge(replacedLayer);
     }
     if (!graph.addEdge({*edgeId, source_, destination_}, registry_))
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Connection could not be inserted");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            "The connection from output \"" + source_.port + "\" of node " +
+                std::to_string(source_.nodeId.value()) + " to the " +
+                detail::describeInput(destination_) + " could not be inserted");
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
     return neutral(OperationResult::applied({{"edge", *edgeId}}));
@@ -605,7 +649,9 @@ OperationResult SetMergeEnabled::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     auto* merge = composition ? composition->graph().merge(mergeId_) : nullptr;
     if (!merge)
-        return detail::invalidTarget();
+        return detail::brokenReference("Merge node " + std::to_string(mergeId_.value()) +
+                                       " does not exist in composition " +
+                                       std::to_string(compositionId_.value()));
     if (merge->enabled() == enabled_)
         return OperationResult::noChange();
     merge->setEnabled(enabled_);
@@ -616,8 +662,20 @@ std::string_view ReorderMergeInput::typeId() const noexcept { return "bloom.merg
 OperationResult ReorderMergeInput::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     auto* stack = composition ? composition->graph().merge(mergeId_) : nullptr;
-    if (!stack || !stack->find(slotId_) || newIndex_ >= stack->entries().size())
-        return detail::invalidTarget();
+    if (!stack)
+        return detail::brokenReference("Merge node " + std::to_string(mergeId_.value()) +
+                                       " does not exist in composition " +
+                                       std::to_string(compositionId_.value()));
+    if (!stack->find(slotId_))
+        return detail::brokenReference("Slot " + std::to_string(slotId_.value()) +
+                                       " does not exist on Merge node " +
+                                       std::to_string(mergeId_.value()));
+    if (newIndex_ >= stack->entries().size())
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            "Position " + std::to_string(newIndex_) + " is outside Merge node " +
+                std::to_string(mergeId_.value()) + ", which has " +
+                std::to_string(stack->entries().size()) + " inputs");
     const auto entries = stack->entries();
     const auto found = std::ranges::find(entries, slotId_, &document::LayerStackEntry::slotId);
     const auto oldIndex = static_cast<std::size_t>(std::distance(entries.begin(), found));
@@ -627,7 +685,10 @@ OperationResult ReorderMergeInput::apply(document::Draft& draft) const {
     const auto before =
         beforeIndex == entries.size() ? std::nullopt : std::optional(entries[beforeIndex].slotId);
     if (!stack->moveBefore(slotId_, before))
-        return detail::invalidTarget();
+        return detail::brokenReference("Slot " + std::to_string(slotId_.value()) +
+                                       " could not be moved to position " +
+                                       std::to_string(newIndex_) + " on Merge node " +
+                                       std::to_string(mergeId_.value()));
     return OperationResult::applied();
 }
 
@@ -638,7 +699,9 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         return detail::missingComposition(compositionId_);
     auto& graph = composition->graph();
     if (!graph.inputKind(input_, registry_))
-        return detail::invalidTarget();
+        return detail::brokenReference("The " + detail::describeInput(input_) +
+                                       " does not exist in composition " +
+                                       std::to_string(compositionId_.value()));
     const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     std::set<document::NodeId> touched{detail::destinationNode(input_)};
     const auto neutral = [&](OperationResult result) {
@@ -649,7 +712,9 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&input_); slot != nullptr) {
         auto* stack = graph.merge(slot->stackNodeId);
         if (!stack || stack->find(slot->slotId) == nullptr)
-            return detail::invalidTarget();
+            return detail::brokenReference("The " + detail::describeInput(input_) +
+                                           " does not exist in composition " +
+                                           std::to_string(compositionId_.value()));
         // Detaching a stack slot's ONLY remaining edge removes the slot (task FIX1, item B): a slot
         // with nothing in it is not a shape the canonical graph admits, so "the slot" and "the link
         // into it" are one thing to the artist and one thing here. A slot now carries up to two
@@ -668,8 +733,10 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
                    other->slotId == slot->slotId;
         });
         if (!stillFed && !stack->erase(slot->slotId))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Layer stack slot could not be removed");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Slot " + std::to_string(slot->slotId.value()) + " could not be removed from Merge node " +
+                    std::to_string(slot->stackNodeId.value()));
         // A layer that leaves its Merge loses the track mattes it shared there (ADR 0028), as a
         // matte whose source node is deleted is cleared.
         if (!stillFed)
@@ -684,7 +751,10 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     if (const auto* binding = detail::parameterSocketBinding(graph, input_)) {
         const auto* parameter = composition->parameters().find(binding->parameterId);
         if (parameter == nullptr)
-            return detail::invalidTarget();
+            return detail::brokenReference(
+                "The " + detail::describeInput(input_) + " is bound to parameter " +
+                std::to_string(binding->parameterId.value()) + ", which composition " +
+                std::to_string(compositionId_.value()) + " does not hold");
         if (!std::holds_alternative<document::DriverBindingSource>(parameter->source))
             return OperationResult::noChange();
         const auto* fixed = std::get_if<document::NodeInputRef>(&input_);
@@ -705,12 +775,17 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
                                          : detail::registeredDefault(graph, fixed->nodeId,
                                                                      binding->role, registry_);
         if (!fallback.has_value())
-            return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                             "This socket has no registered default to restore");
+            return OperationResult::rejected(
+                OperationIssueCode::Unsupported,
+                "The " + detail::describeInput(input_) +
+                    " has no registered default to restore, so its link cannot be removed");
         if (!composition->parameters().setSource(
                 binding->parameterId, document::ConstantValueSource{*std::move(fallback)}))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Registered default violates its parameter schema");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The registered default for the " + detail::describeInput(input_) +
+                    " violates the schema of parameter " +
+                    std::to_string(binding->parameterId.value()));
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
         return neutral(OperationResult::applied());
@@ -768,8 +843,10 @@ OperationResult RemapGradientStopLinks::apply(document::Draft& draft) const {
     std::set<std::string_view> roles;
     for (const auto& binding : kept)
         if (!roles.insert(binding.role).second)
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Two stop links would land on one stop");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Two stop links of gradient \"" + gradientRole_ + "\" on node " +
+                    std::to_string(nodeId_.value()) + " would land on one stop");
     node->parameters = std::move(kept);
     for (const auto id : removed)
         static_cast<void>(composition->parameters().erase(id));
@@ -793,22 +870,28 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     if (detail::protectedNode(graph, nodeId_))
         return OperationResult::rejected(
             OperationIssueCode::Unsupported,
-            "Output and its directly connected Merge cannot be dissolved");
+            "Node " + std::to_string(nodeId_.value()) +
+                " is the composition Output or the Merge connected to it and cannot be dissolved");
     const auto* definition = registry_.find(node->typeId, node->schemaVersion);
     if (!definition)
         return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "Node has no registered socket schema");
+                                         "Node " + std::to_string(nodeId_.value()) + " (" +
+                                             node->typeId + ") has no registered socket schema");
     const auto input = std::ranges::find(definition->inputs, document::SocketValueKind::Image,
                                          &document::InputPortDefinition::valueKind);
     const auto output = std::ranges::find(definition->outputs, document::SocketValueKind::Image,
                                           &document::OutputPortDefinition::valueKind);
     if (input == definition->inputs.end() || output == definition->outputs.end())
         return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "Dissolve requires an Image input and Image output pair");
+                                         "Node " + std::to_string(nodeId_.value()) + " (" +
+                                             node->typeId +
+                                             ") has no Image input and Image output pair to dissolve through");
     const auto* incoming = detail::inputEdge(graph, document::NodeInputRef{nodeId_, input->name});
     if (!incoming)
         return OperationResult::rejected(OperationIssueCode::MissingReference,
-                                         "Dissolve requires a connected first Image input");
+                                         "Node " + std::to_string(nodeId_.value()) +
+                                             " has nothing connected to its \"" + input->name +
+                                             "\" Image input, so it cannot be dissolved");
     const auto source = incoming->source;
     const bool layerNode = node->typeId == document::kLayerOutputNodeType;
     std::optional<document::OutputPortRef> audioSource;
@@ -870,8 +953,11 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
             if (!released.contains({stack.nodeId(), entry.slotId}) || !entry.layerId.isValid())
                 continue;
             if (!graph.merge(stack.nodeId())->setLayerId(entry.slotId, {}))
-                return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                                 "Dissolve could not keep the Layer's entries");
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidValue,
+                    "Dissolving node " + std::to_string(nodeId_.value()) +
+                        " could not keep the layer of slot " + std::to_string(entry.slotId.value()) +
+                        " on Merge node " + std::to_string(stack.nodeId().value()));
         }
     }
     // A slot the Layer fed only audio it has no source for leaves, as before.
@@ -894,13 +980,20 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     (void)detail::detachFromNodeGroups(*composition, {nodeId_});
     for (const auto& edge : consumers) {
         if (!graph.addEdge(edge, registry_))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Dissolve could not reconnect consumers");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Dissolving node " + std::to_string(nodeId_.value()) +
+                    " could not reconnect the output of node " +
+                    std::to_string(edge.source.nodeId.value()) + " to node " +
+                    std::to_string(detail::destinationNode(edge.destination).value()));
     }
     for (const auto& edge : slotEdges) {
         if (!graph.addEdge(edge, registry_))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Dissolve could not reconnect the Layer's entries");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Dissolving node " + std::to_string(nodeId_.value()) +
+                    " could not reconnect node " + std::to_string(edge.source.nodeId.value()) +
+                    " to the " + detail::describeInput(edge.destination));
     }
     // A slot now fed straight by an upstream Layer node names that node's layer.
     for (const auto& [stackId, slotId] : released) {
@@ -918,7 +1011,9 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
         if (!graph.merge(stackId)->setLayerId(slotId, upstream->layerId))
             return OperationResult::rejected(
                 OperationIssueCode::Unsupported,
-                "Dissolve would give the upstream Layer node a second entry of one Merge");
+                "Dissolving node " + std::to_string(nodeId_.value()) +
+                    " would give the upstream Layer node " + std::to_string(fed->source.nodeId.value()) +
+                    " a second entry on Merge node " + std::to_string(stackId.value()));
     }
     detail::eraseOrphanedParameters(*composition, candidates);
     if (const auto failure = detail::validateGraph(*composition, registry_))

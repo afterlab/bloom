@@ -219,7 +219,9 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
             copyId = std::get<document::LayerId>(output.id);
     auto* copy = composition->graph().findLayer(copyId);
     if (!copy)
-        return detail::invalidTarget();
+        return detail::brokenReference("The copy of layer " + std::to_string(layer_.value()) +
+                                       " was not created in composition " +
+                                       std::to_string(composition_.value()));
     composition->graph().findLayer(layer_)->outPoint = *time;
     copy->parent = original.parent;
     copy->inPoint = *time;
@@ -301,7 +303,7 @@ OperationResult SetLayerNameFollowsSource::apply(document::Draft& draft) const {
     const auto* readable = std::as_const(draft.project()).findComposition(composition_);
     const auto* current = readable ? readable->graph().findLayer(layer_) : nullptr;
     if (!current)
-        return detail::invalidTarget();
+        return detail::missingLayer(readable, composition_, layer_);
     std::optional<std::string> sourceName;
     if (value_) {
         sourceName = document::layerSourceName(draft.project(), *readable, *current);

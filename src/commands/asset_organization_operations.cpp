@@ -68,7 +68,8 @@ OperationResult RenameAssetFolder::apply(document::Draft& draft) const {
     auto* folder = draft.project().findAssetFolder(id_);
     if (!folder)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Folder does not exist");
+                                         "Folder " + std::to_string(id_.value()) +
+                                             " does not exist in the project");
     if (!document::isValidHumanFacingName(name_) ||
         siblingNameExists(draft.project(), folder->parent, name_, id_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -108,13 +109,21 @@ OperationResult RemoveAssetFolder::apply(document::Draft& draft) const {
 OperationResult MoveAssetFolders::apply(document::Draft& draft) const {
     auto& project = draft.project();
     std::unordered_set<document::AssetFolderId> moving;
-    for (const auto id : folders_)
-        if (!project.findAssetFolder(id) || !moving.insert(id).second)
+    for (const auto id : folders_) {
+        if (!project.findAssetFolder(id))
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "Choose existing folders, each once");
+                                             "Folder " + std::to_string(id.value()) +
+                                                 " does not exist in the project");
+        if (!moving.insert(id).second)
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "Folder " + std::to_string(id.value()) +
+                                                 " is listed more than once");
+    }
     if (!folderExists(project, parent_))
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The destination folder does not exist");
+                                         "The destination folder " +
+                                             std::to_string(parent_->value()) +
+                                             " does not exist in the project");
     // The destination and its ancestors must not be one of the moving folders.
     for (auto cursor = parent_; cursor; cursor = project.findAssetFolder(*cursor)->parent)
         if (moving.contains(*cursor))
@@ -142,13 +151,21 @@ OperationResult MoveAssetFolders::apply(document::Draft& draft) const {
 OperationResult MoveCompositions::apply(document::Draft& draft) const {
     auto& project = draft.project();
     std::unordered_set<document::CompositionId> unique;
-    for (const auto id : compositions_)
-        if (!project.findComposition(id) || !unique.insert(id).second)
+    for (const auto id : compositions_) {
+        if (!project.findComposition(id))
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "Choose existing compositions, each once");
+                                             "Composition " + std::to_string(id.value()) +
+                                                 " does not exist");
+        if (!unique.insert(id).second)
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "Composition " + std::to_string(id.value()) +
+                                                 " is listed more than once");
+    }
     if (!folderExists(project, folder_))
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The destination folder does not exist");
+                                         "The destination folder " +
+                                             std::to_string(folder_->value()) +
+                                             " does not exist in the project");
     bool changed = false;
     for (const auto id : compositions_) {
         auto* composition = project.findComposition(id);
@@ -162,7 +179,9 @@ OperationResult MoveCompositions::apply(document::Draft& draft) const {
 OperationResult RenameAsset::apply(document::Draft& draft) const {
     auto* asset = draft.project().findAsset(id_);
     if (!asset)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget, "Asset does not exist");
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Asset " + std::to_string(id_.value()) +
+                                             " does not exist in the project");
     if (!document::isValidHumanFacingName(name_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Asset name must not be empty");
@@ -198,9 +217,19 @@ OperationResult MoveAssets::apply(document::Draft& draft) const {
     return changed ? OperationResult::applied() : OperationResult::noChange();
 }
 OperationResult SetAssetTags::apply(document::Draft& draft) const {
-    if (!validAssets(draft.project(), assets_))
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Asset does not exist or is repeated");
+    if (!validAssets(draft.project(), assets_)) {
+        std::unordered_set<document::AssetId> seen;
+        for (const auto id : assets_) {
+            if (!draft.project().findAsset(id))
+                return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                                 "Asset " + std::to_string(id.value()) +
+                                                     " does not exist in the project");
+            if (!seen.insert(id).second)
+                return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                                 "Asset " + std::to_string(id.value()) +
+                                                     " is listed more than once");
+        }
+    }
     auto tags = tags_;
     std::ranges::sort(tags);
     tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
@@ -221,8 +250,11 @@ OperationResult SetAssetInputColor::apply(document::Draft& draft) const {
     if (asset == nullptr ||
         (asset->kind != document::AssetKind::Image &&
          asset->kind != document::AssetKind::Sequence && asset->kind != document::AssetKind::Video))
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Image or video asset does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Asset " + std::to_string(asset_.value()) +
+                (asset == nullptr ? " does not exist in the project"
+                                  : " is not an image, sequence or video asset"));
     if (legacy_ > document::AssetColorSpace::Raw ||
         (legacy_ != document::AssetColorSpace::Auto && !inputColorSpaceId_.empty()))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,

@@ -182,7 +182,8 @@ OperationResult SetAssetInterpretation::apply(document::Draft& draft) const {
         const auto* asset = project.findAsset(id);
         if (asset == nullptr)
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "Asset does not exist");
+                                             "Asset " + std::to_string(id.value()) +
+                                                 " does not exist in the project");
         if (std::ranges::any_of(updated, [id](const auto& record) { return record.id == id; }))
             continue;
         if (!isInterpretableFootage(asset->kind))

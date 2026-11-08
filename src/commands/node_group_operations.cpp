@@ -7,8 +7,7 @@
 namespace bloom::commands {
 namespace {
 // Every group command starts the same way: find the composition, then find the group inside it.
-// A missing composition and a missing group are the same refusal -- the caller named something that
-// is not there.
+// A missing composition and a missing group are separate refusals, each naming what is not there.
 struct Target final {
     document::Composition* composition = nullptr;
     document::NodeGroupRecord* group = nullptr;
@@ -41,7 +40,7 @@ OperationResult GroupNodes::apply(document::Draft& draft) const {
         return invalidName();
     for (const auto id : nodes_)
         if (!composition->graph().findNode(id))
-            return detail::invalidTarget();
+            return detail::missingNode(composition, compositionId_, id);
     const auto groupId = draft.ids().allocateNodeGroup();
     if (!groupId)
         return detail::exhaustedIds("node group");
@@ -62,7 +61,7 @@ std::string_view UngroupNodes::typeId() const noexcept { return "bloom.node-grou
 OperationResult UngroupNodes::apply(document::Draft& draft) const {
     const auto target = findGroup(draft, compositionId_, groupId_);
     if (!target.group)
-        return detail::invalidTarget();
+        return detail::missingNodeGroup(target.composition, compositionId_, groupId_);
     // Only the frame goes. Its members keep their positions, their sizes and their wiring: a group
     // never owned any of that.
     target.composition->nodeGroups().erase(groupId_);
@@ -73,7 +72,7 @@ std::string_view RenameGroup::typeId() const noexcept { return "bloom.node-group
 OperationResult RenameGroup::apply(document::Draft& draft) const {
     const auto target = findGroup(draft, compositionId_, groupId_);
     if (!target.group)
-        return detail::invalidTarget();
+        return detail::missingNodeGroup(target.composition, compositionId_, groupId_);
     if (!document::isValidHumanFacingName(name_))
         return invalidName();
     if (target.group->name == name_)
@@ -86,7 +85,7 @@ std::string_view SetGroupColor::typeId() const noexcept { return "bloom.node-gro
 OperationResult SetGroupColor::apply(document::Draft& draft) const {
     const auto target = findGroup(draft, compositionId_, groupId_);
     if (!target.group)
-        return detail::invalidTarget();
+        return detail::missingNodeGroup(target.composition, compositionId_, groupId_);
     if (target.group->color == color_)
         return OperationResult::noChange();
     target.group->color = color_;
@@ -97,10 +96,10 @@ std::string_view SetGroupMembers::typeId() const noexcept { return "bloom.node-g
 OperationResult SetGroupMembers::apply(document::Draft& draft) const {
     const auto target = findGroup(draft, compositionId_, groupId_);
     if (!target.group)
-        return detail::invalidTarget();
+        return detail::missingNodeGroup(target.composition, compositionId_, groupId_);
     for (const auto id : members_)
         if (!target.composition->graph().findNode(id))
-            return detail::invalidTarget();
+            return detail::missingNode(target.composition, compositionId_, id);
     if (target.group->members == members_)
         return OperationResult::noChange();
     if (members_.empty()) {

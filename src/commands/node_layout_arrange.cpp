@@ -363,8 +363,9 @@ NodePositions arrangeNodes(const document::Composition& composition, const NodeC
 OperationResult ArrangeNodes::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     for (const auto id : selection_)
         if (composition->graph().findNode(id) == nullptr)
             return OperationResult::rejected(OperationIssueCode::MissingReference,

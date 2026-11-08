@@ -19,10 +19,7 @@ OperationResult MoveNodes::apply(document::Draft& draft) const {
         if (!composition->graph().findNode(id))
             return detail::missingNode(composition, compositionId_, id);
         if (group && !composition->nodeGroups().contains(*group))
-            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "Node group " + std::to_string(group->value()) +
-                                                 " does not exist in composition " +
-                                                 std::to_string(compositionId_.value()));
+            return detail::missingNodeGroup(composition, compositionId_, *group);
     }
     bool changed = false;
     for (const auto& [id, position] : positions_) {
@@ -48,7 +45,7 @@ OperationResult MoveNodes::apply(document::Draft& draft) const {
             // detachFromNodeGroups() never prunes `group` itself, so the landing frame is still
             // here; the guard is a truthful refusal rather than an assumption if that ever changes.
             if (landing == composition->nodeGroups().end())
-                return detail::invalidTarget();
+                return detail::missingNodeGroup(composition, compositionId_, *group);
             changed = landing->second.members.insert(id).second || changed;
         }
     }

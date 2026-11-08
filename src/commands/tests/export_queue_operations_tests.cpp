@@ -192,6 +192,11 @@ void testDuplicateMoveRemove(TestContext& test) {
                 "only the kept job remains");
     test.expect(run<RemoveExportJobs>(stack, std::vector{*first}).status == CommandStatus::Rejected,
                 "removing a missing job is rejected");
+    const auto missingJob = run<RemoveExportJobs>(stack, std::vector{*first});
+    test.expect(!missingJob.operationFailures.empty() &&
+                    missingJob.operationFailures.front().issue.message.find(
+                        "Export job " + std::to_string(first->value())) != std::string::npos,
+                "the refusal names the missing export job");
     test.expect(stack.undo().succeeded() && jobs(document).size() == 3, "undo restores removal");
 
     // Ids are never reused after removal.

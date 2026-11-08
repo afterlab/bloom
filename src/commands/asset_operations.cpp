@@ -749,7 +749,9 @@ RelinkAsset::RelinkAsset(document::AssetId id, const std::filesystem::path& path
 OperationResult RelinkAsset::apply(document::Draft& draft) const {
     auto* target = draft.project().findAsset(id_);
     if (!target)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget, "Asset does not exist");
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Asset " + std::to_string(id_.value()) +
+                                             " does not exist in the project");
     if (!prepared_.diagnostic().empty() || prepared_.prepared().size() != 1) {
         // Name the file that was tried, so a path that does not resolve is plain to see.
         std::error_code error;
@@ -822,8 +824,9 @@ OperationResult RemoveAsset::apply(document::Draft& draft) const {
 OperationResult SetCompositionBackgroundColor::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (!composition)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     if (!color_.isValid())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Invalid background color");
@@ -836,8 +839,9 @@ OperationResult SetCompositionBackgroundColor::apply(document::Draft& draft) con
 OperationResult SetCompositionWorkingColorSpace::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     if (colorSpaceId_.has_value() && !document::validateWorkingColorSpaceId(*colorSpaceId_).ok())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Invalid working color space id");
@@ -850,9 +854,15 @@ OperationResult SetCompositionWorkingColorSpace::apply(document::Draft& draft) c
 OperationResult AddAudioLayer::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     const auto* asset = draft.project().findAsset(asset_);
-    if (composition == nullptr || asset == nullptr || asset->kind != document::AssetKind::Audio)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Audio asset or composition does not exist");
+    if (composition == nullptr)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
+    if (asset == nullptr || asset->kind != document::AssetKind::Audio)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Asset " + std::to_string(asset_.value()) +
+                (asset == nullptr ? " does not exist in the project" : " is not an audio asset"));
 
     const auto sourceNodeId = draft.ids().allocateNode();
     const auto layerOutputNodeId = draft.ids().allocateNode();

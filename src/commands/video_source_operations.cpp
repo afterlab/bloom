@@ -16,8 +16,9 @@ std::string_view SetVideoAudioStream::typeId() const noexcept {
 OperationResult SetVideoAudioStream::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     auto* node = composition->graph().findNode(node_);
     if (node == nullptr || node->typeId != "bloom.video-source")
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,

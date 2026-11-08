@@ -5,9 +5,9 @@
 
 namespace bloom::commands {
 namespace {
-OperationResult targetMissing() {
+OperationResult targetMissing(const document::DataBlockRecordId id) {
     return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                     "Data block does not exist");
+                                     "Data block " + std::to_string(id.value()) + " does not exist");
 }
 bool validTags(const std::vector<std::string>& tags) {
     if (tags.size() > 64 || !std::ranges::is_sorted(tags))
@@ -46,7 +46,7 @@ OperationResult CreateDataBlock::apply(document::Draft& draft) const {
 OperationResult ReplaceDataBlockPayload::apply(document::Draft& draft) const {
     auto* block = draft.project().findDataBlock(id_);
     if (!block)
-        return targetMissing();
+        return targetMissing(id_);
     document::DataBlockRecord candidate = *block;
     candidate.payload = payload_;
     if (!candidate.validate(&draft.project()).ok())
@@ -59,14 +59,14 @@ OperationResult ReplaceDataBlockPayload::apply(document::Draft& draft) const {
 
 OperationResult RemoveDataBlock::apply(document::Draft& draft) const {
     if (!draft.project().removeDataBlock(id_))
-        return targetMissing();
+        return targetMissing(id_);
     return OperationResult::applied({{"dataBlock", id_}});
 }
 
 OperationResult RelinkDataBlock::apply(document::Draft& draft) const {
     auto* block = draft.project().findDataBlock(id_);
     if (!block)
-        return targetMissing();
+        return targetMissing(id_);
     if (!std::holds_alternative<document::AssetLocator>(block->provenance.source))
         return OperationResult::rejected(OperationIssueCode::Unsupported,
                                          "Only locator-backed data blocks can be relinked");
@@ -82,7 +82,7 @@ OperationResult RelinkDataBlock::apply(document::Draft& draft) const {
 OperationResult SetDataBlockTags::apply(document::Draft& draft) const {
     auto* block = draft.project().findDataBlock(id_);
     if (!block)
-        return targetMissing();
+        return targetMissing(id_);
     if (!validTags(tags_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Tags must be sorted, unique, and bounded");

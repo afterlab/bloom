@@ -11,9 +11,18 @@
 #include <variant>
 
 namespace bloom::commands::detail {
-inline OperationResult invalidTarget() {
-    return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                     "Composition or node target does not exist");
+// "input <port> of node N" or "slot S of Merge node N": the socket a connection names.
+inline std::string describeInput(const document::InputPortRef& input) {
+    if (const auto* node = std::get_if<document::NodeInputRef>(&input))
+        return "input \"" + node->port + "\" of node " + std::to_string(node->nodeId.value());
+    const auto& stack = std::get<document::LayerStackInputRef>(input);
+    return "slot " + std::to_string(stack.slotId.value()) + " of Merge node " +
+           std::to_string(stack.stackNodeId.value());
+}
+// A record the project refers to but does not hold, or an edit the graph refused to apply: says
+// what failed and on which object, never "target does not exist".
+inline OperationResult brokenReference(const std::string& message) {
+    return OperationResult::rejected(OperationIssueCode::InvalidTarget, message);
 }
 // Missing-object refusals: each says which object was not found and where, so a caller that
 // addressed the wrong composition, layer or node learns which one.
@@ -39,6 +48,16 @@ inline OperationResult missingNode(const document::Composition* composition,
         return missingComposition(compositionId);
     return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                      "Node " + std::to_string(node.value()) +
+                                         " does not exist in composition " +
+                                         std::to_string(compositionId.value()));
+}
+inline OperationResult missingNodeGroup(const document::Composition* composition,
+                                        const document::CompositionId compositionId,
+                                        const document::NodeGroupId group) {
+    if (composition == nullptr)
+        return missingComposition(compositionId);
+    return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                     "Node group " + std::to_string(group.value()) +
                                          " does not exist in composition " +
                                          std::to_string(compositionId.value()));
 }

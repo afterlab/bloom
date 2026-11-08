@@ -196,11 +196,19 @@ OperationResult EnableLayerTimeRemap::apply(document::Draft& draft) const {
     if (!target.layer->entryOwned()) {
         const auto* node = composition.graph().findNode(target.layer->nodeId);
         if (node == nullptr || node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
-            return detail::invalidTarget();
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidTarget,
+                "Layer " + std::to_string(layer_.value()) + " in composition " +
+                    std::to_string(composition_.value()) +
+                    " has no Layer node at the current schema, so it cannot hold a Time Remap");
     }
     auto* bindings = detail::mutableLayerBindings(composition.graph(), *target.layer);
     if (bindings == nullptr)
-        return detail::invalidTarget();
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Layer " + std::to_string(layer_.value()) + " in composition " +
+                std::to_string(composition_.value()) +
+                " has no parameter bindings, so a Time Remap cannot be enabled");
     if (std::ranges::any_of(*bindings, [](const auto& binding) {
             return binding.role == document::kTimeRemapParameterRole;
         }))
@@ -255,7 +263,11 @@ OperationResult DisableLayerTimeRemap::apply(document::Draft& draft) const {
     auto& composition = *target.composition;
     auto* bindings = detail::mutableLayerBindings(composition.graph(), *target.layer);
     if (bindings == nullptr)
-        return detail::invalidTarget();
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Layer " + std::to_string(layer_.value()) + " in composition " +
+                std::to_string(composition_.value()) +
+                " has no parameter bindings, so a Time Remap cannot be disabled");
     const auto binding = std::ranges::find(*bindings, document::kTimeRemapParameterRole,
                                            &document::ParameterBinding::role);
     if (binding == bindings->end())

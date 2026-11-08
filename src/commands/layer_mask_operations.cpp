@@ -232,7 +232,11 @@ OperationResult SetLayerMaskPath::apply(document::Draft& draft) const {
         return invalid("Mask path is invalid");
     const auto* record = composition.parameters().find(mask->path);
     if (record == nullptr)
-        return detail::invalidTarget();
+        return detail::brokenReference(
+            "Mask " + std::to_string(mask_.value()) + " of layer " +
+            std::to_string(target.layer->layerId.value()) + " uses path parameter " +
+            std::to_string(mask->path.value()) + ", which composition " +
+            std::to_string(composition_.value()) + " does not hold");
     if (std::holds_alternative<document::ConstantValueSource>(record->source)) {
         const auto* current = std::get_if<document::PathValue>(
             &std::get<document::ConstantValueSource>(record->source).value);
@@ -284,7 +288,11 @@ OperationResult AnimateLayerMaskPath::apply(document::Draft& draft) const {
         return detail::missingMask(target.layer->layerId, mask_);
     const auto* record = composition.parameters().find(mask->path);
     if (record == nullptr)
-        return detail::invalidTarget();
+        return detail::brokenReference(
+            "Mask " + std::to_string(mask_.value()) + " of layer " +
+            std::to_string(target.layer->layerId.value()) + " uses path parameter " +
+            std::to_string(mask->path.value()) + ", which composition " +
+            std::to_string(composition_.value()) + " does not hold");
     const auto* constant = std::get_if<document::ConstantValueSource>(&record->source);
     if (constant == nullptr)
         return OperationResult::noChange();
@@ -327,7 +335,11 @@ OperationResult StopAnimatingLayerMaskPath::apply(document::Draft& draft) const 
         return invalid("Mask path is invalid");
     const auto* record = composition.parameters().find(mask->path);
     if (record == nullptr)
-        return detail::invalidTarget();
+        return detail::brokenReference(
+            "Mask " + std::to_string(mask_.value()) + " of layer " +
+            std::to_string(target.layer->layerId.value()) + " uses path parameter " +
+            std::to_string(mask->path.value()) + ", which composition " +
+            std::to_string(composition_.value()) + " does not hold");
     const auto* source = std::get_if<document::AnimationCurveSource>(&record->source);
     if (source == nullptr)
         return OperationResult::noChange();

@@ -71,14 +71,18 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
     for (const auto id : nodes_) {
         const auto* node = original.graph().findNode(id);
         if (!node)
-            return detail::invalidTarget();
+            return detail::missingNode(composition, compositionId_, id);
         if (node->typeId == document::kCompositionOutputNodeType)
             return OperationResult::rejected(OperationIssueCode::Unsupported,
                                              "Output cannot be duplicated");
         for (const auto& binding : node->parameters) {
             const auto* parameter = original.parameters().find(binding.parameterId);
             if (!parameter)
-                return detail::invalidTarget();
+                return detail::brokenReference(
+                    "Node " + std::to_string(id.value()) + " in composition " +
+                    std::to_string(compositionId_.value()) + " is bound to parameter " +
+                    std::to_string(binding.parameterId.value()) +
+                    ", which the composition does not hold; the node cannot be duplicated");
             if (std::holds_alternative<document::DriverBindingSource>(parameter->source) &&
                 node->typeId != document::kLayerOutputNodeType)
                 return OperationResult::rejected(OperationIssueCode::Unsupported,
@@ -121,22 +125,30 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                     source->curveId = curveIds.at(source->curveId);
                 }
                 if (!composition->parameters().insert(std::move(parameter)))
-                    return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                                     "Duplicated parameter could not be inserted");
+                    return OperationResult::rejected(
+                        OperationIssueCode::InvalidValue,
+                        "The copy of parameter " + std::to_string(oldId.value()) + " of node " +
+                            std::to_string(id.value()) + " could not be inserted into composition " +
+                            std::to_string(compositionId_.value()));
                 parameterIds.emplace(oldId, *parameterId);
                 outputs.push_back({"parameter." + std::to_string(oldId.value()), *parameterId});
             }
             binding.parameterId = parameterIds.at(oldId);
         }
         if (!graph.addNode(std::move(node)))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Duplicated node could not be inserted");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The copy of node " + std::to_string(id.value()) +
+                    " could not be inserted into composition " +
+                    std::to_string(compositionId_.value()));
         auto layout = detail::layoutFor(original, id);
         layout.position.x += offset_.x;
         layout.position.y += offset_.y;
         if (!detail::finite(layout.position))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Duplicate position overflowed");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The position of the copy of node " + std::to_string(id.value()) +
+                    " overflowed; use a smaller offset");
         composition->nodeLayout()[*newId] = layout;
         outputs.push_back({"node." + std::to_string(id.value()), *newId});
     }
@@ -161,7 +173,11 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             for (auto& binding : copy.parameters) {
                 const auto* sourceParameter = original.parameters().find(binding.parameterId);
                 if (sourceParameter == nullptr)
-                    return detail::invalidTarget();
+                    return detail::brokenReference(
+                        "Layer " + std::to_string(boundary.layerId.value()) +
+                        " is bound to parameter " + std::to_string(binding.parameterId.value()) +
+                        ", which composition " + std::to_string(compositionId_.value()) +
+                        " does not hold; the layer cannot be duplicated");
                 auto parameter = *sourceParameter;
                 const auto parameterId = draft.ids().allocateParameter();
                 if (!parameterId)
@@ -176,7 +192,10 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                 if (!composition->parameters().insert(std::move(parameter)))
                     return OperationResult::rejected(
                         OperationIssueCode::InvalidValue,
-                        "Duplicated entry layer parameter could not be inserted");
+                        "The copy of parameter " + std::to_string(binding.parameterId.value()) +
+                            " of layer " + std::to_string(boundary.layerId.value()) +
+                            " could not be inserted into composition " +
+                            std::to_string(compositionId_.value()));
                 outputs.push_back(
                     {"parameter." + std::to_string(binding.parameterId.value()), *parameterId});
                 binding.parameterId = *parameterId;
@@ -195,7 +214,12 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             for (auto* parameterId : {&mask.path, &mask.feather, &mask.expansion, &mask.opacity}) {
                 const auto* sourceParameter = original.parameters().find(*parameterId);
                 if (sourceParameter == nullptr)
-                    return detail::invalidTarget();
+                    return detail::brokenReference(
+                        "Mask " + std::to_string(mask.id.value()) + " of layer " +
+                        std::to_string(boundary.layerId.value()) + " uses parameter " +
+                        std::to_string(parameterId->value()) + ", which composition " +
+                        std::to_string(compositionId_.value()) +
+                        " does not hold; the layer cannot be duplicated");
                 auto parameter = *sourceParameter;
                 const auto newParameterId = draft.ids().allocateParameter();
                 if (!newParameterId)
@@ -208,14 +232,22 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                     source->curveId = *curveId;
                 }
                 if (!composition->parameters().insert(std::move(parameter)))
-                    return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                                     "Duplicated mask parameter could not be inserted");
+                    return OperationResult::rejected(
+                        OperationIssueCode::InvalidValue,
+                        "The copy of a parameter of mask " + std::to_string(mask.id.value()) +
+                            " of layer " + std::to_string(boundary.layerId.value()) +
+                            " could not be inserted into composition " +
+                            std::to_string(compositionId_.value()));
                 *parameterId = *newParameterId;
             }
         }
         if (!graph.addLayerOutput(std::move(copy)))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Duplicated layer name or boundary is invalid");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The copy of layer " + std::to_string(boundary.layerId.value()) + " \"" +
+                    boundary.name + "\" could not be added to composition " +
+                    std::to_string(compositionId_.value()) +
+                    "; its name or boundary conflicts with an existing layer");
         layerIds.emplace(boundary.layerId, *layerId);
         outputs.push_back({"layer." + std::to_string(boundary.layerId.value()), *layerId});
     }
@@ -245,7 +277,10 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                 document::LayerStackInputRef{stack.nodeId(), entry.slotId,
                                              std::string(document::kLayerStackContentInputRole)});
             if (!originalEdge)
-                return detail::invalidTarget();
+                return detail::brokenReference(
+                    "Slot " + std::to_string(entry.slotId.value()) + " of layer stack node " +
+                    std::to_string(stack.nodeId().value()) + " has no content edge in composition " +
+                    std::to_string(compositionId_.value()) + "; the stack cannot be duplicated");
             const auto slotId = slotIds.contains(entry.slotId) && copyStack
                                     ? std::optional(slotIds.at(entry.slotId))
                                     : draft.ids().allocateLayerSlot();
@@ -255,12 +290,20 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             const auto layerId =
                 layerIds.contains(entry.layerId) ? layerIds.at(entry.layerId) : entry.layerId;
             if (!target.append({*slotId, layerId}))
-                return detail::invalidTarget();
+                return detail::brokenReference(
+                    "Layer " + std::to_string(layerId.value()) +
+                    " could not be added to the duplicated stack node " +
+                    std::to_string(targetId.value()) + " in composition " +
+                    std::to_string(compositionId_.value()));
             if (!copyStack &&
                 !target.moveBefore(*slotId, index + 1 < entries.size()
                                                 ? std::optional(entries[index + 1].slotId)
                                                 : std::nullopt))
-                return detail::invalidTarget();
+                return detail::brokenReference(
+                    "Slot " + std::to_string(slotId->value()) +
+                    " could not be ordered in the duplicated stack node " +
+                    std::to_string(targetId.value()) + " in composition " +
+                    std::to_string(compositionId_.value()));
             auto source = originalEdge->source;
             if (nodeIds.contains(source.nodeId))
                 source.nodeId = nodeIds.at(source.nodeId);
@@ -268,7 +311,11 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                     {*edgeId, source,
                      document::LayerStackInputRef{
                          targetId, *slotId, std::string(document::kLayerStackContentInputRole)}}))
-                return detail::invalidTarget();
+                return detail::brokenReference(
+                    "The content edge of slot " + std::to_string(slotId->value()) +
+                    " could not be added to the duplicated stack node " +
+                    std::to_string(targetId.value()) + " in composition " +
+                    std::to_string(compositionId_.value()));
             outputs.push_back({"slot." + std::to_string(entry.slotId.value()), *slotId});
         }
     }
@@ -286,6 +333,7 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         const auto edgeId = draft.ids().allocateEdge();
         if (!edgeId)
             return detail::exhaustedIds("edge");
+        const auto originalEdgeId = edge.id;
         edge.id = *edgeId;
         if (internal)
             edge.source.nodeId = nodeIds.at(edge.source.nodeId);
@@ -298,8 +346,11 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
             },
             edge.destination);
         if (!graph.addEdge(edge))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Duplicated internal edge could not be inserted");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "The copy of edge " + std::to_string(originalEdgeId.value()) +
+                    " between duplicated nodes could not be inserted into composition " +
+                    std::to_string(compositionId_.value()));
     }
     // An in-place duplicate (a zero offset: the Timeline's Duplicate) would put every copy exactly
     // on top of its original. The copies move together, as one block, to the nearest clear grid

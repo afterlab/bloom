@@ -48,8 +48,9 @@ bool droppableAsLayer(const document::Project& project, const document::Composit
 OperationResult AddDroppedLayers::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     if (items_.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue, "Nothing to add");
     for (const auto& item : items_)

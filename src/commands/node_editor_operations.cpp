@@ -88,10 +88,15 @@ checkAddEditorNodeEligibility(const document::Snapshot& snapshot,
 OperationResult AddCompositionSource::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     const auto* nested = draft.project().findComposition(source_);
-    if (!composition || !nested ||
+    if (!composition)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
+    if (!nested ||
         source_.value() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Source composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Source composition " + std::to_string(source_.value()) + " does not exist");
     const auto name = nested->name();
     const auto duration = std::min(nested->duration(), composition->duration());
     auto added = AddNode(composition_, std::string(document::kCompositionSourceNodeType), position_)
@@ -319,7 +324,8 @@ OperationResult InsertReroute::apply(document::Draft& draft) const {
 OperationResult AddImageNode::apply(document::Draft& draft) const {
     if (!draft.project().findAsset(asset_))
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Image asset does not exist");
+                                         "Image asset " + std::to_string(asset_.value()) +
+                                             " does not exist in the project");
     const auto* asset = draft.project().findAsset(asset_);
     auto added = AddNode(composition_,
                          asset && asset->kind == document::AssetKind::Video ? "bloom.video-source"
@@ -365,8 +371,10 @@ OperationResult AddImageNode::apply(document::Draft& draft) const {
 OperationResult AddAudioNode::apply(document::Draft& draft) const {
     const auto* asset = draft.project().findAsset(asset_);
     if (asset == nullptr || asset->kind != document::AssetKind::Audio)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Audio asset does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Asset " + std::to_string(asset_.value()) +
+                (asset == nullptr ? " does not exist in the project" : " is not an audio asset"));
     auto added = AddNode(composition_, "bloom.audio-source", position_).apply(draft);
     if (added.status != OperationStatus::Applied)
         return added;
@@ -396,7 +404,8 @@ OperationResult AddAssetSourceNode::apply(document::Draft& draft) const {
     const auto* asset = draft.project().findAsset(asset_);
     if (asset == nullptr)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The asset does not exist");
+                                         "Asset " + std::to_string(asset_.value()) +
+                                             " does not exist in the project");
     switch (asset->kind) {
     case document::AssetKind::Audio:
         return AddAudioNode(composition_, asset_, position_).apply(draft);

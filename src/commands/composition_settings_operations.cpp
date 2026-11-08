@@ -113,8 +113,9 @@ std::string_view SetCompositionSettings::typeId() const noexcept {
 OperationResult SetCompositionSettings::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     if (const auto issue = compositionSettingsIssue(settings_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue, *issue);
     if (!anchor_.isValid())
@@ -171,8 +172,9 @@ std::string_view UpdateCompositionSettings::typeId() const noexcept {
 OperationResult UpdateCompositionSettings::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     auto settings = compositionSettingsOf(*composition);
     const auto current = composition->format();
     const auto format = document::CompositionFormat::create(
@@ -236,7 +238,9 @@ std::string_view AddCompositionFromAssets::typeId() const noexcept {
 OperationResult AddCompositionFromAssets::apply(document::Draft& draft) const {
     if (folder_ && draft.project().findAssetFolder(*folder_) == nullptr)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The destination folder does not exist");
+                                         "The destination folder " +
+                                             std::to_string(folder_->value()) +
+                                             " does not exist in the project");
     auto result = AddCompositionWithSettings(settings_).apply(draft);
     if (result.status != OperationStatus::Applied)
         return result;
@@ -251,7 +255,8 @@ OperationResult AddCompositionFromAssets::apply(document::Draft& draft) const {
         const auto* asset = draft.project().findAsset(*it);
         if (asset == nullptr)
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "Asset does not exist");
+                                             "Asset " + std::to_string(it->value()) +
+                                                 " does not exist in the project");
         if (asset->kind == document::AssetKind::Lut || asset->kind == document::AssetKind::Font)
             continue;
         auto layer = asset->kind == document::AssetKind::Audio

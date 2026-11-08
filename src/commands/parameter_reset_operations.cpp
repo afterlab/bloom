@@ -16,8 +16,9 @@ namespace bloom::commands {
 OperationResult ResetParameter::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The composition does not exist");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition_.value()) + " does not exist");
     const auto* parameter = composition->parameters().find(parameter_);
     if (parameter == nullptr)
         return OperationResult::rejected(OperationIssueCode::MissingReference,

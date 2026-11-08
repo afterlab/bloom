@@ -16,12 +16,14 @@ OperationResult rejected(const OperationIssueCode code, std::string message) {
     return OperationResult::rejected(code, std::move(message));
 }
 
-OperationResult jobMissing() {
-    return rejected(OperationIssueCode::InvalidTarget, "Export job does not exist");
+OperationResult jobMissing(const ExportJobId id) {
+    return rejected(OperationIssueCode::InvalidTarget,
+                    "Export job " + std::to_string(id.value()) + " does not exist in the queue");
 }
 
-OperationResult outputMissing() {
-    return rejected(OperationIssueCode::InvalidTarget, "Export output does not exist");
+OperationResult outputMissing(const ExportOutputId id) {
+    return rejected(OperationIssueCode::InvalidTarget,
+                    "Export output " + std::to_string(id.value()) + " does not exist in the queue");
 }
 
 OperationResult invalid(const document::ValidationResult& result) {
@@ -70,7 +72,7 @@ template <typename Mutate>
 OperationResult editOutput(document::Draft& draft, const ExportOutputId id, Mutate&& mutate) {
     const auto [owner, found] = std::as_const(draft.project()).findExportOutput(id);
     if (found == nullptr)
-        return outputMissing();
+        return outputMissing(id);
     auto candidate = *found;
     mutate(candidate);
     if (candidate == *found)
@@ -85,7 +87,7 @@ template <typename Mutate>
 OperationResult editJob(document::Draft& draft, const ExportJobId id, Mutate&& mutate) {
     const auto* found = std::as_const(draft.project()).findExportJob(id);
     if (found == nullptr)
-        return jobMissing();
+        return jobMissing(id);
     auto candidate = *found;
     mutate(candidate);
     if (candidate == *found)
@@ -104,7 +106,8 @@ OperationResult AddExportJob::apply(document::Draft& draft) const {
         return rejected(OperationIssueCode::InvalidValue, "The export queue is full (1024 jobs)");
     if (project.findComposition(job_.composition) == nullptr)
         return rejected(OperationIssueCode::MissingReference,
-                        "The export job's composition does not exist");
+                        "Composition " + std::to_string(job_.composition.value()) +
+                            " of the export job does not exist");
     auto job = job_;
     if (!assignId(
             job.id, [&] { return draft.ids().allocateExportJob(); },
@@ -135,7 +138,7 @@ OperationResult RemoveExportJobs::apply(document::Draft& draft) const {
     std::vector<OperationOutput> outputs;
     for (const auto id : jobs_)
         if (std::as_const(draft.project()).findExportJob(id) == nullptr)
-            return jobMissing();
+            return jobMissing(id);
     for (const auto id : jobs_) {
         if (draft.project().removeExportJob(id))
             outputs.push_back({std::string(kExportJobOutput), id});
@@ -149,7 +152,7 @@ OperationResult DuplicateExportJob::apply(document::Draft& draft) const {
     const auto found =
         std::ranges::find_if(jobs, [this](const auto& job) { return job.id == job_; });
     if (found == jobs.end())
-        return jobMissing();
+        return jobMissing(job_);
     if (jobs.size() >= document::kExportQueueMaximumJobs)
         return rejected(OperationIssueCode::InvalidValue, "The export queue is full (1024 jobs)");
     auto copy = *found;
@@ -177,7 +180,7 @@ OperationResult MoveExportJobs::apply(document::Draft& draft) const {
     std::unordered_set<ExportJobId> moving;
     for (const auto id : jobs_) {
         if (project.findExportJob(id) == nullptr)
-            return jobMissing();
+            return jobMissing(id);
         if (!moving.insert(id).second)
             return rejected(OperationIssueCode::InvalidValue, "A job is listed twice");
     }
@@ -219,7 +222,7 @@ OperationResult AddExportOutput::apply(document::Draft& draft) const {
     const auto& project = std::as_const(draft.project());
     const auto* job = project.findExportJob(job_);
     if (job == nullptr)
-        return jobMissing();
+        return jobMissing(job_);
     if (job->outputs.size() >= document::kExportJobMaximumOutputs)
         return rejected(OperationIssueCode::InvalidValue, "An export job has at most 16 outputs");
     auto output = output_;
@@ -237,7 +240,7 @@ OperationResult AddExportOutput::apply(document::Draft& draft) const {
 OperationResult RemoveExportOutput::apply(document::Draft& draft) const {
     const auto [job, found] = std::as_const(draft.project()).findExportOutput(output_);
     if (found == nullptr)
-        return outputMissing();
+        return outputMissing(output_);
     if (job->outputs.size() <= 1)
         return rejected(OperationIssueCode::InvalidValue, "A job keeps at least one output");
     auto& outputs = draft.project().findExportJob(job->id)->outputs;

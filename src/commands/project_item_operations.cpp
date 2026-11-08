@@ -47,7 +47,8 @@ OperationResult DeleteProjectItems::apply(document::Draft& draft) const {
     for (const auto folder : items_.folders)
         if (draft.project().findAssetFolder(folder) == nullptr)
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "The folder does not exist");
+                                             "Folder " + std::to_string(folder.value()) +
+                                                 " does not exist in the project");
     // Folder contents are read before anything is removed, as the panel reads them from the
     // snapshot it shows.
     ProjectItems contents;
@@ -103,8 +104,10 @@ OperationResult AddCompositionFromFootage::apply(document::Draft& draft) const {
     if (template_) {
         const auto* current = project.findComposition(*template_);
         if (current == nullptr)
-            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "The template composition does not exist");
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidTarget,
+                "The template composition " + std::to_string(template_->value()) +
+                    " does not exist");
         base = compositionSettingsOf(*current);
     }
     const auto* first = project.findAsset(footage.front());

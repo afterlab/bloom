@@ -28,9 +28,11 @@ using document::LayerSlotId;
 using document::NodeId;
 using document::ParameterId;
 
-OperationResult missingEntry() {
+OperationResult missingEntry(const NodeId merge, const LayerSlotId slot) {
     return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                     "The Merge entry does not exist in the composition");
+                                     "Slot " + std::to_string(slot.value()) +
+                                         " does not exist on Merge node " +
+                                         std::to_string(merge.value()));
 }
 
 // The entry layer a slot owns by its own record, whether or not the slot still names it (a source
@@ -153,7 +155,7 @@ OperationResult EnsureEntryLayer::apply(document::Draft& draft) const {
     const auto& graph = composition->graph();
     const auto* stack = graph.merge(merge_);
     if (stack == nullptr || stack->find(slot_) == nullptr)
-        return missingEntry();
+        return missingEntry(merge_, slot_);
     if (const auto* layer = document::mergeEntryLayer(graph, merge_, slot_))
         return OperationResult::noChange({{std::string(kEntryLayerOutput), layer->layerId}});
     return createEntryLayer(draft, composition_, merge_, slot_);
@@ -175,7 +177,9 @@ OperationResult EntryLayerEdit::apply(document::Draft& draft) const {
         return ensured;
     const auto layer = outputLayer(ensured);
     if (!layer)
-        return missingEntry();
+        return detail::brokenReference("Slot " + std::to_string(slot_.value()) + " of Merge node " +
+                                       std::to_string(merge_.value()) +
+                                       " did not report an entry layer after it was ensured");
     std::shared_ptr<Operation> operation = build_(*layer);
     if (!operation)
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -218,7 +222,7 @@ OperationResult InsertLayerNode::apply(document::Draft& draft) const {
         return detail::missingComposition(composition_);
     const auto* stack = readable->graph().merge(merge_);
     if (stack == nullptr || stack->find(slot_) == nullptr)
-        return missingEntry();
+        return missingEntry(merge_, slot_);
     const auto* edge = document::mergeSlotImageEdge(readable->graph(), merge_, slot_);
     if (edge == nullptr)
         return OperationResult::rejected(OperationIssueCode::Unsupported,
@@ -241,7 +245,10 @@ OperationResult InsertLayerNode::apply(document::Draft& draft) const {
     const auto layer = outputId<LayerId>(added, "layer");
     const auto inputEdge = draft.ids().allocateEdge();
     if (!node || !layer)
-        return detail::invalidTarget();
+        return detail::brokenReference("Adding a Layer node to composition " +
+                                       std::to_string(composition_.value()) +
+                                       " did not report the new node and layer"
+                                       "; the entry layer cannot be converted");
     if (!inputEdge)
         return detail::exhaustedIds("edge");
     auto* composition = draft.project().findComposition(composition_);
@@ -282,7 +289,9 @@ OperationResult AddAdjustmentLayer::apply(document::Draft& draft) const {
     const auto* stack = readable->graph().merge(merge_);
     if (stack == nullptr)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The Merge does not exist in the composition");
+                                         "Merge node " + std::to_string(merge_.value()) +
+                                             " does not exist in composition " +
+                                             std::to_string(composition_.value()));
     if (above_ && stack->find(*above_) == nullptr)
         return OperationResult::rejected(OperationIssueCode::MissingReference,
                                          "The entry to add the Adjustment Layer above does not "
@@ -303,7 +312,9 @@ OperationResult AddAdjustmentLayer::apply(document::Draft& draft) const {
         return added;
     const auto node = outputId<NodeId>(added, kAddNodeOutput);
     if (!node)
-        return detail::invalidTarget();
+        return detail::brokenReference("Adding an Adjustment node to composition " +
+                                       std::to_string(composition_.value()) +
+                                       " did not report the new node");
     auto connected =
         ConnectPorts(composition_, {*node, std::string(document::kAdjustmentOutputPort)},
                      document::LayerStackInputRef{
@@ -314,15 +325,19 @@ OperationResult AddAdjustmentLayer::apply(document::Draft& draft) const {
         return connected;
     const auto slot = outputId<LayerSlotId>(connected, kConnectPortsSlotOutput);
     if (!slot)
-        return detail::invalidTarget();
+        return detail::brokenReference("Connecting the new Adjustment node to Merge node " +
+                                       std::to_string(merge_.value()) +
+                                       " did not report the new slot");
     auto ensured = EnsureEntryLayer(composition_, merge_, *slot).apply(draft);
     if (ensured.status != OperationStatus::Applied)
-        return ensured.status == OperationStatus::Rejected ? ensured : missingEntry();
+        return ensured.status == OperationStatus::Rejected ? ensured : missingEntry(merge_, *slot);
     const auto layer = outputLayer(ensured);
     auto* composition = draft.project().findComposition(composition_);
     auto* boundary = layer ? composition->graph().findLayer(*layer) : nullptr;
     if (boundary == nullptr)
-        return missingEntry();
+        return detail::brokenReference("The entry layer of slot " + std::to_string(slot->value()) +
+                                       " on Merge node " + std::to_string(merge_.value()) +
+                                       " was not found after it was ensured");
     boundary->name = "Adjustment Layer " + std::to_string(existing + 1);
     boundary->nameFollowsSource = false;
     std::vector<OperationOutput> outputs{{std::string(kEntryLayerNodeOutput), *node},
@@ -347,13 +362,16 @@ std::optional<OperationResult> duplicateEntryLayer(document::Draft& draft,
     const auto* readable = composition ? &std::as_const(*composition) : nullptr;
     const auto* layer = readable ? readable->graph().findLayer(original) : nullptr;
     if (layer == nullptr || !layer->entryOwned())
-        return detail::invalidTarget();
+        return detail::brokenReference("Layer " + std::to_string(original.value()) +
+                                       (layer == nullptr ? " does not exist in composition "
+                                                         : " is not an entry layer in composition ") +
+                                       std::to_string(compositionId.value()));
     auto boundary = *layer;
     const auto merge = boundary.nodeId;
     const auto slot = *boundary.entrySlot;
     const auto* stack = readable->graph().merge(merge);
     if (stack == nullptr || stack->find(slot) == nullptr)
-        return missingEntry();
+        return missingEntry(merge, slot);
     const auto entries = stack->entries();
     const auto found = std::ranges::find(entries, slot, &document::LayerStackEntry::slotId);
     const auto below = std::next(found) == entries.end() ? std::nullopt
@@ -418,7 +436,11 @@ std::optional<OperationResult> duplicateEntryLayer(document::Draft& draft,
 std::optional<OperationResult> deleteEntryLayer(Composition& composition, const LayerId layerId) {
     const auto* layer = std::as_const(composition).graph().findLayer(layerId);
     if (layer == nullptr || !layer->entryOwned())
-        return detail::invalidTarget();
+        return detail::brokenReference("Layer " + std::to_string(layerId.value()) +
+                                       (layer == nullptr ? " does not exist"
+                                                         : " is not an entry layer") +
+                                       " in composition " +
+                                       std::to_string(composition.id().value()));
     const auto boundary = *layer;
     auto& graph = composition.graph();
     std::vector<document::EdgeId> edges;
@@ -617,7 +639,8 @@ class CompositionReconcile final {
         auto* node = target ? graph().findNode(target->nodeId) : nullptr;
         if (node == nullptr)
             return OperationIssue{OperationIssueCode::InvalidTarget,
-                                  "The adopting Layer node does not exist"};
+                                  "The Layer node of layer " + std::to_string(layerId.value()) +
+                                      ", which adopts the entry layer, does not exist"};
         auto& parameters = after_.parameters();
         std::set<ParameterId> moved;
         for (const auto& binding : entry.parameters) {

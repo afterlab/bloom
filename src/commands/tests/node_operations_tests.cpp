@@ -2039,6 +2039,69 @@ void testParentCommands(TestContext& test) {
     test.expect(!parent(), "unparent command survives undo and redo");
 }
 
+// #578: a refusal names what failed and on which object. Each message carries the id that was
+// addressed and the place it was looked up, so "target does not exist" cannot come back.
+template <typename Op, typename... Args>
+std::string refusalMessage(Fixture& fixture, Args&&... args) {
+    Transaction transaction("Message probe");
+    transaction.emplace<Op>(kCompositionId, std::forward<Args>(args)...);
+    const auto result = fixture.stack.execute(std::move(transaction));
+    return result.operationFailures.empty() ? std::string("(not refused)")
+                                            : result.operationFailures.front().issue.message;
+}
+
+void expectNames(TestContext& test, const std::string& message,
+                 const std::initializer_list<std::string_view> parts, const std::string_view what) {
+    for (const auto part : parts)
+        test.expect(message.find(part) != std::string::npos,
+                    std::string(what) + " names \"" + std::string(part) + "\": " + message);
+}
+
+void testRefusalMessagesNameTheObject(TestContext& test) {
+    Fixture fixture;
+    const auto comp = std::to_string(kCompositionId.value());
+    const auto missingNode = NodeId::fromRaw(9999);
+    const auto missingGroup = NodeGroupId::fromRaw(8888);
+    const auto missingSlot = LayerSlotId::fromRaw(7777);
+
+    expectNames(test, refusalMessage<GroupNodes>(fixture, std::set<NodeId>{missingNode}),
+                {"Node 9999", "composition " + comp}, "grouping a missing node");
+    expectNames(test, refusalMessage<DuplicateNodes>(fixture, std::set<NodeId>{missingNode}, Vec2d{}),
+                {"Node 9999", "composition " + comp}, "duplicating a missing node");
+    expectNames(test, refusalMessage<UngroupNodes>(fixture, missingGroup),
+                {"Node group 8888", "composition " + comp}, "ungrouping a missing group");
+    expectNames(test,
+                refusalMessage<SetMergeEnabled>(fixture, missingNode, false),
+                {"Merge node 9999", "composition " + comp}, "toggling a missing Merge");
+    expectNames(test, refusalMessage<ReorderMergeInput>(fixture, kLayerStackNodeId, missingSlot, 0),
+                {"Slot 7777", "Merge node " + std::to_string(kLayerStackNodeId.value())},
+                "reordering a missing slot");
+    expectNames(test,
+                refusalMessage<DisconnectInput>(
+                    fixture, document::InputPortRef{document::NodeInputRef{missingNode, "in"}}),
+                {"input \"in\" of node 9999", "composition " + comp},
+                "disconnecting a missing input");
+    expectNames(test,
+                refusalMessage<ConnectPorts>(
+                    fixture, document::OutputPortRef{missingNode, "out"},
+                    document::InputPortRef{document::NodeInputRef{kFirstLayerNodeId, "in"}}),
+                {"Output \"out\" of node 9999", "composition " + comp},
+                "connecting from a missing output");
+    expectNames(test,
+                refusalMessage<SetNodeParameterValue>(fixture, missingNode, "x",
+                                                      document::ParameterValue{1.0}),
+                {"Node 9999", "composition " + comp}, "setting a missing node's parameter");
+    expectNames(test,
+                refusalMessage<SetNodeParameterValue>(fixture, kFirstLayerNodeId, "nope",
+                                                      document::ParameterValue{1.0}),
+                {"Node " + std::to_string(kFirstLayerNodeId.value()), "\"nope\""},
+                "setting an unknown optional parameter");
+    expectNames(test, refusalMessage<RemoveNodes>(fixture, std::set<NodeId>{missingNode}),
+                {"Node 9999", "composition " + comp}, "removing a missing node");
+    expectNames(test, refusalMessage<DissolveNode>(fixture, missingNode),
+                {"Node 9999", "composition " + comp}, "dissolving a missing node");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -2073,6 +2136,7 @@ int main() {
         bloom::commands::test::testLayerRangeTimeFootprint(test);
         bloom::commands::test::testRemovalTimeFootprint(test);
         bloom::commands::test::testSplitEquivalenceEvidence(test);
+        bloom::commands::test::testRefusalMessagesNameTheObject(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
