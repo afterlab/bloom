@@ -22,11 +22,16 @@ class KPropertyRow final : public QWidget {
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
   private:
+    [[nodiscard]] int naturalLabelWidth() const;
+    [[nodiscard]] QWidget* labelGroup() const;
+    void applyLabelColumn();
     QLabel* label_;
     bool leadingIndicator_ = false;
     int labelWidth_ = 0;
+    int lineCount_ = 1;
 };
 QLabel* makePropertyRowLabel(const QString& text, QWidget* parent);
 class KRow : public QWidget {

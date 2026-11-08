@@ -1,4 +1,7 @@
+#include <QFontMetrics>
 #include <QPainter>
+#include <QShowEvent>
+#include <algorithm>
 #include <QResizeEvent>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -8,6 +11,8 @@
 #include <bloom/ui/kit/switch_control.hpp>
 namespace bloom::ui::kit {
 namespace {
+// The largest share of a row its label column may take before a longer label wraps.
+constexpr double kLabelColumnShare = 0.4;
 class PropertyRowLabel final : public KLabel {
   public:
     PropertyRowLabel(QString fullText, const int preferredWidth, QWidget* parent)
@@ -31,6 +36,12 @@ class PropertyRowLabel final : public KLabel {
   protected:
     void resizeEvent(QResizeEvent* event) override {
         KLabel::resizeEvent(event);
+        // A wrapping label (an ordinary Properties row) always shows its whole text; the row sizes
+        // the column and the line count so nothing is cut. Others elide to the width they are given.
+        if (wordWrap()) {
+            setText(fullText_);
+            return;
+        }
         const QFontMetrics metrics(font());
         setText(metrics.elidedText(fullText_, Qt::ElideRight, width()));
     }
@@ -70,6 +81,8 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator, const std::vector<
     label->setFixedWidth(
         px(leadingIndicator_ ? Size::PropertyLabelCompact : Size::PropertiesLabelWidth));
     label->setFixedHeight(px(Size::Control));
+    if (!leadingIndicator_)
+        label->setWordWrap(true);
     if (leadingIndicator_ && indicator) {
         indicator->setFixedWidth(px(Size::ToggleCell));
         layout->addWidget(indicator, 0, Qt::AlignVCenter);
@@ -113,12 +126,73 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator, const std::vector<
 void KPropertyRow::setLineCount(int lines) {
     const auto count = std::max(1, lines);
     setProperty("rowLines", count);
-    setFixedHeight(px(Size::PropertyRow) * count);
+    lineCount_ = count;
+    applyLabelColumn();
 }
 void KPropertyRow::setLabelWidth(const int width) {
     labelWidth_ = std::max(0, width);
+    // An explicit column keeps the label on one line, elided to that width.
+    label_->setWordWrap(labelWidth_ <= 0 && !leadingIndicator_);
     label_->setFixedWidth(labelWidth_ > 0 ? labelWidth_ : px(Size::PropertiesLabelWidth));
     updateGeometry();
+}
+int KPropertyRow::naturalLabelWidth() const {
+    const QString text = label_->toolTip();
+    if (text.isEmpty())
+        return 0;
+    return QFontMetrics(label_->font()).horizontalAdvance(text) + 2;
+}
+QWidget* KPropertyRow::labelGroup() const {
+    for (auto* host = parentWidget(); host != nullptr; host = host->parentWidget())
+        if (host->property("propertyRowGroup").toBool())
+            return host;
+    return parentWidget();
+}
+void KPropertyRow::applyLabelColumn() {
+    const int rowHeight = px(Size::PropertyRow) * lineCount_;
+    if (leadingIndicator_ || labelWidth_ > 0) {
+        setFixedHeight(rowHeight);
+        return;
+    }
+    // One label column per section: the longest label among the sibling rows sets it (never
+    // narrower than the token width), up to two fifths of the row. A label still longer wraps onto
+    // more lines and the row grows to hold them, so a label is never cut at any panel width.
+    int natural = naturalLabelWidth();
+    if (const auto* host = labelGroup())
+        for (const auto* sibling : host->findChildren<KPropertyRow*>())
+            if (!sibling->leadingIndicator_ && sibling->labelWidth_ <= 0 &&
+                sibling->isVisibleTo(host))
+                natural = std::max(natural, sibling->naturalLabelWidth());
+    const int base =
+        px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
+                                             : Size::PropertiesLabelWidth);
+    const int cap = std::max(base, static_cast<int>(width() * kLabelColumnShare));
+    const int column = std::clamp(natural, base, cap);
+    int lines = 1;
+    const QFontMetrics metrics(label_->font());
+    if (const QString text = label_->toolTip(); !text.isEmpty() && naturalLabelWidth() > column) {
+        const QRect bounds = metrics.boundingRect(
+            QRect(0, 0, column, QWIDGETSIZE_MAX), Qt::TextWordWrap | Qt::TextWrapAnywhere, text);
+        lines = std::max(1, (bounds.height() + metrics.lineSpacing() - 1) / metrics.lineSpacing());
+    }
+    const int extra = (lines - 1) * metrics.lineSpacing();
+    if (label_->width() != column || label_->maximumWidth() != column)
+        label_->setFixedWidth(column);
+    label_->setFixedHeight(px(Size::Control) + extra);
+    const int height = std::max(rowHeight, px(Size::PropertyRow) + extra);
+    if (this->height() != height || minimumHeight() != height)
+        setFixedHeight(height);
+}
+void KPropertyRow::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    // A row shown after its siblings can widen the shared column: bring them all up to date.
+    const auto* host = labelGroup();
+    if (leadingIndicator_ || labelWidth_ > 0 || host == nullptr)
+        return;
+    for (auto* sibling : host->findChildren<KPropertyRow*>())
+        if (sibling != this && sibling->isVisibleTo(host))
+            sibling->applyLabelColumn();
+    applyLabelColumn();
 }
 QSize KPropertyRow::minimumSizeHint() const {
     auto size = QWidget::minimumSizeHint();
@@ -132,10 +206,10 @@ void KPropertyRow::resizeEvent(QResizeEvent* event) {
         QWidget::resizeEvent(event);
         return;
     }
-    label_->setFixedWidth(labelWidth_ > 0
-                              ? labelWidth_
-                              : px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
-                                                                     : Size::PropertiesLabelWidth));
+    if (labelWidth_ > 0)
+        label_->setFixedWidth(labelWidth_);
+    else
+        applyLabelColumn();
     QWidget::resizeEvent(event);
 }
 KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {

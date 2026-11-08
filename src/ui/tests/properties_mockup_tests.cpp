@@ -248,10 +248,12 @@ void run() {
         expect(area.width() == width && scroll->widget()->width() <= scroll->viewport()->width(),
                "compact panel holds the minimum width");
         auto* label = xRow->findChild<QLabel*>("propertiesRowLabel");
-        expect(label->width() == (xRow->width() < ui::kit::px(ui::kit::Size::PanelMinWidth)
+        // The column is at least the responsive token and grows to the section's longest label.
+        expect(label->width() >= (xRow->width() < ui::kit::px(ui::kit::Size::PanelMinWidth)
                                       ? ui::kit::px(ui::kit::Size::PropertiesLabelMinWidth)
-                                      : ui::kit::px(ui::kit::Size::PropertiesLabelWidth)),
-               "label column uses responsive tokens");
+                                      : ui::kit::px(ui::kit::Size::PropertiesLabelWidth)) &&
+                   label->text() == label->toolTip(),
+               "label column uses responsive tokens and shows the whole label");
     }
     if (expand)
         expand->setChecked(false);

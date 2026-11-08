@@ -86,6 +86,8 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
 
     body_ = new QWidget(this);
     body_->setObjectName(QStringLiteral("kSectionBody"));
+    // The rows inside share one label column (KPropertyRow).
+    body_->setProperty("propertyRowGroup", true);
     bodyLayout_ = new QVBoxLayout(body_);
     bodyLayout_->setContentsMargins(px(Spacing::SectionPadding), px(Spacing::SectionPadding),
                                     px(Spacing::SectionPadding), px(Spacing::SectionPadding));

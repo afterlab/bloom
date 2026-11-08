@@ -624,7 +624,6 @@ void widthRule() {
                   << " min=" << scroll->widget()->minimumSizeHint().width() << '\n';
     expect(scroll->widget()->width() <= scroll->viewport()->width(),
            "body never exceeds viewport width");
-    bool elided = false;
     for (auto* child : scroll->widget()->findChildren<QWidget*>()) {
         if (!child->isVisible() || child->isWindow())
             continue;
@@ -638,9 +637,60 @@ void widthRule() {
                    "numeric field keeps its legible floor");
         if (auto* label = qobject_cast<QLabel*>(child);
             label && label->objectName() == "propertiesRowLabel")
-            elided = elided || label->text().endsWith(QChar(0x2026));
+            expect(!label->text().endsWith(QChar(0x2026)), "narrow labels wrap, never elide");
     }
-    expect(elided, "narrow labels elide instead of stretching viewport");
+}
+// #582: no label of any built-in node's Properties section is cut, at a wide, a normal and a
+// narrow panel. A label either fits its column on one line or wraps onto lines the row has room
+// for; its text is always the whole name.
+void everyBuiltInLabelIsShownWhole() {
+    int checked = 0;
+    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+        const std::string typeId = definition.key.typeId;
+        auto project = document::makeNewProject("Labels", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, typeId);
+        if (!node.isValid())
+            continue;
+        session.selectNode(node);
+        // Motion blur's rows carry the longest labels; show them wherever a node has the toggle.
+        for (const auto& binding : session.composition()->graph().findNode(node)->parameters)
+            if (binding.role == "motionBlur")
+                (void)session.setParameterValue(binding.parameterId, true, "Set");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1500);
+            properties.show();
+            QCoreApplication::processEvents();
+            if (const auto directory = qEnvironmentVariable("BLOOM_LABEL_CAPTURE_DIR");
+                !directory.isEmpty() && width == 900 &&
+                (typeId == document::kCameraShakeNodeType ||
+                 typeId == document::kTransform2DNodeType)) {
+                QDir().mkpath(directory);
+                properties.grab().save(directory + QLatin1Char('/') +
+                                       QString::fromStdString(typeId) +
+                                       QStringLiteral("-900.png"));
+            }
+            for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel")) {
+                if (!label->isVisibleTo(&properties) || label->toolTip().isEmpty())
+                    continue;
+                ++checked;
+                const QFontMetrics metrics(label->font());
+                const QRect needed = metrics.boundingRect(QRect(0, 0, label->width(), 100000),
+                                                          Qt::TextWordWrap | Qt::TextWrapAnywhere,
+                                                          label->toolTip());
+                expect(label->text() == label->toolTip() &&
+                           needed.height() <= label->height(),
+                       (std::string("a Properties label is cut: ") +
+                        label->toolTip().toStdString() + " in " + typeId +
+                        " at " + std::to_string(width))
+                           .c_str());
+            }
+        }
+    }
+    expect(checked > 100, "the label audit visits the built-in nodes' rows");
 }
 void genericKinds() {
     auto project = document::makeNewProject("Kinds", "Main", core::RationalTime::fromInteger(10));
@@ -1375,6 +1425,7 @@ int main(int argc, char** argv) try {
     colorGradeRows();
     imageChannelRows();
     widthRule();
+    everyBuiltInLabelIsShownWhole();
     videoRows();
     testCardRows();
     QSettings().clear();

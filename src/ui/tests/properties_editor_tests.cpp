@@ -1032,10 +1032,10 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
 }
 
 // task WIDTH-1 (owner: "let it have min width of something like 300px ... so inner sections and
-// users can compromise"): a narrow label column elides its text with an ellipsis rather than
-// forcing the row wider or clipping raw, and always keeps the untruncated parameter name
+// users can compromise"): a narrow label column wraps its text rather than eliding it or
+// forcing the row wider, and always keeps the untruncated parameter name
 // reachable through its tooltip.
-void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectations& expectations) {
+void testNarrowLabelColumnKeepsTheFullNameAndATooltip(Expectations& expectations) {
     auto newProject = document::makeNewProject("Elide Test", "Main", time(10));
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
@@ -1074,14 +1074,11 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     expectations.expect(label->text() == QStringLiteral("Position"),
                         "at its preferred width the label shows the full parameter name");
 
-    // Narrow enough to force eliding, but wide enough to fit at least one glyph plus the ellipsis
-    // itself -- narrower than that, Qt::elidedText() gives up and returns an empty string, which
-    // would trivially (and wrongly) satisfy a "not equal to the full text" check on its own.
+    // A column narrower than the name wraps it onto more lines rather than cutting it.
     label->setFixedWidth(24);
-    expectations.expect(
-        label->text() != QStringLiteral("Position") &&
-            label->text().endsWith(QString::fromUtf8("\xE2\x80\xA6")),
-        "a narrow label column elides to an ellipsis instead of forcing the row wider");
+    QCoreApplication::processEvents();
+    expectations.expect(label->text() == QStringLiteral("Position"),
+                        "a narrow label column never elides the parameter name");
     expectations.expect(label->toolTip() == QStringLiteral("Position"),
                         "the tooltip always carries the full, untruncated parameter name");
 }
@@ -1314,7 +1311,7 @@ int main(int argc, char** argv) {
     testScrubOnRgbaCellChangesValue(expectations);
     testFocusedHoveredCellBorderIsAccentOnScreen(expectations);
     testTextSourceRowsEditThroughCommands(expectations);
-    testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(expectations);
+    testNarrowLabelColumnKeepsTheFullNameAndATooltip(expectations);
     testValueCellMinimumSizeHintIsAFloorBelowItsPreferredWidth(expectations);
     testSectionsGroupCollapseAndPersist(expectations);
     testPropertiesFilterStripRemoved(expectations);
