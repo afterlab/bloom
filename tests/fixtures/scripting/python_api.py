@@ -525,6 +525,41 @@ class PythonApi(unittest.TestCase):
             self.assertEqual(command.returncode, 0, command.stderr.decode())
             self.assertIn(b'executed 2 transaction(s)', command.stdout)
 
+    def test_curve_points_take_auto_anchors_with_null_handles(self):
+        """#547: a Curves point list takes an auto anchor with null handles; a bad one is named."""
+        before = {node.id for node in bloom.data.nodes(1)}
+        bloom.ops.node.add(composition=1, nodeType='bloom.curves', position=(0, 0))
+        node = next(node for node in bloom.data.nodes(1) if node.id not in before)
+        curve = node.parameters['master']
+        points = [{'point': (0, 0), 'mode': 'auto', 'in_handle': None, 'out_handle': None},
+                  {'point': (0.5, 0.7), 'mode': 'auto', 'in_handle': None, 'out_handle': None},
+                  {'point': (1, 1), 'mode': 'corner'}]
+        self.assertTrue(bloom.ops.parameter.set_source(
+            curve, value={'closed': False, 'anchors': points})['succeeded'])
+        value = bloom.data.parameters(1).get(curve).value
+        self.assertEqual([row['point'] for row in value['anchors']],
+                         [(0.0, 0.0), (0.5, 0.7), (1.0, 1.0)])
+        self.assertEqual({row['mode'] for row in value['anchors']}, {'corner'})
+        with self.assertRaises(bloom.OperationError) as raised:
+            bloom.ops.parameter.set_source(curve, value={'closed': False, 'anchors': [
+                {'point': (0, 0), 'mode': 'auto', 'in_handle': (0.1, 0.1)}]})
+        self.assertIn('anchor 0 has a handle', str(raised.exception))
+        self.assertIn('point:[input, output]', str(raised.exception))
+
+    def test_locked_layer_takes_view_state_only(self):
+        """#470: a locked layer still disables, solos and unlocks; its content edits are refused."""
+        result = bloom.ops.layer.add_solid('Locked', (1, 0, 0, 1))
+        layer = next(o['id'] for o in result['outputs'] if o['name'] == 'layer')
+        self.assertTrue(bloom.ops.layer.set_locked(True, layer=layer)['succeeded'])
+        self.assertTrue(bloom.ops.layer.set_enabled(False, layer=layer)['succeeded'])
+        self.assertTrue(bloom.ops.layer.set_solo(True, layer=layer)['succeeded'])
+        self.assertTrue(bloom.ops.layer.set_shy(True, layer=layer)['succeeded'])
+        with self.assertRaises(bloom.OperationError) as raised:
+            bloom.ops.layer.set_range(layer=layer, start=1, end=5)
+        self.assertIn('locked', str(raised.exception))
+        self.assertTrue(bloom.ops.layer.set_locked(False, layer=layer)['succeeded'])
+        self.assertTrue(bloom.ops.layer.set_range(layer=layer, start=1, end=5)['succeeded'])
+
     def test_gradient_blend_modes(self):
         """#546: a gradient's interpolation, colour mode and hue direction read and write by name."""
         before = {node.id for node in bloom.data.nodes(1)}

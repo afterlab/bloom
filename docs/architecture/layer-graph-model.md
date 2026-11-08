@@ -1325,11 +1325,19 @@ remain reusable across frame times. The added operands do not reinterpret previo
 change existing default pixels; evaluator, primitive, animation and plan semantics constants and
 output identity goldens remain unchanged.
 
-`SetLayerLocked` protects a layer's parameters and upstream parameter owners, including animated
-keys, range and explicit reorder commands. The command stack refuses protected changes with a
-message, including destructive Layer deletion. Node-card and Properties editors disable their
-controls. Unlock, visibility, solo and label edits remain available. Undo/redo restore recorded
-snapshots and are not refused by a lock introduced in that history.
+`SetLayerLocked` freezes a layer's content (#470). A locked layer still takes the view and naming
+state: Enable/Disable, Solo, Shy, its label color and its name, and it can be unlocked. Everything
+else is refused with a message, from every surface (Timeline, Properties, node editor, MCP, Python
+and scripts all submit the same commands): masks, track mattes, transform and every other
+parameter including animated keys, range, slip and other timing, parent, pivot, effects and the
+inputs and drivers upstream of the layer, explicit reorder, and Layer deletion. The command stack
+enforces this once, for every operation, by comparing each locked layer, the nodes locked with it
+and the edges into those nodes before and after each operation, so a new operation cannot bypass
+it. The lock is read from the state at the start of the transaction: unlocking a layer and
+editing it in one transaction is refused at the edit. A deleted parent leaves a locked child
+unparented, which is a cascade and not an edit of the child. Node-card and Properties editors
+disable their controls. Undo/redo restore recorded snapshots and are not refused by a lock
+introduced in that history.
 
 `SetLayerLabelColor` sets or clears an optional three-channel, 8-bit RGB display label. The row
 swatch and clip bar use it; absence uses the layer-kind color. Labels and locks do not affect

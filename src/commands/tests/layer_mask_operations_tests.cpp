@@ -133,6 +133,66 @@ void testLimitAndLock(TestContext& test) {
         "a locked layer rejects mask edits");
 }
 
+// #470: a locked layer still takes view and naming state (Enable/Disable, Solo, Shy, label, name)
+// and can be unlocked; every edit of its content (masks, matte, timing, parent, parameters) is
+// refused.
+void testLockedLayerRule(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto mask = addMask(test, document, stack);
+    const auto id = kFirstLayerId;
+    const auto lock = [&](const bool value) {
+        return run<SetLayerLocked>(document, stack, kCompositionId, id, value);
+    };
+    test.expect(lock(true).changed(), "the layer locks");
+    test.expect(run<SetLayerEnabled>(document, stack, kCompositionId, id, false).changed() &&
+                    !layerOf(document).enabled,
+                "a locked layer can be disabled");
+    test.expect(run<SetLayerSolo>(document, stack, kCompositionId, id, true).changed() &&
+                    layerOf(document).solo,
+                "a locked layer can be soloed");
+    test.expect(run<SetLayerSolo>(document, stack, kCompositionId, id, false).changed() &&
+                    run<SetLayerEnabled>(document, stack, kCompositionId, id, true).changed(),
+                "and restored");
+    test.expect(run<SetLayerShy>(document, stack, kCompositionId, id, true).changed() &&
+                    run<SetLayerLabelColor>(document, stack, kCompositionId, id,
+                                            std::array<std::uint8_t, 3>{1, 2, 3})
+                        .changed(),
+                "shy and the label color are view state a locked layer still takes");
+    const auto before = document.snapshot().revision();
+    test.expect(run<SetLayerParent>(document, stack, kCompositionId, id, kSecondLayerId).status ==
+                    CommandStatus::Rejected,
+                "a locked layer refuses a new parent");
+    test.expect(run<SetLayerRange>(document, stack, kCompositionId, id,
+                                   RationalTime::fromInteger(1), RationalTime::fromInteger(5))
+                        .status == CommandStatus::Rejected,
+                "a locked layer refuses a new range");
+    test.expect(run<RemoveLayerMask>(document, stack, kCompositionId, id, mask).status ==
+                    CommandStatus::Rejected,
+                "a locked layer refuses a mask removal");
+    test.expect(document.snapshot().revision() == before, "the refusals changed nothing");
+    // The lock is read from the state at the start of the transaction, so unlocking and editing in
+    // one transaction is refused wherever the edit sits, while editing and then locking is not.
+    {
+        Transaction t("Unlock then edit", document.snapshot().revision());
+        t.emplace<SetLayerLocked>(kCompositionId, id, false);
+        t.emplace<SetLayerRange>(kCompositionId, id, RationalTime::fromInteger(1),
+                                 RationalTime::fromInteger(5));
+        const auto result = stack.execute(std::move(t));
+        test.expect(result.status == CommandStatus::Rejected &&
+                        result.operationFailures.size() == 1 &&
+                        result.operationFailures[0].operationIndex == 1 && layerOf(document).locked,
+                    "unlocking and editing in one transaction is refused at the edit");
+    }
+    test.expect(lock(false).changed() && !layerOf(document).locked, "the layer unlocks");
+    test.expect(
+        run<SetLayerRange>(document, stack, kCompositionId, id, RationalTime::fromInteger(1),
+                           RationalTime::fromInteger(5))
+            .changed(),
+        "an unlocked layer takes the edit");
+    test.expect(valid(document), "the document stays valid");
+}
+
 void testFieldEdits(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -449,6 +509,7 @@ int main() {
     try {
         bloom::commands::test::testAddRemoveUndo(test);
         bloom::commands::test::testLimitAndLock(test);
+        bloom::commands::test::testLockedLayerRule(test);
         bloom::commands::test::testFieldEdits(test);
         bloom::commands::test::testPathAnimation(test);
         bloom::commands::test::testTrackMatte(test);

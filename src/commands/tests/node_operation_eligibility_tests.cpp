@@ -194,6 +194,11 @@ void testLocked(TestContext& test) {
     test.expect(canRemoveNodes(checker.comp, {kSecondLayerNodeId}), "unlocked layer still removes");
     test.expect(canRenameLayer(checker.comp, kFirstLayerId, "Locked rename"),
                 "rename of a locked layer matches command acceptance");
+    // #470: what feeds a locked layer is locked with it.
+    test.expect(!apply<ConnectPorts>(fixture, OutputPortRef{unrelated, "image"},
+                                     InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}})
+                     .changed(),
+                "a locked layer's image input cannot be rewired");
 }
 
 void testNoValidationAndNoDocumentCopy(TestContext& test) {

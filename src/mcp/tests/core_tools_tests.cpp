@@ -1271,6 +1271,81 @@ void gradientReadBack() {
            "an unknown interpolation is refused, saying which are known: " + result);
 }
 
+// #547: a Curves point list takes an auto (or corner) anchor with null handles as a plain point; an
+// invalid one is refused naming the anchor, the shape a curve takes and what was received.
+void curvesAutoAnchors() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.node.add","args":{"composition":1,)"
+                           R"("nodeType":"bloom.curves"}})");
+    expect(outputId(result, "node") != 0, "a Curves node is added: " + result);
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    const auto master = firstMatch(nodes, R"re("master":(\d+))re");
+    expect(!master.empty(), "the Curves node lists its master curve: " + nodes);
+    if (master.empty())
+        return;
+    const auto set = [&](const std::string& anchors) {
+        return transact(
+            R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" + master +
+            R"(,"value":{"closed":false,"anchors":)" + anchors + "}}}");
+    };
+    result = set(R"([{"point":[0,0],"mode":"auto","inHandle":null,"outHandle":null},)"
+                 R"({"point":[0.5,0.7],"mode":"auto","inHandle":null,"outHandle":null},)"
+                 R"({"point":[1,1],"mode":"corner"}])");
+    expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)"),
+           "auto anchors with null handles are accepted: " + result);
+    const auto read = server.call(
+        "query", R"({"kind":"parameter","composition":1,"parameter":)" + master + "}");
+    expect(contains(read, R"("point":[0.5,0.7])") && !contains(read, R"("mode":"auto")"),
+           "the points read back as plain curve points: " + read);
+    result = set(R"([{"point":[0,0],"mode":"auto","inHandle":[0.1,0.1]}])");
+    expect(contains(result, "anchor 0 has a handle") && contains(result, "point:[input, output]"),
+           "a curve anchor with a handle is refused, saying what a curve takes: " + result);
+    result = set(R"([{"point":[0,0]},{"point":[2000000,0]}])");
+    expect(contains(result, "anchor 1 input 2e+06 is outside"),
+           "a point outside the domain is refused, naming it: " + result);
+    result = set(R"([{"point":[0,0],"mode":"free"}])");
+    expect(contains(result, "anchor 0 is in free mode"),
+           "a free anchor is refused, naming its mode: " + result);
+}
+
+// #470: a locked layer still takes Enable/Disable, Solo, Shy and Unlock over MCP; its timing,
+// masks and other content are refused with the layer named.
+void lockedLayerRule() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    const auto added = transact(R"({"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                                R"("name":"Locked","color":[1,0,0,1]}})");
+    const auto layer = std::to_string(outputId(added, "layer"));
+    expect(layer != "0", "a layer is added: " + added);
+    const auto on = [&](const std::string& op, const std::string& extra) {
+        return transact(R"({"op":"bloom.layer.)" + op + R"(","args":{"composition":1,"layer":)" +
+                        layer + extra + "}}");
+    };
+    auto result = on("set-locked", R"(,"locked":true)");
+    expect(contains(result, R"("succeeded":true)"), "the layer locks: " + result);
+    for (const auto& [op, extra] : {std::pair<std::string, std::string>{"set-enabled", R"(,"enabled":false)"},
+                                    {"set-solo", R"(,"solo":true)"},
+                                    {"set-shy", R"(,"shy":true)"}}) {
+        result = on(op, extra);
+        expect(contains(result, R"("succeeded":true)"),
+               "a locked layer takes " + op + ": " + result);
+    }
+    result = on("set-range", R"(,"start":1,"end":5)");
+    expect(contains(result, R"("succeeded":false)") && contains(result, "is locked"),
+           "a locked layer refuses a new range, saying why: " + result);
+    result = on("set-locked", R"(,"locked":false)");
+    expect(contains(result, R"("succeeded":true)"), "the layer unlocks: " + result);
+    result = on("set-range", R"(,"start":1,"end":5)");
+    expect(contains(result, R"("succeeded":true)"), "an unlocked layer takes the range: " + result);
+}
+
 // profiler.snapshot (#423): unbound it says so; bound it returns the snapshot as JSON with
 // schemaVersion, absent values as null, and the fixed histogram and pool shapes.
 void profilerSnapshotTool() {
@@ -1684,6 +1759,8 @@ int main() {
         mergeEntryReadBack();
         fieldTestArguments();
         gradientReadBack();
+        curvesAutoAnchors();
+        lockedLayerRule();
         parityTools();
         stdioStopsWhileInputIdle();
     } catch (const std::exception& error) {
