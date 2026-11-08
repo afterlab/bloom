@@ -47,7 +47,7 @@ constexpr std::array kHandleLumas{0.0, document::kFilmGrainMidGrey, document::kF
 }
 
 [[nodiscard]] QString description(const std::string_view role) {
-    static const std::array<std::pair<std::string_view, const char*>, 8> kText{{
+    static const std::array<std::pair<std::string_view, const char*>, 12> kText{{
         {"intensity",
          QT_TRANSLATE_NOOP("FilmGrain", "How strong the grain is, in linear light, where the "
                                         "response is 100%.")},
@@ -60,6 +60,17 @@ constexpr std::array kHandleLumas{0.0, document::kFilmGrainMidGrey, document::kF
         {"highlights",
          QT_TRANSLATE_NOOP("FilmGrain", "The share of the grain at white. Above white, the grain "
                                         "grows with the brightness.")},
+        {"shadowWeighting",
+         QT_TRANSLATE_NOOP("FilmGrain", "How much the noise favors the shadows: at 0% it is even, "
+                                        "and the higher it is, the more the brighter areas lose.")},
+        {"chromaBlotches",
+         QT_TRANSLATE_NOOP("FilmGrain", "How strong the soft, low-frequency color blotches are, "
+                                        "relative to the intensity.")},
+        {"blotchSize",
+         QT_TRANSLATE_NOOP("FilmGrain", "How wide a color blotch is, in full-resolution pixels.")},
+        {"fixedPattern",
+         QT_TRANSLATE_NOOP("FilmGrain", "How strong a noise pattern is that stays the same on "
+                                        "every frame, relative to the intensity.")},
     }};
     for (const auto& [name, text] : kText)
         if (name == role)
@@ -87,6 +98,14 @@ int FilmGrainResponseGraph::fixedHeight() {
     return 120;
 }
 
+bool FilmGrainResponseGraph::sensorNoise() const {
+    if (const auto id = nodeRoleParameter(session_, node_, "mode"))
+        if (const auto live = session_.liveValue(*id))
+            if (const auto* stored = std::get_if<std::int64_t>(&*live))
+                return *stored == document::kFilmGrainSensorNoise;
+    return false;
+}
+
 QRectF FilmGrainResponseGraph::plotRect() const {
     const qreal inset = handleRadius() + 1.0;
     return QRectF(rect()).adjusted(inset, inset, -inset, -inset);
@@ -106,6 +125,9 @@ QPointF FilmGrainResponseGraph::handlePosition(const std::size_t handle) const {
 }
 
 std::optional<std::size_t> FilmGrainResponseGraph::handleAt(const QPointF position) const {
+    // Sensor Noise has no handles: its response is the one Shadow weighting row.
+    if (sensorNoise())
+        return std::nullopt;
     // The nearest handle within reach of the pointer.
     std::optional<std::size_t> nearest;
     qreal best = (handleRadius() + kit::px(kit::Spacing::S));
@@ -136,6 +158,13 @@ QImage FilmGrainResponseGraph::preview(const int width, const int height) const 
             if (const auto* stored = std::get_if<std::int64_t>(&*live))
                 seed = *stored;
     const auto stream = core::film_grain::stream(seed, 0);
+    const bool sensor = sensorNoise();
+    const double weighting = scalar("shadowWeighting") / document::kFilmGrainMidGrey;
+    const double chroma = intensity * scalar("chromaBlotches");
+    const double blotchRatio = size / std::max(scalar("blotchSize"), 1.0);
+    const double pattern = intensity * scalar("fixedPattern");
+    const auto blotchStream = core::film_grain::blotchStream(seed, 0);
+    const auto patternStream = core::film_grain::fixedStream(seed);
     bool monochrome = false;
     if (const auto id = nodeRoleParameter(session_, node_, "monochrome"))
         if (const auto live = session_.liveValue(*id))
@@ -149,13 +178,30 @@ QImage FilmGrainResponseGraph::preview(const int width, const int height) const 
             // The ramp, one preview pixel for one image pixel, so the grain shows at its size.
             const double shown = (x + 0.5) / w;
             const double luma = std::pow(shown, kDisplayGamma);
-            const double response = document::filmGrainResponse(luma, shadows, midtones, highlights);
-            const auto grain =
-                core::film_grain::noise(static_cast<float>((x + 0.5) / size), py, stream);
+            const double response =
+                sensor ? 1.0 / (1.0 + weighting * luma)
+                       : document::filmGrainResponse(luma, shadows, midtones, highlights);
+            const auto px = static_cast<float>((x + 0.5) / size);
+            const auto grain = core::film_grain::noise(px, py, stream);
+            std::array<float, 3> blotch{};
+            std::array<float, 3> fixed{};
+            if (sensor && chroma != 0.0) {
+                const auto raw = core::film_grain::noise(
+                    px * static_cast<float>(blotchRatio), py * static_cast<float>(blotchRatio),
+                    blotchStream);
+                const float mean = (raw[0] + raw[1] + raw[2]) / 3.0F;
+                for (std::size_t c = 0; c < 3; ++c)
+                    blotch[c] = raw[c] - mean;
+            }
+            if (sensor && pattern != 0.0)
+                fixed = core::film_grain::noise(px, py, patternStream);
             std::array<int, 3> rgb{};
             for (std::size_t c = 0; c < 3; ++c) {
-                const double value =
-                    luma + response * amounts[c] * static_cast<double>(grain[monochrome ? 0 : c]);
+                double noise = amounts[c] * static_cast<double>(grain[monochrome ? 0 : c]);
+                if (sensor)
+                    noise += chroma * static_cast<double>(blotch[c]) +
+                             pattern * static_cast<double>(fixed[c]);
+                const double value = luma + response * noise;
                 rgb[c] = static_cast<int>(std::lround(
                     255.0 * std::pow(std::clamp(value, 0.0, 1.0), 1.0 / kDisplayGamma)));
             }
@@ -183,12 +229,16 @@ void FilmGrainResponseGraph::paintEvent(QPaintEvent* event) {
     const double shadows = scalar("shadows");
     const double midtones = scalar("midtones");
     const double highlights = scalar("highlights");
+    const bool sensor = sensorNoise();
+    const double weighting = scalar("shadowWeighting") / document::kFilmGrainMidGrey;
     QPainterPath curve;
     const int steps = std::max(2, static_cast<int>(plot.width()) / 2);
     for (int step = 0; step <= steps; ++step) {
         const double x = static_cast<double>(step) / steps;
-        const double response = document::filmGrainResponse(std::pow(x, kDisplayGamma), shadows,
-                                                            midtones, highlights);
+        const double luma = std::pow(x, kDisplayGamma);
+        const double response =
+            sensor ? 1.0 / (1.0 + weighting * luma)
+                   : document::filmGrainResponse(luma, shadows, midtones, highlights);
         const QPointF point(plot.left() + x * plot.width(),
                             plot.bottom() -
                                 std::clamp(response / kGraphMaximum, 0.0, 1.0) * plot.height());
@@ -203,7 +253,7 @@ void FilmGrainResponseGraph::paintEvent(QPaintEvent* event) {
     painter.drawPath(curve);
     painter.setPen(QPen(kit::color(kit::Color::Accent), kit::kEmphasisStroke));
     painter.drawPath(curve);
-    for (std::size_t handle = 0; handle < kHandles; ++handle) {
+    for (std::size_t handle = 0; handle < (sensor ? 0 : kHandles); ++handle) {
         const bool active = drag_ && drag_->handle == handle;
         const bool hovered = !drag_ && hovered_ == handle;
         painter.setBrush(kit::color(active || hovered ? kit::Color::Accent : kit::Color::Foreground));
@@ -355,6 +405,7 @@ FilmGrainCardWidget::FilmGrainCardWidget(CompositionSession& session, const docu
           &CompositionSession::currentTimeChanged})
         connect(&session_, signal, this, &FilmGrainCardWidget::refresh);
     refresh();
+    place();
 }
 
 GradingValueRow* FilmGrainCardWidget::valueRow(const std::string_view role) const {
@@ -363,21 +414,38 @@ GradingValueRow* FilmGrainCardWidget::valueRow(const std::string_view role) cons
     return found == values_.end() ? nullptr : *found;
 }
 
+std::vector<GradingValueRow*> FilmGrainCardWidget::shownRows() const {
+    const bool sensor = mode_ == document::kFilmGrainSensorNoise;
+    std::vector<GradingValueRow*> rows;
+    for (auto* row : values_) {
+        const auto& spec = specOf(row->role());
+        const bool response = spec.role == "shadows" || spec.role == "midtones" ||
+                              spec.role == "highlights";
+        // Sensor Noise reads its own rows, Film the response rows.
+        if (spec.optional ? !sensor : (sensor && response))
+            continue;
+        rows.push_back(row);
+    }
+    return rows;
+}
+
 bool FilmGrainCardWidget::showsRole(const std::string_view role) const {
     // The animation, the seed and Monochrome are the node's own rows; every value is here.
     return !document::isFilmGrainScalarSchemaKey(document::filmGrainSchemaKey(role));
 }
 
 std::optional<int> FilmGrainCardWidget::socketY(const std::string_view role) const {
-    if (const auto* row = valueRow(role))
-        return row->y() + row->socketY();
+    // A row the mode does not read has no socket on the card.
+    for (const auto* row : shownRows())
+        if (row->role() == role)
+            return row->y() + row->socketY();
     return std::nullopt;
 }
 
 int FilmGrainCardWidget::heightAt(const int width) const {
     static_cast<void>(width);
     int height = FilmGrainResponseGraph::fixedHeight() + small();
-    for (const auto* row : values_)
+    for (const auto* row : shownRows())
         height += row->heightHint() + small();
     return std::max(0, height - small());
 }
@@ -406,8 +474,12 @@ void FilmGrainCardWidget::place() {
         labels = std::max(labels, row->labelWidthHint());
     graph_->setGeometry(0, 0, width(), FilmGrainResponseGraph::fixedHeight());
     int y = graph_->height() + small();
+    const auto rows = shownRows();
     for (auto* row : values_) {
         row->setLabelWidth(labels);
+        row->setVisible(std::ranges::find(rows, row) != rows.end());
+    }
+    for (auto* row : rows) {
         row->setGeometry(0, y, width(), row->heightHint());
         y += row->heightHint() + small();
     }
@@ -416,10 +488,22 @@ void FilmGrainCardWidget::place() {
 void FilmGrainCardWidget::refresh() {
     const auto* composition = session_.composition();
     const bool locked = composition == nullptr || composition->nodeLocked(node_);
+    std::int64_t mode = document::kFilmGrainFilm;
+    if (const auto id = nodeRoleParameter(session_, node_, "mode"))
+        if (const auto value = session_.liveValue(*id))
+            if (const auto* stored = std::get_if<std::int64_t>(&*value))
+                mode = *stored;
+    const bool changed = mode != mode_;
+    mode_ = mode;
     for (auto* row : values_)
         row->refresh(locked);
     graph_->setEnabled(!locked);
     graph_->update();
+    if (changed) {
+        place();
+        updateGeometry();
+        emit rowsChanged();
+    }
 }
 
 } // namespace bloom::ui

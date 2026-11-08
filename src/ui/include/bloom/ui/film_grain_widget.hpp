@@ -7,9 +7,10 @@
 //   as the node adds it there, and the share of the intensity across that ramp as a curve with one
 //   handle each for the shadows, the midtones and the highlights, dragged up and down;
 // - Intensity, Size, the red, green and blue amounts and the three responses, each a grading slider
-//   row.
+//   row. In Sensor Noise mode (#565) the graph shows the shadow weighting instead and the rows are
+//   Intensity, Size, the three amounts, Shadow weighting, Chroma blotches, Blotch size and Fixed pattern.
 //
-// The animation, the seed and Monochrome are the node's own rows. Every control follows the shared grading rules
+// The mode, the animation, the seed and Monochrome are the node's own rows. Every control follows the shared grading rules
 // (grading_controls.hpp): relative drags, Ctrl a tenth and Shift ten times the speed, a double-click
 // resets, one gesture is one undo step, and every value keeps its keyframe diamond and its socket
 // beside its row.
@@ -24,6 +25,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -68,6 +70,7 @@ class FilmGrainResponseGraph final : public QWidget {
         qreal lastY = 0.0;
     };
     [[nodiscard]] double scalar(std::string_view role) const;
+    [[nodiscard]] bool sensorNoise() const;
     [[nodiscard]] std::optional<std::size_t> handleAt(QPointF position) const;
 
     CompositionSession& session_;
@@ -98,10 +101,13 @@ class FilmGrainCardWidget final : public NodeCardWidget {
 
   private:
     void place();
+    // The rows the mode reads (#565): Film the response rows, Sensor Noise its own four.
+    [[nodiscard]] std::vector<GradingValueRow*> shownRows() const;
     CompositionSession& session_;
     document::NodeId node_;
     FilmGrainResponseGraph* graph_ = nullptr;
     std::vector<GradingValueRow*> values_;
+    std::int64_t mode_ = 0;
 };
 
 } // namespace bloom::ui
