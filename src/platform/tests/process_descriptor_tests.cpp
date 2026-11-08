@@ -1,6 +1,7 @@
 #include <bloom/platform/process_supervisor.hpp>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <variant>
@@ -52,6 +54,44 @@ int memoryWorker() {
         return 4;
     // Hold the memory until the parent has read it: an exiting process releases it first.
     return ::read(STDIN_FILENO, &received, 1) == 1 && received == 'Z' ? 0 : 5;
+}
+
+// A tool that finishes at once and never reads the gate, as a fast external compiler does.
+int quickTool() { return 0; }
+
+// #623: launching a tool that exits at once must never fail the launch. The child closes the gate
+// as it exits, which can happen before the parent writes the ready byte and before the child can
+// be reaped; under load that window is wide, and the write used to report it as a failed spawn.
+int quickToolsLaunch(const std::string& executable) {
+    constexpr int kThreads = 16;
+    constexpr int kLaunches = 150;
+    std::atomic<int> failures{0};
+    std::vector<std::thread> threads;
+    for (int thread = 0; thread < kThreads; ++thread)
+        threads.emplace_back([&] {
+            for (int launch = 0; launch < kLaunches; ++launch) {
+                bloom::platform::ProcessOptions options;
+                options.executable = executable;
+                options.arguments = {"--quick-tool"};
+                auto launched = bloom::platform::ProcessSupervisor::launch(options);
+                auto* process =
+                    std::get_if<std::unique_ptr<bloom::platform::ProcessSupervisor>>(&launched);
+                if (!process) {
+                    ++failures;
+                    continue;
+                }
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+                std::array<std::byte, 1> byte{};
+                const auto ended = (*process)->read(byte, deadline, {});
+                const auto finished = (*process)->finish(deadline);
+                if (!std::holds_alternative<bloom::platform::ProcessFailure>(ended) ||
+                    !std::holds_alternative<int>(finished) || std::get<int>(finished) != 0)
+                    ++failures;
+            }
+        });
+    for (auto& thread : threads)
+        thread.join();
+    return failures.load();
 }
 
 int memoryReport(const std::string& executable) {
@@ -155,9 +195,15 @@ int main(const int argc, char** argv) {
             return worker();
         if (argc == 2 && std::string_view(argv[1]) == "--memory-worker")
             return memoryWorker();
+        if (argc == 2 && std::string_view(argv[1]) == "--quick-tool")
+            return quickTool();
         const auto executable = std::filesystem::absolute(argv[0]).string();
         if (const int code = memoryReport(executable); code != 0) {
             std::fprintf(stderr, "worker memory report failed: %d\n", code);
+            return 1;
+        }
+        if (const int failed = quickToolsLaunch(executable); failed != 0) {
+            std::fprintf(stderr, "%d quick-tool launches failed\n", failed);
             return 1;
         }
         return isolatedExchange(executable, false) && isolatedExchange(executable, true) ? 0 : 1;

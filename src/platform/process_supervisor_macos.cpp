@@ -295,7 +295,12 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     // ready byte, so the byte simply releases the child.
     if (!released) {
         constexpr char ready = 'R';
-        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && !childExited())
+        // EPIPE means every holder of the gate's read end has closed it: the child has exited or
+        // is exiting (its files close before it can be reaped, so a WNOHANG probe may still say it
+        // runs, and under load that window is long), or it is a tool that never reads the gate.
+        // Either way there is nothing to release; its output and exit status still gate the
+        // caller. Any other failure is a failed launch.
+        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && errno != EPIPE && !childExited())
             return ProcessFailure{ProcessError::Spawn, errno};
     }
     return child;

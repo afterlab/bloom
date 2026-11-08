@@ -309,8 +309,9 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
             ::prlimit(child->state_->pid, RLIMIT_NOFILE, &files, nullptr) != 0 ||
             ::prlimit(child->state_->pid, RLIMIT_CORE, &core, nullptr) != 0) {
             // The child may have exited between the probe and the limit install; only fail when it
-            // is still running.
-            if (!childExited())
+            // is still running. ESRCH means the child is already gone (it can be exiting, past
+            // closing its files but not yet reapable), so the limits are moot for it as well.
+            if (errno != ESRCH && !childExited())
                 return ProcessFailure{ProcessError::ResourceLimit, errno};
             released = true;
         }
@@ -322,7 +323,12 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     }
     if (!released) {
         constexpr char ready = 'R';
-        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && !childExited())
+        // EPIPE means every holder of the gate's read end has closed it: the child has exited or
+        // is exiting (its files close before it can be reaped, so a WNOHANG probe may still say it
+        // runs, and under load that window is long), or it is a tool that never reads the gate.
+        // Either way there is nothing to release; its output and exit status still gate the
+        // caller. Any other failure is a failed launch.
+        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && errno != EPIPE && !childExited())
             return ProcessFailure{ProcessError::Spawn, errno};
     }
     return child;
