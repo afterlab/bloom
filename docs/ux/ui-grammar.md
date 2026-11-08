@@ -169,7 +169,10 @@ The slider maps the full composition through a logarithmic range down to individ
 `KRow` owns list layout: fixed-pitch toggle cells, flexible name, fixed-width dropdown columns
 and trailing cell. `KPropertyRow` owns the label, control and reserved diamond columns,
 promoting the Properties layout into the kit. Timeline and properties use these shared row
-layouts. Tables with sortable columns (Assets, Jobs) use the kit theme's item-view and header
+layouts. In a Properties section the label column is one width for every row: the longest label of
+the section sets it (never narrower than `PropertiesLabelWidth`, or `PropertiesLabelMinWidth` in a
+narrow panel), up to two fifths of the row. A label longer than that wraps and its row grows; a
+Properties label is never elided. Tables with sortable columns (Assets, Jobs) use the kit theme's item-view and header
 styling at the `ListRow` pitch, with no per-row widgets.
 
 Painting outside the kit is limited to viewer canvas, node scene items, timeline
