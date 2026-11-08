@@ -322,7 +322,11 @@ approve anything, its dependent worker stages perform, in order:
    export retains one CPU-fallback evaluator for its range so per-frame revalidation reads no
    source bytes. CPU final boundaries also set
    `requireVerifiedMediaSources`, rejecting changed/unavailable media before memoized pixels can be
-   accepted. A preview `Retained` request never carries source availability authority into final
+   accepted. A changed or missing source read by an image, sequence, video, Shuffle or
+   Cryptomatte source fails with `MediaSourceUnavailable` carrying the asset's name, so the export
+   says which asset to reload or relink in one sentence and logs the technical detail; Shuffle and
+   Cryptomatte, which read several sources through channel expressions, name the first source that
+   failed. A preview `Retained` request never carries source availability authority into final
    output. Any future exact `ProcessFrame` reuse must first revalidate every media dependency from
    the original source; a media-derived preview frame alone is insufficient. The current host
    attempt runner accepts a plan/request, evaluates afresh, and has no preview-frame reuse input.

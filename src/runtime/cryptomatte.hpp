@@ -95,6 +95,8 @@ struct CryptomatteSelection final {
     // Raw-gather identity (sources and rank channels, no selection): the GPU upload cache key.
     std::string gatherKey;
     std::string warning;
+    // The first unavailable source asset's name (#611); empty when no source asset failed.
+    std::string unavailableAsset;
     bool available = false;
     bool cancelled = false;
     bool budgetExceeded = false;

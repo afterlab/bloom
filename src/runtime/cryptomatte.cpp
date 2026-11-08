@@ -338,6 +338,7 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
     result.cacheKey = key.bytes();
     if (!result.channels.available()) {
         result.warning = result.channels.warning;
+        result.unavailableAsset = result.channels.unavailableAsset;
         return result;
     }
     result.layer = resolveCryptomatteLayer(result.channels.resolution.channels, cryptomatte.layer);

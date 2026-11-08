@@ -51,6 +51,9 @@ struct ChannelShuffleSelection final {
     // Raw-gather identity (no colour interpretation): the GPU upload cache key.
     std::string decodeKey;
     std::string warning;
+    // The name of the first source asset that was unavailable (changed, moved or unreadable), so a
+    // final render names it (#611); empty when no source asset failed.
+    std::string unavailableAsset;
     bool available = false;
     bool cancelled = false;
     bool budgetExceeded = false;
@@ -73,6 +76,8 @@ struct ChannelSetSourceSelection final {
     std::vector<const media::ImagePartInfo*> parts;
     ChannelResolution resolution;
     std::string warning;
+    // The first unavailable source asset's name (#611); empty when no source asset failed.
+    std::string unavailableAsset;
     bool cancelled = false;
     bool budgetExceeded = false;
     [[nodiscard]] bool available() const noexcept { return warning.empty() && !cancelled; }

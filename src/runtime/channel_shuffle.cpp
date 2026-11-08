@@ -87,9 +87,12 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
             return result;
         }
         result.budgetExceeded = result.budgetExceeded || selected.budgetExceeded;
-        if (!selected.available && result.warning.empty())
+        if (!selected.available && result.warning.empty()) {
             result.warning =
                 selected.warning.empty() ? "A channel source is unavailable" : selected.warning;
+            if (source.asset)
+                result.unavailableAsset = source.asset->name;
+        }
         const auto* part = partOf(selected, source.part);
         if (selected.available && part == nullptr && result.warning.empty())
             result.warning = "The selected OpenEXR part is not present: " + source.part;
@@ -145,9 +148,12 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
             return result;
         }
         result.budgetExceeded = result.budgetExceeded || selected.budgetExceeded;
-        if (!selected.available && result.warning.empty())
+        if (!selected.available && result.warning.empty()) {
             result.warning = selected.warning.empty() ? "A channel source is unavailable"
                                                       : selected.warning;
+            if (source.asset)
+                result.unavailableAsset = source.asset->name;
+        }
         const auto* part = partOf(selected, source.part);
         if (selected.available && part == nullptr && result.warning.empty())
             result.warning = "The selected OpenEXR part is not present: " + source.part;

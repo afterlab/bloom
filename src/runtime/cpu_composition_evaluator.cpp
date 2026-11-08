@@ -2653,10 +2653,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedShuffle->available)
                     return EvaluationResult::failed(diagnostic(
-                        EvaluationDiagnosticCode::InvalidParameter,
+                        selectedShuffle->unavailableAsset.empty()
+                            ? EvaluationDiagnosticCode::InvalidParameter
+                            : EvaluationDiagnosticCode::MediaSourceUnavailable,
                         selectedShuffle->warning.empty() ? "Final channel source is unavailable"
                                                          : selectedShuffle->warning,
-                        {}, operationSubject));
+                        selectedShuffle->unavailableAsset, operationSubject));
                 if (!selectedShuffle->warning.empty())
                     imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                              DiagnosticSeverity::Warning,
@@ -2679,10 +2681,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedCryptomatte->available)
                     return EvaluationResult::failed(diagnostic(
-                        EvaluationDiagnosticCode::InvalidParameter,
+                        selectedCryptomatte->unavailableAsset.empty()
+                            ? EvaluationDiagnosticCode::InvalidParameter
+                            : EvaluationDiagnosticCode::MediaSourceUnavailable,
                         selectedCryptomatte->warning.empty() ? "Final Cryptomatte is unavailable"
                                                              : selectedCryptomatte->warning,
-                        {}, operationSubject));
+                        selectedCryptomatte->unavailableAsset, operationSubject));
                 if (!selectedCryptomatte->warning.empty())
                     imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
                                              DiagnosticSeverity::Warning,

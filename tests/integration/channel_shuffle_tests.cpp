@@ -190,6 +190,21 @@ struct Fixture {
             });
         }
     };
+    // A final render (#611): a source file that went away after import fails the frame, and the
+    // failure names the asset instead of a generic channel message.
+    runtime::EvaluationResult finalRender() {
+        const auto plan = compile();
+        runtime::CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(folder);
+        runtime::EvaluationRequest request{{},
+                                           plan->output(),
+                                           runtime::CompositionFormatResolution{},
+                                           runtime::EvaluationQuality::Reference,
+                                           runtime::EvaluationColorIntent::LinearRec709Scene,
+                                           1U << 24U};
+        request.requireVerifiedMediaSources = true;
+        return evaluator.evaluate(plan, request, {});
+    }
     Frame frame(std::optional<runtime::ChannelInspection> inspection = std::nullopt) {
         const auto plan = compile(std::move(inspection));
         runtime::CpuCompositionEvaluator evaluator;
@@ -672,8 +687,27 @@ void videoChannels() {
 }
 } // namespace
 
+void changedSourceNamesTheAsset() {
+    Fixture fixture("changed");
+    const auto shuffle = fixture.add(document::kChannelShuffleNodeType);
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, shuffle,
+                    document::kChannelSetPort);
+    fixture.connect(shuffle, document::kChannelShuffleImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    const auto name = fixture.document.snapshot().project().assets().front().name;
+    expect(fixture.finalRender().frame() != nullptr, "the final render succeeds with its source");
+    std::filesystem::remove(fixture.folder / "layers.exr");
+    const auto result = fixture.finalRender();
+    expect(result.frame() == nullptr && !result.diagnostics().empty() &&
+               result.diagnostics().front().code ==
+                   runtime::EvaluationDiagnosticCode::MediaSourceUnavailable &&
+               !name.empty() && result.diagnostics().front().detail == name,
+           "a changed source fails the final Shuffle and names the asset");
+}
+
 int main() {
     try {
+        changedSourceNamesTheAsset();
         imageLayerSelection();
         shuffleChain();
         defaultSlots();

@@ -147,6 +147,24 @@ struct Fixture {
             value.warnings.push_back(diagnostic.summary + " " + diagnostic.detail);
         return value;
     }
+    // A final render (#611): a source file that went away after import fails the frame, and the
+    // failure names the asset instead of a generic channel message.
+    runtime::EvaluationResult finalRender() {
+        runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({document.snapshot(), composition, {}, {}}, {});
+        if (!compiled.plan)
+            throw std::runtime_error("cryptomatte compilation failed");
+        runtime::CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(folder);
+        runtime::EvaluationRequest request{{},
+                                           compiled.plan->output(),
+                                           runtime::CompositionFormatResolution{},
+                                           runtime::EvaluationQuality::Reference,
+                                           runtime::EvaluationColorIntent::LinearRec709Scene,
+                                           1U << 24U};
+        request.requireVerifiedMediaSources = true;
+        return evaluator.evaluate(compiled.plan, request, {});
+    }
     Frame matte() {
         return frame(runtime::ChannelInspection{
             cryptomatte, std::string(document::kCryptomatteMaskOutputPort), {}});
@@ -351,8 +369,22 @@ void asLayerMatte() {
     expect(close(f.frame(), {0, 2}), "a Cryptomatte node track matte keeps the selection");
 }
 
+void changedSourceNamesTheAsset() {
+    Fixture fixture("changed", true);
+    const auto name = fixture.document.snapshot().project().assets().front().name;
+    expect(fixture.finalRender().frame() != nullptr, "the final render succeeds with its source");
+    std::filesystem::remove(fixture.folder / "crypto.exr");
+    const auto result = fixture.finalRender();
+    expect(result.frame() == nullptr && !result.diagnostics().empty() &&
+               result.diagnostics().front().code ==
+                   runtime::EvaluationDiagnosticCode::MediaSourceUnavailable &&
+               !name.empty() && result.diagnostics().front().detail == name,
+           "a changed source fails the final Cryptomatte and names the asset");
+}
+
 int main() {
     try {
+        changedSourceNamesTheAsset();
         hashing();
         withManifest();
         withoutManifest();
