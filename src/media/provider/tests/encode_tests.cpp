@@ -322,6 +322,14 @@ void tests(const std::filesystem::path& directory) {
         mp4.container = "mp4";
         mp4.audioCodec = "aac";
         (void)run(mp4, directory / "export-h264.mp4");
+        // #619: short ranges whose audio is not a whole number of milliseconds keep
+        // the exact logical duration in MP4 too.
+        for (const std::uint64_t frames : {1U, 2U, 3U, 4U, 5U, 6U, 7U, 12U}) {
+            auto brief = mp4;
+            brief.frames = frames;
+            brief.audioSamples = frames * 2000U;
+            (void)run(brief, directory / ("export-h264-" + std::to_string(frames) + ".mp4"));
+        }
     }
     // VA-API requested where no render node encodes falls back to OpenH264 without a refusal: the
     // fallback is recorded in provenance, never shown.

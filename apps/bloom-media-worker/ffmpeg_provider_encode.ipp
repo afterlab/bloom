@@ -615,6 +615,13 @@ struct Encoder::State {
                 if (!settings.bwfDescription.empty())
                     av_dict_set(&options, "write_bext", "1", 0);
             }
+            // #619: AAC's priming and padding are an edit list whose duration the movie header
+            // states in the movie timescale (1000 by default, so whole milliseconds). A range whose
+            // audio is not a whole number of milliseconds then reopens a sample or more short or
+            // long. The audio sample rate as the movie timescale states every sample count exactly.
+            if (settings.audioCodec == "aac" &&
+                (settings.container == "mov" || settings.container == "mp4"))
+                av_dict_set_int(&options, "movie_timescale", settings.sampleRate, 0);
             const auto status = avformat_write_header(format, &options);
             av_dict_free(&options);
             require(status >= 0, "Muxer refused stream layout", Error::Unavailable);
