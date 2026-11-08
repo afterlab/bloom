@@ -590,6 +590,41 @@ std::optional<std::vector<float>> encodeLensWarp(const LensWarpParameters& p) {
     return checked(std::move(out));
 }
 
+std::optional<std::vector<float>> encodeTestCard(const TestCardParameters& p) {
+    if (p.card < 0 || p.card > 15 || p.variant < 0 || p.variant > 4096 || p.option < 0 ||
+        p.option > 4096 || p.text.size() > kTestCardMaxLabel || !finite(p.width) ||
+        !finite(p.height) || !(p.width >= 1.0) || !(p.height >= 1.0) || !finite(p.centreX) ||
+        !finite(p.centreY))
+        return std::nullopt;
+    for (const auto v : p.values)
+        if (!finite(v))
+            return std::nullopt;
+    for (const auto v : p.timed)
+        if (!finite(v))
+            return std::nullopt;
+    for (const auto c : p.text)
+        if (c > 42)
+            return std::nullopt;
+    std::vector<float> out;
+    const auto flags = (p.label ? 1.0 : 0.0) + 16.0 * static_cast<double>(p.text.size());
+    push(out, static_cast<double>(p.card), static_cast<double>(p.variant),
+         static_cast<double>(p.option), flags);
+    push(out, p.width, p.height, p.centreX, p.centreY);
+    push(out, p.values[0], p.values[1], p.values[2], p.values[3]);
+    push(out, p.timed[0], p.timed[1], p.timed[2], p.timed[3]);
+    // Three six-bit codes to a lane, eight lanes.
+    for (std::size_t lane = 0; lane < 8; ++lane) {
+        std::uint32_t word = 0;
+        for (std::size_t k = 0; k < 3; ++k) {
+            const auto at = lane * 3U + k;
+            if (at < p.text.size())
+                word |= static_cast<std::uint32_t>(p.text[at]) << (6U * k);
+        }
+        out.push_back(static_cast<float>(word));
+    }
+    return checked(std::move(out));
+}
+
 std::vector<float> encodeSwizzle(const SwizzleParameters& p) {
     std::vector<float> out;
     push(out, std::min<int>(p.lanes[0], 5), std::min<int>(p.lanes[1], 5),
@@ -867,6 +902,8 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
     case FieldOp::Swizzle:
     case FieldOp::LensWarp:
         return 2;
+    case FieldOp::TestCard:
+        return 6;
     case FieldOp::Ramp:
         return 1U + kFieldRampEntries;
     }
@@ -904,7 +941,7 @@ bool validFieldTable(const std::span<const float> table) noexcept {
         const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
         const auto* b = a + 4;
         const auto op = a[0];
-        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::LensWarp) || op != std::floor(op))
+        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::TestCard) || op != std::floor(op))
             return false;
         if (!(a[1] >= 0.0F) || a[1] >= static_cast<float>(kFieldRegisterCount))
             return false;

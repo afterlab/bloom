@@ -2174,6 +2174,1062 @@ BFK_FN vec4 bfk_op_lens_warp(BFK_CTX, int base, vec4 p) {
     return vec4(rx, ry, 0.0f, 0.0f);
 }
 
+// --- Test card ----------------------------------------------------------------------------------------
+// [card, variant, option, flags] [width, height, centre x, centre y] [s0, s1, s2, s3] [phase, a1, a2, a3]
+// then the label's characters, three six-bit codes to a lane in two vec4 (docs/user-guide/test-card.md).
+// A card is drawn procedurally from the pixel's position in the card's own frame (x right and y down
+// from its top left, in full-resolution composition pixels, so a circle is round and a cell square at
+// any size) and returns the straight RGBA signal of that point. The raster's own sub-samples antialias
+// it. Signal levels are the card's own numbers (0 black, 1 white); the node's colour space turns them
+// into working-space values downstream. Cards: 0 SD Bars, 1 HD Bars, 2 EBU Bars, 3 HDR Bars, 4 Patch,
+// 5 Colour Chart, 6 Grey Ramp, 7 Grid, 8 Circle, 9 Safe Areas, 10 UV Grid, 11 Zone Plate, 12 Siemens
+// Star, 13 Moving Bar, 14 Countdown, 15 Alpha Ramp.
+
+BFK_FN int bfk_tc_glyph_a(int ch) {
+    switch (ch) {
+    case 1:
+        return 476789;
+    case 2:
+        return 143492;
+    case 3:
+        return 476194;
+    case 4:
+        return 476198;
+    case 5:
+        return 72018;
+    case 6:
+        return 1033153;
+    case 7:
+        return 205342;
+    case 8:
+        return 1016900;
+    case 9:
+        return 476718;
+    case 10:
+        return 476719;
+    case 11:
+        return 476735;
+    case 12:
+        return 1001022;
+    case 13:
+        return 476688;
+    case 14:
+        return 936497;
+    case 15:
+        return 1032734;
+    case 16:
+        return 1032734;
+    case 17:
+        return 476695;
+    case 18:
+        return 575039;
+    case 19:
+        return 462980;
+    case 20:
+        return 231490;
+    case 21:
+        return 576152;
+    case 22:
+        return 541200;
+    case 23:
+        return 585397;
+    case 24:
+        return 583347;
+    case 25:
+        return 476721;
+    case 26:
+        return 1001022;
+    case 27:
+        return 476721;
+    case 28:
+        return 1001022;
+    case 29:
+        return 508430;
+    case 30:
+        return 1020036;
+    case 31:
+        return 575025;
+    case 32:
+        return 575025;
+    case 33:
+        return 575029;
+    case 34:
+        return 574788;
+    case 35:
+        return 574788;
+    case 36:
+        return 1016900;
+    case 38:
+        return 12672;
+    case 40:
+        return 31;
+    case 41:
+        return 33860;
+    case 42:
+        return 844868;
+    default:
+        return 0;
+    }
+}
+
+BFK_FN int bfk_tc_glyph_b(int ch) {
+    switch (ch) {
+    case 1:
+        return 26158;
+    case 2:
+        return 4238;
+    case 3:
+        return 4383;
+    case 4:
+        return 1582;
+    case 5:
+        return 31810;
+    case 6:
+        return 1582;
+    case 7:
+        return 17966;
+    case 8:
+        return 8456;
+    case 9:
+        return 17966;
+    case 10:
+        return 1100;
+    case 11:
+        return 17969;
+    case 12:
+        return 17982;
+    case 13:
+        return 16942;
+    case 14:
+        return 18012;
+    case 15:
+        return 16927;
+    case 16:
+        return 16912;
+    case 17:
+        return 17967;
+    case 18:
+        return 17969;
+    case 19:
+        return 4238;
+    case 20:
+        return 2636;
+    case 21:
+        return 21073;
+    case 22:
+        return 16927;
+    case 23:
+        return 17969;
+    case 24:
+        return 17969;
+    case 25:
+        return 17966;
+    case 26:
+        return 16912;
+    case 27:
+        return 22093;
+    case 28:
+        return 21073;
+    case 29:
+        return 1086;
+    case 30:
+        return 4228;
+    case 31:
+        return 17966;
+    case 32:
+        return 17732;
+    case 33:
+        return 22385;
+    case 34:
+        return 10801;
+    case 35:
+        return 4228;
+    case 36:
+        return 8735;
+    case 37:
+        return 396;
+    case 38:
+        return 12672;
+    case 39:
+        return 12424;
+    case 41:
+        return 8720;
+    case 42:
+        return 8819;
+    default:
+        return 0;
+    }
+}
+
+BFK_FN int bfk_tc_glyph_bit(int ch, int gx, int gy) {
+    if (gx < 0 || gx > 4 || gy < 0 || gy > 6)
+        return 0;
+    int bits = 0;
+    if (gy < 4)
+        bits = (bfk_tc_glyph_a(ch) >> (5 * (3 - gy))) & 31;
+    else
+        bits = (bfk_tc_glyph_b(ch) >> (5 * (6 - gy))) & 31;
+    return (bits >> (4 - gx)) & 1;
+}
+
+// 1 where (x, y), measured from the top left of one glyph cell, lies on a lit pixel of a glyph drawn
+// with squares of g pixels.
+BFK_FN int bfk_tc_hit(int ch, float x, float y, float g) {
+    BFK_P float gx = bfk_div(x, g);
+    BFK_P float gy = bfk_div(y, g);
+    if (gx < 0.0f || gy < 0.0f)
+        return 0;
+    return bfk_tc_glyph_bit(ch, int(floor(gx)), int(floor(gy)));
+}
+
+BFK_FN int bfk_tc_label_char(vec4 l0, vec4 l1, int i) {
+    int lane = i / 3;
+    int shift = 6 * (i % 3);
+    vec4 v = lane < 4 ? l0 : l1;
+    int k = lane & 3;
+    BFK_P float f = k == 0 ? v.x : (k == 1 ? v.y : (k == 2 ? v.z : v.w));
+    return (int(f) >> shift) & 63;
+}
+
+BFK_FN int bfk_tc_digits(int n) {
+    int d = 1;
+    int m = n;
+    for (int i = 0; i < 9; ++i) {
+        if (m < 10)
+            break;
+        m = m / 10;
+        d = d + 1;
+    }
+    return d;
+}
+
+// The decimal digit of n whose place value is 10^place.
+BFK_FN int bfk_tc_digit(int n, int place) {
+    int m = n;
+    for (int i = 0; i < 9; ++i) {
+        if (i >= place)
+            break;
+        m = m / 10;
+    }
+    return m % 10;
+}
+
+BFK_FN vec4 bfk_tc_rgb(int bits, float level) {
+    BFK_P float r = (bits & 1) != 0 ? level : 0.0f;
+    BFK_P float g = (bits & 2) != 0 ? level : 0.0f;
+    BFK_P float b = (bits & 4) != 0 ? level : 0.0f;
+    return vec4(r, g, b, 1.0f);
+}
+
+BFK_FN vec4 bfk_tc_grey(float v) { return vec4(v, v, v, 1.0f); }
+
+// Bar colour bits (R 1, G 2, B 4) of the seven bars white, yellow, cyan, green, magenta, red, blue.
+BFK_FN int bfk_tc_bar_bits(int k) {
+    switch (k) {
+    case 0:
+        return 7;
+    case 1:
+        return 3;
+    case 2:
+        return 6;
+    case 3:
+        return 2;
+    case 4:
+        return 5;
+    case 5:
+        return 1;
+    default:
+        return 4;
+    }
+}
+
+// The largest rectangle of the given aspect (width over height; 0 the whole frame) centred in the
+// frame: the point's position in it, 0 to 1, and whether it is inside.
+BFK_FN bool bfk_tc_fit(float px, float py, float w, float h, float aspect, BFK_OUT(float) u,
+                       BFK_OUT(float) v) {
+    BFK_P float rw = w;
+    BFK_P float rh = h;
+    if (aspect > 0.0f) {
+        BFK_P float wide = h * aspect;
+        if (wide <= w) {
+            rw = wide;
+        } else {
+            rh = bfk_div(w, aspect);
+        }
+    }
+    BFK_P float ox = (w - rw) * 0.5f;
+    BFK_P float oy = (h - rh) * 0.5f;
+    u = bfk_div(px - ox, rw);
+    v = bfk_div(py - oy, rh);
+    return u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+}
+
+// Cards of colour and level ------------------------------------------------------------------------
+
+// SD Bars: seven 75% bars over two thirds of the height, the reversed castellation row, and the
+// bottom row of -I, 100% white, +Q, black and the PLUGE steps below, at and above black.
+BFK_FN vec4 bfk_tc_sd(float u, float v) {
+    int col = min(max(int(floor(u * 7.0f)), 0), 6);
+    if (v < 0.666666687f)
+        return bfk_tc_rgb(bfk_tc_bar_bits(col), 0.75f);
+    if (v < 0.75f) {
+        int bits = 0;
+        if (col == 0)
+            bits = 4;
+        else if (col == 2)
+            bits = 5;
+        else if (col == 4)
+            bits = 6;
+        else if (col == 6)
+            bits = 7;
+        return bfk_tc_rgb(bits, 0.75f);
+    }
+    if (u < 0.142857149f)
+        return vec4(0.0f, 0.246575341f, 0.410958916f, 1.0f);
+    if (u < 0.428571433f)
+        return bfk_tc_grey(1.0f);
+    if (u < 0.714285731f)
+        return vec4(0.255707771f, 0.0f, 0.465753436f, 1.0f);
+    if (u >= 0.714285731f && u < 0.857142866f) {
+        int pluge = int(floor((u - 0.714285731f) * 21.0f));
+        if (pluge <= 0)
+            return bfk_tc_grey(-0.04f);
+        if (pluge == 1)
+            return bfk_tc_grey(0.0f);
+        return bfk_tc_grey(0.04f);
+    }
+    return bfk_tc_grey(0.0f);
+}
+
+// The seven bar starts of the HD bars in 1920ths of the width, and the end.
+BFK_FN float bfk_tc_hd_start(int k) {
+    switch (k) {
+    case 0:
+        return 240.0f;
+    case 1:
+        return 445.714294f;
+    case 2:
+        return 651.428589f;
+    case 3:
+        return 857.142883f;
+    case 4:
+        return 1062.85718f;
+    case 5:
+        return 1268.57141f;
+    case 6:
+        return 1474.28577f;
+    default:
+        return 1680.0f;
+    }
+}
+
+BFK_FN vec4 bfk_tc_hd_bar(float x, float level) {
+    int k = 0;
+    for (int i = 1; i < 7; ++i)
+        if (x >= bfk_tc_hd_start(i))
+            k = i;
+    return bfk_tc_rgb(bfk_tc_bar_bits(k), level);
+}
+
+// HD Bars (SMPTE RP 219-1:2014, figure 1 and annex C with its default sub-patterns): four patterns of
+// 7, 1, 1 and 3 twelfths of the height, widths in 1920ths of the width.
+BFK_FN vec4 bfk_tc_hd(float u, float v) {
+    BFK_P float x = u * 1920.0f;
+    if (v < 0.583333313f) {
+        if (x < 240.0f || x >= 1680.0f)
+            return bfk_tc_grey(0.4f);
+        return bfk_tc_hd_bar(x, 0.75f);
+    }
+    if (v < 0.666666687f) {
+        if (x < 240.0f)
+            return bfk_tc_rgb(6, 1.0f);
+        if (x >= 1680.0f)
+            return bfk_tc_rgb(4, 1.0f);
+        return bfk_tc_grey(0.75f);
+    }
+    if (v < 0.75f) {
+        if (x < 240.0f)
+            return bfk_tc_rgb(3, 1.0f);
+        if (x >= 1680.0f)
+            return bfk_tc_rgb(1, 1.0f);
+        if (x < 445.714294f)
+            return bfk_tc_grey(0.0f);
+        if (x >= 1474.28577f)
+            return bfk_tc_grey(1.0f);
+        return bfk_tc_grey(bfk_div(x - 445.714294f, 1028.57141f));
+    }
+    if (x < 240.0f || x >= 1680.0f)
+        return bfk_tc_grey(0.15f);
+    if (x < 549.0f)
+        return bfk_tc_grey(0.0f);
+    if (x < 960.0f)
+        return bfk_tc_grey(1.0f);
+    if (x < 1131.0f)
+        return bfk_tc_grey(0.0f);
+    if (x < 1200.0f)
+        return bfk_tc_grey(-0.02f);
+    if (x < 1268.0f)
+        return bfk_tc_grey(0.0f);
+    if (x < 1337.0f)
+        return bfk_tc_grey(0.02f);
+    if (x < 1405.0f)
+        return bfk_tc_grey(0.0f);
+    if (x < 1474.0f)
+        return bfk_tc_grey(0.04f);
+    return bfk_tc_grey(0.0f);
+}
+
+// EBU Bars (ITU-R BT.471, 100/0/75/0): white at 100%, the six colours at 75%, black; eight equal bars.
+BFK_FN vec4 bfk_tc_ebu(float u) {
+    int col = min(max(int(floor(u * 8.0f)), 0), 7);
+    if (col == 0)
+        return bfk_tc_grey(1.0f);
+    if (col == 7)
+        return bfk_tc_grey(0.0f);
+    return bfk_tc_rgb(bfk_tc_bar_bits(col), 0.75f);
+}
+
+// HDR Bars (ITU-R BT.2111-3, figures 1 to 3 and tables 1 to 6): variant 0 HLG narrow range, 1 PQ narrow
+// range, 2 PQ full range; the signal is the code value as a fraction of its range.
+BFK_FN BFK_P float bfk_tc_hdr_sig(int code, int variant) {
+    BFK_P float c = float(code);
+    if (variant == 2)
+        return bfk_div(c, 1023.0f);
+    return bfk_div(c - 64.0f, 876.0f);
+}
+
+// The code values (10 bits each, red, green, blue) of the 75% (58% for PQ) BT.709 colour bars, packed.
+BFK_FN int bfk_tc_hdr_709(int variant, int k) {
+    int key = variant * 6 + k;
+    switch (key) {
+    case 0:
+        return (713 << 20) | (719 << 10) | 316;
+    case 1:
+        return (538 << 20) | (709 << 10) | 718;
+    case 2:
+        return (512 << 20) | (706 << 10) | 296;
+    case 3:
+        return (651 << 20) | (286 << 10) | 705;
+    case 4:
+        return (639 << 20) | (269 << 10) | 164;
+    case 5:
+        return (227 << 20) | (147 << 10) | 702;
+    case 6:
+        return (569 << 20) | (572 << 10) | 381;
+    case 7:
+        return (485 << 20) | (566 << 10) | 571;
+    case 8:
+        return (474 << 20) | (565 << 10) | 368;
+    case 9:
+        return (537 << 20) | (362 << 10) | 564;
+    case 10:
+        return (531 << 20) | (351 << 10) | 257;
+    case 11:
+        return (318 << 20) | (236 << 10) | 563;
+    case 12:
+        return (589 << 20) | (593 << 10) | 370;
+    case 13:
+        return (491 << 20) | (586 << 10) | 592;
+    case 14:
+        return (479 << 20) | (585 << 10) | 355;
+    case 15:
+        return (552 << 20) | (348 << 10) | 584;
+    case 16:
+        return (545 << 20) | (335 << 10) | 225;
+    default:
+        return (296 << 20) | (201 << 10) | 582;
+    }
+}
+
+// The code of step j (0 to 12) of the stair: -7% (0% full range), 0, 10 ... 100% and 109% (100%).
+BFK_FN int bfk_tc_hdr_step(int variant, int j) {
+    if (variant == 2) {
+        switch (j) {
+        case 0:
+            return 0;
+        case 1:
+            return 0;
+        case 2:
+            return 102;
+        case 3:
+            return 205;
+        case 4:
+            return 307;
+        case 5:
+            return 409;
+        case 6:
+            return 512;
+        case 7:
+            return 614;
+        case 8:
+            return 716;
+        case 9:
+            return 818;
+        case 10:
+            return 921;
+        default:
+            return 1023;
+        }
+    }
+    switch (j) {
+    case 0:
+        return 4;
+    case 1:
+        return 64;
+    case 2:
+        return 152;
+    case 3:
+        return 239;
+    case 4:
+        return 327;
+    case 5:
+        return 414;
+    case 6:
+        return 502;
+    case 7:
+        return 590;
+    case 8:
+        return 677;
+    case 9:
+        return 765;
+    case 10:
+        return 852;
+    case 11:
+        return 940;
+    default:
+        return 1019;
+    }
+}
+
+BFK_FN vec4 bfk_tc_hdr_code_rgb(int codes, int variant) {
+    BFK_P float r = bfk_tc_hdr_sig((codes >> 20) & 1023, variant);
+    BFK_P float g = bfk_tc_hdr_sig((codes >> 10) & 1023, variant);
+    BFK_P float b = bfk_tc_hdr_sig(codes & 1023, variant);
+    return vec4(r, g, b, 1.0f);
+}
+
+BFK_FN float bfk_tc_hdr_start(int k) {
+    switch (k) {
+    case 0:
+        return 240.0f;
+    case 1:
+        return 446.0f;
+    case 2:
+        return 652.0f;
+    case 3:
+        return 858.0f;
+    case 4:
+        return 1062.0f;
+    case 5:
+        return 1268.0f;
+    case 6:
+        return 1474.0f;
+    default:
+        return 1680.0f;
+    }
+}
+
+BFK_FN vec4 bfk_tc_hdr_bar(float x, float level) {
+    int k = 0;
+    for (int i = 1; i < 7; ++i)
+        if (x >= bfk_tc_hdr_start(i))
+            k = i;
+    return bfk_tc_rgb(bfk_tc_bar_bits(k), level);
+}
+
+BFK_FN vec4 bfk_tc_hdr(float u, float v, int variant) {
+    BFK_P float x = u * 1920.0f;
+    int white = variant == 0 ? 721 : (variant == 1 ? 573 : 594);
+    int grey = variant == 2 ? 409 : 414;
+    int black = variant == 2 ? 0 : 64;
+    if (v < 0.583333313f) {
+        if (x < 240.0f || x >= 1680.0f)
+            return bfk_tc_grey(bfk_tc_hdr_sig(grey, variant));
+        BFK_P float bar = v < 0.0833333358f ? 1.0f : bfk_tc_hdr_sig(white, variant);
+        return bfk_tc_hdr_bar(x, bar);
+    }
+    if (v < 0.666666687f) {
+        if (x < 240.0f || x >= 1680.0f)
+            return bfk_tc_grey(bfk_tc_hdr_sig(white, variant));
+        if (x < 446.0f)
+            return bfk_tc_grey(bfk_tc_hdr_sig(bfk_tc_hdr_step(variant, 0), variant));
+        int bar = 1;
+        for (int i = 2; i < 7; ++i)
+            if (x >= bfk_tc_hdr_start(i))
+                bar = i;
+        BFK_P float mid = (bfk_tc_hdr_start(bar) + bfk_tc_hdr_start(bar + 1)) * 0.5f;
+        int j = 1 + 2 * (bar - 1) + (x >= mid ? 1 : 0);
+        return bfk_tc_grey(bfk_tc_hdr_sig(bfk_tc_hdr_step(variant, j), variant));
+    }
+    if (v < 0.75f) {
+        if (x < 240.0f)
+            return bfk_tc_grey(bfk_tc_hdr_sig(black, variant));
+        BFK_P float ramp = 0.0f;
+        if (variant == 2) {
+            ramp = bfk_clamp(x - 858.0f, 0.0f, 1023.0f);
+            return bfk_tc_grey(bfk_div(ramp, 1023.0f));
+        }
+        ramp = bfk_clamp(4.0f + (x - 799.0f), 4.0f, 1019.0f);
+        return bfk_tc_grey(bfk_div(ramp - 64.0f, 876.0f));
+    }
+    if (x < 240.0f) {
+        int k = int(floor(bfk_div(x, 80.0f)));
+        return bfk_tc_hdr_code_rgb(bfk_tc_hdr_709(variant, min(k, 2)), variant);
+    }
+    if (x >= 1680.0f) {
+        int k = 3 + int(floor(bfk_div(x - 1680.0f, 80.0f)));
+        return bfk_tc_hdr_code_rgb(bfk_tc_hdr_709(variant, min(k, 5)), variant);
+    }
+    int code = black;
+    if (x >= 376.0f && x < 446.0f)
+        code = variant == 2 ? 0 : 48;
+    else if (x >= 514.0f && x < 584.0f)
+        code = variant == 2 ? 19 : 80;
+    else if (x >= 652.0f && x < 722.0f)
+        code = variant == 2 ? 41 : 99;
+    else if (x >= 960.0f && x < 1398.0f)
+        code = white;
+    return bfk_tc_grey(bfk_tc_hdr_sig(code, variant));
+}
+
+// Patch: the 27 values, black and the grey steps first, then the primaries and secondaries at 75% and
+// 100%.
+BFK_FN vec4 bfk_tc_patch_value(int index) {
+    if (index == 0)
+        return bfk_tc_grey(0.0f);
+    if (index == 1)
+        return bfk_tc_grey(0.02f);
+    if (index == 2)
+        return bfk_tc_grey(0.04f);
+    if (index <= 11)
+        return bfk_tc_grey(float(index - 2) * 0.1f);
+    if (index == 12)
+        return bfk_tc_grey(0.95f);
+    if (index == 13)
+        return bfk_tc_grey(0.98f);
+    if (index == 14)
+        return bfk_tc_grey(1.0f);
+    int k = (index - 15) % 6;
+    BFK_P float level = index < 21 ? 0.75f : 1.0f;
+    // red, green, blue, cyan, magenta, yellow
+    int bits = k == 0 ? 1 : (k == 1 ? 2 : (k == 2 ? 4 : (k == 3 ? 6 : (k == 4 ? 5 : 3))));
+    return bfk_tc_rgb(bits, level);
+}
+
+BFK_FN vec4 bfk_tc_patch(float u, float v, int index, int window) {
+    BFK_P float area = window == 1 ? 0.5f : (window == 2 ? 0.25f : (window == 3 ? 0.1f : 1.0f));
+    if (window != 0) {
+        BFK_P float reach = bfk_sqrt(area) * 0.5f;
+        BFK_P float dx = abs(u - 0.5f);
+        BFK_P float dy = abs(v - 0.5f);
+        if (dx >= reach || dy >= reach)
+            return bfk_tc_grey(0.0f);
+    }
+    return bfk_tc_patch_value(index);
+}
+
+// Colour Chart: 6 by 4 patches of our own values: neutrals, the primaries and secondaries at 100% and
+// 50%, and six skin tones.
+BFK_FN vec4 bfk_tc_chart(float u, float v) {
+    BFK_P float fx = u * 6.0f;
+    BFK_P float fy = v * 4.0f;
+    int col = min(max(int(floor(fx)), 0), 5);
+    int row = min(max(int(floor(fy)), 0), 3);
+    BFK_P float cx = fx - float(col);
+    BFK_P float cy = fy - float(row);
+    if (cx < 0.04f || cx >= 0.96f || cy < 0.04f || cy >= 0.96f)
+        return bfk_tc_grey(0.12f);
+    if (row == 0)
+        return bfk_tc_grey(1.0f - float(col) * 0.2f);
+    if (row < 3) {
+        int bits = col == 0 ? 1 : (col == 1 ? 2 : (col == 2 ? 4 : (col == 3 ? 6 : (col == 4 ? 5 : 3))));
+        return bfk_tc_rgb(bits, row == 1 ? 1.0f : 0.5f);
+    }
+    switch (col) {
+    case 0:
+        return vec4(0.90f, 0.74f, 0.64f, 1.0f);
+    case 1:
+        return vec4(0.82f, 0.62f, 0.50f, 1.0f);
+    case 2:
+        return vec4(0.72f, 0.52f, 0.40f, 1.0f);
+    case 3:
+        return vec4(0.58f, 0.40f, 0.30f, 1.0f);
+    case 4:
+        return vec4(0.42f, 0.28f, 0.21f, 1.0f);
+    default:
+        return vec4(0.28f, 0.18f, 0.14f, 1.0f);
+    }
+}
+
+// Grey Ramp: a smooth ramp from 0 to 1 over the top four fifths, PLUGE steps below.
+BFK_FN vec4 bfk_tc_ramp(float u, float v) {
+    if (v < 0.8f)
+        return bfk_tc_grey(u);
+    int k = min(max(int(floor(u * 9.0f)), 0), 8);
+    BFK_P float level = 0.0f;
+    if (k == 1)
+        level = -0.04f;
+    else if (k == 3)
+        level = -0.02f;
+    else if (k == 5)
+        level = 0.02f;
+    else if (k == 7)
+        level = 0.04f;
+    return bfk_tc_grey(level);
+}
+
+// Cards of geometry and framing --------------------------------------------------------------------
+
+// 1 within half a line width of the nearest multiple of `spacing` of d.
+BFK_FN int bfk_tc_on_line(float d, float spacing, float lw) {
+    BFK_P float k = floor(bfk_div(d, spacing) + 0.5f);
+    BFK_P float off = abs(d - k * spacing);
+    return off <= lw * 0.5f ? 1 : 0;
+}
+
+BFK_FN vec4 bfk_tc_grid(float px, float py, float w, float h, float spacing, float lw) {
+    BFK_P float dx = px - w * 0.5f;
+    BFK_P float dy = py - h * 0.5f;
+    if (abs(dx) <= lw * 0.5f || abs(dy) <= lw * 0.5f)
+        return vec4(0.9f, 0.8f, 0.1f, 1.0f);
+    if (bfk_tc_on_line(dx, spacing, lw) != 0 || bfk_tc_on_line(dy, spacing, lw) != 0)
+        return bfk_tc_grey(0.85f);
+    return bfk_tc_grey(0.08f);
+}
+
+BFK_FN int bfk_tc_outline(float px, float py, float x0, float y0, float x1, float y1, float lw) {
+    BFK_P float hw = lw * 0.5f;
+    if (px < x0 - hw || px > x1 + hw || py < y0 - hw || py > y1 + hw)
+        return 0;
+    if (px > x0 + hw && px < x1 - hw && py > y0 + hw && py < y1 - hw)
+        return 0;
+    return 1;
+}
+
+BFK_FN vec4 bfk_tc_circle(float px, float py, float w, float h) {
+    BFK_P float s = min(w, h);
+    BFK_P float lw = max(1.0f, bfk_div(s, 540.0f));
+    BFK_P float dx = px - w * 0.5f;
+    BFK_P float dy = py - h * 0.5f;
+    if (px < lw * 2.0f || py < lw * 2.0f || px > w - lw * 2.0f || py > h - lw * 2.0f)
+        return bfk_tc_grey(0.95f);
+    if (abs(dx) <= lw || abs(dy) <= lw)
+        return bfk_tc_grey(0.95f);
+    BFK_P float r = bfk_sqrt(dx * dx + dy * dy);
+    BFK_P float ring = s * 0.45f;
+    if (abs(r - ring) <= lw)
+        return bfk_tc_grey(0.95f);
+    if (abs(r - ring * 0.5f) <= lw * 0.5f)
+        return vec4(0.9f, 0.8f, 0.1f, 1.0f);
+    BFK_P float cell = bfk_div(s, 20.0f);
+    if (bfk_tc_on_line(dx, cell * 5.0f, lw) != 0 || bfk_tc_on_line(dy, cell * 5.0f, lw) != 0)
+        return bfk_tc_grey(0.45f);
+    if (bfk_tc_on_line(dx, cell, lw * 0.5f) != 0 || bfk_tc_on_line(dy, cell, lw * 0.5f) != 0)
+        return bfk_tc_grey(0.24f);
+    return bfk_tc_grey(0.08f);
+}
+
+// The largest rectangle of the given aspect centred in the frame, as its corners.
+BFK_FN vec4 bfk_tc_crop(float w, float h, float aspect) {
+    BFK_P float cw = w;
+    BFK_P float ch = h;
+    BFK_P float wide = h * aspect;
+    if (wide <= w)
+        cw = wide;
+    else
+        ch = bfk_div(w, aspect);
+    return vec4((w - cw) * 0.5f, (h - ch) * 0.5f, (w + cw) * 0.5f, (h + ch) * 0.5f);
+}
+
+// Safe Areas: action safe 93% and title safe 90% of the width and the height, the centre, and the crop
+// guides selected in the option's bits (1 16:9, 2 9:16, 4 1:1, 8 2.39:1).
+BFK_FN vec4 bfk_tc_safe(float px, float py, float w, float h, int guides) {
+    BFK_P float lw = max(2.0f, bfk_div(min(w, h), 360.0f));
+    BFK_P float cx = w * 0.5f;
+    BFK_P float cy = h * 0.5f;
+    if (bfk_tc_outline(px, py, cx - w * 0.465f, cy - h * 0.465f, cx + w * 0.465f, cy + h * 0.465f,
+                       lw) != 0)
+        return vec4(0.9f, 0.8f, 0.1f, 1.0f);
+    if (bfk_tc_outline(px, py, cx - w * 0.45f, cy - h * 0.45f, cx + w * 0.45f, cy + h * 0.45f,
+                       lw) != 0)
+        return vec4(0.1f, 0.8f, 0.9f, 1.0f);
+    for (int i = 0; i < 4; ++i) {
+        if ((guides & (1 << i)) == 0)
+            continue;
+        BFK_P float aspect = i == 0 ? 1.77777779f : (i == 1 ? 0.5625f : (i == 2 ? 1.0f : 2.39f));
+        vec4 r = bfk_tc_crop(w, h, aspect);
+        if (bfk_tc_outline(px, py, r.x, r.y, r.z, r.w, lw) != 0) {
+            if (i == 0)
+                return vec4(0.95f, 0.45f, 0.1f, 1.0f);
+            if (i == 1)
+                return vec4(0.5f, 0.9f, 0.2f, 1.0f);
+            if (i == 2)
+                return vec4(0.95f, 0.3f, 0.7f, 1.0f);
+            return vec4(0.4f, 0.5f, 1.0f, 1.0f);
+        }
+    }
+    BFK_P float dx = abs(px - cx);
+    BFK_P float dy = abs(py - cy);
+    BFK_P float arm = min(w, h) * 0.03f;
+    if ((dx <= lw * 0.5f && dy <= arm) || (dy <= lw * 0.5f && dx <= arm))
+        return bfk_tc_grey(0.95f);
+    return bfk_tc_grey(0.12f);
+}
+
+// UV Grid: square cells `cell` pixels across, coloured by their position (red across, green up, a
+// little blue), a dark line between them, and each cell's column and row written in it.
+BFK_FN vec4 bfk_tc_uv(float px, float py, float w, float h, float cell) {
+    int col = int(floor(bfk_div(px, cell)));
+    int row = int(floor(bfk_div(py, cell)));
+    BFK_P float fx = px - float(col) * cell;
+    BFK_P float fy = py - float(row) * cell;
+    BFK_P float lw = max(1.0f, bfk_div(cell, 32.0f));
+    if (fx < lw * 0.5f || fy < lw * 0.5f || fx > cell - lw * 0.5f || fy > cell - lw * 0.5f)
+        return bfk_tc_grey(0.0f);
+    BFK_P float g = floor(bfk_div(cell, 36.0f));
+    if (g >= 1.0f) {
+        int nc = bfk_tc_digits(col);
+        int nr = bfk_tc_digits(row);
+        int total = nc + 1 + nr;
+        BFK_P float tw = float(total) * 6.0f * g - g;
+        BFK_P float ox = (cell - tw) * 0.5f;
+        BFK_P float oy = (cell - 7.0f * g) * 0.5f;
+        for (int pass = 0; pass < 2; ++pass) {
+            BFK_P float shift = pass == 0 ? g : 0.0f;
+            BFK_P float tx = fx - ox - shift;
+            BFK_P float ty = fy - oy - shift;
+            if (tx < 0.0f || ty < 0.0f || tx >= tw || ty >= 7.0f * g)
+                continue;
+            int k = int(floor(bfk_div(tx, 6.0f * g)));
+            BFK_P float inner = tx - float(k) * 6.0f * g;
+            int ch = 0;
+            if (k < nc)
+                ch = 1 + bfk_tc_digit(col, nc - 1 - k);
+            else if (k == nc)
+                ch = 39;
+            else
+                ch = 1 + bfk_tc_digit(row, nr - 1 - (k - nc - 1));
+            if (bfk_tc_hit(ch, inner, ty, g) != 0)
+                return pass == 0 ? bfk_tc_grey(0.0f) : bfk_tc_grey(1.0f);
+        }
+    }
+    BFK_P float u = bfk_div(px, w);
+    BFK_P float v = 1.0f - bfk_div(py, h);
+    return vec4(bfk_clamp(u, 0.0f, 1.0f), bfk_clamp(v, 0.0f, 1.0f), 0.25f, 1.0f);
+}
+
+// Cards of sharpness and motion --------------------------------------------------------------------
+
+// Zone Plate: 0.5 + 0.5 cos(2 pi (r^2 / (4 R) + phase)), whose local frequency reaches the Nyquist
+// limit (0.5 cycle per pixel) at R, half the frame's diagonal.
+BFK_FN vec4 bfk_tc_zone(float px, float py, float w, float h, float phase) {
+    BFK_P float dx = px - w * 0.5f;
+    BFK_P float dy = py - h * 0.5f;
+    BFK_P float rmax = bfk_sqrt(w * w + h * h) * 0.5f;
+    BFK_P float r2 = dx * dx + dy * dy;
+    BFK_P float turns = bfk_div(r2, rmax * 4.0f) + phase;
+    BFK_P float s = 0.0f;
+    BFK_P float c = 0.0f;
+    bfk_sincos(turns, s, c);
+    BFK_P float value = c * 0.5f + 0.5f;
+    return bfk_tc_grey(value);
+}
+
+// Siemens Star: `spokes` alternating black and white spokes inside a circle of 45% of the shorter
+// side.
+BFK_FN vec4 bfk_tc_star(float px, float py, float w, float h, float spokes) {
+    BFK_P float dx = px - w * 0.5f;
+    BFK_P float dy = py - h * 0.5f;
+    BFK_P float r = bfk_sqrt(dx * dx + dy * dy);
+    if (r > min(w, h) * 0.45f)
+        return bfk_tc_grey(0.18f);
+    BFK_P float turns = bfk_atan2(dy, dx);
+    BFK_P float s = turns * spokes;
+    BFK_P float f = s - floor(s);
+    return bfk_tc_grey(f < 0.5f ? 1.0f : 0.0f);
+}
+
+// Moving Bar: a white bar `bar` pixels wide at `phase` (0 to 1) of its way from off the left (top)
+// edge to off the right (bottom) edge.
+BFK_FN vec4 bfk_tc_bar(float px, float py, float w, float h, float bar, float phase, int vertical) {
+    BFK_P float extent = vertical != 0 ? h : w;
+    BFK_P float at = vertical != 0 ? py : px;
+    BFK_P float start = phase * (extent + bar) - bar;
+    if (at >= start && at < start + bar)
+        return bfk_tc_grey(1.0f);
+    return bfk_tc_grey(0.1f);
+}
+
+// Countdown: the seconds left in large digits, the frame within the second under them, and a white
+// flash over the whole frame on the first frame of each second (a3).
+BFK_FN vec4 bfk_tc_countdown(float px, float py, float w, float h, int seconds, int frame, int fps,
+                             bool flash) {
+    if (flash)
+        return bfk_tc_grey(1.0f);
+    int nd = bfk_tc_digits(seconds);
+    BFK_P float g = max(1.0f, floor(min(bfk_div(h, 18.0f), bfk_div(w, float(nd) * 6.0f))));
+    BFK_P float tw = float(nd) * 6.0f * g - g;
+    BFK_P float tx = px - (w - tw) * 0.5f;
+    BFK_P float ty = py - (h * 0.5f - 7.5f * g);
+    if (tx >= 0.0f && tx < tw && ty >= 0.0f && ty < 7.0f * g) {
+        int k = int(floor(bfk_div(tx, 6.0f * g)));
+        BFK_P float inner = tx - float(k) * 6.0f * g;
+        if (bfk_tc_hit(1 + bfk_tc_digit(seconds, nd - 1 - k), inner, ty, g) != 0)
+            return bfk_tc_grey(0.95f);
+    }
+    int fd = fps >= 100 ? 3 : 2;
+    int total = 6 + fd;
+    BFK_P float g2 = max(1.0f, floor(min(bfk_div(h, 60.0f), bfk_div(w, float(total) * 6.0f))));
+    BFK_P float tw2 = float(total) * 6.0f * g2 - g2;
+    BFK_P float ux = px - (w - tw2) * 0.5f;
+    BFK_P float uy = py - (h * 0.5f + 2.0f * g2);
+    if (ux >= 0.0f && ux < tw2 && uy >= 0.0f && uy < 7.0f * g2) {
+        int k = int(floor(bfk_div(ux, 6.0f * g2)));
+        BFK_P float inner = ux - float(k) * 6.0f * g2;
+        int ch = 0;
+        if (k == 0)
+            ch = 16;
+        else if (k == 1)
+            ch = 28;
+        else if (k == 2)
+            ch = 11;
+        else if (k == 3)
+            ch = 23;
+        else if (k == 4)
+            ch = 15;
+        else if (k >= 6)
+            ch = 1 + bfk_tc_digit(frame, fd - 1 - (k - 6));
+        if (bfk_tc_hit(ch, inner, uy, g2) != 0)
+            return bfk_tc_grey(0.7f);
+    }
+    return bfk_tc_grey(0.1f);
+}
+
+// Alpha Ramp: six bands of colour, each with an alpha rising from 0 to 1 across the width. Straight
+// colour; the caller premultiplies.
+BFK_FN vec4 bfk_tc_alpha(float u, float v) {
+    int band = min(max(int(floor(v * 6.0f)), 0), 5);
+    vec4 c = bfk_tc_grey(0.0f);
+    if (band == 0)
+        c = bfk_tc_grey(1.0f);
+    else if (band == 1)
+        c = bfk_tc_rgb(1, 1.0f);
+    else if (band == 2)
+        c = bfk_tc_rgb(2, 1.0f);
+    else if (band == 3)
+        c = bfk_tc_rgb(4, 1.0f);
+    else if (band == 5)
+        c = bfk_tc_grey(0.5f);
+    return vec4(c.x, c.y, c.z, bfk_clamp(u, 0.0f, 1.0f));
+}
+
+// The label: the card's name and size on a dark plate in the top left corner.
+BFK_FN vec4 bfk_tc_label(vec4 under, vec4 l0, vec4 l1, float px, float py, float w, float h, int n) {
+    BFK_P float g = max(1.0f, floor(bfk_div(min(w, h), 270.0f)));
+    BFK_P float m = g * 3.0f;
+    BFK_P float pad = g * 2.0f;
+    BFK_P float tw = float(n) * 6.0f * g - g;
+    if (px < m || py < m || px >= m + pad * 2.0f + tw || py >= m + pad * 2.0f + 7.0f * g)
+        return under;
+    BFK_P float tx = px - m - pad;
+    BFK_P float ty = py - m - pad;
+    if (tx >= 0.0f && tx < tw && ty >= 0.0f && ty < 7.0f * g) {
+        int k = int(floor(bfk_div(tx, 6.0f * g)));
+        BFK_P float inner = tx - float(k) * 6.0f * g;
+        if (bfk_tc_hit(bfk_tc_label_char(l0, l1, k), inner, ty, g) != 0)
+            return bfk_tc_grey(0.95f);
+    }
+    return bfk_tc_grey(0.04f);
+}
+
+BFK_FN vec4 bfk_op_test_card(BFK_CTX, int base, float qx, float qy) {
+    vec4 h0 = bfk_data(BFK_CTXA, base);
+    vec4 h1 = bfk_data(BFK_CTXA, base + 1);
+    vec4 h2 = bfk_data(BFK_CTXA, base + 2);
+    vec4 h3 = bfk_data(BFK_CTXA, base + 3);
+    vec4 l0 = bfk_data(BFK_CTXA, base + 4);
+    vec4 l1 = bfk_data(BFK_CTXA, base + 5);
+    int card = int(h0.x);
+    int variant = int(h0.y);
+    int option = int(h0.z);
+    int flags = int(h0.w);
+    BFK_P float w = h1.x;
+    BFK_P float h = h1.y;
+    BFK_P float px = (qx - h1.z) + w * 0.5f;
+    BFK_P float py = h * 0.5f - (qy - h1.w);
+    BFK_P float u = 0.0f;
+    BFK_P float v = 0.0f;
+    vec4 c = bfk_tc_grey(0.0f);
+    bool inside = true;
+    switch (card) {
+    case 0:
+        inside = bfk_tc_fit(px, py, w, h, 1.77777779f, u, v);
+        c = bfk_tc_sd(u, v);
+        break;
+    case 1:
+        inside = bfk_tc_fit(px, py, w, h, 1.77777779f, u, v);
+        c = bfk_tc_hd(u, v);
+        break;
+    case 2:
+        inside = bfk_tc_fit(px, py, w, h, 1.77777779f, u, v);
+        c = bfk_tc_ebu(u);
+        break;
+    case 3:
+        inside = bfk_tc_fit(px, py, w, h, 1.77777779f, u, v);
+        c = bfk_tc_hdr(u, v, variant);
+        break;
+    case 4:
+        inside = bfk_tc_fit(px, py, w, h, 0.0f, u, v);
+        c = bfk_tc_patch(u, v, variant, option);
+        break;
+    case 5:
+        inside = bfk_tc_fit(px, py, w, h, 1.5f, u, v);
+        c = bfk_tc_chart(u, v);
+        break;
+    case 6:
+        inside = bfk_tc_fit(px, py, w, h, 0.0f, u, v);
+        c = bfk_tc_ramp(u, v);
+        break;
+    case 7:
+        c = bfk_tc_grid(px, py, w, h, h2.x, h2.y);
+        break;
+    case 8:
+        c = bfk_tc_circle(px, py, w, h);
+        break;
+    case 9:
+        c = bfk_tc_safe(px, py, w, h, option);
+        break;
+    case 10:
+        c = bfk_tc_uv(px, py, w, h, h2.x);
+        break;
+    case 11:
+        c = bfk_tc_zone(px, py, w, h, h3.x);
+        break;
+    case 12:
+        c = bfk_tc_star(px, py, w, h, h2.x);
+        break;
+    case 13:
+        c = bfk_tc_bar(px, py, w, h, h2.x, h3.x, option);
+        break;
+    case 14:
+        c = bfk_tc_countdown(px, py, w, h, int(h3.y), int(h3.z), int(h2.x), h3.w > 0.5f);
+        break;
+    default:
+        inside = bfk_tc_fit(px, py, w, h, 0.0f, u, v);
+        c = bfk_tc_alpha(u, v);
+        break;
+    }
+    if (!inside)
+        c = bfk_tc_grey(0.0f);
+    if ((flags & 1) != 0)
+        c = bfk_tc_label(c, l0, l1, px, py, w, h, (flags >> 4) & 31);
+    BFK_P float a = bfk_clamp(c.w, 0.0f, 1.0f);
+    BFK_P float r = c.x * a;
+    BFK_P float g = c.y * a;
+    BFK_P float b = c.z * a;
+    return vec4(r, g, b, a);
+}
+
 // --- Plumbing -----------------------------------------------------------------------------------------
 
 BFK_FN BFK_P float bfk_lane(vec4 v, float selector) {
@@ -2323,7 +3379,7 @@ BFK_FN vec4 bfk_op_ramp(BFK_CTX, int base, vec4 a) {
 //   8 Image  9 Force  10 Math (in0, in1, in2)  11 Remap  12 Transform (in0 coordinate, in1 warp)
 //   13 Swizzle  14 Combine (in0..in3 x; an absent input is the parameter's lane)  15 Offset [dx, dy]
 //   16 Derivative (in0..in3)  17 Cell Centre  18 Arrow (in0 p, in1 centre, in2 v)
-//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)
+//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)  22 Test Card (in0 p)
 // Every register write is limited to [-1e30, 1e30], so no later operation can see an infinity.
 
 BFK_FN vec4 bfk_limit(vec4 v) {
@@ -2434,6 +3490,9 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             break;
         case 21:
             v = bfk_op_lens_warp(BFK_CTXA, base, x0);
+            break;
+        case 22:
+            v = bfk_op_test_card(BFK_CTXA, base, x0.x, x0.y);
             break;
         default:
             v = zero;

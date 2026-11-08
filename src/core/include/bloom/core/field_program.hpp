@@ -69,6 +69,7 @@ enum class FieldOp : std::uint8_t {
     Streak = 19,
     Ramp = 20,
     LensWarp = 21,
+    TestCard = 22,
 };
 inline constexpr std::array kFieldOps{
     FieldOp::Coordinate, FieldOp::Constant, FieldOp::Noise,      FieldOp::Voronoi,
@@ -76,7 +77,7 @@ inline constexpr std::array kFieldOps{
     FieldOp::Image,      FieldOp::Force,    FieldOp::Math,       FieldOp::Remap,
     FieldOp::Transform,  FieldOp::Swizzle,  FieldOp::Combine,    FieldOp::Offset,
     FieldOp::Derivative, FieldOp::CellCentre, FieldOp::Arrow,    FieldOp::Streak,
-    FieldOp::Ramp,       FieldOp::LensWarp};
+    FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard};
 
 // Stable lower-case names (coverage ids, diagnostics). No default case: a new op is a -Wswitch
 // error until it is named.
@@ -126,6 +127,8 @@ inline constexpr std::array kFieldOps{
         return "ramp";
     case FieldOp::LensWarp:
         return "lens-warp";
+    case FieldOp::TestCard:
+        return "test-card";
     }
     return {};
 }
@@ -364,6 +367,28 @@ struct LensWarpParameters final {
     bool reverse = false;
 };
 
+// A test card drawn procedurally (field_kernel.glsl, "Test card"): the card, its option values and
+// geometry, in full-resolution composition pixels. The card's frame is `width` x `height` pixels
+// centred at (`centreX`, `centreY`) of the field's positions (+y up); the op returns the card's
+// premultiplied RGBA signal at a position, black and opaque outside the card's own layout rectangle.
+inline constexpr std::size_t kTestCardMaxLabel = 24;
+struct TestCardParameters final {
+    std::int64_t card = 0;
+    std::int64_t variant = 0;
+    std::int64_t option = 0;
+    bool label = false;
+    double width = 1.0;
+    double height = 1.0;
+    double centreX = 0.0;
+    double centreY = 0.0;
+    // Card specific numbers (grid spacing and line width, UV cells, star spokes, bar width, fps).
+    std::array<double, 4> values{};
+    // Card specific numbers resolved from time: the phase, and a1 to a3.
+    std::array<double, 4> timed{};
+    // The label's characters as codes 0 to 63 (the kernel's glyph table).
+    std::vector<std::uint8_t> text;
+};
+
 enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
 
 // A lane of a Swizzle: 0..3 a component of the input, 4 zero, 5 one.
@@ -420,6 +445,9 @@ class FieldProgramBuilder final {
 [[nodiscard]] std::vector<float> encodeSwizzle(const SwizzleParameters&);
 // Null when a value cannot be represented (non-finite, a scale not above 1e-6).
 [[nodiscard]] std::optional<std::vector<float>> encodeLensWarp(const LensWarpParameters&);
+// Null when a value cannot be represented (non-finite, a frame not at least one pixel, a card or text
+// outside the kernel's tables).
+[[nodiscard]] std::optional<std::vector<float>> encodeTestCard(const TestCardParameters&);
 [[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);

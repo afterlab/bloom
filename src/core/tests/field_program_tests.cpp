@@ -621,6 +621,383 @@ void testDistanceTransform(Expectations& e) {
     }
 }
 
+// --- Test Card ---------------------------------------------------------------------------------
+
+// The card's premultiplied RGBA at pixel position (px, py) of its own frame (top left origin, y down).
+std::array<double, 4> cardAt(const field::TestCardParameters& p, const double px, const double py) {
+    const auto block = field::encodeTestCard(p);
+    if (!block)
+        return {-9.0, -9.0, -9.0, -9.0};
+    const auto table = single(FieldOp::TestCard, *block, field::FieldResultKind::Premultiplied);
+    return at(table, px - p.width * 0.5 + p.centreX, p.height * 0.5 - py + p.centreY);
+}
+
+field::TestCardParameters cardOf(const std::int64_t card, const double w = 1920.0,
+                                 const double h = 1080.0) {
+    field::TestCardParameters p;
+    p.card = card;
+    p.width = w;
+    p.height = h;
+    return p;
+}
+
+bool near(const std::array<double, 4>& v, const std::array<double, 4>& want,
+          const double tolerance = 1.0e-6) {
+    for (std::size_t i = 0; i < 4; ++i)
+        if (std::abs(v[i] - want[i]) > tolerance)
+            return false;
+    return true;
+}
+
+void testTestCard(Expectations& e) {
+    // Encoding limits.
+    auto bad = cardOf(16);
+    e.expect(!field::encodeTestCard(bad), "a card beyond the sixteen is refused");
+    bad = cardOf(0, 0.0, 10.0);
+    e.expect(!field::encodeTestCard(bad), "a frame under a pixel is refused");
+    bad = cardOf(0);
+    bad.text.assign(25, 1);
+    e.expect(!field::encodeTestCard(bad), "a label beyond 24 characters is refused");
+    bad = cardOf(0);
+    bad.text = {43};
+    e.expect(!field::encodeTestCard(bad), "a glyph beyond the table is refused");
+    bad = cardOf(0);
+    bad.values[0] = std::numeric_limits<double>::infinity();
+    e.expect(!field::encodeTestCard(bad), "a non-finite number is refused");
+    e.expect(field::validFieldTable(
+                 single(FieldOp::TestCard, *field::encodeTestCard(cardOf(0)),
+                        field::FieldResultKind::Premultiplied)),
+             "a Test Card table is valid");
+
+    // SD Bars (the whole frame, 75% bars, castellation, -I, white, +Q, black and PLUGE).
+    const auto sd = cardOf(0);
+    e.expect(near(cardAt(sd, 137.0, 300.0), {0.75, 0.75, 0.75, 1.0}), "SD: the white bar is 75%");
+    e.expect(near(cardAt(sd, 411.0, 300.0), {0.75, 0.75, 0.0, 1.0}), "SD: the yellow bar");
+    e.expect(near(cardAt(sd, 1783.0, 300.0), {0.0, 0.0, 0.75, 1.0}), "SD: the blue bar");
+    e.expect(near(cardAt(sd, 137.0, 780.0), {0.0, 0.0, 0.75, 1.0}), "SD: the castellation reverses");
+    e.expect(near(cardAt(sd, 411.0, 780.0), {0.0, 0.0, 0.0, 1.0}), "SD: black between castellations");
+    e.expect(near(cardAt(sd, 1783.0, 780.0), {0.75, 0.75, 0.75, 1.0}), "SD: the castellation ends white");
+    e.expect(near(cardAt(sd, 137.0, 1000.0), {0.0, 0.246575341, 0.410958916, 1.0}),
+             "SD: -I below the white bar");
+    e.expect(near(cardAt(sd, 411.0, 1000.0), {1.0, 1.0, 1.0, 1.0}), "SD: 100% white");
+    e.expect(near(cardAt(sd, 960.0, 1000.0), {0.255707771, 0.0, 0.465753436, 1.0}), "SD: +Q");
+    e.expect(near(cardAt(sd, 1400.0, 1000.0), {-0.04, -0.04, -0.04, 1.0}),
+             "SD: the PLUGE step below black is kept below zero");
+    e.expect(near(cardAt(sd, 1500.0, 1000.0), {0.0, 0.0, 0.0, 1.0}), "SD: the PLUGE black");
+    e.expect(near(cardAt(sd, 1600.0, 1000.0), {0.04, 0.04, 0.04, 1.0}), "SD: the PLUGE step above black");
+    e.expect(near(cardAt(sd, 1800.0, 1000.0), {0.0, 0.0, 0.0, 1.0}), "SD: black beside the PLUGE");
+    // A portrait frame holds the 16:9 layout whole, centred (rows 656.25 to 1263.75), black around it.
+    const auto sdPortrait = cardOf(0, 1080.0, 1920.0);
+    e.expect(near(cardAt(sdPortrait, 1080.0 * 0.2, 800.0), {0.75, 0.75, 0.0, 1.0}) &&
+                 near(cardAt(sdPortrait, 1080.0 * 0.2, 300.0), {0.0, 0.0, 0.0, 1.0}) &&
+                 near(cardAt(sdPortrait, 1080.0 * 0.2, 1600.0), {0.0, 0.0, 0.0, 1.0}),
+             "SD: a portrait frame holds the 16:9 layout, padded in black, not stretched");
+
+    // HD Bars (SMPTE RP 219-1): in 1920 x 1080 the widths of annex C table C.1 and C.2.
+    const auto hd = cardOf(1);
+    e.expect(near(cardAt(hd, 100.5, 300.0), {0.4, 0.4, 0.4, 1.0}), "HD: 40% grey beside the bars");
+    e.expect(near(cardAt(hd, 300.5, 300.0), {0.75, 0.75, 0.75, 1.0}), "HD: the 75% white bar");
+    e.expect(near(cardAt(hd, 1578.5, 300.0), {0.0, 0.0, 0.75, 1.0}), "HD: the 75% blue bar");
+    e.expect(near(cardAt(hd, 100.5, 660.0), {0.0, 1.0, 1.0, 1.0}), "HD: 100% cyan");
+    e.expect(near(cardAt(hd, 900.5, 660.0), {0.75, 0.75, 0.75, 1.0}), "HD: the 75% white chroma reference");
+    e.expect(near(cardAt(hd, 1800.5, 660.0), {0.0, 0.0, 1.0, 1.0}), "HD: 100% blue");
+    e.expect(near(cardAt(hd, 100.5, 750.0), {1.0, 1.0, 0.0, 1.0}), "HD: 100% yellow");
+    e.expect(near(cardAt(hd, 300.5, 750.0), {0.0, 0.0, 0.0, 1.0}), "HD: 0% black left of the ramp");
+    e.expect(near(cardAt(hd, 1000.5, 750.0),
+                  {(1000.5 - 445.714294) / 1028.57141, (1000.5 - 445.714294) / 1028.57141,
+                   (1000.5 - 445.714294) / 1028.57141, 1.0},
+                  1.0e-5),
+             "HD: the ramp is linear from 0% to 100%");
+    e.expect(near(cardAt(hd, 1600.5, 750.0), {1.0, 1.0, 1.0, 1.0}), "HD: 100% white right of the ramp");
+    e.expect(near(cardAt(hd, 1800.5, 750.0), {1.0, 0.0, 0.0, 1.0}), "HD: 100% red");
+    e.expect(near(cardAt(hd, 100.5, 900.0), {0.15, 0.15, 0.15, 1.0}), "HD: 15% grey");
+    e.expect(near(cardAt(hd, 700.5, 900.0), {1.0, 1.0, 1.0, 1.0}), "HD: the 100% white block");
+    e.expect(near(cardAt(hd, 1150.5, 900.0), {-0.02, -0.02, -0.02, 1.0}), "HD: PLUGE -2% below black");
+    e.expect(near(cardAt(hd, 1230.5, 900.0), {0.0, 0.0, 0.0, 1.0}), "HD: PLUGE black");
+    e.expect(near(cardAt(hd, 1300.5, 900.0), {0.02, 0.02, 0.02, 1.0}), "HD: PLUGE +2%");
+    e.expect(near(cardAt(hd, 1440.5, 900.0), {0.04, 0.04, 0.04, 1.0}), "HD: PLUGE +4%");
+    // A wide frame pads the 16:9 layout in black at the sides; a tall one above and below.
+    const auto hdWide = cardOf(1, 2048.0, 858.0);
+    e.expect(near(cardAt(hdWide, 10.0, 400.0), {0.0, 0.0, 0.0, 1.0}), "HD: a wide frame is padded in black");
+    e.expect(cardAt(hdWide, 1024.0, 429.0)[3] == 1.0, "HD: the wide frame's layout is opaque");
+    const auto hdTall = cardOf(1, 1080.0, 1920.0);
+    e.expect(near(cardAt(hdTall, 540.0, 100.0), {0.0, 0.0, 0.0, 1.0}), "HD: a tall frame is padded in black");
+    // The layout rectangle of the wide frame is 1525.33 x 858 about the centre: the 75% yellow bar.
+    e.expect(near(cardAt(hdWide, 1024.0 - 762.67 + (1525.33 / 1920.0) * 500.0, 200.0),
+                  {0.75, 0.75, 0.0, 1.0}),
+             "HD: the layout inside the padding keeps its proportions");
+
+    // EBU Bars (ITU-R BT.471, 100/0/75/0).
+    const auto ebu = cardOf(2);
+    e.expect(near(cardAt(ebu, 100.0, 500.0), {1.0, 1.0, 1.0, 1.0}), "EBU: 100% white");
+    e.expect(near(cardAt(ebu, 360.0, 500.0), {0.75, 0.75, 0.0, 1.0}), "EBU: 75% yellow");
+    e.expect(near(cardAt(ebu, 1800.0, 500.0), {0.0, 0.0, 0.0, 1.0}), "EBU: the black bar");
+
+    // HDR Bars (ITU-R BT.2111-3): signal = (code - 64) / 876 narrow, code / 1023 full range.
+    const auto narrow = [](const int code) { return (code - 64) / 876.0; };
+    for (const std::int64_t variant : {0, 1, 2}) {
+        auto hdr = cardOf(3);
+        hdr.variant = variant;
+        const auto sig = [&](const int code) {
+            return variant == 2 ? code / 1023.0 : narrow(code);
+        };
+        const int white = variant == 0 ? 721 : (variant == 1 ? 573 : 594);
+        const int grey = variant == 2 ? 409 : 414;
+        const auto name = std::string(" (variant ") + std::to_string(variant) + ")";
+        e.expect(near(cardAt(hdr, 100.5, 300.0), {sig(grey), sig(grey), sig(grey), 1.0}, 1.0e-6),
+                 "HDR: 40% grey" + name);
+        e.expect(near(cardAt(hdr, 300.5, 300.0), {sig(white), sig(white), sig(white), 1.0}, 1.0e-6),
+                 "HDR: the reference white bar" + name);
+        e.expect(near(cardAt(hdr, 300.5, 40.0),
+                      {sig(variant == 2 ? 1023 : 940), sig(variant == 2 ? 1023 : 940),
+                       sig(variant == 2 ? 1023 : 940), 1.0}, 1.0e-6),
+                 "HDR: the 100% white bar above" + name);
+        e.expect(near(cardAt(hdr, 500.5, 40.0),
+                      {sig(variant == 2 ? 1023 : 940), sig(variant == 2 ? 1023 : 940), 0.0, 1.0},
+                      1.0e-6),
+                 "HDR: the 100% yellow bar above" + name);
+        // The stair: -7% below black (0% in full range) over the white bar, then 0% and 10% over yellow.
+        e.expect(near(cardAt(hdr, 300.5, 680.0),
+                      {sig(variant == 2 ? 0 : 4), sig(variant == 2 ? 0 : 4), sig(variant == 2 ? 0 : 4), 1.0},
+                      1.0e-6),
+                 "HDR: the first step" + name);
+        e.expect(near(cardAt(hdr, 600.5, 680.0),
+                      {sig(variant == 2 ? 102 : 152), sig(variant == 2 ? 102 : 152),
+                       sig(variant == 2 ? 102 : 152), 1.0}, 1.0e-6),
+                 "HDR: the 10% step" + name);
+        e.expect(near(cardAt(hdr, 1650.5, 680.0),
+                      {sig(variant == 2 ? 1023 : 1019), sig(variant == 2 ? 1023 : 1019),
+                       sig(variant == 2 ? 1023 : 1019), 1.0}, 1.0e-6),
+                 "HDR: the last step" + name);
+        // The ramp: flat, then one code per 1920th of the width.
+        if (variant != 2) {
+            e.expect(near(cardAt(hdr, 900.5, 765.0),
+                          {(4.0 + (900.5 - 799.0) - 64.0) / 876.0,
+                           (4.0 + (900.5 - 799.0) - 64.0) / 876.0,
+                           (4.0 + (900.5 - 799.0) - 64.0) / 876.0, 1.0},
+                          1.0e-5),
+                     "HDR: the narrow-range ramp rises a code a pixel" + name);
+            e.expect(near(cardAt(hdr, 400.5, 765.0), {narrow(4), narrow(4), narrow(4), 1.0}, 1.0e-6),
+                     "HDR: the ramp starts at -7%" + name);
+        } else {
+            e.expect(near(cardAt(hdr, 1000.5, 765.0),
+                          {(1000.5 - 858.0) / 1023.0, (1000.5 - 858.0) / 1023.0,
+                           (1000.5 - 858.0) / 1023.0, 1.0},
+                          1.0e-5),
+                     "HDR: the full-range ramp starts at the green bar" + name);
+        }
+        // The black steps: -2% (not in full range), 0, +2%, 0, +4%.
+        e.expect(near(cardAt(hdr, 410.5, 900.0),
+                      {sig(variant == 2 ? 0 : 48), sig(variant == 2 ? 0 : 48), sig(variant == 2 ? 0 : 48), 1.0},
+                      1.0e-6),
+                 "HDR: the -2% black step" + name);
+        e.expect(near(cardAt(hdr, 550.5, 900.0),
+                      {sig(variant == 2 ? 19 : 80), sig(variant == 2 ? 19 : 80),
+                       sig(variant == 2 ? 19 : 80), 1.0}, 1.0e-6),
+                 "HDR: the +2% black step" + name);
+        e.expect(near(cardAt(hdr, 690.5, 900.0),
+                      {sig(variant == 2 ? 41 : 99), sig(variant == 2 ? 41 : 99),
+                       sig(variant == 2 ? 41 : 99), 1.0}, 1.0e-6),
+                 "HDR: the +4% black step" + name);
+        e.expect(near(cardAt(hdr, 1100.5, 900.0), {sig(white), sig(white), sig(white), 1.0}, 1.0e-6),
+                 "HDR: the reference white block" + name);
+        const int r = variant == 0 ? 713 : (variant == 1 ? 569 : 589);
+        const int g = variant == 0 ? 719 : (variant == 1 ? 572 : 593);
+        const int b = variant == 0 ? 316 : (variant == 1 ? 381 : 370);
+        e.expect(near(cardAt(hdr, 40.5, 900.0), {sig(r), sig(g), sig(b), 1.0}, 1.0e-6),
+                 "HDR: the BT.709 yellow bar" + name);
+    }
+
+    // Patch: the exact value, full field or in a centred window over black.
+    auto patch = cardOf(4);
+    patch.variant = 14;
+    e.expect(near(cardAt(patch, 500.0, 500.0), {1.0, 1.0, 1.0, 1.0}), "Patch: white 100%");
+    patch.variant = 7;
+    e.expect(near(cardAt(patch, 500.0, 500.0), {0.5, 0.5, 0.5, 1.0}, 1.0e-6), "Patch: grey 50%");
+    patch.variant = 2;
+    e.expect(near(cardAt(patch, 1.0, 1.0), {0.04, 0.04, 0.04, 1.0}), "Patch: near black 4%");
+    patch.variant = 15;
+    e.expect(near(cardAt(patch, 960.0, 540.0), {0.75, 0.0, 0.0, 1.0}), "Patch: red 75%");
+    patch.variant = 26;
+    e.expect(near(cardAt(patch, 960.0, 540.0), {1.0, 1.0, 0.0, 1.0}), "Patch: yellow 100%");
+    patch.variant = 14;
+    patch.option = 3;
+    e.expect(near(cardAt(patch, 960.0, 540.0), {1.0, 1.0, 1.0, 1.0}), "Patch: the window's centre");
+    e.expect(near(cardAt(patch, 100.0, 100.0), {0.0, 0.0, 0.0, 1.0}), "Patch: black around the window");
+    // A tenth of the area: the window is about 0.316 of each side.
+    e.expect(near(cardAt(patch, 960.0 + 0.158 * 1920.0 - 2.0, 540.0), {1.0, 1.0, 1.0, 1.0}) &&
+                 near(cardAt(patch, 960.0 + 0.158 * 1920.0 + 2.0, 540.0), {0.0, 0.0, 0.0, 1.0}),
+             "Patch: a window of a tenth of the frame's area");
+    // The set follows the numbers of the kernel in the document vocabulary.
+    for (std::int64_t index = 0; index < 27; ++index) {
+        auto each = cardOf(4);
+        each.variant = index;
+        const auto v = cardAt(each, 500.0, 500.0);
+        e.expect(v[3] == 1.0 && v[0] >= 0.0, "Patch: every value of the set is drawn");
+    }
+
+    // Grey Ramp.
+    const auto ramp = cardOf(6);
+    e.expect(near(cardAt(ramp, 960.0, 300.0), {0.5, 0.5, 0.5, 1.0}), "Grey Ramp: the middle is 50%");
+    e.expect(near(cardAt(ramp, 480.0, 300.0), {0.25, 0.25, 0.25, 1.0}), "Grey Ramp: a quarter along");
+    e.expect(near(cardAt(ramp, 320.0, 1000.0), {-0.04, -0.04, -0.04, 1.0}),
+             "Grey Ramp: a PLUGE step below black");
+    e.expect(near(cardAt(ramp, 1200.0, 1000.0), {0.02, 0.02, 0.02, 1.0}) &&
+                 near(cardAt(ramp, 1500.0, 1000.0), {0.04, 0.04, 0.04, 1.0}),
+             "Grey Ramp: PLUGE steps above black");
+
+    // Colour Chart: 24 patches in a 3:2 rectangle (here 1620 x 1080 of 1920).
+    const auto chart = cardOf(5);
+    const double chartLeft = (1920.0 - 1620.0) / 2.0;
+    const auto patchCentre = [&](const int col, const int row) {
+        return std::array<double, 2>{chartLeft + (col + 0.5) * 270.0, (row + 0.5) * 270.0};
+    };
+    auto chartAt = [&](const int col, const int row) {
+        const auto c = patchCentre(col, row);
+        return cardAt(chart, c[0], c[1]);
+    };
+    e.expect(near(chartAt(0, 0), {1.0, 1.0, 1.0, 1.0}), "Chart: the white patch");
+    e.expect(near(chartAt(3, 0), {0.4, 0.4, 0.4, 1.0}, 1.0e-6), "Chart: a grey patch");
+    e.expect(near(chartAt(5, 0), {0.0, 0.0, 0.0, 1.0}, 1.0e-6), "Chart: the black patch");
+    e.expect(near(chartAt(0, 1), {1.0, 0.0, 0.0, 1.0}), "Chart: red");
+    e.expect(near(chartAt(4, 2), {0.5, 0.0, 0.5, 1.0}), "Chart: half magenta");
+    e.expect(near(chartAt(0, 3), {0.90, 0.74, 0.64, 1.0}, 1.0e-6), "Chart: the lightest skin tone");
+    e.expect(near(chartAt(5, 3), {0.28, 0.18, 0.14, 1.0}, 1.0e-6), "Chart: the darkest skin tone");
+    e.expect(near(cardAt(chart, chartLeft + 2.0, 2.0), {0.12, 0.12, 0.12, 1.0}), "Chart: the gap between patches");
+    e.expect(near(cardAt(chart, 10.0, 500.0), {0.0, 0.0, 0.0, 1.0}), "Chart: black outside the chart");
+
+    // Grid: square cells, lines through the centre, the spacing and line width.
+    auto grid = cardOf(7);
+    grid.values = {90.0, 2.0, 0.0, 0.0};
+    e.expect(near(cardAt(grid, 960.0 + 90.0, 540.0 + 45.0), {0.85, 0.85, 0.85, 1.0}), "Grid: a vertical line");
+    e.expect(near(cardAt(grid, 960.0 + 45.0, 540.0 + 90.0), {0.85, 0.85, 0.85, 1.0}), "Grid: a horizontal line");
+    e.expect(near(cardAt(grid, 960.0 + 45.0, 540.0 + 45.0), {0.08, 0.08, 0.08, 1.0}), "Grid: the cell between");
+    e.expect(near(cardAt(grid, 960.0, 540.0 + 45.0), {0.9, 0.8, 0.1, 1.0}), "Grid: the centre line");
+    e.expect(near(cardAt(grid, 960.0 + 90.0 + 1.5, 540.0 + 45.0), {0.08, 0.08, 0.08, 1.0}),
+             "Grid: the line is the width asked");
+    auto gridPortrait = cardOf(7, 1080.0, 1920.0);
+    gridPortrait.values = {90.0, 2.0, 0.0, 0.0};
+    e.expect(cardAt(gridPortrait, 540.0 + 90.0, 960.0 + 45.0) == cardAt(gridPortrait, 540.0 + 45.0, 960.0 + 90.0) &&
+                 near(cardAt(gridPortrait, 540.0 + 90.0, 960.0 + 45.0), {0.85, 0.85, 0.85, 1.0}),
+             "Grid: the spacing is the same across and down in a portrait frame");
+
+    // Circle: round in a wide, a portrait and a square frame.
+    for (const auto& [w, h] : {std::pair{1920.0, 1080.0}, std::pair{1080.0, 1920.0},
+                               std::pair{1000.0, 1000.0}, std::pair{2048.0, 858.0}}) {
+        const auto circle = cardOf(8, w, h);
+        const double radius = 0.45 * std::min(w, h);
+        const auto ring = cardAt(circle, w / 2.0 + radius, h / 2.0 + 10.0);
+        e.expect(near(ring, {0.95, 0.95, 0.95, 1.0}) &&
+                     near(cardAt(circle, w / 2.0 + 10.0, h / 2.0 + radius), ring) &&
+                     near(cardAt(circle, w / 2.0 - radius, h / 2.0 + 10.0), ring) &&
+                     near(cardAt(circle, w / 2.0 + 10.0, h / 2.0 - radius), ring),
+                 "Circle: the ring is at the same distance across and down");
+        const double d = radius / std::sqrt(2.0);
+        e.expect(near(cardAt(circle, w / 2.0 + d, h / 2.0 + d), ring),
+                 "Circle: the ring passes the diagonal at the same radius");
+    }
+
+    // Safe Areas: action safe at 93% and title safe at 90%.
+    auto safe = cardOf(9);
+    safe.option = 0;
+    e.expect(near(cardAt(safe, 960.0 + 0.465 * 1920.0, 300.0), {0.9, 0.8, 0.1, 1.0}), "Safe: action safe at 93%");
+    e.expect(near(cardAt(safe, 960.0 + 0.45 * 1920.0, 300.0), {0.1, 0.8, 0.9, 1.0}), "Safe: title safe at 90%");
+    e.expect(near(cardAt(safe, 300.0, 300.0), {0.12, 0.12, 0.12, 1.0}), "Safe: the field");
+    safe.option = 2;
+    // The 9:16 guide in a 16:9 frame is 607.5 pixels wide about the centre.
+    e.expect(near(cardAt(safe, 960.0 + 303.75, 300.0), {0.5, 0.9, 0.2, 1.0}), "Safe: the 9:16 guide");
+    safe.option = 8;
+    // The 2.39:1 guide is the frame wide and 803.3 pixels tall.
+    e.expect(near(cardAt(safe, 300.0, 540.0 - 1920.0 / 2.39 / 2.0), {0.4, 0.5, 1.0, 1.0}), "Safe: the 2.39:1 guide");
+
+    // UV Grid: square cells coloured by position, labelled.
+    auto uv = cardOf(10);
+    uv.values = {120.0, 0.0, 0.0, 0.0};
+    e.expect(near(cardAt(uv, 0.2, 500.0), {0.0, 0.0, 0.0, 1.0}), "UV: the line between cells");
+    const auto cell = cardAt(uv, 120.0 * 5.0 + 4.0, 120.0 * 2.0 + 4.0);
+    e.expect(std::abs(cell[0] - (604.0 / 1920.0)) < 1.0e-5 && std::abs(cell[1] - (1.0 - 244.0 / 1080.0)) < 1.0e-5 &&
+                 cell[2] == 0.25,
+             "UV: a cell is coloured by its position");
+    int lit = 0;
+    for (int y = 0; y < 120; ++y)
+        for (int x = 0; x < 120; ++x) {
+            const auto v = cardAt(uv, 120.0 * 5.0 + x + 0.5, 120.0 * 2.0 + y + 0.5);
+            if (v[0] == 1.0 && v[1] == 1.0 && v[2] == 1.0)
+                ++lit;
+        }
+    e.expect(lit > 20, "UV: each cell has its column and row written in it");
+
+    // Zone Plate and Siemens Star.
+    const auto zone = cardOf(11);
+    e.expect(near(cardAt(zone, 960.0, 540.0), {1.0, 1.0, 1.0, 1.0}, 1.0e-6), "Zone: the centre is white");
+    e.expect(near(cardAt(zone, 960.0 + 31.0, 540.0), cardAt(zone, 960.0, 540.0 + 31.0), 1.0e-5),
+             "Zone: the rings are round");
+    auto moving = cardOf(11);
+    moving.timed[0] = 0.5;
+    e.expect(near(cardAt(moving, 960.0, 540.0), {0.0, 0.0, 0.0, 1.0}, 1.0e-5), "Zone: half a turn of phase");
+    auto star = cardOf(12);
+    star.values[0] = 36.0;
+    e.expect(near(cardAt(star, 960.0 + 100.0, 540.0 - 0.1), {1.0, 1.0, 1.0, 1.0}) ||
+                 near(cardAt(star, 960.0 + 100.0, 540.0 - 0.1), {0.0, 0.0, 0.0, 1.0}),
+             "Star: a spoke is black or white");
+    e.expect(near(cardAt(star, 960.0 + 500.0, 540.0), {0.18, 0.18, 0.18, 1.0}), "Star: outside its circle");
+    {
+        const double r = 300.0;
+        const double a0 = 0.25 / 36.0 * 2.0 * std::numbers::pi;
+        const double a1 = 0.75 / 36.0 * 2.0 * std::numbers::pi;
+        const auto s0 = cardAt(star, 960.0 + r * std::cos(a0), 540.0 + r * std::sin(a0));
+        const auto s1 = cardAt(star, 960.0 + r * std::cos(a1), 540.0 + r * std::sin(a1));
+        e.expect(near(s0, {1.0, 1.0, 1.0, 1.0}) && near(s1, {0.0, 0.0, 0.0, 1.0}), "Star: the spokes alternate");
+    }
+
+    // Moving Bar: a bar of 100 px at half way.
+    auto bar = cardOf(13);
+    bar.values = {100.0, 2.0, 0.0, 0.0};
+    bar.timed[0] = 0.5;
+    e.expect(near(cardAt(bar, 950.0, 200.0), {1.0, 1.0, 1.0, 1.0}) && near(cardAt(bar, 900.0, 200.0), {0.1, 0.1, 0.1, 1.0}) &&
+                 near(cardAt(bar, 1020.0, 200.0), {0.1, 0.1, 0.1, 1.0}),
+             "Bar: the bar is where its time puts it");
+    bar.option = 1;
+    e.expect(near(cardAt(bar, 200.0, 540.0 + 4.0), {1.0, 1.0, 1.0, 1.0}) && near(cardAt(bar, 200.0, 300.0), {0.1, 0.1, 0.1, 1.0}),
+             "Bar: vertical");
+
+    // Countdown: the flash frame is white, other frames show their digits on near black.
+    auto count = cardOf(14);
+    count.values = {24.0, 0.0, 0.0, 0.0};
+    count.timed = {0.0, 7.0, 3.0, 0.0};
+    int lit2 = 0;
+    for (int y = 100; y < 980; y += 3)
+        for (int x = 400; x < 1500; x += 3)
+            if (cardAt(count, x + 0.5, y + 0.5)[0] > 0.9)
+                ++lit2;
+    e.expect(lit2 > 50 && near(cardAt(count, 5.0, 5.0), {0.1, 0.1, 0.1, 1.0}), "Countdown: digits on near black");
+    count.timed[3] = 1.0;
+    e.expect(near(cardAt(count, 5.0, 5.0), {1.0, 1.0, 1.0, 1.0}), "Countdown: the flash frame is white");
+
+    // Alpha Ramp: straight colour bands whose alpha rises across the width, premultiplied.
+    const auto alpha = cardOf(15);
+    e.expect(near(cardAt(alpha, 480.0, 90.0), {0.25 * 1.0, 0.25, 0.25, 0.25}, 1.0e-6), "Alpha: a quarter along over white");
+    e.expect(near(cardAt(alpha, 480.0, 270.0), {0.25, 0.0, 0.0, 0.25}, 1.0e-6), "Alpha: over red");
+    e.expect(near(cardAt(alpha, 0.0, 90.0), {0.0, 0.0, 0.0, 0.0}), "Alpha: transparent at the left edge");
+
+    // The label: a dark plate with light text in the corner.
+    auto labelled = cardOf(7);
+    labelled.values = {90.0, 2.0, 0.0, 0.0};
+    labelled.label = true;
+    labelled.text = {19, 6, 1, 2, 15, 0, 2, 1};
+    int plate = 0;
+    int ink = 0;
+    for (int y = 0; y < 80; ++y)
+        for (int x = 0; x < 300; ++x) {
+            const auto v = cardAt(labelled, x + 0.5, y + 0.5);
+            if (std::abs(v[0] - 0.04) < 1.0e-6)
+                ++plate;
+            if (std::abs(v[0] - 0.95) < 1.0e-6)
+                ++ink;
+        }
+    e.expect(plate > 500 && ink > 50, "Label: text on a dark plate in the corner");
+}
+
 } // namespace
 
 int main() {
@@ -632,6 +1009,7 @@ int main() {
     testMathAndRemap(expectations);
     testImagesAndRaster(expectations);
     testLensWarp(expectations);
+    testTestCard(expectations);
     testDistanceTransform(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
