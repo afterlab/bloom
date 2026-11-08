@@ -3,6 +3,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
@@ -540,6 +541,19 @@ std::optional<ParameterPresentation> sharpenPresentation(const std::string_view 
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #563 Codec Degrade: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> codecDegradePresentation(const std::string_view schemaKey) {
+    const auto* spec = codecDegradeParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    if (spec->kind == CodecDegradeParameterKind::Choice)
+        return choice();
+    if (spec->kind == CodecDegradeParameterKind::Boolean)
+        return std::nullopt;
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit, spec->displayScale);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -553,6 +567,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *flare;
     if (auto grain = filmGrainPresentation(schemaKey))
         return *grain;
+    if (auto codec = codecDegradePresentation(schemaKey))
+        return *codec;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
     for (const auto& entry : table())

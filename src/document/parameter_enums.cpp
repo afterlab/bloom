@@ -7,6 +7,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -193,6 +194,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         Options options;
         for (std::size_t index = 0; index < grain->choices.size(); ++index)
             options.push_back({std::string(grain->choices[index]),
+                               static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #563 Codec Degrade.
+    if (const auto* codec = codecDegradeParameterSpec(schemaKey);
+        codec != nullptr && codec->kind == CodecDegradeParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < codec->choices.size(); ++index)
+            options.push_back({std::string(codec->choices[index]),
                                static_cast<std::int64_t>(index)});
         return options;
     }

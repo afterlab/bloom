@@ -6,6 +6,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -575,6 +576,9 @@ template <typename Definition>
         // #486 Film Grain: the exact generated shape.
         if (definition.key.typeId == kFilmGrainNodeType)
             return definition == filmGrainDefinition();
+        // #563 Codec Degrade: the exact generated shape.
+        if (definition.key.typeId == kCodecDegradeNodeType)
+            return definition == codecDegradeDefinition();
         // #484 the motion-blur nodes: the exact generated shapes.
         if (isMotionBlurNodeType(definition.key.typeId))
             return definition == motionBlurDefinition(definition.key.typeId);
@@ -1672,6 +1676,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         colorizeDefinition(),
         vignetteDefinition(),
         filmGrainDefinition(),
+        codecDegradeDefinition(),
         sharpenDefinition(),
         cameraShakeDefinition(),
         depthEffectDefinition(kZDefocusNodeType),

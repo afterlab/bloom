@@ -14,6 +14,7 @@ target_sources(
         depth_effect_nodes.cpp
         lens_flare_nodes.cpp
         film_grain_nodes.cpp
+        codec_degrade_nodes.cpp
         motion_blur_nodes.cpp
         sharpen_nodes.cpp
         graph.cpp

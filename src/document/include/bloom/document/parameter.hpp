@@ -9,6 +9,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
@@ -414,7 +415,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
-           isFilmGrainScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
+           isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
@@ -527,6 +528,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #486 Film Grain (film_grain_nodes.hpp).
     if (filmGrainParameterSpec(schemaKey) != nullptr)
         return isFilmGrainScalarWithinDomain(schemaKey, value);
+    // #563 Codec Degrade (codec_degrade_nodes.hpp).
+    if (codecDegradeParameterSpec(schemaKey) != nullptr)
+        return isCodecDegradeScalarWithinDomain(schemaKey, value);
     // #484 the motion-blur nodes (motion_blur_parameters.hpp).
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionScalarWithinDomain(schemaKey, value);

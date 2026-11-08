@@ -281,7 +281,7 @@ int main() {
           "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen",
+          "bloom.film-grain", "bloom.sharpen", "bloom.codec-degrade",
           "bloom.video-source",
           "bloom.image-preview"})
         expect(completeRegistry.find(type, std::string_view(type) == "bloom.curves" ||

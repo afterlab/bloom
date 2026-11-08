@@ -4,6 +4,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -402,6 +403,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #486 Film Grain: every parameter within its document domain.
     if (filmGrainParameterSpec(schemaKey) != nullptr)
         return isFilmGrainParameterValueValid(schemaKey, constant.value);
+    // #563 Codec Degrade: every parameter within its document domain.
+    if (codecDegradeParameterSpec(schemaKey) != nullptr)
+        return isCodecDegradeParameterValueValid(schemaKey, constant.value);
     // #484 the motion-blur nodes and Transform 2D's motion blur.
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionParameterValueValid(schemaKey, constant.value);
@@ -588,6 +592,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isDepthConstantSchemaKey(schemaKey) ||
          bloom::document::isLensFlareConstantSchemaKey(schemaKey) ||
          bloom::document::isFilmGrainConstantSchemaKey(schemaKey) ||
+         bloom::document::isCodecDegradeConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))

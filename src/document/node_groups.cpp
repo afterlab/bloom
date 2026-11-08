@@ -48,7 +48,8 @@ constexpr std::array<std::string_view, 11> kBlurSharpen{"bloom.gaussian-blur",
 constexpr std::array<std::string_view, 5> kLightShadow{
     "bloom.glow", "bloom.light-wrap", "bloom.drop-shadow", "bloom.depth-fog", "bloom.lens-flare"};
 // Planned: Dither, Quantize.
-constexpr std::array<std::string_view, 2> kStylize{"bloom.vignette", "bloom.film-grain"};
+constexpr std::array<std::string_view, 3> kStylize{"bloom.vignette", "bloom.film-grain",
+                                                   "bloom.codec-degrade"};
 // Planned: Color Matrix, Tone Map.
 constexpr std::array<std::string_view, 9> kColorCorrection{
     "bloom.grade",  "bloom.levels",   "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
