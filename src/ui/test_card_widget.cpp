@@ -8,6 +8,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/project_view_memory.hpp>
 
@@ -93,6 +94,14 @@ TestCardCardWidget::TestCardCardWidget(CompositionSession& session, const docume
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
+    // A read-only swatch of the expected display colour: it takes no pointer or focus, so it never
+    // opens the picker.
+    swatchChip_ = new kit::KColorChip(this);
+    swatchChip_->setObjectName(QStringLiteral("testCardSwatch"));
+    swatchChip_->setControlSize(kit::KColorChip::ControlSize::Roomy);
+    swatchChip_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    swatchChip_->setFocusPolicy(Qt::NoFocus);
+    swatchChip_->setFixedSize(swatchSide(), swatchSide());
     signal_ = new kit::KLabel(QString{}, this);
     signal_->setObjectName(QStringLiteral("testCardSignal"));
     signal_->setWordWrap(true);
@@ -157,8 +166,10 @@ void TestCardCardWidget::place() {
     signal_->setVisible(patch_);
     expected_->setVisible(patch_);
     note_->setVisible(patch_);
+    swatchChip_->setVisible(patch_ && swatch_.isValid());
     if (!patch_)
         return;
+    swatchChip_->move(0, 0);
     const int x = swatchSide() + small();
     const int text = std::max(1, width() - x);
     const int signalHeight = signal_->heightForWidth(text);
@@ -169,20 +180,16 @@ void TestCardCardWidget::place() {
     note_->setGeometry(0, block + small(), width(), note_->heightForWidth(width()));
 }
 
-void TestCardCardWidget::paintEvent(QPaintEvent* event) {
-    NodeCardWidget::paintEvent(event);
-    if (!patch_ || !swatch_.isValid())
-        return;
-    QPainter painter(this);
-    painter.fillRect(QRect(0, 0, swatchSide(), swatchSide()), swatch_);
-}
-
 void TestCardCardWidget::expectationReady(const quint64 generation, QString expected,
                                           QColor swatch) {
     if (generation != state_->generation)
         return;
     expected_->setText(expected);
     swatch_ = swatch;
+    if (swatch_.isValid())
+        swatchChip_->setColor(kit::KColor::fromRgba(static_cast<float>(swatch_.redF()),
+                                                     static_cast<float>(swatch_.greenF()),
+                                                     static_cast<float>(swatch_.blueF())));
     place();
     updateGeometry();
     update();

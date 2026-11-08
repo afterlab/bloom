@@ -11,6 +11,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/ui/node_card_widget.hpp>
 
+#include <QColor>
 #include <QString>
 
 #include <memory>
@@ -21,6 +22,7 @@ namespace bloom::ui {
 
 namespace kit {
 class KLabel;
+class KColorChip;
 }
 
 class TestCardCardWidget final : public NodeCardWidget {
@@ -44,7 +46,6 @@ class TestCardCardWidget final : public NodeCardWidget {
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
-    void paintEvent(QPaintEvent* event) override;
 
   private:
     struct State;
@@ -58,6 +59,7 @@ class TestCardCardWidget final : public NodeCardWidget {
     kit::KLabel* note_ = nullptr;
     bool patch_ = false;
     QColor swatch_;
+    kit::KColorChip* swatchChip_ = nullptr;
 };
 
 } // namespace bloom::ui

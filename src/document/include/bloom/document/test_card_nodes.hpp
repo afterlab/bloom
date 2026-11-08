@@ -158,6 +158,13 @@ testCardParameterSpec(const std::string_view schemaKey) noexcept {
 }
 
 // Every Test Card parameter is a constant with no socket and no animation.
+// Whether the Scalar `value` lies in the parameter's domain; true for any other key.
+[[nodiscard]] constexpr bool isTestCardScalarWithinDomain(const std::string_view key,
+                                                          const double value) noexcept {
+    const auto* spec = testCardParameterSpec(key);
+    return spec == nullptr || (value >= spec->minimum && value <= spec->maximum);
+}
+
 [[nodiscard]] constexpr bool isTestCardConstantSchemaKey(const std::string_view key) noexcept {
     return testCardParameterSpec(key) != nullptr;
 }

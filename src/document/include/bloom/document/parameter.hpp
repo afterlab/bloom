@@ -541,6 +541,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #486 Chromatic Aberration (chromatic_aberration_nodes.hpp).
     if (isChromaticAberrationScalarSchemaKey(schemaKey))
         return isChromaticAberrationScalarWithinDomain(schemaKey, value);
+    // #587 Test Card (test_card_nodes.hpp).
+    if (testCardParameterSpec(schemaKey) != nullptr)
+        return isTestCardScalarWithinDomain(schemaKey, value);
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);
