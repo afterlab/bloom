@@ -517,8 +517,17 @@ the session stays open between calls (edits, undo and unsaved changes persist), 
 with `projectFile` writes it and `project.close` releases it (`discardChanges:true` to close with
 unsaved edits). Asking for a file that is open in Bloom, or is the server's own project, is
 refused with `bloom.mcp.preflight-blocked`, because two sessions on one file would overwrite each
-other's saves. At most four files are open this way at once. In the desktop application their
-renders use the CPU reference path.
+other's saves. The question is asked again on every call, `project.save` included, so a file the
+artist opens in Bloom after its session opened is refused from then on. When Bloom is busy and
+cannot say within two seconds whether the file is open there, the call is refused
+(`bloom.mcp.project-unavailable`, "Bloom is busy ...") instead of assuming it is free. While a
+session holds a file, `project.open`, `project.save-as` and `project.save-copy` onto that path are
+refused with `bloom.mcp.busy`; close the session first. At most four files are open this way at
+once. In the desktop application their renders use the application's own final-render provider,
+only for these calls; the open project keeps rendering through the export queue. A render, export
+or capture of a project file reports `gpuFrames`, `cpuReferenceFrames` and `provenance` (`gpu` or
+`cpu-reference`); when frames ran on the CPU reference path, because no GPU device was available
+or the scene could not run on it, `routeNote` says so.
 
 **Dialogs.** While a modal dialog is open in the application, the calls that need the window
 answer `bloom.mcp.busy` and name the dialog: its title, its text and its buttons, with the

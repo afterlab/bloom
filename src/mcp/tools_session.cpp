@@ -198,6 +198,16 @@ yyjson_mut_val* projectTool(McpServerCore::State& core, Json& out, const McpTool
         (request.path.empty() || !request.path.is_absolute()))
         return refusal(out, McpUiRefusal::PathInvalid,
                        "The path must be an absolute path to a .bloom file.");
+    if ((request.kind == McpProjectRequestKind::SaveAs ||
+         request.kind == McpProjectRequestKind::SaveCopy ||
+         request.kind == McpProjectRequestKind::Open) &&
+        fileSessionHolds(core, request.path))
+        return refusal(out, McpUiRefusal::Busy,
+                       request.path.filename().string() +
+                           " is held by a projectFile session of this server (or one is still "
+                           "running on it); two sessions on one file would overwrite each "
+                           "other's saves. Close it first with project.close and its "
+                           "projectFile.");
     const auto& lifecycle = core.dependencies.ui.projectLifecycle;
     if (!lifecycle)
         return refusal(out, McpUiRefusal::Unbound,

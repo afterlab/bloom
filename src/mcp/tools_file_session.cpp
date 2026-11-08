@@ -40,11 +40,13 @@ std::string withoutProjectFile(yyjson_val* arguments) {
     return result;
 }
 
-scripting::Session& fileSessionFor(McpServerCore::State& core, const std::filesystem::path& path,
-                                   const McpRequestControl& control) {
-    const auto key = path.string();
-    if (const auto found = core.fileSessions.find(key); found != core.fileSessions.end())
-        return *found->second.session;
+namespace {
+
+// Refuses `path` when the application (or this server's own project) has it open: two sessions
+// on one file would overwrite each other's saves. When the application cannot be asked in time
+// the answer is no, never an assumption that the file is free.
+void refuseIfOpenElsewhere(McpServerCore::State& core, const std::filesystem::path& path,
+                           const McpRequestControl& control) {
     const auto refuse = [&](const std::string& where) -> ToolFailure {
         return ToolFailure(McpToolErrorCode::PreflightBlocked,
                            path.filename().string() + " is already open " + where +
@@ -55,8 +57,12 @@ scripting::Session& fileSessionFor(McpServerCore::State& core, const std::filesy
         auto lease = live->acquire(
             {.stop = control.stop,
              .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2)});
-        if (lease && lease.state().projectPath &&
-            normalized(*lease.state().projectPath) == path)
+        if (!lease)
+            throw ToolFailure(McpToolErrorCode::ProjectUnavailable,
+                              "Bloom is busy, so it could not be confirmed that " +
+                                  path.filename().string() +
+                                  " is not open there; try again in a moment.");
+        if (lease.state().projectPath && normalized(*lease.state().projectPath) == path)
             throw refuse("in Bloom");
     } else if (const auto* headless = std::get_if<std::reference_wrapper<scripting::Session>>(
                    &core.dependencies.session)) {
@@ -64,6 +70,27 @@ scripting::Session& fileSessionFor(McpServerCore::State& core, const std::filesy
         if (!own.empty() && normalized(own) == path)
             throw refuse("as this server's project");
     }
+}
+
+} // namespace
+
+bool fileSessionHolds(McpServerCore::State& core, const std::filesystem::path& path) {
+    std::unique_lock lock(core.fileMutex, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(2)))
+        return true;
+    return core.fileSessions.contains(normalized(path).string());
+}
+
+scripting::Session& fileSessionFor(McpServerCore::State& core, const std::filesystem::path& path,
+                                   const McpRequestControl& control, const bool recheck) {
+    const auto key = path.string();
+    const auto found = core.fileSessions.find(key);
+    // Every call asks again: the artist may have opened the file in Bloom after this session did.
+    // Closing a session writes nothing, so it skips the question.
+    if (recheck || found == core.fileSessions.end())
+        refuseIfOpenElsewhere(core, path, control);
+    if (found != core.fileSessions.end())
+        return *found->second.session;
     if (core.fileSessions.size() >= kMcpFileSessions)
         throw ToolFailure(McpToolErrorCode::PreflightBlocked,
                           "At most " + std::to_string(kMcpFileSessions) +
@@ -78,13 +105,6 @@ scripting::Session& fileSessionFor(McpServerCore::State& core, const std::filesy
         throw ToolFailure(McpToolErrorCode::ProjectUnavailable,
                           "The project file could not be opened: " + opened.diagnostic().message);
     auto session = std::move(opened).takeSession();
-    // A render of this file runs headless. The desktop application passes no provider, so the file
-    // renders on the CPU reference path; a server that owns a provider keeps using it.
-    if (!core.gpuExportProvider) {
-        runtime::GpuProcessFrameEvaluatorOptions options;
-        options.enabled = false;
-        core.gpuExportProvider = host::GpuExportProvider::create(std::move(options));
-    }
     const auto revision = session->snapshot().revision();
     auto& slot = core.fileSessions[key];
     slot.session = std::move(session);
@@ -96,7 +116,7 @@ yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, const Mcp
                                 const std::filesystem::path& path, yyjson_val* arguments,
                                 const McpRequestControl& control) {
     const std::lock_guard lock(core.fileMutex);
-    auto& session = fileSessionFor(core, path, control);
+    auto& session = fileSessionFor(core, path, control, tool != McpTool::ProjectClose);
     auto& slot = core.fileSessions.at(path.string());
     auto* value = out.object();
     out.set(value, "projectFile", out.text(path.string()));

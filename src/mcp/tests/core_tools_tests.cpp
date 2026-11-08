@@ -143,7 +143,8 @@ struct Live final {
 
     // No export queue unless `exports` binds one (as in a window that has not created one).
     explicit Live(mcp::McpLiveUiPort ui, std::optional<mcp::McpExportAccess> exports = {},
-                  std::filesystem::path captures = {}) {
+                  std::filesystem::path captures = {},
+                  std::shared_ptr<host::GpuExportProvider> fileProvider = {}) {
         host.replace({events, session->publicationCoordinator(), session->artifactCoordinator()},
                      {.renderSource = session->renderSourceSnapshot(),
                       .context = session->operationContext(),
@@ -163,6 +164,7 @@ struct Live final {
                                                       .callerIsOwner = false},
             .scheduler = scheduler,
             .gpuProvider = nullptr,
+            .fileSessionGpuProvider = std::move(fileProvider),
             .captureDirectory = std::move(captures),
             .ui = std::move(ui),
             .serverVersion = "test",
@@ -172,6 +174,16 @@ struct Live final {
                                R"("protocolVersion":"2025-11-25","capabilities":{},)"
                                R"("clientInfo":{"name":"core","version":"1"}}})"));
         static_cast<void>(send(R"({"jsonrpc":"2.0","method":"notifications/initialized"})"));
+    }
+    // Binds the live project to `path` (a new generation), as File > Open does in the application.
+    void bindProject(const std::optional<std::filesystem::path>& path) {
+        host.replace({events, session->publicationCoordinator(), session->artifactCoordinator()},
+                     {.renderSource = session->renderSourceSnapshot(),
+                      .context = session->operationContext(),
+                      .viewerDisplay = {},
+                      .viewerView = {},
+                      .projectPath = path,
+                      .readOnly = false});
     }
     ~Live() {
         core.reset();
@@ -1476,6 +1488,128 @@ void secondProjectFile() {
     std::filesystem::remove_all(folder, ignored);
 }
 
+// Another project file edited and exported through the desktop host path while the application's
+// own project stays live: the file is refused when Bloom has it open (at first use, after it
+// became live, and when Bloom cannot be asked), project.open and project.save-as refuse a file a
+// session holds, and a render with no GPU device says it ran on the CPU reference path.
+void fileSessionsBesideALiveProject() {
+    const auto folder = std::filesystem::temp_directory_path() /
+                        ("bloom-mcp-live-file-" +
+                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    const auto second = folder / "second.bloom";
+    const auto third = folder / "third.bloom";
+    const auto live = folder / "live.bloom";
+    for (const auto& path : {second, third}) {
+        auto created = scripting::Session::createNew("Other");
+        expect(static_cast<bool>(created), "a project file is created");
+        auto session = std::move(created).takeSession();
+        expect(session->saveAs(path).succeeded(), "a project file is saved");
+    }
+    {
+        // The provider the application passes for file sessions only; it has no device here.
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.enabled = false;
+        Live server({}, {}, {}, host::GpuExportProvider::create(std::move(options)));
+        server.bindProject(live);
+        const auto file = [](const std::filesystem::path& path, const std::string& rest) {
+            return R"({"projectFile":")" + path.generic_string() + '"' + rest + "}";
+        };
+        const auto liveRevision = revisionOf(server);
+
+        // Edit and export a second project while another is live.
+        const auto before = server.call("query", file(second, R"(,"kind":"project")"));
+        const auto revision = firstMatch(before, R"re("revision":(\d+))re");
+        expect(contains(before, R"("isError":false)") && !revision.empty(),
+               "a second project reads while another is live: " + before);
+        const auto edited = server.call(
+            "transact", file(second, R"(,"expectedRevision":)" + revision +
+                                         R"(,"operations":[{"op":"bloom.layer.add-solid","args":)"
+                                         R"({"composition":1,"name":"Other","color":[0,1,0,1]}}])"));
+        expect(contains(edited, R"("isError":false)"), "the second project edits: " + edited);
+        expect(revisionOf(server) == liveRevision, "the live project is untouched");
+        const auto exported = server.call(
+            "render", file(second, R"(,"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                                   R"("destination":")" +
+                                       (folder / "out.png").generic_string() + R"(")"));
+        expect(contains(exported, R"("isError":false)") &&
+                   std::filesystem::exists(folder / "out.png"),
+               "the second project exports while another is live: " + exported);
+        expect(contains(exported, R"("provenance":"cpu-reference")") &&
+                   contains(exported, R"("gpuFrames":0)") &&
+                   contains(exported, R"("cpuReferenceFrames":1)") &&
+                   contains(exported, "CPU reference path"),
+               "a file render with no GPU device says it ran on the CPU reference path: " + exported);
+
+        // The live project's own routes do not see the file-session provider: the live host
+        // renders through the export queue, which this window has not bound.
+        const auto own = server.call(
+            "render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1","destination":")" +
+                          (folder / "own.png").generic_string() + R"("})");
+        expect(contains(own, "bloom.mcp.export-unavailable") && !std::filesystem::exists(folder / "own.png"),
+               "the live project still renders only through the export queue: " + own);
+
+        // A file Bloom has open is refused at first use.
+        server.bindProject(third);
+        const auto first = server.call("query", file(third, R"(,"kind":"project")"));
+        expect(contains(first, "already open in Bloom"),
+               "a file open in Bloom is refused at first use: " + first);
+
+        // A file that becomes live after its session opened is refused from then on.
+        server.bindProject(second);
+        const auto later = server.call("query", file(second, R"(,"kind":"project")"));
+        expect(contains(later, "already open in Bloom"),
+               "a file opened in Bloom after its session opened is refused: " + later);
+        const auto laterSave = server.call("project.save", file(second, ""));
+        expect(contains(laterSave, "already open in Bloom") && !contains(laterSave, R"("saved":true)"),
+               "project.save on it is refused too: " + laterSave);
+        const auto laterEdit = server.call(
+            "transact", file(second, R"(,"expectedRevision":0,"operations":[{"op":)"
+                                     R"("bloom.layer.add-solid","args":{"composition":1,)"
+                                     R"("name":"Again","color":[0,1,0,1]}}])"));
+        expect(contains(laterEdit, "already open in Bloom"),
+               "and so is a later edit: " + laterEdit);
+
+        // Closing the session writes nothing, so it still works.
+        server.bindProject(live);
+        const auto unsaved = server.call("project.close", file(second, ""));
+        expect(contains(unsaved, "unsaved changes"), "the held session is still there: " + unsaved);
+
+        // project.open and project.save-as refuse a file a session holds.
+        const auto open = server.call("project.open", R"({"path":")" + second.generic_string() + R"("})");
+        expect(contains(open, "held by a projectFile session"),
+               "project.open of a held file is refused: " + open);
+        const auto saveAs = server.call("project.save-as", R"({"path":")" + second.generic_string() +
+                                                               R"(","replace":true})");
+        expect(contains(saveAs, "held by a projectFile session"),
+               "project.save-as onto a held file is refused: " + saveAs);
+        const auto saveCopy = server.call("project.save-copy", R"({"path":")" + second.generic_string() +
+                                                                  R"(","replace":true})");
+        expect(contains(saveCopy, "held by a projectFile session"),
+               "project.save-copy onto a held file is refused: " + saveCopy);
+        const auto free = server.call("project.open", R"({"path":")" + third.generic_string() + R"("})");
+        expect(!contains(free, "held by a projectFile session"),
+               "a file no session holds is not refused for that reason: " + free);
+
+        // Bloom busy: no lease within the deadline, so the file is not opened or used.
+        server.host.revoke(scripting::LiveSessionAvailability::Replacing);
+        const auto busyHeld = server.call("query", file(second, R"(,"kind":"project")"));
+        expect(contains(busyHeld, "Bloom is busy") && contains(busyHeld, "not open there"),
+               "an existing session fails closed when Bloom cannot be asked: " + busyHeld);
+        const auto busyNew = server.call("query", file(third, R"(,"kind":"project")"));
+        expect(contains(busyNew, "Bloom is busy") && contains(busyNew, "not open there"),
+               "a new session fails closed when Bloom cannot be asked: " + busyNew);
+        server.bindProject(live);
+        const auto closed = server.call("project.close", file(second, R"(,"discardChanges":true)"));
+        expect(contains(closed, R"("closed":true)"), "the session closes: " + closed);
+        const auto reopened = server.call("project.open", R"({"path":")" + second.generic_string() + R"("})");
+        expect(!contains(reopened, "held by a projectFile session"),
+               "after close the file is no longer held: " + reopened);
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
+}
+
 int main() {
     try {
         exportWithoutQueue();
@@ -1487,6 +1621,7 @@ int main() {
         animationReadBack();
         mcpFold();
         secondProjectFile();
+        fileSessionsBesideALiveProject();
         mergeEntryReadBack();
         fieldTestArguments();
         gradientReadBack();
