@@ -1174,7 +1174,8 @@ void testAddAndLayout(TestContext& test) {
             // #512: a new Camera Shake (and #564 Frame Rate Hold) gets a seed of its own, an ordinary stored
             // constant.
             if ((parameter.schemaKey == "bloom.camera-shake.seed" ||
-                 parameter.schemaKey == "bloom.frame-rate-hold.seed") &&
+                 parameter.schemaKey == "bloom.frame-rate-hold.seed" ||
+                 (definition.key.typeId == "bloom.light-flicker" && parameter.role == "seed")) &&
                 record) {
                 const auto* constant = std::get_if<ConstantValueSource>(&record->source);
                 const auto* seed =
