@@ -4,6 +4,7 @@ target_sources(
     bloom_output
     PRIVATE
         display_output.cpp
+        frame_readback.cpp
         bound_output_analysis.cpp
         flat_exr_options.cpp
         flat_exr_export_write.cpp
@@ -36,6 +37,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/output/display_output.hpp
+            include/bloom/output/frame_readback.hpp
             include/bloom/output/flat_exr_options.hpp
             include/bloom/output/flat_exr_export_write.hpp
             include/bloom/output/flat_exr_output_adapter.hpp

@@ -13,8 +13,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
-#include <bloom/media/image.hpp>
-#include <bloom/render/image.hpp>
+#include <bloom/output/frame_readback.hpp>
 #include <fstream>
 
 #include <array>
@@ -573,30 +572,16 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
     for (auto index = first;; ++index) {
         const auto path = range ? host::FrameRangeRunnerV1::sequenceFramePath(destination, index, last)
                                 : destination;
-        media::ImageInterpretation raw;
-        raw.colorSpace = media::ImageColorSpace::Raw;
-        auto decoded = media::decodeImage(path, raw);
-        if (!decoded)
-            throw std::runtime_error("Frame " + std::to_string(index) +
-                                     " could not be read back: " + decoded.diagnostic);
-        const auto& image = **decoded.value;
-        const auto* descriptor = image.descriptor();
-        if (descriptor == nullptr)
-            throw std::runtime_error("Frame " + std::to_string(index) + " has no pixels");
-        const auto& window = descriptor->dataWindow();
         StatisticsAccumulator one(bins);
-        const auto pixels = image.pixels();
-        const auto imageWidth = window.extent().width();
-        for (auto y = regionY; y < regionY + regionHeight; ++y) {
-            for (auto x = regionX; x < regionX + regionWidth; ++x) {
-                const auto at = y * imageWidth + x;
-                if (at >= pixels.size())
-                    throw std::runtime_error("The rendered frame is smaller than the composition");
-                const auto& pixel = pixels[at];
-                one.addPixel(pixel.red(), pixel.green(), pixel.blue(), pixel.alpha());
-                all.addPixel(pixel.red(), pixel.green(), pixel.blue(), pixel.alpha());
-            }
-        }
+        const auto readback = output::visitExportedFrame(
+            path, {regionX, regionY, regionWidth, regionHeight},
+            [&](const float red, const float green, const float blue, const float alpha) {
+                one.addPixel(red, green, blue, alpha);
+                all.addPixel(red, green, blue, alpha);
+            });
+        if (!readback.succeeded)
+            throw std::runtime_error("Frame " + std::to_string(index) +
+                                     " could not be read back: " + readback.diagnostic);
         if (range) {
             const auto result = one.result();
             auto* row = out.object();

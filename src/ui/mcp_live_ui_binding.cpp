@@ -18,10 +18,6 @@
 
 #include <QAbstractButton>
 #include <QApplication>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QMessageBox>
-#include <QPushButton>
 #include <QString>
 #include <QTimer>
 
@@ -473,12 +469,13 @@ QString McpLiveUiBinding::openDialogMessage() {
     QString text = tr("A dialog is open in Bloom");
     if (!dialog->windowTitle().isEmpty())
         text += tr(": \u201c%1\u201d").arg(dialog->windowTitle());
-    if (const auto* box = qobject_cast<const QMessageBox*>(dialog)) {
-        if (!box->text().isEmpty())
-            text += tr(". It says: %1").arg(box->text());
-        if (!box->informativeText().isEmpty())
-            text += tr(" %1").arg(box->informativeText());
-    }
+    // A message box carries its text as properties; any other dialog has only its title.
+    const auto message = dialog->property("text").toString();
+    const auto detail = dialog->property("informativeText").toString();
+    if (!message.isEmpty())
+        text += tr(". It says: %1").arg(message);
+    if (!detail.isEmpty())
+        text += tr(" %1").arg(detail);
     QStringList buttons;
     for (const auto* button : dialog->findChildren<QAbstractButton*>()) {
         if (!button->isVisible() || button->text().isEmpty())
