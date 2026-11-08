@@ -7,6 +7,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <system_error>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -92,6 +93,15 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::filesystem::path directory = argv[1];
+    // bloom.media.encode skips the Main 10 cases, with its reason, when the worker's FFmpeg has no
+    // 10-bit Kvazaar (a dependency prefix older than the lock). There is then nothing to read:
+    // that is an explicit skip (77), not a pass.
+    std::error_code missing;
+    if (!std::filesystem::exists(directory / "export-hevc-main10-ramp.mov", missing)) {
+        std::cout << "SKIP: bloom.media.encode wrote no HEVC Main 10 ramp because the worker's "
+                     "FFmpeg has no 10-bit Kvazaar; rebuild the dependency prefix\n";
+        return 77;
+    }
     for (const auto* container : {"mov", "mp4"}) {
         const auto ten = read(directory / (std::string("export-hevc-main10-ramp.") + container));
         const auto eight = read(directory / (std::string("export-hevc-main-ramp.") + container));

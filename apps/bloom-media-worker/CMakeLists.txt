@@ -279,7 +279,8 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_enable_warnings(bloom_media_hevc_depth_test)
     bloom_add_test(NAME bloom.media.hevc-depth COMMAND bloom_media_hevc_depth_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 60)
-    set_tests_properties(bloom.media.hevc-depth PROPERTIES FIXTURES_REQUIRED media-encode)
+    set_tests_properties(bloom.media.hevc-depth PROPERTIES FIXTURES_REQUIRED media-encode
+                         SKIP_RETURN_CODE 77)
     # NVIDIA NVENC needs the device: hold the machine GPU lock. Skipped (77) without a driver.
     bloom_add_test(NAME bloom.media.encode-nvenc COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" --nvenc
