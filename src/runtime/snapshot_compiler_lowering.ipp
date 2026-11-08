@@ -1809,7 +1809,9 @@ lowerImageEffect(const document::NodeRecord& node,
         return effect;
     }
     // #486 Film Grain: the constant animation, seed and Monochrome, and every value. A node with no
-    // Monochrome binding (saved before it, on a path that does not migrate) lowers with it off.
+    // Monochrome or Mode binding (saved before them, on a path that does not migrate) lowers with
+    // them off. #565: a mode lowers only the values it reads; the others keep their defaults with
+    // no identity, so an unused (even animated) value neither claims nor invalidates anything.
     if (node.typeId == document::kFilmGrainNodeType) {
         runtime::FilmGrainKernel kernel;
         const auto* animation =
@@ -1826,13 +1828,31 @@ lowerImageEffect(const document::NodeRecord& node,
             if (monochrome != nullptr)
                 kernel.monochrome = *monochrome;
         }
+        if (const auto* binding = findParameterBinding(node, "mode")) {
+            const auto* mode = parameterConstant<std::int64_t>(binding);
+            lowered = lowered && mode != nullptr && *mode >= document::kFilmGrainFilm &&
+                      *mode <= document::kFilmGrainSensorNoise;
+            if (mode != nullptr)
+                kernel.mode = *mode;
+        }
+        const bool sensor = kernel.mode == document::kFilmGrainSensorNoise;
         for (const auto& spec : document::filmGrainParameters()) {
             if (spec.kind != document::FilmGrainParameterKind::Scalar)
                 continue;
+            const auto slot = document::filmGrainScalarIndex(spec.role);
+            kernel.values[slot] = {{}, spec.value};
+            const bool sensorOnly = spec.optional;
+            const bool filmOnly = spec.role == "shadows" || spec.role == "midtones" ||
+                                  spec.role == "highlights";
+            if ((sensorOnly && !sensor) || (filmOnly && sensor))
+                continue;
             const auto value = compiledScalarParameter(findParameterBinding(node, spec.role));
+            // A node saved before a Sensor Noise value reads its default.
+            if (!value && sensorOnly && findParameterBinding(node, spec.role) == nullptr)
+                continue;
             lowered = lowered && value.has_value();
             if (value)
-                kernel.values[document::filmGrainScalarIndex(spec.role)] = *value;
+                kernel.values[slot] = *value;
         }
         if (lowered)
             return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};

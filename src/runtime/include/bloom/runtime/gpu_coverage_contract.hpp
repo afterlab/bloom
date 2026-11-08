@@ -152,7 +152,9 @@ BLOOM_GPU_REQUIRED_EFFECT(LensFlareKernel,
                           "elements with source brightness and matte occlusion probes (#507)");
 BLOOM_GPU_REQUIRED_EFFECT(FilmGrainKernel,
                           "Film Grain: seeded per-channel or monochrome grain with a luma response, a "
-                          "size in full-resolution pixels and a frame's own pattern (#486)");
+                          "size in full-resolution pixels and a frame's own pattern (#486); Sensor "
+                          "Noise mode with shadow-weighted grain, chroma blotches and a fixed "
+                          "pattern (#565)");
 BLOOM_GPU_REQUIRED_EFFECT(TimeSampleKernel,
                           "time sample: its input evaluated on a sub-frame or neighbour-frame "
                           "Offset clock, posterized or holding footage (#484)");

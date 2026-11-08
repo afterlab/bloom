@@ -16,6 +16,12 @@
 //   monochrome off gives each channel its own grain; on, every channel takes the red channel's
 //              pattern, each still scaled by its own amount. Constant and optional: a node saved
 //              before it opens with it off (migrateLegacyFilmGrainMonochrome).
+//   mode       Film (the default) or Sensor Noise (#565). Constant and optional.
+//   shadowWeighting, chromaBlotches, blotchSize, fixedPattern
+//              what Sensor Noise adds: how much the noise favors the shadows, the strength and size
+//              of its low-frequency chroma blotches, and the strength of a pattern that never
+//              changes from frame to frame. Each is optional (a node saved before them opens with
+//              them at their defaults) and is read only in Sensor Noise mode.
 //
 // The colour never clips: grain is added, in proportion to alpha so the image stays premultiplied,
 // and alpha is kept. docs/architecture/image-filters.md, "Film Grain", is the specification.
@@ -36,6 +42,10 @@ inline constexpr std::uint32_t kFilmGrainNodeSchemaVersion = 1;
 
 inline constexpr std::int64_t kFilmGrainEveryFrame = 0;
 inline constexpr std::int64_t kFilmGrainHeld = 1;
+
+// #565: the modes. Film is the node as it always was.
+inline constexpr std::int64_t kFilmGrainFilm = 0;
+inline constexpr std::int64_t kFilmGrainSensorNoise = 1;
 
 // The response's knots in linear light: mid grey and 1.0.
 inline constexpr double kFilmGrainMidGrey = 0.18;
@@ -60,6 +70,8 @@ struct FilmGrainParameterSpec final {
     int decimals = 1;
     std::string_view unit{};
     double displayScale = 1.0;
+    // A node saved before the parameter existed opens with it at this default (Booleans always are).
+    bool optional = false;
 };
 
 namespace film_grain_parameters {
@@ -67,6 +79,7 @@ namespace film_grain_parameters {
 using Kind = FilmGrainParameterKind;
 
 inline constexpr std::array<std::string_view, 2> kAnimations{"Every Frame", "Held"};
+inline constexpr std::array<std::string_view, 2> kModes{"Film", "Sensor Noise"};
 
 inline constexpr std::array kParameters{
     FilmGrainParameterSpec{"intensity", Kind::Scalar, 0.02, 0.0, 1.0, {}, "Intensity", 0.0, 0.2, 0.1,
@@ -88,6 +101,17 @@ inline constexpr std::array kParameters{
     FilmGrainParameterSpec{"animation", Kind::Choice, 0.0, 0.0, 1.0, kAnimations, "Grain changes"},
     FilmGrainParameterSpec{"seed", Kind::Integer, 1.0, 0.0, 2147483647.0, {}, "Seed"},
     FilmGrainParameterSpec{"monochrome", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Monochrome"},
+    // #565 Sensor Noise. Appended, so every earlier parameter keeps its place.
+    FilmGrainParameterSpec{"mode", Kind::Choice, 0.0, 0.0, 1.0, kModes, "Mode", 0.0, 1.0, 1.0, 1, {},
+                           1.0, true},
+    FilmGrainParameterSpec{"shadowWeighting", Kind::Scalar, 1.0, 0.0, 10.0, {}, "Shadow weighting",
+                           0.0, 4.0, 1.0, 0, "%", 100.0, true},
+    FilmGrainParameterSpec{"chromaBlotches", Kind::Scalar, 0.5, 0.0, 10.0, {}, "Chroma blotches",
+                           0.0, 2.0, 1.0, 0, "%", 100.0, true},
+    FilmGrainParameterSpec{"blotchSize", Kind::Scalar, 24.0, 1.0, 512.0, {}, "Blotch size", 4.0,
+                           128.0, 0.5, 1, "px", 1.0, true},
+    FilmGrainParameterSpec{"fixedPattern", Kind::Scalar, 0.0, 0.0, 10.0, {}, "Fixed pattern", 0.0,
+                           2.0, 1.0, 0, "%", 100.0, true},
 };
 
 } // namespace film_grain_parameters
@@ -126,7 +150,7 @@ filmGrainParameterSpec(const std::string_view schemaKey) noexcept {
 }
 
 // The Scalars in table order: FilmGrainKernel::values holds one per entry.
-inline constexpr std::size_t kFilmGrainScalarCount = 8;
+inline constexpr std::size_t kFilmGrainScalarCount = 12;
 // The index of the Scalar `role` among the Scalars, or kFilmGrainScalarCount for another role.
 [[nodiscard]] constexpr std::size_t filmGrainScalarIndex(const std::string_view role) noexcept {
     std::size_t index = 0;

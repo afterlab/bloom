@@ -42,7 +42,8 @@ NodeDefinition filmGrainDefinition() {
                               NodeCardinality::Many,
                               NodeCategory::Filters};
     for (const auto& parameter : filmGrainParameters()) {
-        // Optional, so a node saved before it still validates and renders with it off.
+        // Optional, so a node saved before it still validates and renders with it off. The Booleans and
+        // the parameters marked optional (#565) are bound at their defaults on a node that lacks them.
         if (parameter.kind == FilmGrainParameterKind::Boolean) {
             definition.parameters.push_back({std::string(parameter.role),
                                              filmGrainSchemaKey(parameter.role),
@@ -53,7 +54,7 @@ NodeDefinition filmGrainDefinition() {
         const bool scalar = parameter.kind == FilmGrainParameterKind::Scalar;
         definition.parameters.push_back(
             {std::string(parameter.role), filmGrainSchemaKey(parameter.role),
-             scalar ? ParameterValueKind::Float64 : ParameterValueKind::Integer, true, scalar,
+             scalar ? ParameterValueKind::Float64 : ParameterValueKind::Integer, !parameter.optional, scalar,
              scalar ? ParameterValue{parameter.value}
                     : ParameterValue{static_cast<std::int64_t>(parameter.value)}});
         if (scalar)

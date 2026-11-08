@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
+#include <string_view>
 
 namespace bloom::runtime::detail {
 namespace {
@@ -24,6 +26,12 @@ namespace {
 //  8  Rec. 709 luma weights, 1 / mid grey
 // 12  1 / (white - mid grey), the stream's low and high 16 bits, mid grey
 // 16  pixel origin x and y, scale x and y (filmGrainProgramData)
+//
+// #565 Sensor Noise: the monochrome slot is 2 (3 with Monochrome), and the prepared table is
+// followed by eight more floats, which filmGrainProgramData places after the geometry:
+// 16  the shadow weighting over mid grey, the chroma amplitude, the blotch scale relative to the
+//     grain, the fixed pattern's amplitude
+// 20  the blotch stream's low and high 16 bits, the fixed pattern's low and high 16 bits
 constexpr std::size_t kSize = 3;
 constexpr std::size_t kShadows = 4;
 constexpr std::size_t kMidtones = 5;
@@ -36,6 +44,20 @@ constexpr std::size_t kOriginX = 16;
 constexpr std::size_t kOriginY = 17;
 constexpr std::size_t kScaleX = 18;
 constexpr std::size_t kScaleY = 19;
+// The Sensor Noise extras in the prepared table, and in the program's after the geometry.
+constexpr std::size_t kSensorExtras = 8;
+constexpr std::size_t kShadowWeight = 0;
+constexpr std::size_t kChromaAmplitude = 1;
+constexpr std::size_t kBlotchScale = 2;
+constexpr std::size_t kFixedAmplitude = 3;
+constexpr std::size_t kBlotchStreamLow = 4;
+constexpr std::size_t kFixedStreamLow = 6;
+constexpr std::size_t kSensorTableFloats = kFilmGrainTableFloats + kSensorExtras;
+constexpr std::size_t kSensorProgramFloats = kFilmGrainProgramFloats + kSensorExtras;
+// The marker kMonochrome holds for Sensor Noise, plus one with Monochrome.
+constexpr float kSensorMarker = 2.0F;
+// The float nearest 1/3: the blotches' channels average out to nothing in luma.
+constexpr float kThird = 0x1.555556p-2F;
 
 // Rec. 709 luma, the weights of the track-matte Luma, Luma Key and the Glow roll-off.
 constexpr float kLumaRed = 0.2126F;
@@ -52,9 +74,20 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
     return result;
 }
 
+[[nodiscard]] bool isSensor(const float* const k) noexcept {
+    return k[kMonochrome] >= kSensorMarker;
+}
+[[nodiscard]] bool isMonochrome(const float* const k) noexcept {
+    return k[kMonochrome] == 1.0F || k[kMonochrome] == kSensorMarker + 1.0F;
+}
+
 [[nodiscard]] std::uint32_t streamOf(const float* const k) noexcept {
     return static_cast<std::uint32_t>(k[kStreamLow]) |
            (static_cast<std::uint32_t>(k[kStreamHigh]) << 16U);
+}
+// A stream stored as two halves, each exact in a binary32.
+[[nodiscard]] std::uint32_t streamOf(const float* const halves, const std::size_t at) noexcept {
+    return static_cast<std::uint32_t>(halves[at]) | (static_cast<std::uint32_t>(halves[at + 1]) << 16U);
 }
 
 } // namespace
@@ -62,7 +95,8 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
 std::optional<PreparedColorGrade> prepareFilmGrainGrade(const FilmGrainKernel& kernel,
                                                         const std::span<const double> values) {
     if (values.size() != document::kFilmGrainScalarCount + 1 ||
-        kernel.seed < 0 || kernel.seed > 2147483647 ||
+        kernel.seed < 0 || kernel.seed > 2147483647 || kernel.mode < document::kFilmGrainFilm ||
+        kernel.mode > document::kFilmGrainSensorNoise ||
         (kernel.animation != document::kFilmGrainEveryFrame &&
          kernel.animation != document::kFilmGrainHeld))
         return std::nullopt;
@@ -91,20 +125,47 @@ std::optional<PreparedColorGrade> prepareFilmGrainGrade(const FilmGrainKernel& k
     d[kShadows] = static_cast<float>(at("shadows"));
     d[kMidtones] = static_cast<float>(at("midtones"));
     d[kHighlights] = static_cast<float>(at("highlights"));
-    d[kMonochrome] = kernel.monochrome ? 1.0F : 0.0F;
+    const bool sensor = kernel.mode == document::kFilmGrainSensorNoise;
+    d[kMonochrome] = (sensor ? kSensorMarker : 0.0F) + (kernel.monochrome ? 1.0F : 0.0F);
     d[8] = kLumaRed;
     d[9] = kLumaGreen;
     d[10] = kLumaBlue;
     d[11] = static_cast<float>(1.0 / document::kFilmGrainMidGrey);
     d[12] = static_cast<float>(1.0 / (document::kFilmGrainWhite - document::kFilmGrainMidGrey));
+    d[kMidGrey] = static_cast<float>(document::kFilmGrainMidGrey);
+    auto framed = static_cast<std::int64_t>(frame);
+    if (sensor) {
+        d.resize(kSensorTableFloats, 0.0F);
+        const double base = intensity;
+        const double chroma = base * at("chromaBlotches");
+        const double fixed = base * at("fixedPattern");
+        d[kFilmGrainTableFloats + kShadowWeight] =
+            static_cast<float>(at("shadowWeighting") / document::kFilmGrainMidGrey);
+        d[kFilmGrainTableFloats + kChromaAmplitude] = static_cast<float>(chroma);
+        d[kFilmGrainTableFloats + kBlotchScale] = static_cast<float>(at("size") / at("blotchSize"));
+        d[kFilmGrainTableFloats + kFixedAmplitude] = static_cast<float>(fixed);
+        // Only the fixed pattern is left when neither the grain nor the blotches add anything: every
+        // frame is then the same picture, so no frame is named and every frame shares one identity.
+        const bool framedNoise = d[0] != 0.0F || d[1] != 0.0F || d[2] != 0.0F || chroma != 0.0;
+        if (!framedNoise)
+            framed = 0;
+        // The fixed pattern never takes the frame, whatever the animation.
+        const auto blotches = core::film_grain::blotchStream(kernel.seed, framed);
+        const auto pattern = core::film_grain::fixedStream(kernel.seed);
+        d[kFilmGrainTableFloats + kBlotchStreamLow] = static_cast<float>(blotches & 0xFFFFU);
+        d[kFilmGrainTableFloats + kBlotchStreamLow + 1] = static_cast<float>(blotches >> 16U);
+        d[kFilmGrainTableFloats + kFixedStreamLow] = static_cast<float>(pattern & 0xFFFFU);
+        d[kFilmGrainTableFloats + kFixedStreamLow + 1] = static_cast<float>(pattern >> 16U);
+        grade.identity = !framedNoise && fixed == 0.0;
+    } else {
+        // No channel or no response anywhere adds nothing, on any frame.
+        grade.identity = (d[0] == 0.0F && d[1] == 0.0F && d[2] == 0.0F) ||
+                         (d[kShadows] == 0.0F && d[kMidtones] == 0.0F && d[kHighlights] == 0.0F);
+    }
     // Each half of the stream is exact in a binary32.
-    const auto stream = core::film_grain::stream(kernel.seed, static_cast<std::int64_t>(frame));
+    const auto stream = core::film_grain::stream(kernel.seed, framed);
     d[kStreamLow] = static_cast<float>(stream & 0xFFFFU);
     d[kStreamHigh] = static_cast<float>(stream >> 16U);
-    d[kMidGrey] = static_cast<float>(document::kFilmGrainMidGrey);
-    // No channel or no response anywhere adds nothing, on any frame.
-    grade.identity = (d[0] == 0.0F && d[1] == 0.0F && d[2] == 0.0F) ||
-                     (d[kShadows] == 0.0F && d[kMidtones] == 0.0F && d[kHighlights] == 0.0F);
     return grade;
 }
 
@@ -112,7 +173,9 @@ std::optional<std::vector<float>>
 filmGrainProgramData(const PreparedColorGrade& grade, const render::ImageWindow& dataWindow,
                      const double pixelAspect, const double horizontalScale,
                      const double verticalScale) {
-    if (grade.kind != ColorGradeKind::FilmGrain || grade.data.size() != kFilmGrainTableFloats ||
+    if (grade.kind != ColorGradeKind::FilmGrain ||
+        (grade.data.size() != kFilmGrainTableFloats && grade.data.size() != kSensorTableFloats) ||
+        (grade.data.size() == kSensorTableFloats) != isSensor(grade.data.data()) ||
         !std::isfinite(pixelAspect) || !(pixelAspect > 0.0) || !std::isfinite(horizontalScale) ||
         !std::isfinite(verticalScale) || !(horizontalScale > 0.0) || !(verticalScale > 0.0))
         return std::nullopt;
@@ -129,22 +192,77 @@ filmGrainProgramData(const PreparedColorGrade& grade, const render::ImageWindow&
         std::abs(originX) * scaleX > kCoordinateLimit || std::abs(lastX) * scaleX > kCoordinateLimit ||
         std::abs(originY) * scaleY > kCoordinateLimit || std::abs(lastY) * scaleY > kCoordinateLimit)
         return std::nullopt;
+    // The geometry follows the base table; a Sensor Noise table's extras follow the geometry.
     auto data = grade.data;
-    data.insert(data.end(), {static_cast<float>(originX), static_cast<float>(originY),
-                             static_cast<float>(scaleX), static_cast<float>(scaleY)});
+    data.insert(data.begin() + static_cast<std::ptrdiff_t>(kFilmGrainTableFloats),
+                {static_cast<float>(originX), static_cast<float>(originY),
+                 static_cast<float>(scaleX), static_cast<float>(scaleY)});
     return data;
 }
 
 bool validFilmGrainProgramData(const std::vector<float>& d) noexcept {
-    if (d.size() != kFilmGrainProgramFloats ||
+    if ((d.size() != kFilmGrainProgramFloats && d.size() != kSensorProgramFloats) ||
         !std::ranges::all_of(d, [](const float value) { return std::isfinite(value); }))
+        return false;
+    if ((d.size() == kSensorProgramFloats) != isSensor(d.data()))
         return false;
     const auto half = [](const float value) {
         return value >= 0.0F && value <= 65535.0F && value == std::floor(value);
     };
-    return half(d[kStreamLow]) && half(d[kStreamHigh]) && d[kScaleX] > 0.0F && d[kScaleY] > 0.0F &&
-           (d[kMonochrome] == 0.0F || d[kMonochrome] == 1.0F);
+    const bool marker = d[kMonochrome] == 0.0F || d[kMonochrome] == 1.0F ||
+                        d[kMonochrome] == kSensorMarker || d[kMonochrome] == kSensorMarker + 1.0F;
+    if (!half(d[kStreamLow]) || !half(d[kStreamHigh]) || !(d[kScaleX] > 0.0F) ||
+        !(d[kScaleY] > 0.0F) || !marker)
+        return false;
+    if (d.size() == kSensorProgramFloats) {
+        const float* const extras = d.data() + kFilmGrainProgramFloats;
+        return half(extras[kBlotchStreamLow]) && half(extras[kBlotchStreamLow + 1]) &&
+               half(extras[kFixedStreamLow]) && half(extras[kFixedStreamLow + 1]) &&
+               extras[kShadowWeight] >= 0.0F && extras[kChromaAmplitude] >= 0.0F &&
+               extras[kBlotchScale] > 0.0F && extras[kFixedAmplitude] >= 0.0F;
+    }
+    return true;
 }
+
+namespace {
+
+// #565 Sensor Noise at the data window's index (x, y), given the pixel's straight luma `l`. The
+// noise is weighted by 1 / (1 + shadowWeight * l), so the shadows carry the most. Three terms are
+// added in this order, each in proportion to alpha: the grain (per channel, or red's with
+// Monochrome), low-frequency blotches with the channels' mean removed so they carry colour and
+// not brightness, and the fixed pattern. A term whose amplitude is zero adds nothing and is
+// skipped, on the GPU too.
+bool sensorPixel(const float* const k, const float l, const std::int64_t x, const std::int64_t y,
+                 std::array<float, 4>& pixel) noexcept {
+    const float* const e = k + kFilmGrainProgramFloats;
+    const float weight = 1.0F / (1.0F + e[kShadowWeight] * l);
+    const float scale = pixel[3] * weight;
+    if (scale == 0.0F)
+        return true;
+    const float px = (static_cast<float>(x) + k[kOriginX]) * k[kScaleX];
+    const float py = (static_cast<float>(y) + k[kOriginY]) * k[kScaleY];
+    const bool monochrome = isMonochrome(k);
+    if (k[0] != 0.0F || k[1] != 0.0F || k[2] != 0.0F) {
+        const auto grain = core::film_grain::noise(px, py, streamOf(k));
+        for (std::size_t i = 0; i < 3; ++i)
+            pixel[i] = pixel[i] + scale * (k[i] * grain[monochrome ? 0 : i]);
+    }
+    if (e[kChromaAmplitude] != 0.0F) {
+        const auto blotch = core::film_grain::noise(px * e[kBlotchScale], py * e[kBlotchScale],
+                                                    streamOf(e, kBlotchStreamLow));
+        const float mean = (blotch[0] + blotch[1] + blotch[2]) * kThird;
+        for (std::size_t i = 0; i < 3; ++i)
+            pixel[i] = pixel[i] + scale * (e[kChromaAmplitude] * (blotch[i] - mean));
+    }
+    if (e[kFixedAmplitude] != 0.0F) {
+        const auto pattern = core::film_grain::noise(px, py, streamOf(e, kFixedStreamLow));
+        for (std::size_t i = 0; i < 3; ++i)
+            pixel[i] = pixel[i] + scale * (e[kFixedAmplitude] * pattern[i]);
+    }
+    return std::isfinite(pixel[0]) && std::isfinite(pixel[1]) && std::isfinite(pixel[2]);
+}
+
+} // namespace
 
 bool filmGrainPixel(const float* const k, const std::int64_t x, const std::int64_t y,
                     std::array<float, 4>& pixel) noexcept {
@@ -156,6 +274,8 @@ bool filmGrainPixel(const float* const k, const std::int64_t x, const std::int64
     if (!std::isfinite(straight))
         return false;
     const float l = std::max(straight, 0.0F);
+    if (isSensor(k))
+        return sensorPixel(k, l, x, y, pixel);
     float response = 0.0F;
     if (l >= 1.0F)
         response = k[kHighlights] * l;
@@ -169,11 +289,62 @@ bool filmGrainPixel(const float* const k, const std::int64_t x, const std::int64
     const float px = (static_cast<float>(x) + k[kOriginX]) * k[kScaleX];
     const float py = (static_cast<float>(y) + k[kOriginY]) * k[kScaleY];
     const auto grain = core::film_grain::noise(px, py, streamOf(k));
-    const bool monochrome = k[kMonochrome] != 0.0F;
+    const bool monochrome = isMonochrome(k);
     for (std::size_t i = 0; i < 3; ++i)
         pixel[i] = pixel[i] + scale * (k[i] * grain[monochrome ? 0 : i]);
     return std::isfinite(pixel[0]) && std::isfinite(pixel[1]) && std::isfinite(pixel[2]);
 }
+
+// #565: the Sensor Noise program, whole, and the one line that enters it. Kept apart so the Film
+// program around them is the text it always was.
+constexpr std::string_view kSensorBranch =
+    " if (k1.w >= 2.0) { return bloom_film_grain_sensor(p, c, k0, k1, k2, k3, g); }\n";
+constexpr std::string_view kSensorGlsl =
+    "vec4 bloom_film_grain_sensor(vec4 p, ivec2 c, vec4 k0, vec4 k1, vec4 k2, vec4 k3, vec4 g) {\n"
+    " float a = p.a;\n"
+    " vec4 e0 = bloom_film_grain_data.values[5];\n"
+    " vec4 e1 = bloom_film_grain_data.values[6];\n"
+    " precise float luma = k2.x * p.r + k2.y * p.g + k2.z * p.b;\n"
+    " precise float straight = bloom_ocio_cpu_div(luma, a);\n"
+    " float l = max(straight, 0.0);\n"
+    " precise float denominator = 1.0 + e0.x * l;\n"
+    " precise float weight = bloom_ocio_cpu_div(1.0, denominator);\n"
+    " precise float scale = a * weight;\n"
+    " if (scale == 0.0) { return p; }\n"
+    " precise float px = (float(c.x) + g.x) * g.z;\n"
+    " precise float py = (float(c.y) + g.y) * g.w;\n"
+    " precise float r = p.r;\n"
+    " precise float gr = p.g;\n"
+    " precise float b = p.b;\n"
+    " if (k0.x != 0.0 || k0.y != 0.0 || k0.z != 0.0) {\n"
+    "  uint stream = uint(k3.y) | (uint(k3.z) << 16u);\n"
+    "  vec3 grain = bloom_film_grain_noise(px, py, stream);\n"
+    "  if (k1.w == 3.0) { grain = grain.xxx; }\n"
+    "  r = r + scale * (k0.x * grain.x);\n"
+    "  gr = gr + scale * (k0.y * grain.y);\n"
+    "  b = b + scale * (k0.z * grain.z);\n"
+    " }\n"
+    " if (e0.y != 0.0) {\n"
+    "  uint stream = uint(e1.x) | (uint(e1.y) << 16u);\n"
+    "  precise float bx = px * e0.z;\n"
+    "  precise float by = py * e0.z;\n"
+    "  vec3 blotch = bloom_film_grain_noise(bx, by, stream);\n"
+    "  precise float sum = blotch.x + blotch.y;\n"
+    "  sum = sum + blotch.z;\n"
+    "  precise float mean = sum * 0.3333333432674408;\n"
+    "  r = r + scale * (e0.y * (blotch.x - mean));\n"
+    "  gr = gr + scale * (e0.y * (blotch.y - mean));\n"
+    "  b = b + scale * (e0.y * (blotch.z - mean));\n"
+    " }\n"
+    " if (e0.w != 0.0) {\n"
+    "  uint stream = uint(e1.z) | (uint(e1.w) << 16u);\n"
+    "  vec3 pattern = bloom_film_grain_noise(px, py, stream);\n"
+    "  r = r + scale * (e0.w * pattern.x);\n"
+    "  gr = gr + scale * (e0.w * pattern.y);\n"
+    "  b = b + scale * (e0.w * pattern.z);\n"
+    " }\n"
+    " return vec4(r, gr, b, a);\n"
+    "}\n";
 
 const std::string& filmGrainProgramText() {
     // The same binary32 operations as filmGrainPixel: precise additions and multiplications, the
@@ -184,7 +355,7 @@ const std::string& filmGrainProgramText() {
             "layout(set = 0, binding = 0, std430) readonly buffer BloomFilmGrainData { vec4 "
             "values[]; } bloom_film_grain_data;\n"
             "precise float bloom_ocio_cpu_div(float a, float b);\n") +
-        std::string(core::film_grain::kernelGlsl()) +
+        std::string(core::film_grain::kernelGlsl()) + std::string(kSensorGlsl) +
         "vec4 bloom_film_grain(ivec2 c) {\n"
         " vec4 p = imageLoad(bloom_ocio_input, c);\n"
         " float a = p.a;\n"
@@ -194,6 +365,7 @@ const std::string& filmGrainProgramText() {
         " vec4 k2 = bloom_film_grain_data.values[2];\n"
         " vec4 k3 = bloom_film_grain_data.values[3];\n"
         " vec4 g = bloom_film_grain_data.values[4];\n"
+        + std::string(kSensorBranch) +
         " precise float luma = k2.x * p.r + k2.y * p.g + k2.z * p.b;\n"
         " precise float straight = bloom_ocio_cpu_div(luma, a);\n"
         " float l = max(straight, 0.0);\n"

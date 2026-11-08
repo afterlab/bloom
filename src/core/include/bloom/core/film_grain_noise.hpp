@@ -21,6 +21,19 @@ namespace bloom::core::film_grain {
 // and neighbouring frames or seeds give unrelated ones, so grain never swims from frame to frame.
 [[nodiscard]] std::uint32_t stream(std::int64_t seed, std::int64_t frame) noexcept;
 
+// #565 Sensor Noise: the blotches and the fixed pattern each draw from a stream of their own, the
+// seed offset by a whole 2^32 (past any seed). The fixed pattern takes frame 0 whatever the frame, so
+// it never changes from one frame to the next.
+inline constexpr std::int64_t kBlotchSeedOffset = std::int64_t{1} << 32;
+inline constexpr std::int64_t kFixedSeedOffset = std::int64_t{2} << 32;
+[[nodiscard]] inline std::uint32_t blotchStream(const std::int64_t seed,
+                                                const std::int64_t frame) noexcept {
+    return stream(seed + kBlotchSeedOffset, frame);
+}
+[[nodiscard]] inline std::uint32_t fixedStream(const std::int64_t seed) noexcept {
+    return stream(seed + kFixedSeedOffset, 0);
+}
+
 // The grain of each channel at (x, y), in cells: zero mean and, with kNormalise applied, a standard
 // deviation of 1. Uniform amplitudes have variance 1/3, a grain's squared weight integrates to pi/5
 // over its disc, and there is one grain per cell, so the sum's variance is pi/15.

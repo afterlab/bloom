@@ -686,10 +686,13 @@ struct LensFlareKernel final {
 // luma. `values` holds the document's Scalars in table order (document::filmGrainScalarIndex). Every
 // Frame draws from the operation clock's frame, so the operation varies with time; Held does not.
 // `monochrome` gives every channel the red channel's pattern, each at its own amplitude.
+// #565: `mode` Sensor Noise replaces the luma response with a shadow weighting and adds chroma
+// blotches and a fixed pattern; the values the mode does not read keep their defaults.
 struct FilmGrainKernel final {
     std::int64_t animation = document::kFilmGrainEveryFrame;
     std::int64_t seed = 1;
     bool monochrome = false;
+    std::int64_t mode = document::kFilmGrainFilm;
     std::array<CompiledScalarParameter, document::kFilmGrainScalarCount> values{};
     friend bool operator==(const FilmGrainKernel&, const FilmGrainKernel&) = default;
 };
