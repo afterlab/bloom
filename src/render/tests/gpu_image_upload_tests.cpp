@@ -8,6 +8,7 @@
 // decoder; this is labelled honestly and does not claim a media decode.
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
@@ -463,6 +464,45 @@ void testStagingReuse(Expectations& expectations, GpuImageUpload& upload) {
     upload.releaseSpareStaging();
 }
 
+// #553: on a device that does not park native storage, a 2160p frame's float staging suballocates
+// from a retained block instead of being a driver allocation and a fresh mapping every upload: the
+// second upload's only driver allocation can be its resident image. It stays bit-exact.
+void testLargeStagingSuballocates(Expectations& expectations, GpuImageUpload& upload) {
+    const auto window = ImageWindow::create(0, 0, 3840, 2160);
+    const auto pixelAspect = PixelAspectRatio::create(1, 1);
+    if (!window || !pixelAspect) {
+        expectations.expect(false, "the 2160p fixture windows build");
+        return;
+    }
+    auto fixture = buildFixture(*window.value(), *window.value(), *pixelAspect);
+    expectations.expect(fixture.has_value(), "the 2160p fixture builds");
+    if (!fixture)
+        return;
+    const auto source = std::make_shared<const Rgba32fImage>(std::move(*fixture));
+    const auto uploadOnce = [&](const bool checkPixels) {
+        GpuImageUploadParameters parameters;
+        parameters.source = source;
+        if (upload.begin(parameters, 1ULL << 32ULL).code != GpuImageUploadDiagnosticCode::None ||
+            pollUntilTerminal(upload) != GpuImageUploadPollResult::Ready)
+            return false;
+        bool exact = true;
+        if (checkPixels) {
+            auto readback = upload.readback();
+            exact = readback.hasValue() && readback.pixels.size() == source->pixels().size() &&
+                    std::memcmp(readback.pixels.data(), source->pixels().data(),
+                                readback.pixels.size() * sizeof(Rgba32f)) == 0;
+        }
+        GpuImage taken = upload.takeImage();
+        return exact && taken.isValid();
+    };
+    expectations.expect(uploadOnce(true), "the first 2160p upload is bit-exact");
+    const auto before = bloom::core::telemetry::gpuDeviceMemoryTotals().allocations;
+    expectations.expect(uploadOnce(false), "the second 2160p upload reaches Ready");
+    expectations.expect(bloom::core::telemetry::gpuDeviceMemoryTotals().allocations <= before + 1,
+                        "the second 2160p upload's staging is not a driver allocation");
+    expectations.expect(uploadOnce(true), "a 2160p upload on the reused block is bit-exact");
+}
+
 // #401: an image whose every value is exactly representable in binary16 (zeros of both signs,
 // infinities-free HDR values, a half subnormal) crosses as RGBA16F and is widened by one blit; the
 // resident bytes must equal the source exactly. A source with one inexact value takes the RGBA32F
@@ -578,6 +618,7 @@ int main(const int argc, char** argv) {
     testBitExactUpload(expectations, *device.device, upload);
     testChunkedStagingCopy(expectations, upload);
     testStagingReuse(expectations, upload);
+    testLargeStagingSuballocates(expectations, upload);
     testHalfStagedUpload(expectations, upload);
     testBudgetsAndArguments(expectations, upload);
     testWrongThread(expectations, upload);

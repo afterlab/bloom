@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -177,6 +178,54 @@ std::uint64_t uploadAllocationBytes(vulkan_detail::DeviceAllocatorState& state,
     return static_cast<std::uint64_t>(info.size);
 }
 
+namespace {
+
+// #553: a 2160p RGBA32F frame's staging is a driver allocation of its own (8 to 11 ms) and a fresh
+// mapping, where a 1080p frame's suballocates from a retained block. From this size up to what two
+// in-flight uploads can share of one block, it suballocates too.
+constexpr std::uint64_t kPooledStagingMinimumBytes = 64ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kPooledStagingMaximumBytes = 256ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kUploadStagingPoolBlockBytes = 2ULL * kPooledStagingMaximumBytes;
+
+// The device's staging pool, or null when this allocation takes the ordinary route: a route that
+// parks native storage already reuses its staging, and frees it when work waits for host memory
+// (#477), and a test's memory-type or fault control must see an ordinary allocation.
+[[nodiscard]] VmaPool uploadStagingPool(vulkan_detail::DeviceAllocatorState& state,
+                                        const VkBufferCreateInfo& bufferInfo,
+                                        const VmaAllocationCreateInfo& allocationInfo) noexcept {
+    if (state.nativeBufferMemoryTypeMaskForTests != 0 ||
+        state.nativeBufferAllocationFault != vulkan_detail::NativeBufferAllocationFault::None)
+        return VK_NULL_HANDLE;
+    {
+        const std::lock_guard lock(state.storageReuse.mutex);
+        if (state.storageReuse.enabled)
+            return VK_NULL_HANDLE;
+    }
+    if (state.uploadStagingPool != VK_NULL_HANDLE) {
+        // One retained block: what does not fit beside the uploads in flight takes the ordinary
+        // route, so frames that overlap do not allocate and free whole blocks.
+        VmaStatistics statistics{};
+        vmaGetPoolStatistics(state.allocator, state.uploadStagingPool, &statistics);
+        return statistics.allocationBytes + bufferInfo.size <= kUploadStagingPoolBlockBytes
+                   ? state.uploadStagingPool
+                   : VK_NULL_HANDLE;
+    }
+    std::uint32_t memoryType = 0;
+    if (vmaFindMemoryTypeIndexForBufferInfo(state.allocator, &bufferInfo, &allocationInfo,
+                                            &memoryType) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    VmaPoolCreateInfo pool{};
+    pool.memoryTypeIndex = memoryType;
+    pool.blockSize = kUploadStagingPoolBlockBytes;
+    pool.maxBlockCount = 1;
+    if (vmaCreatePool(state.allocator, &pool, &state.uploadStagingPool) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    state.uploadStagingPoolType = memoryType;
+    return state.uploadStagingPool;
+}
+
+} // namespace
+
 vulkan_detail::NativeBufferAllocationOutcome
 createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, const std::uint64_t bytes,
                           const std::uint64_t maximumBackingBytes, UploadStagingBuffer& out,
@@ -196,11 +245,21 @@ createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, const std:
     allocationInfo.flags =
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
+    if (!storage && bytes >= kPooledStagingMinimumBytes && bytes <= kPooledStagingMaximumBytes)
+        allocationInfo.pool = uploadStagingPool(state, bufferInfo, allocationInfo);
     UploadStagingBuffer pending;
     VmaAllocationInfo actual{};
-    const auto outcome = vulkan_detail::allocateCoveredBuffer(
+    auto outcome = vulkan_detail::allocateCoveredBuffer(
         state, bufferInfo, allocationInfo, maximumBackingBytes, pending.buffer, pending.allocation,
         actual, pending.token, vulkan_detail::NativeBufferPurpose::Upload);
+    if (outcome == vulkan_detail::NativeBufferAllocationOutcome::Failed &&
+        allocationInfo.pool != VK_NULL_HANDLE) {
+        // A block the pool could not get is not a refusal of this upload.
+        allocationInfo.pool = VK_NULL_HANDLE;
+        outcome = vulkan_detail::allocateCoveredBuffer(
+            state, bufferInfo, allocationInfo, maximumBackingBytes, pending.buffer,
+            pending.allocation, actual, pending.token, vulkan_detail::NativeBufferPurpose::Upload);
+    }
     if (outcome != vulkan_detail::NativeBufferAllocationOutcome::Allocated)
         return outcome;
     pending.state = &state;

@@ -309,4 +309,9 @@ void testGpuExportProviderDisabledFallback(Expectations& expectations) {
         provenance.has_value() && provenance->status == runtime::GpuProcessFrameStatus::Disabled &&
             provenance->counters.nativeDispatches == 0 && provenance->counters.readbacks == 0,
         "provider-disabled: provenance is Disabled with zero GPU work");
+    // #553: a CPU reference frame always carries the reason it is not a GPU frame.
+    expectations.expect(provenance.has_value() && !provenance->cpuFallbackReason.empty() &&
+                            provenance->cpuFallbackReason.find("disabled") != std::string::npos,
+                        "provider-disabled: the CPU frame names why it left the GPU (" +
+                            (provenance ? provenance->cpuFallbackReason : std::string{}) + ")");
 }

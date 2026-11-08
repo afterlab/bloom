@@ -147,6 +147,10 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
         VmaAllocationCreateInfo pinned = preferred;
         pinned.usage = VMA_MEMORY_USAGE_UNKNOWN;
         pinned.memoryTypeBits = bit;
+        // A pool holds one memory type; every other candidate takes the ordinary route.
+        if (pinned.pool != VK_NULL_HANDLE &&
+            (pinned.pool != state.uploadStagingPool || selected != state.uploadStagingPoolType))
+            pinned.pool = VK_NULL_HANDLE;
         if (hostVisible)
             pinned.requiredFlags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
         if (dedicated.requiresDedicatedAllocation)

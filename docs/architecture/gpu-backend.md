@@ -1645,6 +1645,22 @@ suite), host claims follow one source's scratch, so the fill keeps its frames: L
 frames with no evictions (before 155 with 84) at 8.1 fps (before 8.9), and L50 cached 213 with 27
 evictions (before 38 with 192) at 4.6 fps (before 4.9).
 
+**A CPU frame always says why (#553).** A final-render frame that takes the CPU reference path
+records the reason in its GPU provenance (no provider, no usable device, outside the GPU subset, or
+the failed status, code and message) and the export log entry `export.device.cpu-reference` carries
+it, as does the first CPU frame of a sequence export. The Viewer's resident CPU fallback task is
+named with its counted reason. The intermittent fallback came from the process-wide coverage
+reservations (see above): the export's frame and the Viewer's frame each reach a coverage pass on
+their own owner thread, so one could be refused while the other held the reservation. The refused
+step now waits instead of failing the scene.
+
+**Glow runs its octave blurs at full resolution (#539).** A reduced-resolution octave pyramid was
+the remaining item of the fix. A 2x downsampled Gaussian blur differs from the full-resolution CPU
+reference by about 2.3e-4 at its largest at radius 244, and by more at smaller radii. The CPU/GPU
+parity tolerance stays at 2e-6 and is not loosened for Glow, so the pyramid is not used: Classic,
+Physical and Streak Glow keep their full-resolution blurs, and the device peak of a large Glow is
+bounded by the live-set claim and the in-flight bound above instead.
+
 **Device needs follow measured peaks (#417).** The stated device need is a fixed estimate: the
 desktop's preview working allowance is 512 MiB of room for one general OCIO display job (the arm's
 former per-program ceiling, which #474 removed) plus the 320 MiB packed-transfer allowance whatever

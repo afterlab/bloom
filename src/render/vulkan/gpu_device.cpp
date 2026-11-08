@@ -132,7 +132,19 @@ std::uint64_t GpuDevice::releaseReusableNativeStorage(const std::uint64_t bytes,
                                                       const bool deviceLocal) noexcept {
     if (!isOwnerThread() || impl_->control == nullptr || bytes == 0)
         return 0;
-    return vulkan_detail::releaseParkedStorage(*impl_->control, bytes, deviceLocal);
+    // The retained upload staging block (#553) gives its memory back like parked storage does:
+    // when work or another program needs room and no upload holds a part of it, an idle Bloom
+    // does not keep it.
+    auto& control = *impl_->control;
+    if (control.uploadStagingPool != VK_NULL_HANDLE && control.allocator != VK_NULL_HANDLE) {
+        VmaStatistics statistics{};
+        vmaGetPoolStatistics(control.allocator, control.uploadStagingPool, &statistics);
+        if (statistics.allocationCount == 0) {
+            vmaDestroyPool(control.allocator, control.uploadStagingPool);
+            control.uploadStagingPool = VK_NULL_HANDLE;
+        }
+    }
+    return vulkan_detail::releaseParkedStorage(control, bytes, deviceLocal);
 }
 GpuPipelineCacheStats GpuDevice::pipelineCacheStats() const noexcept {
     if (impl_ == nullptr || impl_->control == nullptr)
@@ -605,6 +617,8 @@ DeviceAllocatorState::~DeviceAllocatorState() {
     closePipelineCache(*this);
     if (allocator != VK_NULL_HANDLE) {
         closeStorageReuse(*this);
+        if (uploadStagingPool != VK_NULL_HANDLE)
+            vmaDestroyPool(allocator, uploadStagingPool);
         vmaDestroyAllocator(allocator);
         allocator = VK_NULL_HANDLE;
     }

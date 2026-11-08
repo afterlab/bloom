@@ -250,6 +250,11 @@ struct DeviceAllocatorState final {
     // is only a distinct queue when the presentation family differs from the compute family.
     vk::raii::Queue presentQueue{nullptr};
     VmaAllocator allocator = VK_NULL_HANDLE;
+    // #553: large float staging buffers of a device that does not park native storage suballocate
+    // from this one pool, created on the owner thread at first use, so a frame's staging is not a
+    // driver allocation and a fresh mapping every time. Its memory type is the type AUTO selects.
+    VmaPool uploadStagingPool = VK_NULL_HANDLE;
+    std::uint32_t uploadStagingPoolType = 0;
     NativeStorageReuse storageReuse;
     // #386: the batch owner's compute pipelines, created once per device generation and shared by
     // every batch owner it creates (an executor releases its owner after each scene). The
