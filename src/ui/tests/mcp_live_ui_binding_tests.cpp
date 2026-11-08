@@ -612,6 +612,11 @@ void testBinding() {
         if (auto* dialog = QApplication::activeModalWidget()) {
             const auto busy = runProject(binding, request(mcp::McpProjectRequestKind::Save));
             expect(busy.refusal == McpUiRefusal::Busy, "a dialog on screen -> Busy");
+            // The refusal names the dialog (its title, text and buttons), not just that one is open.
+            expect(busy.message.starts_with("A dialog is open in Bloom") &&
+                       busy.message.find(dialog->windowTitle().toStdString()) != std::string::npos &&
+                       busy.message.find("Its buttons") != std::string::npos,
+                   "and the refusal describes the dialog");
             dialog->close();
             QTest::qWait(50);
         }

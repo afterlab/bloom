@@ -96,6 +96,10 @@ class McpLiveUiBinding final : public QObject {
   private:
     struct Pending;
 
+    // The refusal text while a modal dialog is open: its title, message and buttons, so a client
+    // can tell which dialog blocks it. Buttons that discard or overwrite data say so.
+    [[nodiscard]] static QString openDialogMessage();
+
     void onSaveFinished(ProjectHostOperationOutcome outcome, const QString& message);
     void onOpenFinished(ProjectHostOperationOutcome outcome, const QString& message);
     void onCopyFinished(ProjectHostOperationOutcome outcome, const QString& message);

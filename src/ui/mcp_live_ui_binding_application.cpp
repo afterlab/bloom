@@ -281,8 +281,7 @@ mcp::McpUiResult McpLiveUiBinding::setPreferences(const std::vector<mcp::McpPref
     if (!window_)
         return uiResult(McpUiRefusal::Unbound, tr("There is no Bloom window to apply them to."));
     if (QApplication::activeModalWidget() != nullptr)
-        return uiResult(McpUiRefusal::Busy,
-                        tr("A dialog is open in Bloom. Close it, then try again."));
+        return uiResult(McpUiRefusal::Busy, openDialogMessage());
     auto next = loadApplicationPreferences(QSettings{});
     for (const auto& entry : entries) {
         const auto found = std::ranges::find(preferenceKeys(), std::string_view(entry.key),

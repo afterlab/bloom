@@ -16,7 +16,12 @@
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QString>
 #include <QTimer>
 
@@ -461,6 +466,36 @@ McpLiveUiBinding::refuseUnsettled(const mcp::McpProjectRequest& request) const {
     return std::nullopt;
 }
 
+QString McpLiveUiBinding::openDialogMessage() {
+    auto* dialog = QApplication::activeModalWidget();
+    if (dialog == nullptr)
+        return tr("A dialog is open in Bloom. Close it, then try again.");
+    QString text = tr("A dialog is open in Bloom");
+    if (!dialog->windowTitle().isEmpty())
+        text += tr(": \u201c%1\u201d").arg(dialog->windowTitle());
+    if (const auto* box = qobject_cast<const QMessageBox*>(dialog)) {
+        if (!box->text().isEmpty())
+            text += tr(". It says: %1").arg(box->text());
+        if (!box->informativeText().isEmpty())
+            text += tr(" %1").arg(box->informativeText());
+    }
+    QStringList buttons;
+    for (const auto* button : dialog->findChildren<QAbstractButton*>()) {
+        if (!button->isVisible() || button->text().isEmpty())
+            continue;
+        auto label = button->text();
+        label.remove(QLatin1Char('&'));
+        const auto lower = label.toLower();
+        if (lower.contains(QStringLiteral("discard")) || lower.contains(QStringLiteral("don't save")) ||
+            lower.contains(QStringLiteral("overwrite")) || lower.contains(QStringLiteral("replace")))
+            label += tr(" (discards or overwrites data)");
+        buttons.push_back(label);
+    }
+    if (!buttons.isEmpty())
+        text += tr(". Its buttons: %1").arg(buttons.join(QStringLiteral(", ")));
+    return text + tr(". Close it, then try again.");
+}
+
 void McpLiveUiBinding::projectLifecycle(mcp::McpProjectRequest request,
                                         std::function<void(mcp::McpProjectResult)> done) {
     using Kind = mcp::McpProjectRequestKind;
@@ -473,7 +508,7 @@ void McpLiveUiBinding::projectLifecycle(mcp::McpProjectRequest request,
         return;
     }
     if (QApplication::activeModalWidget() != nullptr) {
-        refuse(McpUiRefusal::Busy, tr("A dialog is open in Bloom. Close it, then try again."));
+        refuse(McpUiRefusal::Busy, openDialogMessage());
         return;
     }
 
