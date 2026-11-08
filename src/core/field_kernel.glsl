@@ -2175,14 +2175,14 @@ BFK_FN vec4 bfk_op_lens_warp(BFK_CTX, int base, vec4 p) {
 }
 
 // --- Test card ----------------------------------------------------------------------------------------
-// [card, variant, option, flags] [width, height, centre x, centre y] [s0, s1, s2, s3] [phase, a1, a2, a3]
+// [card, variant, option, flags] [width, height, center x, center y] [s0, s1, s2, s3] [phase, a1, a2, a3]
 // then the label's characters, three six-bit codes to a lane in two vec4 (docs/user-guide/test-card.md).
 // A card is drawn procedurally from the pixel's position in the card's own frame (x right and y down
 // from its top left, in full-resolution composition pixels, so a circle is round and a cell square at
 // any size) and returns the straight RGBA signal of that point. The raster's own sub-samples antialias
-// it. Signal levels are the card's own numbers (0 black, 1 white); the node's colour space turns them
+// it. Signal levels are the card's own numbers (0 black, 1 white); the node's color space turns them
 // into working-space values downstream. Cards: 0 SD Bars, 1 HD Bars, 2 EBU Bars, 3 HDR Bars, 4 Patch,
-// 5 Colour Chart, 6 Grey Ramp, 7 Grid, 8 Circle, 9 Safe Areas, 10 UV Grid, 11 Zone Plate, 12 Siemens
+// 5 Color Chart, 6 Gray Ramp, 7 Grid, 8 Circle, 9 Safe Areas, 10 UV Grid, 11 Zone Plate, 12 Siemens
 // Star, 13 Moving Bar, 14 Countdown, 15 Alpha Ramp.
 
 BFK_FN int bfk_tc_glyph_a(int ch) {
@@ -2421,9 +2421,9 @@ BFK_FN vec4 bfk_tc_rgb(int bits, float level) {
     return vec4(r, g, b, 1.0f);
 }
 
-BFK_FN vec4 bfk_tc_grey(float v) { return vec4(v, v, v, 1.0f); }
+BFK_FN vec4 bfk_tc_gray(float v) { return vec4(v, v, v, 1.0f); }
 
-// Bar colour bits (R 1, G 2, B 4) of the seven bars white, yellow, cyan, green, magenta, red, blue.
+// Bar color bits (R 1, G 2, B 4) of the seven bars white, yellow, cyan, green, magenta, red, blue.
 BFK_FN int bfk_tc_bar_bits(int k) {
     switch (k) {
     case 0:
@@ -2443,7 +2443,7 @@ BFK_FN int bfk_tc_bar_bits(int k) {
     }
 }
 
-// The largest rectangle of the given aspect (width over height; 0 the whole frame) centred in the
+// The largest rectangle of the given aspect (width over height; 0 the whole frame) centerd in the
 // frame: the point's position in it, 0 to 1, and whether it is inside.
 BFK_FN bool bfk_tc_fit(float px, float py, float w, float h, float aspect, BFK_OUT(float) u,
                        BFK_OUT(float) v) {
@@ -2464,7 +2464,7 @@ BFK_FN bool bfk_tc_fit(float px, float py, float w, float h, float aspect, BFK_O
     return u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
 }
 
-// Cards of colour and level ------------------------------------------------------------------------
+// Cards of color and level ------------------------------------------------------------------------
 
 // SD Bars: seven 75% bars over two thirds of the height, the reversed castellation row, and the
 // bottom row of -I, 100% white, +Q, black and the PLUGE steps below, at and above black.
@@ -2487,18 +2487,18 @@ BFK_FN vec4 bfk_tc_sd(float u, float v) {
     if (u < 0.142857149f)
         return vec4(0.0f, 0.246575341f, 0.410958916f, 1.0f);
     if (u < 0.428571433f)
-        return bfk_tc_grey(1.0f);
+        return bfk_tc_gray(1.0f);
     if (u < 0.714285731f)
         return vec4(0.255707771f, 0.0f, 0.465753436f, 1.0f);
     if (u >= 0.714285731f && u < 0.857142866f) {
         int pluge = int(floor((u - 0.714285731f) * 21.0f));
         if (pluge <= 0)
-            return bfk_tc_grey(-0.04f);
+            return bfk_tc_gray(-0.04f);
         if (pluge == 1)
-            return bfk_tc_grey(0.0f);
-        return bfk_tc_grey(0.04f);
+            return bfk_tc_gray(0.0f);
+        return bfk_tc_gray(0.04f);
     }
-    return bfk_tc_grey(0.0f);
+    return bfk_tc_gray(0.0f);
 }
 
 // The seven bar starts of the HD bars in 1920ths of the width, and the end.
@@ -2537,7 +2537,7 @@ BFK_FN vec4 bfk_tc_hd(float u, float v) {
     BFK_P float x = u * 1920.0f;
     if (v < 0.583333313f) {
         if (x < 240.0f || x >= 1680.0f)
-            return bfk_tc_grey(0.4f);
+            return bfk_tc_gray(0.4f);
         return bfk_tc_hd_bar(x, 0.75f);
     }
     if (v < 0.666666687f) {
@@ -2545,7 +2545,7 @@ BFK_FN vec4 bfk_tc_hd(float u, float v) {
             return bfk_tc_rgb(6, 1.0f);
         if (x >= 1680.0f)
             return bfk_tc_rgb(4, 1.0f);
-        return bfk_tc_grey(0.75f);
+        return bfk_tc_gray(0.75f);
     }
     if (v < 0.75f) {
         if (x < 240.0f)
@@ -2553,39 +2553,39 @@ BFK_FN vec4 bfk_tc_hd(float u, float v) {
         if (x >= 1680.0f)
             return bfk_tc_rgb(1, 1.0f);
         if (x < 445.714294f)
-            return bfk_tc_grey(0.0f);
+            return bfk_tc_gray(0.0f);
         if (x >= 1474.28577f)
-            return bfk_tc_grey(1.0f);
-        return bfk_tc_grey(bfk_div(x - 445.714294f, 1028.57141f));
+            return bfk_tc_gray(1.0f);
+        return bfk_tc_gray(bfk_div(x - 445.714294f, 1028.57141f));
     }
     if (x < 240.0f || x >= 1680.0f)
-        return bfk_tc_grey(0.15f);
+        return bfk_tc_gray(0.15f);
     if (x < 549.0f)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     if (x < 960.0f)
-        return bfk_tc_grey(1.0f);
+        return bfk_tc_gray(1.0f);
     if (x < 1131.0f)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     if (x < 1200.0f)
-        return bfk_tc_grey(-0.02f);
+        return bfk_tc_gray(-0.02f);
     if (x < 1268.0f)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     if (x < 1337.0f)
-        return bfk_tc_grey(0.02f);
+        return bfk_tc_gray(0.02f);
     if (x < 1405.0f)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     if (x < 1474.0f)
-        return bfk_tc_grey(0.04f);
-    return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.04f);
+    return bfk_tc_gray(0.0f);
 }
 
-// EBU Bars (ITU-R BT.471, 100/0/75/0): white at 100%, the six colours at 75%, black; eight equal bars.
+// EBU Bars (ITU-R BT.471, 100/0/75/0): white at 100%, the six colors at 75%, black; eight equal bars.
 BFK_FN vec4 bfk_tc_ebu(float u) {
     int col = min(max(int(floor(u * 8.0f)), 0), 7);
     if (col == 0)
-        return bfk_tc_grey(1.0f);
+        return bfk_tc_gray(1.0f);
     if (col == 7)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     return bfk_tc_rgb(bfk_tc_bar_bits(col), 0.75f);
 }
 
@@ -2598,7 +2598,7 @@ BFK_FN BFK_P float bfk_tc_hdr_sig(int code, int variant) {
     return bfk_div(c - 64.0f, 876.0f);
 }
 
-// The code values (10 bits each, red, green, blue) of the 75% (58% for PQ) BT.709 colour bars, packed.
+// The code values (10 bits each, red, green, blue) of the 75% (58% for PQ) BT.709 color bars, packed.
 BFK_FN int bfk_tc_hdr_709(int variant, int k) {
     int key = variant * 6 + k;
     switch (key) {
@@ -2740,37 +2740,37 @@ BFK_FN vec4 bfk_tc_hdr_bar(float x, float level) {
 BFK_FN vec4 bfk_tc_hdr(float u, float v, int variant) {
     BFK_P float x = u * 1920.0f;
     int white = variant == 0 ? 721 : (variant == 1 ? 573 : 594);
-    int grey = variant == 2 ? 409 : 414;
+    int gray = variant == 2 ? 409 : 414;
     int black = variant == 2 ? 0 : 64;
     if (v < 0.583333313f) {
         if (x < 240.0f || x >= 1680.0f)
-            return bfk_tc_grey(bfk_tc_hdr_sig(grey, variant));
+            return bfk_tc_gray(bfk_tc_hdr_sig(gray, variant));
         BFK_P float bar = v < 0.0833333358f ? 1.0f : bfk_tc_hdr_sig(white, variant);
         return bfk_tc_hdr_bar(x, bar);
     }
     if (v < 0.666666687f) {
         if (x < 240.0f || x >= 1680.0f)
-            return bfk_tc_grey(bfk_tc_hdr_sig(white, variant));
+            return bfk_tc_gray(bfk_tc_hdr_sig(white, variant));
         if (x < 446.0f)
-            return bfk_tc_grey(bfk_tc_hdr_sig(bfk_tc_hdr_step(variant, 0), variant));
+            return bfk_tc_gray(bfk_tc_hdr_sig(bfk_tc_hdr_step(variant, 0), variant));
         int bar = 1;
         for (int i = 2; i < 7; ++i)
             if (x >= bfk_tc_hdr_start(i))
                 bar = i;
         BFK_P float mid = (bfk_tc_hdr_start(bar) + bfk_tc_hdr_start(bar + 1)) * 0.5f;
         int j = 1 + 2 * (bar - 1) + (x >= mid ? 1 : 0);
-        return bfk_tc_grey(bfk_tc_hdr_sig(bfk_tc_hdr_step(variant, j), variant));
+        return bfk_tc_gray(bfk_tc_hdr_sig(bfk_tc_hdr_step(variant, j), variant));
     }
     if (v < 0.75f) {
         if (x < 240.0f)
-            return bfk_tc_grey(bfk_tc_hdr_sig(black, variant));
+            return bfk_tc_gray(bfk_tc_hdr_sig(black, variant));
         BFK_P float ramp = 0.0f;
         if (variant == 2) {
             ramp = bfk_clamp(x - 858.0f, 0.0f, 1023.0f);
-            return bfk_tc_grey(bfk_div(ramp, 1023.0f));
+            return bfk_tc_gray(bfk_div(ramp, 1023.0f));
         }
         ramp = bfk_clamp(4.0f + (x - 799.0f), 4.0f, 1019.0f);
-        return bfk_tc_grey(bfk_div(ramp - 64.0f, 876.0f));
+        return bfk_tc_gray(bfk_div(ramp - 64.0f, 876.0f));
     }
     if (x < 240.0f) {
         int k = int(floor(bfk_div(x, 80.0f)));
@@ -2789,26 +2789,26 @@ BFK_FN vec4 bfk_tc_hdr(float u, float v, int variant) {
         code = variant == 2 ? 41 : 99;
     else if (x >= 960.0f && x < 1398.0f)
         code = white;
-    return bfk_tc_grey(bfk_tc_hdr_sig(code, variant));
+    return bfk_tc_gray(bfk_tc_hdr_sig(code, variant));
 }
 
-// Patch: the 27 values, black and the grey steps first, then the primaries and secondaries at 75% and
+// Patch: the 27 values, black and the gray steps first, then the primaries and secondaries at 75% and
 // 100%.
 BFK_FN vec4 bfk_tc_patch_value(int index) {
     if (index == 0)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     if (index == 1)
-        return bfk_tc_grey(0.02f);
+        return bfk_tc_gray(0.02f);
     if (index == 2)
-        return bfk_tc_grey(0.04f);
+        return bfk_tc_gray(0.04f);
     if (index <= 11)
-        return bfk_tc_grey(float(index - 2) * 0.1f);
+        return bfk_tc_gray(float(index - 2) * 0.1f);
     if (index == 12)
-        return bfk_tc_grey(0.95f);
+        return bfk_tc_gray(0.95f);
     if (index == 13)
-        return bfk_tc_grey(0.98f);
+        return bfk_tc_gray(0.98f);
     if (index == 14)
-        return bfk_tc_grey(1.0f);
+        return bfk_tc_gray(1.0f);
     int k = (index - 15) % 6;
     BFK_P float level = index < 21 ? 0.75f : 1.0f;
     // red, green, blue, cyan, magenta, yellow
@@ -2823,12 +2823,12 @@ BFK_FN vec4 bfk_tc_patch(float u, float v, int index, int window) {
         BFK_P float dx = abs(u - 0.5f);
         BFK_P float dy = abs(v - 0.5f);
         if (dx >= reach || dy >= reach)
-            return bfk_tc_grey(0.0f);
+            return bfk_tc_gray(0.0f);
     }
     return bfk_tc_patch_value(index);
 }
 
-// Colour Chart: 6 by 4 patches of our own values: neutrals, the primaries and secondaries at 100% and
+// Color Chart: 6 by 4 patches of our own values: neutrals, the primaries and secondaries at 100% and
 // 50%, and six skin tones.
 BFK_FN vec4 bfk_tc_chart(float u, float v) {
     BFK_P float fx = u * 6.0f;
@@ -2838,9 +2838,9 @@ BFK_FN vec4 bfk_tc_chart(float u, float v) {
     BFK_P float cx = fx - float(col);
     BFK_P float cy = fy - float(row);
     if (cx < 0.04f || cx >= 0.96f || cy < 0.04f || cy >= 0.96f)
-        return bfk_tc_grey(0.12f);
+        return bfk_tc_gray(0.12f);
     if (row == 0)
-        return bfk_tc_grey(1.0f - float(col) * 0.2f);
+        return bfk_tc_gray(1.0f - float(col) * 0.2f);
     if (row < 3) {
         int bits = col == 0 ? 1 : (col == 1 ? 2 : (col == 2 ? 4 : (col == 3 ? 6 : (col == 4 ? 5 : 3))));
         return bfk_tc_rgb(bits, row == 1 ? 1.0f : 0.5f);
@@ -2861,10 +2861,10 @@ BFK_FN vec4 bfk_tc_chart(float u, float v) {
     }
 }
 
-// Grey Ramp: a smooth ramp from 0 to 1 over the top four fifths, PLUGE steps below.
+// Gray Ramp: a smooth ramp from 0 to 1 over the top four fifths, PLUGE steps below.
 BFK_FN vec4 bfk_tc_ramp(float u, float v) {
     if (v < 0.8f)
-        return bfk_tc_grey(u);
+        return bfk_tc_gray(u);
     int k = min(max(int(floor(u * 9.0f)), 0), 8);
     BFK_P float level = 0.0f;
     if (k == 1)
@@ -2875,7 +2875,7 @@ BFK_FN vec4 bfk_tc_ramp(float u, float v) {
         level = 0.02f;
     else if (k == 7)
         level = 0.04f;
-    return bfk_tc_grey(level);
+    return bfk_tc_gray(level);
 }
 
 // Cards of geometry and framing --------------------------------------------------------------------
@@ -2893,8 +2893,8 @@ BFK_FN vec4 bfk_tc_grid(float px, float py, float w, float h, float spacing, flo
     if (abs(dx) <= lw * 0.5f || abs(dy) <= lw * 0.5f)
         return vec4(0.9f, 0.8f, 0.1f, 1.0f);
     if (bfk_tc_on_line(dx, spacing, lw) != 0 || bfk_tc_on_line(dy, spacing, lw) != 0)
-        return bfk_tc_grey(0.85f);
-    return bfk_tc_grey(0.08f);
+        return bfk_tc_gray(0.85f);
+    return bfk_tc_gray(0.08f);
 }
 
 BFK_FN int bfk_tc_outline(float px, float py, float x0, float y0, float x1, float y1, float lw) {
@@ -2912,24 +2912,24 @@ BFK_FN vec4 bfk_tc_circle(float px, float py, float w, float h) {
     BFK_P float dx = px - w * 0.5f;
     BFK_P float dy = py - h * 0.5f;
     if (px < lw * 2.0f || py < lw * 2.0f || px > w - lw * 2.0f || py > h - lw * 2.0f)
-        return bfk_tc_grey(0.95f);
+        return bfk_tc_gray(0.95f);
     if (abs(dx) <= lw || abs(dy) <= lw)
-        return bfk_tc_grey(0.95f);
+        return bfk_tc_gray(0.95f);
     BFK_P float r = bfk_sqrt(dx * dx + dy * dy);
     BFK_P float ring = s * 0.45f;
     if (abs(r - ring) <= lw)
-        return bfk_tc_grey(0.95f);
+        return bfk_tc_gray(0.95f);
     if (abs(r - ring * 0.5f) <= lw * 0.5f)
         return vec4(0.9f, 0.8f, 0.1f, 1.0f);
     BFK_P float cell = bfk_div(s, 20.0f);
     if (bfk_tc_on_line(dx, cell * 5.0f, lw) != 0 || bfk_tc_on_line(dy, cell * 5.0f, lw) != 0)
-        return bfk_tc_grey(0.45f);
+        return bfk_tc_gray(0.45f);
     if (bfk_tc_on_line(dx, cell, lw * 0.5f) != 0 || bfk_tc_on_line(dy, cell, lw * 0.5f) != 0)
-        return bfk_tc_grey(0.24f);
-    return bfk_tc_grey(0.08f);
+        return bfk_tc_gray(0.24f);
+    return bfk_tc_gray(0.08f);
 }
 
-// The largest rectangle of the given aspect centred in the frame, as its corners.
+// The largest rectangle of the given aspect centerd in the frame, as its corners.
 BFK_FN vec4 bfk_tc_crop(float w, float h, float aspect) {
     BFK_P float cw = w;
     BFK_P float ch = h;
@@ -2941,7 +2941,7 @@ BFK_FN vec4 bfk_tc_crop(float w, float h, float aspect) {
     return vec4((w - cw) * 0.5f, (h - ch) * 0.5f, (w + cw) * 0.5f, (h + ch) * 0.5f);
 }
 
-// Safe Areas: action safe 93% and title safe 90% of the width and the height, the centre, and the crop
+// Safe Areas: action safe 93% and title safe 90% of the width and the height, the center, and the crop
 // guides selected in the option's bits (1 16:9, 2 9:16, 4 1:1, 8 2.39:1).
 BFK_FN vec4 bfk_tc_safe(float px, float py, float w, float h, int guides) {
     BFK_P float lw = max(2.0f, bfk_div(min(w, h), 360.0f));
@@ -2972,11 +2972,11 @@ BFK_FN vec4 bfk_tc_safe(float px, float py, float w, float h, int guides) {
     BFK_P float dy = abs(py - cy);
     BFK_P float arm = min(w, h) * 0.03f;
     if ((dx <= lw * 0.5f && dy <= arm) || (dy <= lw * 0.5f && dx <= arm))
-        return bfk_tc_grey(0.95f);
-    return bfk_tc_grey(0.12f);
+        return bfk_tc_gray(0.95f);
+    return bfk_tc_gray(0.12f);
 }
 
-// UV Grid: square cells `cell` pixels across, coloured by their position (red across, green up, a
+// UV Grid: square cells `cell` pixels across, colored by their position (red across, green up, a
 // little blue), a dark line between them, and each cell's column and row written in it.
 BFK_FN vec4 bfk_tc_uv(float px, float py, float w, float h, float cell) {
     int col = int(floor(bfk_div(px, cell)));
@@ -2985,7 +2985,7 @@ BFK_FN vec4 bfk_tc_uv(float px, float py, float w, float h, float cell) {
     BFK_P float fy = py - float(row) * cell;
     BFK_P float lw = max(1.0f, bfk_div(cell, 32.0f));
     if (fx < lw * 0.5f || fy < lw * 0.5f || fx > cell - lw * 0.5f || fy > cell - lw * 0.5f)
-        return bfk_tc_grey(0.0f);
+        return bfk_tc_gray(0.0f);
     BFK_P float g = floor(bfk_div(cell, 36.0f));
     if (g >= 1.0f) {
         int nc = bfk_tc_digits(col);
@@ -3010,7 +3010,7 @@ BFK_FN vec4 bfk_tc_uv(float px, float py, float w, float h, float cell) {
             else
                 ch = 1 + bfk_tc_digit(row, nr - 1 - (k - nc - 1));
             if (bfk_tc_hit(ch, inner, ty, g) != 0)
-                return pass == 0 ? bfk_tc_grey(0.0f) : bfk_tc_grey(1.0f);
+                return pass == 0 ? bfk_tc_gray(0.0f) : bfk_tc_gray(1.0f);
         }
     }
     BFK_P float u = bfk_div(px, w);
@@ -3032,7 +3032,7 @@ BFK_FN vec4 bfk_tc_zone(float px, float py, float w, float h, float phase) {
     BFK_P float c = 0.0f;
     bfk_sincos(turns, s, c);
     BFK_P float value = c * 0.5f + 0.5f;
-    return bfk_tc_grey(value);
+    return bfk_tc_gray(value);
 }
 
 // Siemens Star: `spokes` alternating black and white spokes inside a circle of 45% of the shorter
@@ -3042,11 +3042,11 @@ BFK_FN vec4 bfk_tc_star(float px, float py, float w, float h, float spokes) {
     BFK_P float dy = py - h * 0.5f;
     BFK_P float r = bfk_sqrt(dx * dx + dy * dy);
     if (r > min(w, h) * 0.45f)
-        return bfk_tc_grey(0.18f);
+        return bfk_tc_gray(0.18f);
     BFK_P float turns = bfk_atan2(dy, dx);
     BFK_P float s = turns * spokes;
     BFK_P float f = s - floor(s);
-    return bfk_tc_grey(f < 0.5f ? 1.0f : 0.0f);
+    return bfk_tc_gray(f < 0.5f ? 1.0f : 0.0f);
 }
 
 // Moving Bar: a white bar `bar` pixels wide at `phase` (0 to 1) of its way from off the left (top)
@@ -3056,8 +3056,8 @@ BFK_FN vec4 bfk_tc_bar(float px, float py, float w, float h, float bar, float ph
     BFK_P float at = vertical != 0 ? py : px;
     BFK_P float start = phase * (extent + bar) - bar;
     if (at >= start && at < start + bar)
-        return bfk_tc_grey(1.0f);
-    return bfk_tc_grey(0.1f);
+        return bfk_tc_gray(1.0f);
+    return bfk_tc_gray(0.1f);
 }
 
 // Countdown: the seconds left in large digits, the frame within the second under them, and a white
@@ -3065,7 +3065,7 @@ BFK_FN vec4 bfk_tc_bar(float px, float py, float w, float h, float bar, float ph
 BFK_FN vec4 bfk_tc_countdown(float px, float py, float w, float h, int seconds, int frame, int fps,
                              bool flash) {
     if (flash)
-        return bfk_tc_grey(1.0f);
+        return bfk_tc_gray(1.0f);
     int nd = bfk_tc_digits(seconds);
     BFK_P float g = max(1.0f, floor(min(bfk_div(h, 18.0f), bfk_div(w, float(nd) * 6.0f))));
     BFK_P float tw = float(nd) * 6.0f * g - g;
@@ -3075,7 +3075,7 @@ BFK_FN vec4 bfk_tc_countdown(float px, float py, float w, float h, int seconds, 
         int k = int(floor(bfk_div(tx, 6.0f * g)));
         BFK_P float inner = tx - float(k) * 6.0f * g;
         if (bfk_tc_hit(1 + bfk_tc_digit(seconds, nd - 1 - k), inner, ty, g) != 0)
-            return bfk_tc_grey(0.95f);
+            return bfk_tc_gray(0.95f);
     }
     int fd = fps >= 100 ? 3 : 2;
     int total = 6 + fd;
@@ -3100,18 +3100,18 @@ BFK_FN vec4 bfk_tc_countdown(float px, float py, float w, float h, int seconds, 
         else if (k >= 6)
             ch = 1 + bfk_tc_digit(frame, fd - 1 - (k - 6));
         if (bfk_tc_hit(ch, inner, uy, g2) != 0)
-            return bfk_tc_grey(0.7f);
+            return bfk_tc_gray(0.7f);
     }
-    return bfk_tc_grey(0.1f);
+    return bfk_tc_gray(0.1f);
 }
 
-// Alpha Ramp: six bands of colour, each with an alpha rising from 0 to 1 across the width. Straight
-// colour; the caller premultiplies.
+// Alpha Ramp: six bands of color, each with an alpha rising from 0 to 1 across the width. Straight
+// color; the caller premultiplies.
 BFK_FN vec4 bfk_tc_alpha(float u, float v) {
     int band = min(max(int(floor(v * 6.0f)), 0), 5);
-    vec4 c = bfk_tc_grey(0.0f);
+    vec4 c = bfk_tc_gray(0.0f);
     if (band == 0)
-        c = bfk_tc_grey(1.0f);
+        c = bfk_tc_gray(1.0f);
     else if (band == 1)
         c = bfk_tc_rgb(1, 1.0f);
     else if (band == 2)
@@ -3119,7 +3119,7 @@ BFK_FN vec4 bfk_tc_alpha(float u, float v) {
     else if (band == 3)
         c = bfk_tc_rgb(4, 1.0f);
     else if (band == 5)
-        c = bfk_tc_grey(0.5f);
+        c = bfk_tc_gray(0.5f);
     return vec4(c.x, c.y, c.z, bfk_clamp(u, 0.0f, 1.0f));
 }
 
@@ -3137,9 +3137,9 @@ BFK_FN vec4 bfk_tc_label(vec4 under, vec4 l0, vec4 l1, float px, float py, float
         int k = int(floor(bfk_div(tx, 6.0f * g)));
         BFK_P float inner = tx - float(k) * 6.0f * g;
         if (bfk_tc_hit(bfk_tc_label_char(l0, l1, k), inner, ty, g) != 0)
-            return bfk_tc_grey(0.95f);
+            return bfk_tc_gray(0.95f);
     }
-    return bfk_tc_grey(0.04f);
+    return bfk_tc_gray(0.04f);
 }
 
 BFK_FN vec4 bfk_op_test_card(BFK_CTX, int base, float qx, float qy) {
@@ -3159,7 +3159,7 @@ BFK_FN vec4 bfk_op_test_card(BFK_CTX, int base, float qx, float qy) {
     BFK_P float py = h * 0.5f - (qy - h1.w);
     BFK_P float u = 0.0f;
     BFK_P float v = 0.0f;
-    vec4 c = bfk_tc_grey(0.0f);
+    vec4 c = bfk_tc_gray(0.0f);
     bool inside = true;
     switch (card) {
     case 0:
@@ -3220,7 +3220,7 @@ BFK_FN vec4 bfk_op_test_card(BFK_CTX, int base, float qx, float qy) {
         break;
     }
     if (!inside)
-        c = bfk_tc_grey(0.0f);
+        c = bfk_tc_gray(0.0f);
     if ((flags & 1) != 0)
         c = bfk_tc_label(c, l0, l1, px, py, w, h, (flags >> 4) & 31);
     BFK_P float a = bfk_clamp(c.w, 0.0f, 1.0f);

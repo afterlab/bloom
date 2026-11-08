@@ -34,7 +34,7 @@
 //   Streak    scalars [step, noise cell]; Ramp scalars [low, high] and the ramp
 //   Lens Warp choices [reverse]; scalars [k1, k2, p1, p2, scale]; vectors [centre, y down]
 //   Test Card choices [card, variant, option, flags (1 label, 2 animated), the label's glyph codes];
-//             scalars [width, height, centre x, centre y, four card values, frame rate]
+//             scalars [width, height, center x, center y, four card values, frame rate]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
 #include "color_grade_image_effect.hpp"

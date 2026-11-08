@@ -1130,7 +1130,7 @@ void testCardCard() {
     set("card", std::int64_t{static_cast<std::int64_t>(document::TestCard::Patch)});
     expect(card->showsRole("patchValue") && card->showsRole("patchWindow") &&
                card->showsRole("patchSpace") && !card->showsRole("label") && card->showsReadout(),
-           "Patch shows its value, window and colour space, no label, and the readout");
+           "Patch shows its value, window and color space, no label, and the readout");
     set("patchStep", true);
     expect(!card->showsRole("patchValue"), "a stepping Patch hides its single value");
     set("patchStep", false);

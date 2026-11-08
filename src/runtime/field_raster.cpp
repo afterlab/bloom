@@ -344,8 +344,8 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
             p.text.push_back(static_cast<std::uint8_t>(std::clamp<std::int64_t>(in.choices[i], 0, 255)));
         p.width = scalar(0, 1.0);
         p.height = scalar(1, 1.0);
-        p.centreX = scalar(2);
-        p.centreY = scalar(3);
+        p.centerX = scalar(2);
+        p.centerY = scalar(3);
         p.values = {scalar(4), scalar(5), scalar(6), scalar(7)};
         const auto fps = std::max(scalar(8, 24.0), 1.0);
         const auto frame = std::floor(std::max(seconds, 0.0) * fps + 1.0e-6);

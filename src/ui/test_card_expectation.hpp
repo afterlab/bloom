@@ -1,9 +1,9 @@
 #pragma once
 
-// #587 Test Card: the display value a Patch should produce. A patch's exact signal in its colour space
-// goes through the same two transforms any source's pixels do: the colour space transform into the
+// #587 Test Card: the display value a Patch should produce. A patch's exact signal in its color space
+// goes through the same two transforms any source's pixels do: the color space transform into the
 // working space, then the Viewer's Display and View (with its tone map where it has one). This is
-// that arithmetic on one colour, for the readout beside the patch; the pipeline's own pixels are
+// that arithmetic on one color, for the readout beside the patch; the pipeline's own pixels are
 // compared with it by the tests. Not a display calibration: a probe may differ from it through the
 // desktop compositor, the GPU output settings or the monitor's profile.
 
@@ -17,7 +17,7 @@
 namespace bloom::ui {
 
 struct PatchExpectation final {
-    // The signal as authored, the working-space value it becomes (a straight colour) and the
+    // The signal as authored, the working-space value it becomes (a straight color) and the
     // display value the Display and View produce, clamped to the display's 0 to 1.
     std::array<double, 3> signal{};
     std::array<double, 3> working{};

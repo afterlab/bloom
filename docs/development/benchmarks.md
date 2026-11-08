@@ -973,7 +973,7 @@ larger dispatched image than the output alone.
 Test Card has no recorded numbers and no budget yet. The scenario `test-card-2k` is written to measure the
 most expensive card end to end. Suspicions to check against it, not findings: the Zone Plate and the Siemens
 Star run 16 sub-samples per pixel where the other cards run 4, so they should cost several times what the
-bars do; and the colour space transform after the raster is one more full-frame pass per card.
+bars do; and the color space transform after the raster is one more full-frame pass per card.
 
 ## Platform notes
 

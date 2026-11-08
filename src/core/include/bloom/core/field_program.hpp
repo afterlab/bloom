@@ -369,7 +369,7 @@ struct LensWarpParameters final {
 
 // A test card drawn procedurally (field_kernel.glsl, "Test card"): the card, its option values and
 // geometry, in full-resolution composition pixels. The card's frame is `width` x `height` pixels
-// centred at (`centreX`, `centreY`) of the field's positions (+y up); the op returns the card's
+// centerd at (`centerX`, `centerY`) of the field's positions (+y up); the op returns the card's
 // premultiplied RGBA signal at a position, black and opaque outside the card's own layout rectangle.
 inline constexpr std::size_t kTestCardMaxLabel = 24;
 struct TestCardParameters final {
@@ -379,8 +379,8 @@ struct TestCardParameters final {
     bool label = false;
     double width = 1.0;
     double height = 1.0;
-    double centreX = 0.0;
-    double centreY = 0.0;
+    double centerX = 0.0;
+    double centerY = 0.0;
     // Card specific numbers (grid spacing and line width, UV cells, star spokes, bar width, fps).
     std::array<double, 4> values{};
     // Card specific numbers resolved from time: the phase, and a1 to a3.

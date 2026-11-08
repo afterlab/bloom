@@ -629,7 +629,7 @@ std::array<double, 4> cardAt(const field::TestCardParameters& p, const double px
     if (!block)
         return {-9.0, -9.0, -9.0, -9.0};
     const auto table = single(FieldOp::TestCard, *block, field::FieldResultKind::Premultiplied);
-    return at(table, px - p.width * 0.5 + p.centreX, p.height * 0.5 - py + p.centreY);
+    return at(table, px - p.width * 0.5 + p.centerX, p.height * 0.5 - py + p.centerY);
 }
 
 field::TestCardParameters cardOf(const std::int64_t card, const double w = 1920.0,
@@ -686,7 +686,7 @@ void testTestCard(Expectations& e) {
     e.expect(near(cardAt(sd, 1500.0, 1000.0), {0.0, 0.0, 0.0, 1.0}), "SD: the PLUGE black");
     e.expect(near(cardAt(sd, 1600.0, 1000.0), {0.04, 0.04, 0.04, 1.0}), "SD: the PLUGE step above black");
     e.expect(near(cardAt(sd, 1800.0, 1000.0), {0.0, 0.0, 0.0, 1.0}), "SD: black beside the PLUGE");
-    // A portrait frame holds the 16:9 layout whole, centred (rows 656.25 to 1263.75), black around it.
+    // A portrait frame holds the 16:9 layout whole, centerd (rows 656.25 to 1263.75), black around it.
     const auto sdPortrait = cardOf(0, 1080.0, 1920.0);
     e.expect(near(cardAt(sdPortrait, 1080.0 * 0.2, 800.0), {0.75, 0.75, 0.0, 1.0}) &&
                  near(cardAt(sdPortrait, 1080.0 * 0.2, 300.0), {0.0, 0.0, 0.0, 1.0}) &&
@@ -695,7 +695,7 @@ void testTestCard(Expectations& e) {
 
     // HD Bars (SMPTE RP 219-1): in 1920 x 1080 the widths of annex C table C.1 and C.2.
     const auto hd = cardOf(1);
-    e.expect(near(cardAt(hd, 100.5, 300.0), {0.4, 0.4, 0.4, 1.0}), "HD: 40% grey beside the bars");
+    e.expect(near(cardAt(hd, 100.5, 300.0), {0.4, 0.4, 0.4, 1.0}), "HD: 40% gray beside the bars");
     e.expect(near(cardAt(hd, 300.5, 300.0), {0.75, 0.75, 0.75, 1.0}), "HD: the 75% white bar");
     e.expect(near(cardAt(hd, 1578.5, 300.0), {0.0, 0.0, 0.75, 1.0}), "HD: the 75% blue bar");
     e.expect(near(cardAt(hd, 100.5, 660.0), {0.0, 1.0, 1.0, 1.0}), "HD: 100% cyan");
@@ -710,7 +710,7 @@ void testTestCard(Expectations& e) {
              "HD: the ramp is linear from 0% to 100%");
     e.expect(near(cardAt(hd, 1600.5, 750.0), {1.0, 1.0, 1.0, 1.0}), "HD: 100% white right of the ramp");
     e.expect(near(cardAt(hd, 1800.5, 750.0), {1.0, 0.0, 0.0, 1.0}), "HD: 100% red");
-    e.expect(near(cardAt(hd, 100.5, 900.0), {0.15, 0.15, 0.15, 1.0}), "HD: 15% grey");
+    e.expect(near(cardAt(hd, 100.5, 900.0), {0.15, 0.15, 0.15, 1.0}), "HD: 15% gray");
     e.expect(near(cardAt(hd, 700.5, 900.0), {1.0, 1.0, 1.0, 1.0}), "HD: the 100% white block");
     e.expect(near(cardAt(hd, 1150.5, 900.0), {-0.02, -0.02, -0.02, 1.0}), "HD: PLUGE -2% below black");
     e.expect(near(cardAt(hd, 1230.5, 900.0), {0.0, 0.0, 0.0, 1.0}), "HD: PLUGE black");
@@ -722,7 +722,7 @@ void testTestCard(Expectations& e) {
     e.expect(cardAt(hdWide, 1024.0, 429.0)[3] == 1.0, "HD: the wide frame's layout is opaque");
     const auto hdTall = cardOf(1, 1080.0, 1920.0);
     e.expect(near(cardAt(hdTall, 540.0, 100.0), {0.0, 0.0, 0.0, 1.0}), "HD: a tall frame is padded in black");
-    // The layout rectangle of the wide frame is 1525.33 x 858 about the centre: the 75% yellow bar.
+    // The layout rectangle of the wide frame is 1525.33 x 858 about the center: the 75% yellow bar.
     e.expect(near(cardAt(hdWide, 1024.0 - 762.67 + (1525.33 / 1920.0) * 500.0, 200.0),
                   {0.75, 0.75, 0.0, 1.0}),
              "HD: the layout inside the padding keeps its proportions");
@@ -742,10 +742,10 @@ void testTestCard(Expectations& e) {
             return variant == 2 ? code / 1023.0 : narrow(code);
         };
         const int white = variant == 0 ? 721 : (variant == 1 ? 573 : 594);
-        const int grey = variant == 2 ? 409 : 414;
+        const int gray = variant == 2 ? 409 : 414;
         const auto name = std::string(" (variant ") + std::to_string(variant) + ")";
-        e.expect(near(cardAt(hdr, 100.5, 300.0), {sig(grey), sig(grey), sig(grey), 1.0}, 1.0e-6),
-                 "HDR: 40% grey" + name);
+        e.expect(near(cardAt(hdr, 100.5, 300.0), {sig(gray), sig(gray), sig(gray), 1.0}, 1.0e-6),
+                 "HDR: 40% gray" + name);
         e.expect(near(cardAt(hdr, 300.5, 300.0), {sig(white), sig(white), sig(white), 1.0}, 1.0e-6),
                  "HDR: the reference white bar" + name);
         e.expect(near(cardAt(hdr, 300.5, 40.0),
@@ -808,12 +808,12 @@ void testTestCard(Expectations& e) {
                  "HDR: the BT.709 yellow bar" + name);
     }
 
-    // Patch: the exact value, full field or in a centred window over black.
+    // Patch: the exact value, full field or in a centerd window over black.
     auto patch = cardOf(4);
     patch.variant = 14;
     e.expect(near(cardAt(patch, 500.0, 500.0), {1.0, 1.0, 1.0, 1.0}), "Patch: white 100%");
     patch.variant = 7;
-    e.expect(near(cardAt(patch, 500.0, 500.0), {0.5, 0.5, 0.5, 1.0}, 1.0e-6), "Patch: grey 50%");
+    e.expect(near(cardAt(patch, 500.0, 500.0), {0.5, 0.5, 0.5, 1.0}, 1.0e-6), "Patch: gray 50%");
     patch.variant = 2;
     e.expect(near(cardAt(patch, 1.0, 1.0), {0.04, 0.04, 0.04, 1.0}), "Patch: near black 4%");
     patch.variant = 15;
@@ -822,7 +822,7 @@ void testTestCard(Expectations& e) {
     e.expect(near(cardAt(patch, 960.0, 540.0), {1.0, 1.0, 0.0, 1.0}), "Patch: yellow 100%");
     patch.variant = 14;
     patch.option = 3;
-    e.expect(near(cardAt(patch, 960.0, 540.0), {1.0, 1.0, 1.0, 1.0}), "Patch: the window's centre");
+    e.expect(near(cardAt(patch, 960.0, 540.0), {1.0, 1.0, 1.0, 1.0}), "Patch: the window's center");
     e.expect(near(cardAt(patch, 100.0, 100.0), {0.0, 0.0, 0.0, 1.0}), "Patch: black around the window");
     // A tenth of the area: the window is about 0.316 of each side.
     e.expect(near(cardAt(patch, 960.0 + 0.158 * 1920.0 - 2.0, 540.0), {1.0, 1.0, 1.0, 1.0}) &&
@@ -836,28 +836,28 @@ void testTestCard(Expectations& e) {
         e.expect(v[3] == 1.0 && v[0] >= 0.0, "Patch: every value of the set is drawn");
     }
 
-    // Grey Ramp.
+    // Gray Ramp.
     const auto ramp = cardOf(6);
-    e.expect(near(cardAt(ramp, 960.0, 300.0), {0.5, 0.5, 0.5, 1.0}), "Grey Ramp: the middle is 50%");
-    e.expect(near(cardAt(ramp, 480.0, 300.0), {0.25, 0.25, 0.25, 1.0}), "Grey Ramp: a quarter along");
+    e.expect(near(cardAt(ramp, 960.0, 300.0), {0.5, 0.5, 0.5, 1.0}), "Gray Ramp: the middle is 50%");
+    e.expect(near(cardAt(ramp, 480.0, 300.0), {0.25, 0.25, 0.25, 1.0}), "Gray Ramp: a quarter along");
     e.expect(near(cardAt(ramp, 320.0, 1000.0), {-0.04, -0.04, -0.04, 1.0}),
-             "Grey Ramp: a PLUGE step below black");
+             "Gray Ramp: a PLUGE step below black");
     e.expect(near(cardAt(ramp, 1200.0, 1000.0), {0.02, 0.02, 0.02, 1.0}) &&
                  near(cardAt(ramp, 1500.0, 1000.0), {0.04, 0.04, 0.04, 1.0}),
-             "Grey Ramp: PLUGE steps above black");
+             "Gray Ramp: PLUGE steps above black");
 
-    // Colour Chart: 24 patches in a 3:2 rectangle (here 1620 x 1080 of 1920).
+    // Color Chart: 24 patches in a 3:2 rectangle (here 1620 x 1080 of 1920).
     const auto chart = cardOf(5);
     const double chartLeft = (1920.0 - 1620.0) / 2.0;
-    const auto patchCentre = [&](const int col, const int row) {
+    const auto patchCenter = [&](const int col, const int row) {
         return std::array<double, 2>{chartLeft + (col + 0.5) * 270.0, (row + 0.5) * 270.0};
     };
     auto chartAt = [&](const int col, const int row) {
-        const auto c = patchCentre(col, row);
+        const auto c = patchCenter(col, row);
         return cardAt(chart, c[0], c[1]);
     };
     e.expect(near(chartAt(0, 0), {1.0, 1.0, 1.0, 1.0}), "Chart: the white patch");
-    e.expect(near(chartAt(3, 0), {0.4, 0.4, 0.4, 1.0}, 1.0e-6), "Chart: a grey patch");
+    e.expect(near(chartAt(3, 0), {0.4, 0.4, 0.4, 1.0}, 1.0e-6), "Chart: a gray patch");
     e.expect(near(chartAt(5, 0), {0.0, 0.0, 0.0, 1.0}, 1.0e-6), "Chart: the black patch");
     e.expect(near(chartAt(0, 1), {1.0, 0.0, 0.0, 1.0}), "Chart: red");
     e.expect(near(chartAt(4, 2), {0.5, 0.0, 0.5, 1.0}), "Chart: half magenta");
@@ -866,13 +866,13 @@ void testTestCard(Expectations& e) {
     e.expect(near(cardAt(chart, chartLeft + 2.0, 2.0), {0.12, 0.12, 0.12, 1.0}), "Chart: the gap between patches");
     e.expect(near(cardAt(chart, 10.0, 500.0), {0.0, 0.0, 0.0, 1.0}), "Chart: black outside the chart");
 
-    // Grid: square cells, lines through the centre, the spacing and line width.
+    // Grid: square cells, lines through the center, the spacing and line width.
     auto grid = cardOf(7);
     grid.values = {90.0, 2.0, 0.0, 0.0};
     e.expect(near(cardAt(grid, 960.0 + 90.0, 540.0 + 45.0), {0.85, 0.85, 0.85, 1.0}), "Grid: a vertical line");
     e.expect(near(cardAt(grid, 960.0 + 45.0, 540.0 + 90.0), {0.85, 0.85, 0.85, 1.0}), "Grid: a horizontal line");
     e.expect(near(cardAt(grid, 960.0 + 45.0, 540.0 + 45.0), {0.08, 0.08, 0.08, 1.0}), "Grid: the cell between");
-    e.expect(near(cardAt(grid, 960.0, 540.0 + 45.0), {0.9, 0.8, 0.1, 1.0}), "Grid: the centre line");
+    e.expect(near(cardAt(grid, 960.0, 540.0 + 45.0), {0.9, 0.8, 0.1, 1.0}), "Grid: the center line");
     e.expect(near(cardAt(grid, 960.0 + 90.0 + 1.5, 540.0 + 45.0), {0.08, 0.08, 0.08, 1.0}),
              "Grid: the line is the width asked");
     auto gridPortrait = cardOf(7, 1080.0, 1920.0);
@@ -904,20 +904,20 @@ void testTestCard(Expectations& e) {
     e.expect(near(cardAt(safe, 960.0 + 0.45 * 1920.0, 300.0), {0.1, 0.8, 0.9, 1.0}), "Safe: title safe at 90%");
     e.expect(near(cardAt(safe, 300.0, 300.0), {0.12, 0.12, 0.12, 1.0}), "Safe: the field");
     safe.option = 2;
-    // The 9:16 guide in a 16:9 frame is 607.5 pixels wide about the centre.
+    // The 9:16 guide in a 16:9 frame is 607.5 pixels wide about the center.
     e.expect(near(cardAt(safe, 960.0 + 303.75, 300.0), {0.5, 0.9, 0.2, 1.0}), "Safe: the 9:16 guide");
     safe.option = 8;
     // The 2.39:1 guide is the frame wide and 803.3 pixels tall.
     e.expect(near(cardAt(safe, 300.0, 540.0 - 1920.0 / 2.39 / 2.0), {0.4, 0.5, 1.0, 1.0}), "Safe: the 2.39:1 guide");
 
-    // UV Grid: square cells coloured by position, labelled.
+    // UV Grid: square cells colored by position, labeled.
     auto uv = cardOf(10);
     uv.values = {120.0, 0.0, 0.0, 0.0};
     e.expect(near(cardAt(uv, 0.2, 500.0), {0.0, 0.0, 0.0, 1.0}), "UV: the line between cells");
     const auto cell = cardAt(uv, 120.0 * 5.0 + 4.0, 120.0 * 2.0 + 4.0);
     e.expect(std::abs(cell[0] - (604.0 / 1920.0)) < 1.0e-5 && std::abs(cell[1] - (1.0 - 244.0 / 1080.0)) < 1.0e-5 &&
                  cell[2] == 0.25,
-             "UV: a cell is coloured by its position");
+             "UV: a cell is colored by its position");
     int lit = 0;
     for (int y = 0; y < 120; ++y)
         for (int x = 0; x < 120; ++x) {
@@ -929,7 +929,7 @@ void testTestCard(Expectations& e) {
 
     // Zone Plate and Siemens Star.
     const auto zone = cardOf(11);
-    e.expect(near(cardAt(zone, 960.0, 540.0), {1.0, 1.0, 1.0, 1.0}, 1.0e-6), "Zone: the centre is white");
+    e.expect(near(cardAt(zone, 960.0, 540.0), {1.0, 1.0, 1.0, 1.0}, 1.0e-6), "Zone: the center is white");
     e.expect(near(cardAt(zone, 960.0 + 31.0, 540.0), cardAt(zone, 960.0, 540.0 + 31.0), 1.0e-5),
              "Zone: the rings are round");
     auto moving = cardOf(11);
@@ -974,22 +974,22 @@ void testTestCard(Expectations& e) {
     count.timed[3] = 1.0;
     e.expect(near(cardAt(count, 5.0, 5.0), {1.0, 1.0, 1.0, 1.0}), "Countdown: the flash frame is white");
 
-    // Alpha Ramp: straight colour bands whose alpha rises across the width, premultiplied.
+    // Alpha Ramp: straight color bands whose alpha rises across the width, premultiplied.
     const auto alpha = cardOf(15);
     e.expect(near(cardAt(alpha, 480.0, 90.0), {0.25 * 1.0, 0.25, 0.25, 0.25}, 1.0e-6), "Alpha: a quarter along over white");
     e.expect(near(cardAt(alpha, 480.0, 270.0), {0.25, 0.0, 0.0, 0.25}, 1.0e-6), "Alpha: over red");
     e.expect(near(cardAt(alpha, 0.0, 90.0), {0.0, 0.0, 0.0, 0.0}), "Alpha: transparent at the left edge");
 
     // The label: a dark plate with light text in the corner.
-    auto labelled = cardOf(7);
-    labelled.values = {90.0, 2.0, 0.0, 0.0};
-    labelled.label = true;
-    labelled.text = {19, 6, 1, 2, 15, 0, 2, 1};
+    auto labeled = cardOf(7);
+    labeled.values = {90.0, 2.0, 0.0, 0.0};
+    labeled.label = true;
+    labeled.text = {19, 6, 1, 2, 15, 0, 2, 1};
     int plate = 0;
     int ink = 0;
     for (int y = 0; y < 80; ++y)
         for (int x = 0; x < 300; ++x) {
-            const auto v = cardAt(labelled, x + 0.5, y + 0.5);
+            const auto v = cardAt(labeled, x + 0.5, y + 0.5);
             if (std::abs(v[0] - 0.04) < 1.0e-6)
                 ++plate;
             if (std::abs(v[0] - 0.95) < 1.0e-6)

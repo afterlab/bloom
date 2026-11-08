@@ -593,8 +593,8 @@ std::optional<std::vector<float>> encodeLensWarp(const LensWarpParameters& p) {
 std::optional<std::vector<float>> encodeTestCard(const TestCardParameters& p) {
     if (p.card < 0 || p.card > 15 || p.variant < 0 || p.variant > 4096 || p.option < 0 ||
         p.option > 4096 || p.text.size() > kTestCardMaxLabel || !finite(p.width) ||
-        !finite(p.height) || !(p.width >= 1.0) || !(p.height >= 1.0) || !finite(p.centreX) ||
-        !finite(p.centreY))
+        !finite(p.height) || !(p.width >= 1.0) || !(p.height >= 1.0) || !finite(p.centerX) ||
+        !finite(p.centerY))
         return std::nullopt;
     for (const auto v : p.values)
         if (!finite(v))
@@ -609,7 +609,7 @@ std::optional<std::vector<float>> encodeTestCard(const TestCardParameters& p) {
     const auto flags = (p.label ? 1.0 : 0.0) + 16.0 * static_cast<double>(p.text.size());
     push(out, static_cast<double>(p.card), static_cast<double>(p.variant),
          static_cast<double>(p.option), flags);
-    push(out, p.width, p.height, p.centreX, p.centreY);
+    push(out, p.width, p.height, p.centerX, p.centerY);
     push(out, p.values[0], p.values[1], p.values[2], p.values[3]);
     push(out, p.timed[0], p.timed[1], p.timed[2], p.timed[3]);
     // Three six-bit codes to a lane, eight lanes.

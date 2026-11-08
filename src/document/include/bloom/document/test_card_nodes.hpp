@@ -28,8 +28,8 @@ enum class TestCard : std::int64_t {
     EbuBars,
     HdrBars,
     Patch,
-    ColourChart,
-    GreyRamp,
+    ColorChart,
+    GrayRamp,
     Grid,
     Circle,
     SafeAreas,
@@ -45,7 +45,7 @@ inline constexpr std::int64_t kTestCardCount = 16;
 inline constexpr std::int64_t kTestCardSizeComposition = 0;
 inline constexpr std::int64_t kTestCardSizeCustom = 1;
 
-// The signal colour spaces of a Patch.
+// The signal color spaces of a Patch.
 inline constexpr std::int64_t kPatchSpaceRec709 = 0;
 inline constexpr std::int64_t kPatchSpaceHlg = 1;
 inline constexpr std::int64_t kPatchSpacePq = 2;
@@ -79,16 +79,16 @@ namespace test_card_parameters {
 using Kind = TestCardParameterKind;
 
 inline constexpr std::array<std::string_view, 16> kCards{
-    "SD Bars", "HD Bars",      "EBU Bars", "HDR Bars",     "Patch",   "Colour Chart",
-    "Grey Ramp", "Grid",       "Circle",   "Safe Areas",   "UV Grid", "Zone Plate",
+    "SD Bars", "HD Bars",      "EBU Bars", "HDR Bars",     "Patch",   "Color Chart",
+    "Gray Ramp", "Grid",       "Circle",   "Safe Areas",   "UV Grid", "Zone Plate",
     "Siemens Star", "Moving Bar", "Countdown", "Alpha Ramp"};
 inline constexpr std::array<std::string_view, 2> kSizes{"Composition", "Custom"};
 inline constexpr std::array<std::string_view, 3> kHdrVariants{
     "HLG, narrow range", "PQ, narrow range", "PQ, full range"};
 inline constexpr std::array<std::string_view, 27> kPatchValues{
-    "Black 0%",       "Near black 2%",  "Near black 4%",  "Grey 10%",     "Grey 20%",
-    "Grey 30%",       "Grey 40%",       "Grey 50%",       "Grey 60%",     "Grey 70%",
-    "Grey 80%",       "Grey 90%",       "Near white 95%", "Near white 98%", "White 100%",
+    "Black 0%",       "Near black 2%",  "Near black 4%",  "Gray 10%",     "Gray 20%",
+    "Gray 30%",       "Gray 40%",       "Gray 50%",       "Gray 60%",     "Gray 70%",
+    "Gray 80%",       "Gray 90%",       "Near white 95%", "Near white 98%", "White 100%",
     "Red 75%",        "Green 75%",      "Blue 75%",       "Cyan 75%",     "Magenta 75%",
     "Yellow 75%",     "Red 100%",       "Green 100%",     "Blue 100%",    "Cyan 100%",
     "Magenta 100%",   "Yellow 100%"};
@@ -111,7 +111,7 @@ inline constexpr std::array kParameters{
     TestCardParameterSpec{"patchValue", Kind::Choice, 14.0, 0.0, 26.0, kPatchValues, "Patch value"},
     TestCardParameterSpec{"patchWindow", Kind::Choice, 0.0, 0.0, 3.0, kPatchWindows, "Window"},
     TestCardParameterSpec{"patchStep", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Step through"},
-    TestCardParameterSpec{"patchSpace", Kind::Choice, 0.0, 0.0, 3.0, kPatchSpaces, "Colour space"},
+    TestCardParameterSpec{"patchSpace", Kind::Choice, 0.0, 0.0, 3.0, kPatchSpaces, "Color space"},
     TestCardParameterSpec{"gridSpacing", Kind::Scalar, 90.0, 2.0, 65536.0, {}, "Spacing", 8.0,
                           512.0, 1.0, 1, "px"},
     TestCardParameterSpec{"gridWidth", Kind::Scalar, 2.0, 0.25, 256.0, {}, "Line width", 0.5, 16.0,
@@ -202,8 +202,8 @@ testCardParameterSpec(const std::string_view schemaKey) noexcept {
     case TestCard::SdBars:
     case TestCard::HdBars:
     case TestCard::EbuBars:
-    case TestCard::ColourChart:
-    case TestCard::GreyRamp:
+    case TestCard::ColorChart:
+    case TestCard::GrayRamp:
     case TestCard::AlphaRamp:
         return false;
     }
@@ -225,7 +225,7 @@ testCardParameterSpec(const std::string_view schemaKey) noexcept {
 }
 
 // The signal of the Patch value `index` (0 to 26) as straight red, green and blue, 0 black and 1 white
-// of the card's colour space; the numbers the kernel draws (field_kernel.glsl, bfk_tc_patch_value).
+// of the card's color space; the numbers the kernel draws (field_kernel.glsl, bfk_tc_patch_value).
 [[nodiscard]] constexpr std::array<double, 3> testCardPatchSignal(const std::int64_t index) noexcept {
     if (index <= 0)
         return {0.0, 0.0, 0.0};
@@ -234,8 +234,8 @@ testCardParameterSpec(const std::string_view schemaKey) noexcept {
     if (index == 2)
         return {0.04, 0.04, 0.04};
     if (index <= 11) {
-        const auto grey = static_cast<double>(index - 2) * 0.1;
-        return {grey, grey, grey};
+        const auto gray = static_cast<double>(index - 2) * 0.1;
+        return {gray, gray, gray};
     }
     if (index == 12)
         return {0.95, 0.95, 0.95};
@@ -260,10 +260,10 @@ testCardParameterSpec(const std::string_view schemaKey) noexcept {
     }
 }
 
-// The colour space the card's signal is written in, named as the colour configuration names it: the
+// The color space the card's signal is written in, named as the color configuration names it: the
 // BT.709 camera encoding for every card but a Patch (which names its own) and the HDR bars (whose
 // signal is the BT.2100 HLG or PQ encoding). Empty: the working space itself, no transform. These are
-// the ids Bloom synthesises into every built-in configuration (color/ocio_builtin_registry.hpp).
+// the ids Bloom synthesizes into every built-in configuration (color/ocio_builtin_registry.hpp).
 inline constexpr std::string_view kTestCardRec709Space = "Rec.709 Camera (Bloom)";
 inline constexpr std::string_view kTestCardHlgSpace = "Rec.2100-HLG (Bloom)";
 inline constexpr std::string_view kTestCardPqSpace = "Rec.2100-PQ (Bloom)";

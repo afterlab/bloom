@@ -511,7 +511,7 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *shuffled);
             continue;
         }
-        // #587 Test Card: a canvas, one field raster and the colour space transform of its signal.
+        // #587 Test Card: a canvas, one field raster and the color space transform of its signal.
         if (node->typeId == document::kTestCardNodeType) {
             if (!lowerTestCard(*node, operations, indices))
                 return {};

@@ -651,7 +651,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::Mask: // a canvas Solid masked by a LayerMaskKernel effect
     case NodeLoweringKind::Field: // a canvas Solid replaced by a FieldRasterKernel effect
-    case NodeLoweringKind::TestCard: // #587: the same raster, then a colour space transform
+    case NodeLoweringKind::TestCard: // #587: the same raster, then a color space transform
     case NodeLoweringKind::Matte: // #383: a canvas Solid combined with Masks
         return "operation.CompiledImageEffect";
     case NodeLoweringKind::Channel: // channel algebra reaches pixels only through the gather

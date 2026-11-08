@@ -1,10 +1,10 @@
 // #587 Test Card through the compiler and the CPU evaluator: the lowering (canvas, optional
-// crop/pad, one field raster, the colour space transform), the size following the composition and a
+// crop/pad, one field raster, the color space transform), the size following the composition and a
 // Custom size overriding it (portrait, wide and square), the exact values of a working-space Patch,
 // the geometry of the Circle on the actual pixel size, a large size within budget, proxy, mute and
 // cancellation. Uses the helpers of snapshot_compiler_field_tests.ipp.
 
-// The document's colour space ids are the ones the colour configuration synthesises.
+// The document's color space ids are the ones the color configuration synthesizes.
 static_assert(document::kTestCardRec709Space == color::kBloomRec709CameraColorSpaceId);
 static_assert(document::kTestCardHlgSpace == color::kBloomRec2100HlgColorSpaceId);
 static_assert(document::kTestCardPqSpace == color::kBloomRec2100PqColorSpaceId);
@@ -18,7 +18,7 @@ static_assert(document::kTestCardPqSpace == color::kBloomRec2100PqColorSpaceId);
                                  document::ConstantValueSource{document::Vec2d{
                                      static_cast<double>(width) / 2.0,
                                      static_cast<double>(height) / 2.0}}),
-            "centre the card layer");
+            "center the card layer");
     require(parameters.setSource(kFirstOpacity, document::ConstantValueSource{1.0}),
             "the card layer is opaque");
     return project;
@@ -71,7 +71,7 @@ evaluateTestCard(const runtime::SnapshotCompileResult& compiled, const std::uint
 
 void testTestCardLowering(Expectations& expectations) {
     using namespace document;
-    // A Composition-sized card: canvas, raster, then the colour space transform.
+    // A Composition-sized card: canvas, raster, then the color space transform.
     {
         const auto compiled = compileTestCard(160, 90, {{"card", std::int64_t{1}}});
         expectations.expect(compiled.plan != nullptr, "a Test Card compiles");
@@ -81,7 +81,7 @@ void testTestCardLowering(Expectations& expectations) {
             expectations.expect(ops.size() == 2 &&
                                     recipeKernel<runtime::FieldRasterKernel>(plan, ops[0]) != nullptr &&
                                     recipeKernel<runtime::CstKernel>(plan, ops[1]) != nullptr,
-                                "a Test Card is one field raster and one colour space transform");
+                                "a Test Card is one field raster and one color space transform");
             const auto* cst = ops.size() == 2 ? recipeKernel<runtime::CstKernel>(plan, ops[1]) : nullptr;
             expectations.expect(cst != nullptr && cst->fromId == kTestCardRec709Space &&
                                     cst->toId.empty(),
@@ -104,7 +104,7 @@ void testTestCardLowering(Expectations& expectations) {
             160, 90, {{"card", std::int64_t{4}}, {"patchSpace", std::int64_t{3}}});
         expectations.expect(compiled.plan != nullptr &&
                                 recipeOperations(*compiled.plan, kTestCardNode).size() == 1,
-                            "a working-space Patch needs no colour space transform");
+                            "a working-space Patch needs no color space transform");
     }
     // A muted card draws nothing.
     {
@@ -122,7 +122,7 @@ void testTestCardLowering(Expectations& expectations) {
 
 void testTestCardPixels(Expectations& expectations) {
     using namespace document;
-    // A working-space grey patch is its exact signal at every pixel (opaque, premultiplied).
+    // A working-space gray patch is its exact signal at every pixel (opaque, premultiplied).
     {
         const auto compiled = compileTestCard(
             48, 27,
@@ -143,7 +143,7 @@ void testTestCardPixels(Expectations& expectations) {
         }
     }
     // The composition's size is the card's size: the Circle is symmetric on every axis, so it is
-    // round and centred, in a wide, a square and a portrait composition.
+    // round and centerd, in a wide, a square and a portrait composition.
     for (const auto& [w, h] : std::vector<std::pair<std::uint32_t, std::uint32_t>>{
              {64, 36}, {40, 40}, {36, 64}}) {
         const auto compiled = compileTestCard(w, h, {{"card", std::int64_t{8}}, {"label", false}});
@@ -156,7 +156,7 @@ void testTestCardPixels(Expectations& expectations) {
                                 image.descriptor()->dataWindow().extent().height() == h,
                             "the card is the composition's size");
         // The sub-samples are not a mirror image of one another, so symmetry is of the picture's
-        // weight: the centroid of its brightness is the frame's centre, and it is drawn.
+        // weight: the centroid of its brightness is the frame's center, and it is drawn.
         double total = 0.0;
         double sumX = 0.0;
         double sumY = 0.0;
@@ -172,7 +172,7 @@ void testTestCardPixels(Expectations& expectations) {
         const bool symmetric = total > 0.0 &&
                                std::abs(sumX / total - static_cast<double>(w) / 2.0) < 0.1 &&
                                std::abs(sumY / total - static_cast<double>(h) / 2.0) < 0.1;
-        expectations.expect(symmetric && drawn, "the Circle is drawn and centred on both axes");
+        expectations.expect(symmetric && drawn, "the Circle is drawn and centerd on both axes");
     }
     // A Custom size overrides the composition's: outside the card nothing is drawn, inside is opaque.
     {
@@ -190,10 +190,10 @@ void testTestCardPixels(Expectations& expectations) {
             const auto edgeOut = cardPixel(image, 21, 13);
             expectations.expect(inside[3] == 1.0F && outside[3] == 0.0F && edgeIn[3] == 1.0F &&
                                     edgeOut[3] == 0.0F,
-                                "a Custom size overrides the composition's, centred, with no stretch");
+                                "a Custom size overrides the composition's, centerd, with no stretch");
         }
     }
-    // A Custom size larger than the composition is cut to it and still centred.
+    // A Custom size larger than the composition is cut to it and still centerd.
     {
         const auto compiled = compileTestCard(
             32, 18,
@@ -269,7 +269,7 @@ void testTestCardPixels(Expectations& expectations) {
     }
 }
 
-// The pixels of a Rec.709 Patch are its signal taken through the colour space transform into the
+// The pixels of a Rec.709 Patch are its signal taken through the color space transform into the
 // working space: the arithmetic the card's expected display value starts from.
 void testTestCardPatchMatchesTheTransform(Expectations& expectations) {
     auto resolution = color::resolveBloomNeutralV1BuiltIn(
@@ -302,7 +302,7 @@ void testTestCardPatchMatchesTheTransform(Expectations& expectations) {
     }
 }
 
-// A level below black survives the colour space transform: the SD Bars' PLUGE step at -4% is
+// A level below black survives the color space transform: the SD Bars' PLUGE step at -4% is
 // negative in the working space, black is zero and the +4% step is above it.
 void testTestCardKeepsLevelsBelowBlack(Expectations& expectations) {
     const auto compiled = compileTestCard(210, 120, {{"card", std::int64_t{0}}});
@@ -320,7 +320,7 @@ void testTestCardKeepsLevelsBelowBlack(Expectations& expectations) {
                         "the PLUGE steps below, at and above black are kept through the transform");
 }
 
-// Standard bars keep their 16:9 layout in any frame: in a portrait frame they are the largest centred
+// Standard bars keep their 16:9 layout in any frame: in a portrait frame they are the largest centerd
 // 16:9 area, black outside it and never stretched.
 void testTestCardBarsArePaddedNotStretched(Expectations& expectations) {
     for (const std::int64_t card : {std::int64_t{0}, std::int64_t{1}, std::int64_t{2}}) {

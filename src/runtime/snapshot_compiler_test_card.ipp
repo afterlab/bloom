@@ -2,8 +2,8 @@
 // beside snapshot_compiler_fields.ipp, whose field program builder it uses.
 //
 // The card is one field raster (the TestCard instruction over the Coordinate) of a transparent canvas
-// the size of the composition, cut or padded to a Custom size about the composition's centre. The raster
-// writes the card's signal; every card but a working-space Patch then runs through one colour space
+// the size of the composition, cut or padded to a Custom size about the composition's center. The raster
+// writes the card's signal; every card but a working-space Patch then runs through one color space
 // transform into the working space, so the pixels reach the Viewer and every export as any source's do.
 
 // The glyph code of one character of a label (field_kernel.glsl, bfk_tc_glyph_a): a space, the digits,
@@ -77,8 +77,8 @@ lowerTestCard(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
         return true;
     }
 
-    // The canvas: the composition's, cut or padded about its centre to the card's own size. The
-    // integer margins fix the card's centre exactly, whatever the parities.
+    // The canvas: the composition's, cut or padded about its center to the card's own size. The
+    // integer margins fix the card's center exactly, whatever the parities.
     const auto floorHalf = [](const std::int64_t d) { return d >= 0 ? d / 2 : -((1 - d) / 2); };
     const auto left = floorHalf(compositionWidth - width);
     const auto top = floorHalf(compositionHeight - height);
@@ -108,16 +108,16 @@ lowerTestCard(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
     };
     cut(runtime::CanvasImageEffect::Crop, 1);
     cut(runtime::CanvasImageEffect::Pad, -1);
-    // The card's centre in field positions (composition pixels from the centre, y up).
-    const auto centreX = static_cast<double>(left) + 0.5 * static_cast<double>(width) -
+    // The card's center in field positions (composition pixels from the center, y up).
+    const auto centerX = static_cast<double>(left) + 0.5 * static_cast<double>(width) -
                          0.5 * static_cast<double>(compositionWidth);
-    const auto centreY = 0.5 * static_cast<double>(compositionHeight) -
+    const auto centerY = 0.5 * static_cast<double>(compositionHeight) -
                          (static_cast<double>(top) + 0.5 * static_cast<double>(height));
 
     const auto cardId = static_cast<TestCard>(card);
     const auto hdrVariant = integer("hdrVariant");
     const auto patchSpace = integer("patchSpace");
-    const bool labelled = flag("label") && testCardParameterRelevant(card, "label");
+    const bool labeled = flag("label") && testCardParameterRelevant(card, "label");
     const bool patchStep = card == static_cast<std::int64_t>(TestCard::Patch) && flag("patchStep");
     const bool zoneMoving = cardId == TestCard::ZonePlate && flag("zoneMoving");
     const bool vertical = integer("barDirection") == 1;
@@ -161,8 +161,8 @@ lowerTestCard(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
         break;
     }
     std::vector<std::int64_t> choices{card, variant, option,
-                                      (labelled ? 1 : 0) | (animated ? 2 : 0)};
-    if (labelled) {
+                                      (labeled ? 1 : 0) | (animated ? 2 : 0)};
+    if (labeled) {
         const auto& names = test_card_parameters::kCards;
         std::string text(names[static_cast<std::size_t>(card)]);
         text += ' ';
@@ -186,7 +186,7 @@ lowerTestCard(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
     const auto result = fieldEmit(
         build, FieldOp::TestCard, {build.coordinate, -1, -1, -1}, std::move(choices),
         {fieldConstant(static_cast<double>(width)), fieldConstant(static_cast<double>(height)),
-         fieldConstant(centreX), fieldConstant(centreY), fieldConstant(v0), fieldConstant(v1),
+         fieldConstant(centerX), fieldConstant(centerY), fieldConstant(v0), fieldConstant(v1),
          fieldConstant(0.0), fieldConstant(0.0), fieldConstant(fps)});
     build.usesTime = animated;
     auto program = finishFieldProgram(build, result, FieldResultKind::Premultiplied,
@@ -198,7 +198,7 @@ lowerTestCard(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
     auto last = runtime::OperationIndex::fromRaw(operations.size());
     operations.emplace_back(runtime::CompiledImageEffect{
         node.id, canvas, runtime::FieldRasterKernel{std::move(*program), samples}});
-    // Into the working space, from the colour space the signal is written in.
+    // Into the working space, from the color space the signal is written in.
     const std::string from(testCardSignalSpaceId(card, patchSpace, hdrVariant));
     if (!from.empty()) {
         const auto index = runtime::OperationIndex::fromRaw(operations.size());

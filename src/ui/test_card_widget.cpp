@@ -94,7 +94,7 @@ TestCardCardWidget::TestCardCardWidget(CompositionSession& session, const docume
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
-    // A read-only swatch of the expected display colour: it takes no pointer or focus, so it never
+    // A read-only swatch of the expected display color: it takes no pointer or focus, so it never
     // opens the picker.
     swatchChip_ = new kit::KColorChip(this);
     swatchChip_->setObjectName(QStringLiteral("testCardSwatch"));
@@ -236,7 +236,7 @@ void TestCardCardWidget::refresh() {
                                  .arg(space)
                                  .arg(remembered ? remembered->join('/') : QString{}, QString::number(card));
             if (builtIn == nullptr) {
-                expected_->setText(tr("Expected display value unavailable for this colour "
+                expected_->setText(tr("Expected display value unavailable for this color "
                                       "configuration."));
                 swatch_ = QColor();
             } else if (key != state_->requested) {

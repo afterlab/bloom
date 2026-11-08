@@ -146,8 +146,8 @@ QString nodeSearchKeywords(const std::string_view typeId) {
                               "lens dispersion red blue shift prism");
     // #587.
     if (typeId == document::kTestCardNodeType)
-        return QStringLiteral("test card bars colour bars color bars grid zone plate "
-                              "smpte ebu hdr hlg pq patch chart grey ramp pluge circle safe areas "
+        return QStringLiteral("test card bars color bars grid zone plate "
+                              "smpte ebu hdr hlg pq patch chart gray ramp pluge circle safe areas "
                               "uv siemens star moving bar countdown alpha ramp chart");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");

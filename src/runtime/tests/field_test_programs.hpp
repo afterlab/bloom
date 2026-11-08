@@ -68,7 +68,7 @@ class Builder final {
 };
 
 // A Test Card program: the TestCard instruction of `card` over the Coordinate, in a `width` x `height`
-// frame centred on the composition's centre, with numbers that make every card vary across it, as the
+// frame centerd on the composition's center, with numbers that make every card vary across it, as the
 // premultiplied raster its lowering builds.
 inline void addTestCard(Builder& b, const int coordinate, const std::int64_t card,
                         const double width, const double height, const std::int64_t variant = 0,
