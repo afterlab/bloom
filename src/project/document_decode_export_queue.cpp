@@ -146,6 +146,12 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
             !float64(*parts[1], state, joinPath(loudnessPath, "truePeakDbtp"),
                      decoded.truePeakDbtp))
             return false;
+        if (!(decoded.targetLufs >= document::kExportLoudnessTargetMinimumLufs &&
+              decoded.targetLufs <= document::kExportLoudnessTargetMaximumLufs))
+            return fail(state, joinPath(loudnessPath, "targetLufs"));
+        if (!(decoded.truePeakDbtp >= document::kExportTruePeakMinimumDbtp &&
+              decoded.truePeakDbtp <= document::kExportTruePeakMaximumDbtp))
+            return fail(state, joinPath(loudnessPath, "truePeakDbtp"));
         out.loudness = decoded;
     }
     if (!decodeUInt32Member(*fields[at++], state, joinPath(path, "audioSampleRate"),

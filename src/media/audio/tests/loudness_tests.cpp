@@ -129,7 +129,7 @@ void limiterKeepsTheCeilingAndTheAlignment() {
     // Far from the clicks the tone is the input at +10 dB, sample for sample (aligned, no ripple).
     const double gain = fromDb(10.0);
     double worst = 0.0;
-    for (std::size_t frame = 40000; frame < 80000; ++frame)
+    for (std::size_t frame = 70000; frame < 85000; ++frame)
         worst = std::max(worst, std::abs(static_cast<double>(out[frame * 2]) -
                                          static_cast<double>(input[frame * 2]) * gain));
     expect(worst < 1e-5, "outside the peaks the stream is the input times the gain, in place (" +

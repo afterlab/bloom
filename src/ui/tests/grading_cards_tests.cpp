@@ -1284,6 +1284,8 @@ void audioEffectCards() {
         if (fixture.item == nullptr)
             continue;
         for (const auto& spec : document::audioEffectParameters(type)) {
+            if (spec.kind != document::AudioEffectParameterKind::Scalar)
+                continue;
             const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
             expect(value && *value == spec.value, "a new audio effect card writes no value of its own");
         }

@@ -523,6 +523,18 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .summary = "Audio sample rate.",
           .unit = "Hz",
           .range = "8000..192000"},
+         {.name = "loudnessLufs",
+          .type = "number",
+          .summary = "Normalize the audio to this integrated loudness (EBU R128) with a true-peak "
+                     "limiter. Absent leaves the audio as mixed.",
+          .unit = "LUFS",
+          .range = "-40..-5"},
+         {.name = "truePeakDbtp",
+          .type = "number",
+          .summary = "The true-peak ceiling of a loudness-normalized export. Needs loudnessLufs.",
+          .unit = "dBTP",
+          .range = "-12..0",
+          .defaultValue = "-1"},
          {.name = "overwrite",
           .type = "string",
           .summary = "What to do when a file exists. Over MCP, ask behaves as refuse; pass "
@@ -546,7 +558,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .range = "0..64",
           .defaultValue = "the Preferences value (automatic)"}});
     exportTool.result = "{publishedFrames, preservationReport, workerMemory:{measured, peakBytes, "
-                        "capBytes, waits, waitedMs} (a movie or WAV), files:[{path, "
+                        "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
+                        "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
+                        "finalMeasured, finalLufs, finalTruePeakDbtp, limiterReductionDb} (with "
+                        "loudnessLufs), files:[{path, "
                         "digest:\"sha256:<hex>\"}]}";
     exportTool.errors = renderErrors;
     addExamples(

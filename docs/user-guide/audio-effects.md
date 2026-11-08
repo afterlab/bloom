@@ -41,8 +41,7 @@ Hiss adds steady noise. **Level** (-50 dB) is its loudness, **Tone** (1000 Hz) r
 frequency (at 20 Hz it is plain white noise), and **Seed** picks which noise it is, so a render is
 repeatable.
 
-## Playback
+## Animation
 
-While you play, a value that is changing over time is refreshed with the transport, so a fast animation
-can sound stepped on screen; the export follows it smoothly. See
+A value that changes over time follows the transport smoothly while you play, and in an export. See
 [Exporting video](exporting-video.md) for how audio is delivered, including **Normalize loudness**.

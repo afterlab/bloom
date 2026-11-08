@@ -787,9 +787,9 @@ frame, so starting mid-clip sounds the same as playing from earlier. Filter coef
 32-sample grid of absolute positions. Animated parameters move linearly across an `AudioEffectRamp`
 span: the exporter evaluates each 512-frame block at its start and end, as it does for level
 automation (#459), which makes automation continuous at sample resolution. Interactive playback
-re-evaluates the mix when the transport time changes and holds each value until the next refresh;
-smooth interactive following of animated values shares the open level-automation gap (#471), and
-static parameters are identical in playback and export.
+re-evaluates the mix as the transport moves and ramps moving effect parameters across the
+look-ahead span the same way it ramps an automated level (#471); static parameters are identical in
+playback and export.
 
 ## Export Loudness (#570)
 
