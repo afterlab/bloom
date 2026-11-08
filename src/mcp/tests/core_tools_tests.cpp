@@ -822,6 +822,38 @@ void retiredTransientJobs() {
     expect(contains(status, R"("recentTransientJobs":[])"),
            "a new queue generation releases the retired jobs: " + status);
 
+    // Issue #570: loudness normalization over MCP. The target reaches the run and the result carries
+    // the measured and delivered level; out-of-range, lone-ceiling and still requests are refused.
+    {
+        const auto movie = (captures / "loudness.mov").string();
+        const auto call = [&](const std::string& extra) {
+            return server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
+                                         R"("destination":")" +
+                                             movie + R"(")" + extra + "}");
+        };
+        fake->push({});
+        const auto normalized = call(R"(,"loudnessLufs":-23,"truePeakDbtp":-2)");
+        expect(contains(normalized, R"("isError":false)") &&
+                   contains(normalized, R"("targetLufs":-23)") &&
+                   contains(normalized, R"("truePeakLimitDbtp":-2)") &&
+                   contains(normalized, R"("measuredLufs":-20)") &&
+                   contains(normalized, R"("finalLufs":-23)") && contains(normalized, R"("gainDb":-3)"),
+               "export reports measured and delivered loudness: " + normalized);
+        fake->push({});
+        expect(!contains(call(""), R"("loudness":)"), "no target reports no loudness");
+        for (const auto& bad : {R"(,"loudnessLufs":-3)", R"(,"loudnessLufs":-45)",
+                                R"(,"loudnessLufs":-16,"truePeakDbtp":1)", R"(,"truePeakDbtp":-1)"}) {
+            const auto refused = call(bad);
+            expect(contains(refused, "-32602"), std::string("refused: ") + bad + " " + refused);
+        }
+        const auto still =
+            server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                                  R"("destination":")" +
+                                      (captures / "loudness.png").string() +
+                                      R"(","loudnessLufs":-16})");
+        expect(contains(still, "-32602"), "a still preset refuses a loudness target: " + still);
+    }
+
     // Issue #581: worker limits and the worker memory report over MCP.
     {
         constexpr std::uint64_t mib = std::uint64_t{1} << 20U;

@@ -19,6 +19,7 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/audio/loudness.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -756,6 +757,94 @@ void testCompileFailureNamesItsSubject() {
     }
 }
 
+
+// #570: a WAV export normalized to a loudness target. The tone source measures about -12.4 LUFS
+// (a 0.25-amplitude sine in both channels); the export brings it to the target, the report states
+// the measured and the delivered level, and an independent meter reading of the published file
+// agrees with the report. A target the true-peak ceiling forbids is limited, and the ceiling holds
+// in the file. The file keeps the programme's length.
+void testLoudnessNormalization() {
+    Fixture f("loudness", WavEncoding::Float32);
+    const auto measureFile = [&](const std::filesystem::path& path) {
+        const auto [channels, samples] = wavSamples(path);
+        media::audio::loudness::Meter meter(48000, 2);
+        std::vector<float> interleaved(samples.begin(), samples.end());
+        expect(channels == 2 && meter.valid() && meter.add(interleaved), "the file is readable");
+        return std::pair{samples.size() / 2, meter.measurement()};
+    };
+    const auto run = [&](const double target, const double ceiling, const std::string& file) {
+        document::ExportOutputSettings settings;
+        settings.format = ExportFormat::Wav;
+        settings.codecProfile = "s24";
+        settings.includeAudio = true;
+        settings.loudness = document::ExportLoudness{target, ceiling};
+        return f.run(f.addJob(settings, "Exports/" + file), file);
+    };
+    const auto reportOf = [](const std::optional<host::ExportJobView>& view)
+        -> std::optional<host::ExportLoudnessReport> {
+        if (!published(view) || view->outputs.empty() || !view->outputs.front().verification)
+            return std::nullopt;
+        return view->outputs.front().verification->loudness;
+    };
+
+    // Plain normalization to -23 LUFS.
+    {
+        const auto finished = run(-23.0, -1.0, "quiet.wav");
+        const auto report = reportOf(finished);
+        expect(report.has_value(), "the normalized export publishes a loudness report");
+        if (report) {
+            expect(report->measured && report->finalMeasured, "the programme is measurable");
+            expect(std::abs(report->measuredLufs - -12.4) < 0.6,
+                   "the tone measures near -12.4 LUFS (got " + std::to_string(report->measuredLufs) +
+                       ")");
+            expect(std::abs(report->finalLufs - -23.0) < 0.2,
+                   "the delivered loudness is the target (got " + std::to_string(report->finalLufs) +
+                       ")");
+            expect(std::abs(report->gainDb - (-23.0 - report->measuredLufs)) < 1e-6,
+                   "the gain is target minus measured");
+            expect(report->limiterReductionDb < 0.05, "no limiting was needed");
+            const auto [frames, measured] = measureFile(f.folder / "Exports/quiet.wav");
+            expect(frames == 48000, "the file keeps the programme's 48000 frames (got " +
+                                        std::to_string(frames) + ")");
+            expect(std::abs(measured.integratedLufs - report->finalLufs) < 0.1,
+                   "an independent reading of the file agrees with the report (file " +
+                       std::to_string(measured.integratedLufs) + ", report " +
+                       std::to_string(report->finalLufs) + ")");
+            expect(std::abs(measured.truePeakDbtp - report->finalTruePeakDbtp) < 0.15,
+                   "the independent true peak agrees with the report");
+        }
+    }
+    // A loud target under a low ceiling: the limiter holds the ceiling.
+    {
+        const auto finished = run(-5.0, -12.0, "limited.wav");
+        const auto report = reportOf(finished);
+        expect(report.has_value(), "the limited export publishes a loudness report");
+        if (report) {
+            expect(report->limiterReductionDb > 1.0,
+                   "the limiter acted (" + std::to_string(report->limiterReductionDb) + " dB)");
+            const auto [frames, measured] = measureFile(f.folder / "Exports/limited.wav");
+            expect(frames == 48000, "the limited file keeps 48000 frames");
+            expect(measured.truePeakDbtp <= -12.0 + 0.1,
+                   "the true-peak ceiling holds in the file (got " +
+                       std::to_string(measured.truePeakDbtp) + ")");
+            expect(measured.integratedLufs <= -5.0 + 0.1,
+                   "the limited programme does not exceed the target");
+        }
+    }
+    // Without a target nothing is reported and the audio is as mixed.
+    {
+        document::ExportOutputSettings settings;
+        settings.format = ExportFormat::Wav;
+        settings.codecProfile = "s24";
+        settings.includeAudio = true;
+        const auto finished = f.run(f.addJob(settings, "Exports/plain.wav"), "plain");
+        expect(published(finished) && !reportOf(finished).has_value(),
+               "an export without a loudness target reports none");
+        const auto [frames, measured] = measureFile(f.folder / "Exports/plain.wav");
+        expect(std::abs(measured.integratedLufs - -12.4) < 0.6, "the plain export is unchanged");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -766,6 +855,7 @@ int main() {
         testLevelAutomationRampsWithinBlocks();
         testFailedRunKeepsFrameProvenance();
         testCompileFailureNamesItsSubject();
+        testLoudnessNormalization();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

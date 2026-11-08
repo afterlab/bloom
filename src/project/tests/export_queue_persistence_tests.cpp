@@ -225,6 +225,33 @@ void testUseCachedFrames() {
         "a non-boolean useCachedFrames is refused");
 }
 
+// #570: `loudness` is an optional member of an output's settings; absent means the audio is not
+// normalized, so every earlier file opens and re-saves unchanged.
+void testLoudness() {
+    const auto plain = encode(makeDocument(true));
+    expect(plain.find("loudness") == std::string::npos, "no target writes no member");
+
+    auto seed = makeNewProject("Export queue", "Main", core::RationalTime::fromInteger(2));
+    auto normalized = job(1, seed.initialCompositionId);
+    normalized.outputs[0].settings.loudness = ExportLoudness{-14.0, -2.5};
+    seed.project.setExportQueue({{normalized}});
+    const Document withTarget{std::move(seed.project)};
+    const auto text = encode(withTarget);
+    expect(text.find("\"loudness\"") != std::string::npos &&
+               text.find("\"targetLufs\": -14") != std::string::npos &&
+               text.find("\"truePeakDbtp\": -2.5") != std::string::npos,
+           "the target is written");
+    const auto decoded = decodeQueue(text);
+    expect(decoded && decoded->jobs[0].outputs[0].settings.loudness ==
+                          std::optional(ExportLoudness{-14.0, -2.5}) &&
+               !decoded->jobs[0].outputs[1].settings.loudness.has_value(),
+           "the target round-trips per output");
+    expect(!decodeQueue(replaceOnce(text, "\"targetLufs\": -14", "\"targetLufs\": -2")),
+           "a target above -5 LUFS is refused");
+    expect(!decodeQueue(replaceOnce(text, "\"truePeakDbtp\": -2.5", "\"truePeakDbtp\": 3")),
+           "a ceiling above 0 dBTP is refused");
+}
+
 void testRejects() {
     const auto text = encode(makeDocument(true));
     for (const auto& [from, to, message] :
@@ -326,6 +353,7 @@ void testWebmFormats() {
 int main() {
     try {
         testRoundTrip();
+        testLoudness();
         testMigration();
         testRejects();
         testUseCachedFrames();

@@ -34,6 +34,7 @@
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -1271,6 +1272,71 @@ void autoExposureCard() {
         std::cerr << "could not write the Auto Exposure neighbors capture\n";
 }
 
+// #569: each audio effect node is a plain card: its rows and sockets paint inside the card with no
+// label cut short and no value of its own written. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the cards
+// are written beside their Sources neighbors.
+void audioEffectCards() {
+    for (const auto type : {document::kAudioEqualizerNodeType, document::kAudioCompressorNodeType,
+                            document::kAudioAutoLevelNodeType, document::kAudioMonoNodeType,
+                            document::kAudioHissNodeType}) {
+        CardFixture fixture(type);
+        expect(fixture.item != nullptr, "an audio effect draws a card");
+        if (fixture.item == nullptr)
+            continue;
+        for (const auto& spec : document::audioEffectParameters(type)) {
+            const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
+            expect(value && *value == spec.value, "a new audio effect card writes no value of its own");
+        }
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << type << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, std::string(type).c_str()))
+            ++failures;
+        capture(fixture, QString::fromLatin1(type.data(), static_cast<int>(type.size())));
+    }
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    if (directory.isEmpty())
+        return;
+    // All five side by side, then beside the Audio and Image source cards they follow.
+    CardFixture fixture(document::kAudioEqualizerNodeType);
+    if (fixture.item == nullptr)
+        return;
+    std::vector<ui::node_editor::NodeItem*> neighbors{fixture.item};
+    double x = fixture.item->mapRectToScene(fixture.item->cardRect()).right() + 40.0;
+    for (const auto type : {"bloom.audio-compressor", "bloom.audio-auto-level", "bloom.audio-mono",
+                            "bloom.audio-hiss", "bloom.audio-source", "bloom.image-source"}) {
+        const auto node = addNode(fixture.session, type);
+        QApplication::processEvents();
+        auto* item = ui::node_editor::nodeItemAncestor(fixture.editor->graphScene()->findNodeItem(node));
+        if (item == nullptr)
+            continue;
+        item->setPos(item->pos() + QPointF(x - item->mapRectToScene(item->cardRect()).left(),
+                                          fixture.item->mapRectToScene(fixture.item->cardRect()).top() -
+                                              item->mapRectToScene(item->cardRect()).top()));
+        x = item->mapRectToScene(item->cardRect()).right() + 40.0;
+        neighbors.push_back(item);
+    }
+    QApplication::processEvents();
+    QRectF source;
+    for (auto* item : neighbors)
+        source = source.united(item->mapRectToScene(item->cardRect()));
+    source.adjust(-24, -24, 24, 24);
+    constexpr qreal scale = 2.0;
+    QImage image((source.size() * scale).toSize(), QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(ui::kit::color(ui::kit::Color::Canvas));
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        fixture.editor->graphScene()->render(&painter, QRectF(QPointF(), source.size()), source);
+    }
+    QDir().mkpath(directory);
+    if (!image.save(directory + QStringLiteral("/audio-effects-neighbors-card.png")))
+        std::cerr << "could not write the audio effects neighbors capture\n";
+}
+
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
 // and shows its node's rows; the graph follows the values, each handle's drag is one command that
 // moves its own value alone and its row follows; a slider drag is one command too.
@@ -2391,6 +2457,7 @@ int main(int argc, char** argv) {
     sharpenCard();
     codecDegradeCard();
     autoExposureCard();
+    audioEffectCards();
     lensDistortionCard();
     chromaticAberrationCard();
     testCardCard();

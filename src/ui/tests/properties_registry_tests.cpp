@@ -24,6 +24,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
@@ -1093,6 +1094,65 @@ void autoExposureRows() {
     }
 }
 
+// #569 audio effects in Properties: a row for every value of every effect, in plain words, each label
+// shown whole and nothing wider than the panel, at the widths of a wide, a normal and a narrow panel.
+// With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device
+// pixel ratio).
+void audioEffectRows() {
+    for (const auto type : {document::kAudioEqualizerNodeType, document::kAudioCompressorNodeType,
+                            document::kAudioAutoLevelNodeType, document::kAudioMonoNodeType,
+                            document::kAudioHissNodeType}) {
+        auto project = document::makeNewProject("Audio", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, type);
+        session.selectNode(node);
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 900);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& spec : document::audioEffectParameters(type)) {
+                auto* found = row(properties, std::string(spec.role).c_str());
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "an audio effect presents every value");
+                if (found == nullptr)
+                    continue;
+                const auto label = QString::fromLatin1(spec.label.data(), static_cast<int>(spec.label.size()));
+                expect(found->property("rowLabel").toString() == label,
+                       "an audio effect row is named in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == label && candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "an audio effect row label is shown whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) && !field->isDisplayRounded(),
+                               "an audio effect value is shown whole");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "an audio effect's rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/") +
+                                            QString::fromLatin1(type.data(), static_cast<int>(type.size())) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the audio effect Properties capture\n";
+            }
+        }
+    }
+}
+
 // #564 Frame Rate Hold in Properties: the amount and the seed appear with the irregular cadence, the
 // seed row carries Randomize seed, and every label is shown whole.
 void frameRateHoldRows() {
@@ -1307,6 +1367,7 @@ int main(int argc, char** argv) try {
     transform2DRows();
     frameRateHoldRows();
     autoExposureRows();
+    audioEffectRows();
     cameraShakeRows();
     matteBlurRows();
     matteKeyRows();
