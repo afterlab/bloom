@@ -32,11 +32,13 @@ void checkStatus(const PyStatus status) {
 
 } // namespace
 
-EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable)
+EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable,
+                               std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver)
     : state_(std::make_unique<State>()) {
     if (Py_IsInitialized() != 0) {
         throw std::runtime_error("Bloom owns one scripting interpreter per process (ADR 0022)");
     }
+    setProcessGpuOcioResolver(std::move(ocioResolver));
     if (PyImport_AppendInittab("_bloom", &PyInit__bloom) != 0) {
         throw std::runtime_error("Could not register the Bloom bridge");
     }

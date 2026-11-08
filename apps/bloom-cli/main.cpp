@@ -501,7 +501,8 @@ int main(int argc, char** argv) {
         (argc == 3 && std::string_view(argv[1]) == "run" &&
          std::filesystem::path(argv[2]).extension() == ".py")) {
         try {
-            scripting::python::EmbeddedPython python(std::filesystem::absolute(argv[0]));
+            scripting::python::EmbeddedPython python(std::filesystem::absolute(argv[0]),
+                                                     packagedOcioResolver());
             return argc == 2 ? python.interactive() : python.runFile(argv[2]);
         } catch (const std::exception& error) {
             std::cerr << "error[bloom-cli.python]: " << error.what() << '\n';

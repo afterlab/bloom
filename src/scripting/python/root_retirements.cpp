@@ -3,12 +3,29 @@
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
+#include <bloom/runtime/gpu_ocio_context.hpp>
+
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace bloom::scripting::python {
+namespace {
+std::mutex& processOcioResolverMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+std::shared_ptr<runtime::GpuOcioContextResolver>& processOcioResolver() {
+    static std::shared_ptr<runtime::GpuOcioContextResolver> resolver;
+    return resolver;
+}
+} // namespace
+void setProcessGpuOcioResolver(std::shared_ptr<runtime::GpuOcioContextResolver> resolver) {
+    const std::lock_guard lock(processOcioResolverMutex());
+    processOcioResolver() = std::move(resolver);
+}
 PythonHostRetirement::PythonHostRetirement() : impl_(std::make_unique<Impl>()) {}
 PythonHostRetirement::~PythonHostRetirement() {
     // Registered schedulers must be collected explicitly outside the GIL before module unload.
@@ -82,6 +99,10 @@ std::shared_ptr<host::GpuExportProvider> PythonRootRetirements::sharedProvider()
     if (!impl_->sharedProvider) {
         runtime::GpuProcessFrameEvaluatorOptions options;
         options.pipelineCacheDirectory = platform::gpuPipelineCacheDirectory();
+        {
+            const std::lock_guard resolverLock(processOcioResolverMutex());
+            options.ocioResolver = processOcioResolver();
+        }
         impl_->sharedProvider =
             host::GpuExportProvider::create(std::move(options), impl_->bootstrapGate);
     }

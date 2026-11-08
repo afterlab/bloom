@@ -1,6 +1,7 @@
 #include <root_retirements_private.hpp>
 
 #include <bloom/render/packed_rgba8_storage.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <packed_host_retirement_private.hpp>
 
 #include <algorithm>
@@ -274,6 +275,21 @@ void constructorFailureAndCloseRace() {
                 "startup race rejects Host and joins before successful closure");
     }
 }
+// #608: the interpreter's own GPU provider takes the composition root's packaged shader-tool
+// resolver. Without it a scripted render of a LUT or any OCIO effect has no GPU OCIO preparer and
+// takes the CPU reference path.
+void sharedProviderTakesTheRootsOcioResolver() {
+    const auto resolver = std::make_shared<runtime::GpuOcioContextResolver>();
+    setProcessGpuOcioResolver(resolver);
+    const auto before = resolver.use_count();
+    {
+        RegistryFixture fixture;
+        const auto provider = fixture.registry->sharedProvider();
+        require(provider != nullptr && resolver.use_count() > before,
+                "the shared provider is created with the root's OCIO resolver");
+    }
+    setProcessGpuOcioResolver(nullptr);
+}
 } // namespace
 int main() {
     try {
@@ -282,6 +298,7 @@ int main() {
         borrowedRoot();
         constructorFailureAndCloseRace();
         sharedBootstrapGateCancellation();
+        sharedProviderTakesTheRootsOcioResolver();
         std::cout << "Python root retirement ownership/startup/active-call/timeout tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -11,6 +11,9 @@
 namespace bloom::host {
 class GpuExportProvider;
 }
+namespace bloom::runtime {
+class GpuOcioContextResolver;
+}
 
 namespace bloom::scripting::python {
 
@@ -31,7 +34,10 @@ struct ExecutionResult final {
 // the GIL; authoring operations may be queued by the host adapter.
 class EmbeddedPython final {
   public:
-    explicit EmbeddedPython(const std::filesystem::path& executable = {});
+    // `ocioResolver` is the root's packaged GPU shader-tool resolver (#608): the interpreter's own
+    // GPU provider needs it to render OCIO effects such as File Transform on the GPU.
+    explicit EmbeddedPython(const std::filesystem::path& executable = {},
+                            std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver = {});
     ~EmbeddedPython();
     EmbeddedPython(const EmbeddedPython&) = delete;
     EmbeddedPython& operator=(const EmbeddedPython&) = delete;

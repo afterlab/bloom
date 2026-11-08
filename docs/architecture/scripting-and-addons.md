@@ -303,7 +303,8 @@ range and concurrent requests; a missing provider is a typed `MissingProcessingR
 compilation. The Python native host retains a provider for its active lifetime. A live GUI host borrows the
 application's injected provider; independent headless hosts share ONE interpreter-owned provider
 (one native device), created on first use and kept for the interpreter's life, exactly as the
-application shares one (#357). Only the module exit hook (or `_shutdown_owned_roots`) retires it,
+application shares one (#357); the root hands the interpreter its packaged GPU shader-tool resolver
+(`EmbeddedPython`), so a scripted render of a LUT or other OCIO effect runs on the GPU (#608). Only the module exit hook (or `_shutdown_owned_roots`) retires it,
 once and serially, after producers are finished and no work is in flight; a Host constructed after
 that is refused with a typed "shutting down" `RuntimeError`. One device per Host is not used: several
 devices destroyed concurrently on different owner threads deadlocked inside a vendor driver at

@@ -7,7 +7,16 @@
 #include <memory>
 #include <optional>
 
+namespace bloom::runtime {
+class GpuOcioContextResolver;
+}
+
 namespace bloom::scripting::python {
+// The composition root's packaged GPU shader-tool resolver for the provider the interpreter
+// creates itself (#608). The packaging definitions live on the executable, not on this library, so
+// the root hands the resolver in before the interpreter starts; without one a scripted render of a
+// LUT or other OCIO effect has no GPU OCIO preparer and takes the CPU reference path.
+void setProcessGpuOcioResolver(std::shared_ptr<runtime::GpuOcioContextResolver> resolver);
 class PythonRootRetirements;
 struct PythonRootRetirementsTestAccess;
 
