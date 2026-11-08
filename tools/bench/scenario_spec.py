@@ -364,6 +364,24 @@ SCENARIOS["codec-degrade-2k"] = {
     ],
 }
 
+# #566: Auto Exposure over a plate whose brightness flickers, so every frame measures a window of
+# changed frames. Its reductions are shared between frames, so the cost per frame is one new frame's
+# measurement plus the filter and the gain; a cold frame measures the whole 48-frame window.
+SCENARIOS["auto-exposure-2k"] = {
+    "description": "A PNG16 plate under an Exposure driven by a seeded Light Flicker, then Auto "
+                   "Exposure over a 48-frame look-back.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.exposure", {},
+                      {"drives": {"stops": ["bloom.light-flicker",
+                                            {"rate": 6.0, "depth": 1.5, "dropoutRate": 1.0,
+                                             "seed": 7}, "stops"]}}],
+                     ["bloom.auto-exposure", {"lookBack": 48}, {}]]},
+    ],
+}
+
 # #486: Lens Distortion in Redistort mode (the inverse solved per pixel) over a plate, its radial
 # coefficient keyed so every frame is new. Only the warped image is read, so the ST map is not built.
 SCENARIOS["lens-distortion-2k"] = {

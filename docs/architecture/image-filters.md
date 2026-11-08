@@ -1931,6 +1931,129 @@ the input through the quadratic of the shake's three samples, the quadratic's ga
 motion, a flow image skewing by phase, a region of interest, the pixel budget and cancellation.
 [Benchmarks](../development/benchmarks.md#rolling-shutter-568) names the scenario and the suspected cost.
 
+## Auto Exposure
+
+`bloom.auto-exposure`, schema 1, under Color Correction (issue #566), has one Image in, `input`, one Image
+out, `image`, and the optional effect mask every filter takes. It measures the brightness and the color
+of the footage and applies a gain that follows them with a lag, the way a phone camera hunts when a light
+dims or flares. One node does both corrections because they share one measurement per frame and one
+look-back window; set **Exposure** or **White balance** to 0% to use the other alone. Every value except the
+look-back has a socket and can be keyed or driven:
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `exposure` | 100% | 0 to 100% | How much of the exposure correction is applied |
+| `target` | 0.18 | 0.01 to 4 | The scene-linear level the frame's mean luminance is brought to |
+| `attack` | 0.25 s | 0 to 30 s | The time constant of the correction following the footage getting brighter (the gain falling); 0 follows at once |
+| `release` | 0.75 s | 0 to 30 s | The same for the footage getting darker (the gain rising) |
+| `minGain` | -3 st | -8 to 0 | The most the exposure gain may fall, in stops |
+| `maxGain` | +3 st | 0 to 8 | The most the exposure gain may rise, in stops |
+| `whiteBalance` | 100% | 0 to 100% | How much of the white balance correction is applied |
+| `balanceLag` | 1 s | 0 to 30 s | The time constant of the white balance following the footage's color |
+| `balanceLimit` | 1 st | 0 to 4 | The most the white balance may move red or blue against green, in stops |
+| `lookBack` | 48 f | 4 to 64 | The frames the node looks back over, counting the current one; a constant with no socket |
+
+There is no seed: nothing in the node is random.
+
+**The look-back window.** Every frame is computed from the window of `lookBack` frames that ends on it, and
+from nothing a previous render left behind, so a frame is the same played to, scrubbed to, reached backwards,
+exported, and rendered by the scripted and headless routes. Sample `i` of the window is the input on the
+frame `max(f - (lookBack - 1 - i), 0)` of the composition's frame rate, `f` being the operation's clock
+frame as a Time node counts it: a frame near the start repeats the first frame, so the window never reads
+before the composition. The last sample is the input itself. Each is a `TimeSampleKernel` with `lookBack`
+set (`lagFrames` the distance back), built by `appendLookBackSamples` in `look_back_recipes.cpp`, which is
+the one routine that builds a bounded set of earlier frames as time samples on the frame grid and is meant
+for any node that reads the frames around its own. The window is at most 64 frames
+(`kMaximumLookBackFrames`); a larger one does not lower and the plan is refused with a diagnostic. The
+operation cache keys each sample's result on its input's content at that source time, so a frame whose window
+reaches a time another frame already measured shares that measurement: in playback or an export a frame
+measures one new source frame, and a cold frame (a scrub or a jump) measures the whole window.
+
+**The measurement.** Two passes of `AutoExposureKernel` in the Reduce role reduce each sample to its mean
+color. The first cuts the sample into at most `64 x 64` tiles (`tileWidth = ceil(width / min(64, width))`,
+likewise for the height, so a tile is the same size but for the last row and column) and, for each tile,
+sums the premultiplied red, green and blue in row-major order in binary32 and multiplies by `1 / (width *
+height)`. The second sums that grid to one pixel. The result is the mean of the premultiplied color over
+the sample's data window, a transparent pixel counting as black, with alpha 1; it lies at the sample's
+origin. The grid, and so the work of the second pass, is bounded however large the frame is, and the
+order of the sums is fixed, so the CPU reference and the GPU add the same numbers in the same order. A
+Reduce reads its whole input, never a region of interest (the evaluator marks it full-support), so a mean
+does not depend on the region asked for; under a proxy it is taken at the proxy's resolution, which
+differs from the full-resolution mean only by what the resampling does to the mean.
+
+**The filter.** One `Filter` operation reads the window's means, oldest first (its input is the newest;
+`fieldImages` hold the older), and publishes one pixel whose red, green and blue are three gains in stops:
+the exposure `e`, and the red `wr` and the blue `wb` against green. Each mean `m` first gives the gains it
+asks for, with `r, g, b = max(m, 1e-6)`:
+
+```text
+wr = clamp(log2(g / r), -limit, limit) * whiteBalance
+wb = clamp(log2(g / b), -limit, limit) * whiteBalance
+luma = 0.2126 r 2^wr + 0.7152 g + 0.0722 b 2^wb        (Rec. 709, after the white balance)
+e  = clamp(log2(target) - log2(max(luma, 1e-6)), minGain, maxGain) * exposure
+```
+
+The first mean that exists seeds the state with its own gains. Each later mean `d` moves it by a one-pole
+recursive filter, `s = s + k (d - s)`, with the coefficient of a lag `tau` seconds sampled every
+`dt = 1 / frameRate` seconds, `k = 1 - exp(-dt / tau)` (1 for `tau = 0`). The exposure uses the attack
+coefficient where `d.e < s.e` (the gain is falling, the footage got brighter) and the release otherwise;
+the two white balance gains use the balance lag. A mean that does not exist (the layer has no pixels at that
+time) holds the state and is not taken for black. The seed stands for a filter that had already settled
+on the oldest frame, so a lag longer than about a third of the look-back is cut short: the frames before the
+window are not seen. The defaults (a release of 0.75 s, a balance lag of 1 s, a look-back of 2 s at 24 f/s)
+keep the lags inside it.
+
+**The gain.** The `Apply` role multiplies the input's premultiplied red, green and blue by `2^(e + wr)`,
+`2^e` and `2^(e + wb)` from the Filter's pixel and keeps alpha. With no Filter pixel it leaves the input
+exactly as it is, and with 0 stops it is exact too. The Filter's pixel is not a color: its channels hold
+stops, its alpha is 1.
+
+**The plan.** The compiler lowers the node to, for each frame of the window, one time sample (but the last)
+and two Reduce passes; then the Filter, carrying the node's nine values (each value's identity on it, so an
+animated value stays animated); then the Apply on the input. The operations are marked as varying with
+time through the input's and the values'. The look-back is a constant: a change to it is a new plan, and
+a change to a value is new data for the Filter alone, so the measurements are not recomputed.
+
+**On the GPU.** One fixed resident program (`ColorGradeKind::AutoExposure`) with every value in its table.
+A Reduce is dispatched over the sample's own window and the pass publishes the part of it that holds the
+grid, cut out at the origin (one exact move). A Filter and an Apply read more than one image the way Z
+Defocus's gather does: an atlas, the followed image padded to it and each other image moved into place
+(one exact move) and blended over it in Normal mode; the Filter's is a row of one pixel for each mean
+and the Apply's the frame with one more column for the gain, and the result is cut back out. The arithmetic
+is additions, multiplications, min, max, correctly rounded divisions and the logarithm and the exponential
+of base two, in one fixed order. The sums are therefore the same bit for bit; the logarithm and the
+exponential are each device's own, so the gains agree to within their last bits, not exactly, and the tests
+hold them to the strict 2e-6 gate. Nothing is read back but the final frame.
+
+**Cache, budget, cancellation, retirement.** The identity of each pass is its input's content and its
+prepared table (the pass, the grid and, for the Filter, the values and the coefficients), so the sample
+measurements of a source time are shared and a changed value invalidates only the Filter and the Apply. The
+outputs of a Reduce are at most 64 by 64 pixels and the Filter's is one, so the window adds almost nothing
+to the cache; the Apply is the frame's size and is charged against the pixel budget, and a Reduce is charged
+for the dispatch over its input. A refused budget is a diagnostic from the pass that refused it
+(`PixelStorageBudgetExceeded` on the CPU, a preparation failure on the GPU), never a frame computed from
+fewer samples. Every pass checks the cancellation token at its row bands, a cancelled pass publishes
+nothing, and the images are ordinary operation-cache and resident-GPU entries, retired with them.
+
+**Limits.** The measurement is the mean of the whole frame: a small bright light moves it little, and the
+node has no metering region (use the effect mask to limit where the gain shows, not where it measures).
+A cut in the footage is followed with the lag like any other change. A lag over a third of the look-back is
+cut short as above. A cold frame costs a whole window of the input, so a slow input makes scrubbing slow.
+No speed has been measured: [Benchmarks](../development/benchmarks.md#auto-exposure-566) lists the scenario
+that will, and no budget is set.
+
+**Evidence.** `src/runtime/tests/auto_exposure_tests.cpp` holds the reduction on every grid shape against an
+independent mean, the filter against an independent double-precision reading of this section (steady,
+attack, release, limits, amounts, no lag, absent means), the gain, the table and its one program, the
+pixel budget, cancellation and row bands, and, over whole plans, a frame independent of how it is reached,
+the response of a flare and a dimming light, a warm shot made neutral, the reuse of measurements between
+frames by cache identity and a refused budget as an explicit error. The native harness (`runAutoExposures`)
+holds a flare, a dimming light, a warm shot, a window reaching before the first frame, a proxy and a region
+of interest to the CPU oracle at the strict gate with exact alpha, with resident dispatches and no
+readback, warm RAM reuse with zero dispatches, the next frame sharing the measurements and a changed value
+re-running. `effect.AutoExposureKernel` and `node.bloom.auto-exposure` prepare through the production
+builder at full frame and ROI. `testAutoExposureLowering` holds the lowering.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,

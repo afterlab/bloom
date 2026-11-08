@@ -98,6 +98,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   time.
 - [Frame Rate Hold](user-guide/frame-rate-hold.md) — holding frames to a lower rate, with an
   optional seeded irregular cadence of doubled and dropped frames.
+- [Auto Exposure](user-guide/auto-exposure.md) — a gain that follows the footage's brightness and color
+  with an attack and a release, so a light that dims or flares makes the picture hunt like a phone camera.
 - [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
   smearing: quality, block size, GOP length and P-frame persistence.
 - [Lens Distortion](user-guide/lens-distortion.md) — undistort or redistort a picture with the standard

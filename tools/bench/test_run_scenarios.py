@@ -525,6 +525,16 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(len(keys[0][1]["contours"]), 64)
         self.assertNotEqual(keys[0][1], keys[1][1])
 
+    def test_auto_exposure_scenario_measures_a_flickering_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["auto-exposure-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effects = scenario["layers"][0]["effects"]
+        self.assertEqual([effect[0] for effect in effects],
+                         ["bloom.exposure", "bloom.auto-exposure"])
+        self.assertIn("stops", effects[0][2]["drives"], "the plate's brightness changes every frame")
+        self.assertEqual(effects[1][1]["lookBack"], 48)
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]

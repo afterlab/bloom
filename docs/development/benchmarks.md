@@ -432,6 +432,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 
 | `test-card-2k` | 1920×1080 | 24 | A Zone Plate Test Card (#587), moving so every frame is new, drawn at the composition's size with 16 sub-samples per pixel; no media is read. Written, not yet run: it has no recorded numbers and no budget |
 | `path-value-compound-2k` | 1920×1080 | 24 | A Shape Source whose `path` comes from a Path node (#589): 64 contours, keyed so every frame flattens and covers a new shape; no media is read. Written, not yet run. |
+| `auto-exposure-2k` | 1920×1080 | 24 | A PNG16 plate under an Exposure driven by a seeded Light Flicker, then Auto Exposure (#566) over its 48-frame look-back, so every frame measures a window of changed frames. Written, not yet run: it has no recorded numbers and no budget |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -1008,6 +1009,17 @@ reads than any other field node takes, and the reads are scattered rather than c
 neighborhood on a GPU; the gather runs at full resolution although a rays picture is soft and a lower
 resolution would look much the same; and on the GPU the input is moved beside the canvas in the field
 raster's atlas, one more full-frame copy and a larger dispatched image than the output alone.
+
+### Auto Exposure (#566)
+
+Auto Exposure has no recorded numbers and no budget yet. The scenario `auto-exposure-2k` is written to
+measure it end to end. A cold frame measures the whole look-back (the node's default is 48 frames): one
+evaluation of the input and two reduction passes for each frame of it. Each frame's reductions are
+shared with the frames after it, so in playback and in an export a frame costs one new measurement plus
+the filter and the gain. The gain is applied through an atlas of the frame and the one gain pixel, which
+pads and crops the frame, so it costs more than a plain pointwise pass. The first reduction pass
+dispatches over the whole frame to fill at most 64 by 64 tile sums, so most of its invocations return
+at once. These are suspicions to check against the scenario, not findings.
 
 ## Platform notes
 
