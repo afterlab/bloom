@@ -618,7 +618,7 @@ void testSearchKeyboardAndMenus() {
                  "Blur & Sharpen holds the blurs and motion blur");
         hasGroup("Light & Shadow", {"Depth Fog", "Drop Shadow", "Glow", "Lens Flare", "Light Wrap"},
                  "Light & Shadow holds the light effects");
-        hasGroup("Stylize", {"Film Grain", "Vignette"}, "Stylize holds the finishing looks");
+        hasGroup("Stylize", {"Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
         hasGroup("Color Correction",
                  {"Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation", "Invert", "Levels",
                   "Multiply", "Offset"},

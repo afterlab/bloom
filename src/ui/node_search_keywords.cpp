@@ -2,6 +2,7 @@
 
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
@@ -80,6 +81,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.lens-flare", "Flare|Optical Flares"},
     // Stylize
     {"bloom.film-grain", "Grain|Add Grain|Noise|ReGrain"},
+    {"bloom.codec-degrade", "Compression|Macroblock|Blocky|JPEG|H.264"},
     // Color Correction
     {"bloom.grade", "ColorCorrect|Lumetri|Color Balance"},
     {"bloom.curves", "ColorLookup|HueCorrect"},
@@ -128,6 +130,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     // #486.
     if (typeId == document::kFilmGrainNodeType)
         return QStringLiteral("film grain noise add finishing stock analogue analog regrain");
+    // #563.
+    if (typeId == document::kCodecDegradeNodeType)
+        return QStringLiteral("codec degrade compression artifacts blocky blocks macroblock jpeg "
+                              "h264 mpeg low bitrate chroma subsampling keyframe gop smear");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     // #512.

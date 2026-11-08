@@ -348,6 +348,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #486: the Sharpen card's edge graph and its three slider rows, each a value over a slider.
     if (node->typeId == document::kSharpenNodeType)
         thumbnail = kSharpenGraphHeight + kSmall + 3.0 * (kControl + kSmall) + kPadding;
+    // #563: the Codec Degrade card's two slider rows, each a value over a slider.
+    if (node->typeId == document::kCodecDegradeNodeType)
+        thumbnail = 2.0 * (kControl + kSmall) + kPadding;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

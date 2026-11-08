@@ -49,6 +49,7 @@
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
+#include <bloom/ui/codec_degrade_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -880,6 +881,48 @@ void cameraShakeCard() {
     expect(rowOf("octaves") == nullptr && rowOf("roughness") == nullptr,
            "Impact hides the octaves and roughness");
     capture(fixture, QStringLiteral("camera-shake-impact"));
+}
+
+// #563: the Codec Degrade card paints inside its card with no label cut short, writes nothing of its
+// own, shows Quality and P-frame persistence as sliders with a socket beside each, leaves the block
+// size, the GOP length and the chroma bleed to the node's own rows; a slider drag is one command.
+void codecDegradeCard() {
+    CardFixture fixture(document::kCodecDegradeNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::CodecDegradeCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Codec Degrade draws its card widget");
+    if (card == nullptr)
+        return;
+    for (const auto& spec : document::codecDegradeParameters())
+        if (spec.kind == document::CodecDegradeParameterKind::Scalar) {
+            const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
+            expect(value && *value == spec.value,
+                   "a new Codec Degrade card writes no value of its own");
+        }
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "codec-degrade paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "codec-degrade"))
+        ++failures;
+    capture(fixture, QStringLiteral("codec-degrade"));
+    expect(card->showsRole("blockSize") && card->showsRole("gopLength") &&
+               card->showsRole("chromaBleed") && !card->showsRole("quality") &&
+               !card->showsRole("persistence") && card->socketY("quality").has_value() &&
+               card->socketY("persistence").has_value() && !card->socketY("blockSize").has_value(),
+           "the card shows the node's constants as its own rows, and a socket beside each slider");
+    // A slider drag is one command.
+    auto* slider = card->valueRow("quality")->slider();
+    const auto commands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    const auto quality = stored(fixture.session, fixture.node, "quality");
+    expect(fixture.stack.size() == commands + 1 && quality && *quality > 40.0,
+           "dragging the quality slider is one command");
+    capture(fixture, QStringLiteral("codec-degrade-quality"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -1980,6 +2023,7 @@ int main(int argc, char** argv) {
     lensFlareCard();
     filmGrainCard();
     sharpenCard();
+    codecDegradeCard();
     cameraShakeCard();
     depthEffectCards();
     motionBlurCards();

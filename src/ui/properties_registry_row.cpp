@@ -8,6 +8,7 @@
 #include "row_inline_controls.hpp"
 #include "text_font_choices.hpp"
 #include "value_presentation.hpp"
+#include <bloom/document/codec_degrade_nodes.hpp>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -171,6 +172,9 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #486 Film Grain: its table's own labels.
     if (const auto* grain = document::filmGrainParameterSpec(schemaKey); grain != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(grain->label).c_str());
+    // #563 Codec Degrade: its table's own labels.
+    if (const auto* codec = document::codecDegradeParameterSpec(schemaKey); codec != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(codec->label).c_str());
     // #486 Sharpen: its table's own labels.
     if (const auto* sharpen = document::sharpenParameterSpec(schemaKey); sharpen != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(sharpen->label).c_str());
