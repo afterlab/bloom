@@ -278,7 +278,7 @@ inline constexpr std::array kEchoParameters{
 inline constexpr std::array kFrameRateHoldParameters{
     constantScalar("rate", 12.0, 0.1, 240.0, "Frame rate", 1.0, 60.0, 1.0, 2, "fps"),
     boolean("irregular", "Irregular cadence"),
-    constantScalar("amount", 0.2, 0.0, 1.0, "Dropped and doubled frames", 0.0, 1.0, 0.01, 2),
+    constantScalar("amount", 0.2, 0.0, 1.0, "Drop and double", 0.0, 1.0, 0.01, 2),
     integer("seed", 1, 0, 999999, "Seed"),
 };
 

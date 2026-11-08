@@ -8,6 +8,7 @@
 #include "row_inline_controls.hpp"
 #include "text_font_choices.hpp"
 #include "value_presentation.hpp"
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
@@ -177,6 +178,10 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #563 Codec Degrade: its table's own labels.
     if (const auto* codec = document::codecDegradeParameterSpec(schemaKey); codec != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(codec->label).c_str());
+    // #564 Frame Rate Hold: its table's own labels.
+    if (schemaKey.starts_with(document::kFrameRateHoldNodeType))
+        if (const auto* hold = document::motionParameterSpec(schemaKey); hold != nullptr)
+            return QCoreApplication::translate("PropertiesRow", std::string(hold->label).c_str());
     // #486 Chromatic Aberration.
     if (schemaKey == document::kChromaticAberrationAmountSchemaKey)
         return QCoreApplication::translate("PropertiesRow", "Amount");

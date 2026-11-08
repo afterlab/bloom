@@ -1964,6 +1964,7 @@ void motionBlurCards() {
              {document::kOpticalFlowNodeType, "optical-flow"},
              {document::kOpticalFlowMotionBlurNodeType, "optical-flow-motion-blur"},
              {document::kEchoNodeType, "echo"},
+             {document::kFrameRateHoldNodeType, "frame-rate-hold"},
              {document::kDirectionalBlurNodeType, "directional-blur"},
              {document::kSpinBlurNodeType, "spin-blur"},
              {document::kZoomBlurNodeType, "zoom-blur"}}) {
@@ -2079,6 +2080,24 @@ void motionBlurCards() {
         QApplication::processEvents();
         expect(!card->showsRole("decay") && !card->showsRole("operator"),
                "Frame Blend has no decay or operator");
+    }
+    {
+        // Frame Rate Hold: the amount and the seed are read only with the irregular cadence on.
+        CardFixture fixture(document::kFrameRateHoldNodeType);
+        auto* card = qobject_cast<ui::MotionBlurCardWidget*>(fixture.item->cardWidget());
+        if (card == nullptr)
+            return;
+        expect(card->showsRole("rate") && card->showsRole("irregular") &&
+                   !card->showsRole("amount") && !card->showsRole("seed"),
+               "a regular Frame Rate Hold reads its rate only");
+        check(fixture, "frame-rate-hold-regular");
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "irregular");
+        expect(id && fixture.session.setParameterValue(*id, true, QStringLiteral("Set")),
+               "Frame Rate Hold's irregular cadence turns on");
+        QApplication::processEvents();
+        expect(card->showsRole("amount") && card->showsRole("seed"),
+               "an irregular cadence reads its amount and its seed");
+        check(fixture, "frame-rate-hold-irregular");
     }
     {
         // Transform 2D: the shutter's rows, dial and curve only with Motion blur on.

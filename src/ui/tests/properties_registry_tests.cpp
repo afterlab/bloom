@@ -16,6 +16,7 @@
 #include <QThread>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <array>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -1029,6 +1030,56 @@ void recipeRows() {
     }
 }
 
+// #564 Frame Rate Hold in Properties: the amount and the seed appear with the irregular cadence, the
+// seed row carries Randomise seed, and every label is shown whole.
+void frameRateHoldRows() {
+    auto project = document::makeNewProject("Hold", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.resize(420, 1000);
+    properties.show();
+    const auto hold = addNode(session, document::kFrameRateHoldNodeType);
+    session.selectNode(hold);
+    QCoreApplication::processEvents();
+    expect(row(properties, "rate") != nullptr && row(properties, "irregular") != nullptr,
+           "Frame Rate Hold presents its rate and its irregular cadence");
+    const auto shown = [&](const char* role) {
+        auto* found = row(properties, role);
+        return found != nullptr && found->isVisibleTo(&properties);
+    };
+    expect(shown("rate") && shown("irregular") && !shown("amount") && !shown("seed"),
+           "a regular Frame Rate Hold shows neither the amount nor the seed");
+    const auto* node = session.composition()->graph().findNode(hold);
+    for (const auto& binding : node->parameters)
+        if (binding.role == "irregular")
+            expect(session.setParameterValue(binding.parameterId, true, "Set"),
+                   "the irregular cadence turns on");
+    QCoreApplication::processEvents();
+    auto* seed = row(properties, "seed");
+    expect(shown("amount") && shown("seed"),
+           "the irregular cadence shows the amount and the seed");
+    expect(seed != nullptr && seed->findChild<ui::kit::KButton*>("randomiseSeed") != nullptr,
+           "the Seed row carries Randomise seed");
+    const std::array<std::pair<const char*, const char*>, 4> names{{{"rate", "Frame rate"},
+                                                                   {"irregular", "Irregular cadence"},
+                                                                   {"amount", "Drop and double"},
+                                                                   {"seed", "Seed"}}};
+    for (const auto& [role, name] : names) {
+        auto* held = row(properties, role);
+        expect(held != nullptr && held->property("rowLabel").toString() == QString::fromLatin1(name),
+               "a Frame Rate Hold row is named in plain words");
+        QLabel* label = nullptr;
+        for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+            if (candidate->text() == QString::fromLatin1(name) && candidate->isVisibleTo(&properties))
+                label = candidate;
+        expect(label != nullptr &&
+                   label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+               "a Frame Rate Hold row label is shown whole");
+    }
+}
+
 // #512 Camera Shake in Properties: the roll amount and the shutter angle are rows like Transform's
 // Rotation (a right-aligned label, the dial and the field together, the diamond in the diamond
 // column), the Seed row carries Randomise seed, every animatable value has a diamond, and the
@@ -1148,6 +1199,7 @@ int main(int argc, char** argv) try {
     colourEffectRows();
     discreteImageRows();
     transform2DRows();
+    frameRateHoldRows();
     cameraShakeRows();
     matteBlurRows();
     matteKeyRows();

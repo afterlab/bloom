@@ -16,7 +16,7 @@ one or two frames unevenly, because 15 does not divide 24.
   to 12. A whole multiple of the composition's rate (24, 48) changes nothing.
 - **Irregular cadence** is off by default, which holds every picture for the same time. Turn it on
   for the uneven rhythm of a phone camera.
-- **Dropped and doubled frames** (shown with the irregular cadence on) is how often a picture is held
+- **Drop and double** (shown with the irregular cadence on) is how often a picture is held
   a beat longer than its turn: from 0%, which is regular, to 100%, about one picture in four. When a
   picture is doubled, the picture that would have followed it is dropped, so the rhythm slips and
   recovers instead of drifting. A picture is never doubled twice in a row.
