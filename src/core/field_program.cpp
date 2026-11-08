@@ -580,6 +580,16 @@ std::optional<std::vector<float>> encodeTransform(const TransformParameters& p) 
     return checked(std::move(out));
 }
 
+std::optional<std::vector<float>> encodeLensWarp(const LensWarpParameters& p) {
+    if (!finite(p.k1) || !finite(p.k2) || !finite(p.p1) || !finite(p.p2) || !finite(p.centreX) ||
+        !finite(p.centreY) || !finite(p.scale) || !(p.scale > 1.0e-6))
+        return std::nullopt;
+    std::vector<float> out;
+    push(out, p.k1, p.k2, p.p1, p.p2);
+    push(out, p.centreX, p.centreY, p.scale, p.reverse ? 1.0 : 0.0);
+    return checked(std::move(out));
+}
+
 std::vector<float> encodeSwizzle(const SwizzleParameters& p) {
     std::vector<float> out;
     push(out, std::min<int>(p.lanes[0], 5), std::min<int>(p.lanes[1], 5),
@@ -855,6 +865,7 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
     case FieldOp::Transform:
         return 4;
     case FieldOp::Swizzle:
+    case FieldOp::LensWarp:
         return 2;
     case FieldOp::Ramp:
         return 1U + kFieldRampEntries;
@@ -893,7 +904,7 @@ bool validFieldTable(const std::span<const float> table) noexcept {
         const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
         const auto* b = a + 4;
         const auto op = a[0];
-        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::Ramp) || op != std::floor(op))
+        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::LensWarp) || op != std::floor(op))
             return false;
         if (!(a[1] >= 0.0F) || a[1] >= static_cast<float>(kFieldRegisterCount))
             return false;

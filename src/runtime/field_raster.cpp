@@ -318,6 +318,20 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         }
         return field::encodeSwizzle(p);
     }
+    case FieldOp::LensWarp: {
+        field::LensWarpParameters p;
+        p.reverse = choiceAt(in, 0) != 0;
+        p.k1 = scalar(0);
+        p.k2 = scalar(1);
+        p.p1 = scalar(2);
+        p.p2 = scalar(3);
+        p.scale = scalar(4, 1.0);
+        // The centre is authored as an offset from the composition's centre with y down; a field
+        // position has y up.
+        p.centreX = vector(0).x;
+        p.centreY = -vector(0).y;
+        return field::encodeLensWarp(p);
+    }
     case FieldOp::Combine:
         return field::encodeConstant({scalar(0), scalar(1), scalar(2), scalar(3)});
     case FieldOp::Offset: {
@@ -352,7 +366,7 @@ std::optional<std::vector<float>> buildTable(const FieldProgram& program,
     OperandReader reader(values.first(values.size() - 1U));
     field::FieldProgramBuilder builder;
     for (const auto& instruction : program.instructions) {
-        if (instruction.op > static_cast<std::uint8_t>(FieldOp::Ramp))
+        if (instruction.op > static_cast<std::uint8_t>(FieldOp::LensWarp))
             return std::nullopt;
         const auto block = encode(instruction, reader, seconds, program.compositionSeconds);
         if (!block)

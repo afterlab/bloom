@@ -68,6 +68,7 @@ enum class FieldOp : std::uint8_t {
     Arrow = 18,
     Streak = 19,
     Ramp = 20,
+    LensWarp = 21,
 };
 inline constexpr std::array kFieldOps{
     FieldOp::Coordinate, FieldOp::Constant, FieldOp::Noise,      FieldOp::Voronoi,
@@ -75,7 +76,7 @@ inline constexpr std::array kFieldOps{
     FieldOp::Image,      FieldOp::Force,    FieldOp::Math,       FieldOp::Remap,
     FieldOp::Transform,  FieldOp::Swizzle,  FieldOp::Combine,    FieldOp::Offset,
     FieldOp::Derivative, FieldOp::CellCentre, FieldOp::Arrow,    FieldOp::Streak,
-    FieldOp::Ramp};
+    FieldOp::Ramp,       FieldOp::LensWarp};
 
 // Stable lower-case names (coverage ids, diagnostics). No default case: a new op is a -Wswitch
 // error until it is named.
@@ -123,12 +124,15 @@ inline constexpr std::array kFieldOps{
         return "streak";
     case FieldOp::Ramp:
         return "ramp";
+    case FieldOp::LensWarp:
+        return "lens-warp";
     }
     return {};
 }
 
 // What the result register holds, and how a raster turns it into premultiplied RGBA.
-enum class FieldResultKind : std::uint8_t { Scalar = 0, Vector = 1, Color = 2 };
+// Premultiplied: the register is already premultiplied RGBA and a raster keeps it whole.
+enum class FieldResultKind : std::uint8_t { Scalar = 0, Vector = 1, Color = 2, Premultiplied = 3 };
 enum class FieldOutputMode : std::uint8_t { Raw = 0, Mask = 1, Color = 2 };
 
 // --- Operation parameters (binary64 authoring values; the encoders resolve and narrow them) -------
@@ -263,7 +267,7 @@ struct ImageParameters final {
     std::uint8_t slot = 0;
     FieldImageFilter filter = FieldImageFilter::Bilinear;
     FieldImageEdge edge = FieldImageEdge::Clamp;
-    std::uint8_t selector = 0; // 0 scalar channel, 1 channel pair, 2 straight colour
+    std::uint8_t selector = 0; // 0 scalar channel, 1 channel pair, 2 straight colour, 3 premultiplied
     std::uint8_t channel = 4;  // 0..3 red..alpha, 4 luma
     std::uint8_t first = 0;
     std::uint8_t second = 1;
@@ -347,6 +351,19 @@ struct TransformParameters final {
     double warpAmount = 0.0;
 };
 
+// The Brown-Conrady lens model about a centre (field_kernel.glsl, "Lens warp"). `reverse` reads the
+// inverse distortion (Redistort); `scale` is the length in field pixels that normalises coordinates.
+struct LensWarpParameters final {
+    double k1 = 0.0;
+    double k2 = 0.0;
+    double p1 = 0.0;
+    double p2 = 0.0;
+    double centreX = 0.0;
+    double centreY = 0.0;
+    double scale = 1.0;
+    bool reverse = false;
+};
+
 enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
 
 // A lane of a Swizzle: 0..3 a component of the input, 4 zero, 5 one.
@@ -401,6 +418,8 @@ class FieldProgramBuilder final {
 [[nodiscard]] std::optional<std::vector<float>> encodeRemap(const RemapParameters&);
 [[nodiscard]] std::optional<std::vector<float>> encodeTransform(const TransformParameters&);
 [[nodiscard]] std::vector<float> encodeSwizzle(const SwizzleParameters&);
+// Null when a value cannot be represented (non-finite, a scale not above 1e-6).
+[[nodiscard]] std::optional<std::vector<float>> encodeLensWarp(const LensWarpParameters&);
 [[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);

@@ -1748,7 +1748,8 @@ BFK_FN vec4 bfk_op_shape(BFK_CTX, int base, float px, float py) {
 
 // --- Image field ------------------------------------------------------------------------------------
 // [slot, filter, edge, selector] [channel, pair first, pair second, 0]. Selector 0 [stored channel,
-// 0, 0, 0], 1 [first, second, 0, 0], 2 the straight colour [r, g, b, a].
+// 0, 0, 0], 1 [first, second, 0, 0], 2 the straight colour [r, g, b, a], 3 the filtered texel as
+// stored, premultiplied [r a, g a, b a, a] (a result of kind 3 keeps it whole, even where alpha is 0).
 
 BFK_FN vec4 bfk_op_image(BFK_CTX, int base, float px, float py) {
     vec4 h0 = bfk_data(BFK_CTXA, base);
@@ -1759,6 +1760,8 @@ BFK_FN vec4 bfk_op_image(BFK_CTX, int base, float px, float py) {
         return vec4(bfk_channel(t, int(h1.x)), 0.0f, 0.0f, 0.0f);
     if (selector == 1)
         return vec4(bfk_channel(t, int(h1.y)), bfk_channel(t, int(h1.z)), 0.0f, 0.0f);
+    if (selector == 3)
+        return t;
     BFK_P float a = bfk_clamp(t.w, 0.0f, 1.0f);
     if (!(a > 0.0f))
         return vec4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -2065,6 +2068,112 @@ BFK_FN vec4 bfk_op_transform(BFK_CTX, int base, vec4 p, vec4 warp, bool warped) 
     return vec4(x, y, 0.0f, 0.0f);
 }
 
+// --- Lens warp ------------------------------------------------------------------------------------
+// [k1, k2, p1, p2] [centre x, centre y, scale, mode]: the Brown-Conrady lens model (Brown, "Decentering
+// Distortion of Lenses", Photogrammetric Engineering 32(3), 1966; Conrady, "Decentred Lens-Systems",
+// Monthly Notices of the Royal Astronomical Society 79, 1919) in normalised coordinates
+// (x, y) = ((p - centre) / scale), with r2 = x x + y y:
+//   D(x, y) = (x s + 2 p1 x y + p2 (r2 + 2 x x), y s + p1 (r2 + 2 y y) + 2 p2 x y), s = 1 + k1 r2 + k2 r2 r2,
+// the distorted position of an undistorted one. The result is the position to read the source at,
+// back in field positions: mode 0 reads D(p) (an Undistort output pixel reads the distorted image
+// where the lens put it), mode 1 reads D^-1(p), found by twelve Newton steps from p over D's
+// Jacobian (Redistort). The two are inverses wherever D is monotonic from the centre. The centre is
+// in field positions (+y up) and the scale a length in field pixels.
+
+BFK_FN vec4 bfk_lens_model(float k1, float k2, float p1, float p2, float x, float y) {
+    BFK_P float xx = x * x;
+    BFK_P float yy = y * y;
+    BFK_P float xy = x * y;
+    BFK_P float r2 = xx + yy;
+    BFK_P float r4 = r2 * r2;
+    BFK_P float rad0 = fma(k1, r2, 1.0f);
+    BFK_P float rad = fma(k2, r4, rad0);
+    BFK_P float p1x2 = p1 * 2.0f;
+    BFK_P float p2x2 = p2 * 2.0f;
+    BFK_P float r2x = fma(xx, 2.0f, r2);
+    BFK_P float r2y = fma(yy, 2.0f, r2);
+    BFK_P float tx0 = p1x2 * xy;
+    BFK_P float tx = fma(p2, r2x, tx0);
+    BFK_P float ty0 = p2x2 * xy;
+    BFK_P float ty = fma(p1, r2y, ty0);
+    BFK_P float xd = fma(x, rad, tx);
+    BFK_P float yd = fma(y, rad, ty);
+    return vec4(xd, yd, 0.0f, 0.0f);
+}
+
+// D's Jacobian [dx/dx, dx/dy (= dy/dx), dy/dy, 0].
+BFK_FN vec4 bfk_lens_jacobian(float k1, float k2, float p1, float p2, float x, float y) {
+    BFK_P float xx = x * x;
+    BFK_P float yy = y * y;
+    BFK_P float xy = x * y;
+    BFK_P float r2 = xx + yy;
+    BFK_P float rad0 = fma(k1, r2, 1.0f);
+    BFK_P float r4 = r2 * r2;
+    BFK_P float rad = fma(k2, r4, rad0);
+    BFK_P float k24 = k2 * 4.0f;
+    BFK_P float k12 = k1 * 2.0f;
+    BFK_P float g = fma(k24, r2, k12);
+    BFK_P float p1x2 = p1 * 2.0f;
+    BFK_P float p2x2 = p2 * 2.0f;
+    BFK_P float p1x6 = p1 * 6.0f;
+    BFK_P float p2x6 = p2 * 6.0f;
+    BFK_P float a0 = fma(g, xx, rad);
+    BFK_P float a1 = fma(p1x2, y, a0);
+    BFK_P float dxx = fma(p2x6, x, a1);
+    BFK_P float b0 = g * xy;
+    BFK_P float b1 = fma(p1x2, x, b0);
+    BFK_P float dxy = fma(p2x2, y, b1);
+    BFK_P float c0 = fma(g, yy, rad);
+    BFK_P float c1 = fma(p1x6, y, c0);
+    BFK_P float dyy = fma(p2x2, x, c1);
+    return vec4(dxx, dxy, dyy, 0.0f);
+}
+
+BFK_FN vec4 bfk_op_lens_warp(BFK_CTX, int base, vec4 p) {
+    vec4 h0 = bfk_data(BFK_CTXA, base);
+    vec4 h1 = bfk_data(BFK_CTXA, base + 1);
+    BFK_P float inv = bfk_div(1.0f, h1.z);
+    BFK_P float ox = p.x - h1.x;
+    BFK_P float oy = p.y - h1.y;
+    BFK_P float x = ox * inv;
+    BFK_P float y = oy * inv;
+    BFK_P float sx = x;
+    BFK_P float sy = y;
+    if (int(h1.w) == 0) {
+        vec4 d = bfk_lens_model(h0.x, h0.y, h0.z, h0.w, x, y);
+        sx = d.x;
+        sy = d.y;
+    } else {
+        BFK_P float ux = x;
+        BFK_P float uy = y;
+        for (int i = 0; i < 12; ++i) {
+            vec4 d = bfk_lens_model(h0.x, h0.y, h0.z, h0.w, ux, uy);
+            vec4 j = bfk_lens_jacobian(h0.x, h0.y, h0.z, h0.w, ux, uy);
+            BFK_P float fx = d.x - x;
+            BFK_P float fy = d.y - y;
+            BFK_P float det0 = j.x * j.z;
+            BFK_P float det = fma(-j.y, j.y, det0);
+            if (abs(det) > 1.0e-12f) {
+                BFK_P float nx0 = j.y * fy;
+                BFK_P float nx = fma(j.z, fx, -nx0);
+                BFK_P float ny0 = j.y * fx;
+                BFK_P float ny = fma(j.x, fy, -ny0);
+                BFK_P float qx = bfk_div(nx, det);
+                BFK_P float qy = bfk_div(ny, det);
+                BFK_P float stepX = bfk_clamp(qx, -1.0f, 1.0f);
+                BFK_P float stepY = bfk_clamp(qy, -1.0f, 1.0f);
+                ux = ux - stepX;
+                uy = uy - stepY;
+            }
+        }
+        sx = ux;
+        sy = uy;
+    }
+    BFK_P float rx = fma(sx, h1.z, h1.x);
+    BFK_P float ry = fma(sy, h1.z, h1.y);
+    return vec4(rx, ry, 0.0f, 0.0f);
+}
+
 // --- Plumbing -----------------------------------------------------------------------------------------
 
 BFK_FN BFK_P float bfk_lane(vec4 v, float selector) {
@@ -2214,7 +2323,7 @@ BFK_FN vec4 bfk_op_ramp(BFK_CTX, int base, vec4 a) {
 //   8 Image  9 Force  10 Math (in0, in1, in2)  11 Remap  12 Transform (in0 coordinate, in1 warp)
 //   13 Swizzle  14 Combine (in0..in3 x; an absent input is the parameter's lane)  15 Offset [dx, dy]
 //   16 Derivative (in0..in3)  17 Cell Centre  18 Arrow (in0 p, in1 centre, in2 v)
-//   19 Streak (in0 p, in1 v)  20 Ramp
+//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)
 // Every register write is limited to [-1e30, 1e30], so no later operation can see an infinity.
 
 BFK_FN vec4 bfk_limit(vec4 v) {
@@ -2323,6 +2432,9 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
         case 20:
             v = bfk_op_ramp(BFK_CTXA, base, x0);
             break;
+        case 21:
+            v = bfk_op_lens_warp(BFK_CTXA, base, x0);
+            break;
         default:
             v = zero;
             break;
@@ -2360,6 +2472,9 @@ BFK_FN vec4 bfk_pixel(BFK_CTX, int i, int j) {
         if (mode == 1) {
             BFK_P float k = bfk_clamp(v.x, 0.0f, 1.0f);
             c = vec4(k, k, k, k);
+        } else if (kind == 3) {
+            BFK_P float a = bfk_clamp(v.w, 0.0f, 1.0f);
+            c = vec4(v.x, v.y, v.z, a);
         } else if (kind == 2) {
             BFK_P float a = bfk_clamp(v.w, 0.0f, 1.0f);
             BFK_P float cr = v.x * a;
@@ -2383,7 +2498,7 @@ BFK_FN vec4 bfk_pixel(BFK_CTX, int i, int j) {
     BFK_P float rz = sum.z * inv;
     BFK_P float rw = sum.w * inv;
     BFK_P float a = bfk_clamp(rw, 0.0f, 1.0f);
-    if (!(a > 0.0f))
+    if (kind != 3 && !(a > 0.0f))
         return vec4(0.0f, 0.0f, 0.0f, 0.0f);
     return vec4(rx, ry, rz, a);
 }

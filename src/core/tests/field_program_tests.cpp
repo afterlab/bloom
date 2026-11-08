@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <source_location>
@@ -481,6 +482,116 @@ void testImagesAndRaster(Expectations& e) {
     e.expect(pixel[0] >= 0.0F && pixel[0] <= 1.0F && pixel[3] == 1.0F, "sixteen sub-samples");
 }
 
+// #486 Lens Warp: the Brown-Conrady model against an independent double-precision reading, the
+// identity at zero coefficients, Undistort and Redistort as inverses, the centre, and the
+// premultiplied Image selector and result kind a warped image is drawn with.
+std::array<double, 2> lensReference(const field::LensWarpParameters& p, const double x,
+                                    const double y) {
+    const auto nx = (x - p.centreX) / p.scale;
+    const auto ny = (y - p.centreY) / p.scale;
+    const auto r2 = nx * nx + ny * ny;
+    const auto radial = 1.0 + p.k1 * r2 + p.k2 * r2 * r2;
+    const auto dx = nx * radial + 2.0 * p.p1 * nx * ny + p.p2 * (r2 + 2.0 * nx * nx);
+    const auto dy = ny * radial + p.p1 * (r2 + 2.0 * ny * ny) + 2.0 * p.p2 * nx * ny;
+    return {p.centreX + dx * p.scale, p.centreY + dy * p.scale};
+}
+
+std::vector<float> lensTable(field::LensWarpParameters p, const bool reverse) {
+    p.reverse = reverse;
+    const auto block = field::encodeLensWarp(p);
+    return block ? single(FieldOp::LensWarp, *block, field::FieldResultKind::Vector)
+                 : std::vector<float>{};
+}
+
+void testLensWarp(Expectations& e) {
+    field::LensWarpParameters lens;
+    lens.k1 = -0.2;
+    lens.k2 = 0.05;
+    lens.p1 = 0.01;
+    lens.p2 = -0.02;
+    lens.centreX = 6.0;
+    lens.centreY = -4.0;
+    lens.scale = 100.0;
+    const auto forward = lensTable(lens, false);
+    const auto inverse = lensTable(lens, true);
+    e.expect(field::validFieldTable(forward) && field::validFieldTable(inverse),
+             "a lens warp table is valid");
+    double worst = 0.0;
+    double roundTrip = 0.0;
+    double backTrip = 0.0;
+    for (int j = -10; j <= 10; ++j)
+        for (int i = -12; i <= 12; ++i) {
+            const double x = 10.0 * i;
+            const double y = 10.0 * j;
+            const auto expected = lensReference(lens, x, y);
+            const auto warped = at(forward, x, y);
+            worst = std::max({worst, std::fabs(warped[0] - expected[0]),
+                              std::fabs(warped[1] - expected[1])});
+            // Redistort undoes Undistort and the other way round.
+            const auto back = at(inverse, warped[0], warped[1]);
+            roundTrip = std::max({roundTrip, std::fabs(back[0] - x), std::fabs(back[1] - y)});
+            const auto there = at(inverse, x, y);
+            const auto again = at(forward, there[0], there[1]);
+            backTrip = std::max({backTrip, std::fabs(again[0] - x), std::fabs(again[1] - y)});
+        }
+    e.expect(worst < 5.0e-3, "Undistort reads the Brown-Conrady position of the model");
+    e.expect(roundTrip < 2.0e-2, "Redistort undoes Undistort within a fiftieth of a pixel");
+    e.expect(backTrip < 2.0e-2, "Undistort undoes Redistort within a fiftieth of a pixel");
+
+    const auto centre = at(forward, lens.centreX, lens.centreY);
+    e.expect(std::fabs(centre[0] - lens.centreX) < 1.0e-4 &&
+                 std::fabs(centre[1] - lens.centreY) < 1.0e-4,
+             "the lens centre does not move");
+
+    // Barrel: with a negative k1 an Undistort pixel reads nearer the centre; pincushion farther.
+    field::LensWarpParameters radial;
+    radial.k1 = -0.2;
+    radial.scale = 100.0;
+    const auto barrel = at(lensTable(radial, false), 50.0, 0.0);
+    radial.k1 = 0.2;
+    const auto pincushion = at(lensTable(radial, false), 50.0, 0.0);
+    e.expect(barrel[0] < 50.0 && barrel[0] > 45.0 && pincushion[0] > 50.0 && pincushion[0] < 55.0,
+             "barrel reads nearer the centre and pincushion farther");
+
+    // No coefficients is the identity in both modes.
+    field::LensWarpParameters none;
+    none.scale = 100.0;
+    for (const bool reverse : {false, true}) {
+        const auto identity = at(lensTable(none, reverse), 37.0, -22.0);
+        e.expect(identity[0] == 37.0 && identity[1] == -22.0, "zero coefficients are the identity");
+    }
+
+    field::LensWarpParameters bad;
+    bad.scale = 0.0;
+    e.expect(!field::encodeLensWarp(bad), "a zero scale cannot be encoded");
+    bad.scale = 100.0;
+    bad.k1 = std::numeric_limits<double>::quiet_NaN();
+    e.expect(!field::encodeLensWarp(bad), "a non-finite coefficient cannot be encoded");
+
+    // The premultiplied selector and result kind keep a texel whole, colour at zero alpha included.
+    TestImage image{1, 1, {{0.5F, 0.25F, 0.125F, 0.0F}}};
+    const field::FieldImages images{&image, &fetchTest};
+    field::ImageParameters read;
+    read.selector = 3;
+    read.edge = field::FieldImageEdge::Transparent;
+    auto drawn = single(FieldOp::Image, field::encodeImage(read), field::FieldResultKind::Premultiplied);
+    auto geometry = field::fieldRasterGeometry(0, 0, 1, 1, 1.0, 1.0, 1.0, 1.0, 1);
+    geometry.slots[0] = field::fieldImageSlot(0, 0, 1, 1, 1.0, 1.0, 1.0, 1.0);
+    e.expect(field::applyFieldRasterGeometry(drawn, geometry), "the image geometry applies");
+    const auto kept = field::fieldPixel(drawn, images, 0, 0);
+    e.expect(kept[0] == 0.5F && kept[1] == 0.25F && kept[2] == 0.125F && kept[3] == 0.0F,
+             "a premultiplied texel is drawn as stored, even at zero alpha");
+    auto straight = single(FieldOp::Image, field::encodeImage([&] {
+                               auto p = read;
+                               p.selector = 2;
+                               return p;
+                           }()),
+                           field::FieldResultKind::Color);
+    e.expect(field::applyFieldRasterGeometry(straight, geometry), "the straight geometry applies");
+    const auto lost = field::fieldPixel(straight, images, 0, 0);
+    e.expect(lost[0] == 0.0F && lost[3] == 0.0F, "the straight colour selector drops zero alpha");
+}
+
 void testDistanceTransform(Expectations& e) {
     std::uint32_t state = 12345U;
     const auto next = [&state]() {
@@ -520,6 +631,7 @@ int main() {
     testGenerators(expectations);
     testMathAndRemap(expectations);
     testImagesAndRaster(expectations);
+    testLensWarp(expectations);
     testDistanceTransform(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

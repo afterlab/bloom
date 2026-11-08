@@ -32,6 +32,7 @@
 //   Derivative choices [mode]; scalars [step, strength]
 //   Cell Centre scalars [spacing]; Arrow scalars [spacing, length per unit, half width];
 //   Streak    scalars [step, noise cell]; Ramp scalars [low, high] and the ramp
+//   Lens Warp choices [reverse]; scalars [k1, k2, p1, p2, scale]; vectors [centre, y down]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
 #include "color_grade_image_effect.hpp"
