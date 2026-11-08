@@ -16,6 +16,7 @@ target_sources(
         film_grain_nodes.cpp
         codec_degrade_nodes.cpp
         lens_distortion_nodes.cpp
+        chromatic_aberration_nodes.cpp
         motion_blur_nodes.cpp
         sharpen_nodes.cpp
         graph.cpp

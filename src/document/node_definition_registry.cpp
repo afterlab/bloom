@@ -8,6 +8,7 @@
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
+#include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -580,6 +581,9 @@ template <typename Definition>
         // #486 Lens Distortion: the exact generated shape.
         if (definition.key.typeId == kLensDistortionNodeType)
             return definition == lensDistortionDefinition();
+        // #486 Chromatic Aberration: the exact generated shape.
+        if (definition.key.typeId == kChromaticAberrationNodeType)
+            return definition == chromaticAberrationDefinition();
         // #563 Codec Degrade: the exact generated shape.
         if (definition.key.typeId == kCodecDegradeNodeType)
             return definition == codecDegradeDefinition();
@@ -1682,6 +1686,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         filmGrainDefinition(),
         codecDegradeDefinition(),
         lensDistortionDefinition(),
+        chromaticAberrationDefinition(),
         sharpenDefinition(),
         cameraShakeDefinition(),
         depthEffectDefinition(kZDefocusNodeType),

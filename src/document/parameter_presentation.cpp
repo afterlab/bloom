@@ -5,6 +5,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
@@ -555,6 +556,17 @@ std::optional<ParameterPresentation> lensDistortionPresentation(const std::strin
                   spec->decimals);
 }
 
+// #486 Chromatic Aberration: the amount a percentage of half the diagonal; the centre a pixel offset.
+std::optional<ParameterPresentation> chromaticAberrationPresentation(const std::string_view schemaKey) {
+    if (schemaKey == kChromaticAberrationCenterSchemaKey)
+        return pixels(-kMaximumChromaticAberrationCenter, kMaximumChromaticAberrationCenter, 4096.0);
+    if (schemaKey == kChromaticAberrationAmountSchemaKey)
+        return number(kMinimumChromaticAberrationAmount, kMaximumChromaticAberrationAmount,
+                      kChromaticAberrationAmountSoftMinimum, kChromaticAberrationAmountSoftMaximum,
+                      0.01, 2, "%", 100.0);
+    return std::nullopt;
+}
+
 // #563 Codec Degrade: one presentation per parameter, from its table.
 std::optional<ParameterPresentation> codecDegradePresentation(const std::string_view schemaKey) {
     const auto* spec = codecDegradeParameterSpec(schemaKey);
@@ -585,6 +597,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *codec;
     if (auto lens = lensDistortionPresentation(schemaKey))
         return *lens;
+    if (auto aberration = chromaticAberrationPresentation(schemaKey))
+        return *aberration;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
     for (const auto& entry : table())

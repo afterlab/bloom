@@ -11,6 +11,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
@@ -382,6 +383,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
            schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
            schemaKey == kLensDistortionCenterSchemaKey ||
+           schemaKey == kChromaticAberrationCenterSchemaKey ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }
@@ -418,7 +420,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
            isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) ||
-           isLensDistortionScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
+           isLensDistortionScalarSchemaKey(schemaKey) ||
+           isChromaticAberrationScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
@@ -534,6 +537,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #486 Lens Distortion (lens_distortion_nodes.hpp).
     if (lensDistortionParameterSpec(schemaKey) != nullptr)
         return isLensDistortionScalarWithinDomain(schemaKey, value);
+    // #486 Chromatic Aberration (chromatic_aberration_nodes.hpp).
+    if (isChromaticAberrationScalarSchemaKey(schemaKey))
+        return isChromaticAberrationScalarWithinDomain(schemaKey, value);
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);

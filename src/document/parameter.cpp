@@ -6,6 +6,7 @@
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
+#include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -408,6 +409,10 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (lensDistortionParameterSpec(schemaKey) != nullptr ||
         schemaKey == kLensDistortionCenterSchemaKey)
         return isLensDistortionParameterValueValid(schemaKey, constant.value);
+    // #486 Chromatic Aberration: the amount and the centre within their document domains.
+    if (isChromaticAberrationScalarSchemaKey(schemaKey) ||
+        schemaKey == kChromaticAberrationCenterSchemaKey)
+        return isChromaticAberrationParameterValueValid(schemaKey, constant.value);
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeParameterValueValid(schemaKey, constant.value);
