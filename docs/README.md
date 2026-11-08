@@ -94,6 +94,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
 - [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount,
   monochrome grain, the response to brightness, and holding or redrawing it over time.
+- [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
+  smearing: quality, block size, GOP length and P-frame persistence.
 - [Motion blur](user-guide/motion-blur.md) — which motion blur to use, the shared shutter, sub-frame
   Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
   Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of

@@ -421,6 +421,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `motion-blur-flow-2k` | 1920×1080 | 24 | A PNG16 plate through Optical Flow Motion Blur with a matte (#484): two layers and eight solves, at Draft |
 | `sharpen-2k` | 1920×1080 | 24 | A PNG16 plate under Sharpen (#486) with a radius of 8 pixels, its amount keyed from 50% to 200% so every frame is new |
 | `camera-shake-2k` | 1920×1080 | 24 | A PNG16 plate under a Handheld Camera Shake (#512) of 24 by 16 pixels and 1° of roll, three octaves, auto overscan on and its motion blur on, so every frame is new and resamples the plate once per shutter sample |
+| `codec-degrade-2k` | 1920×1080 | 24 | A PNG16 plate under Codec Degrade (#563) with 16 px blocks, a 12-frame GOP and 75% P-frame persistence, its quality keyed from 60 to 15 so every frame is new and renders its chain from the last keyframe, optical flow included. Written, not yet run: it has no recorded numbers and no budget |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -930,6 +931,14 @@ radius moves its cost only through the blur. The times on this machine move in s
 so a single case can read a step high or low against its neighbours (radius 1 and radius 3 at 1080p in
 this run); read the columns together. `NODE_COST_BUDGETS` holds each case about 25% over the worst of
 three runs on that day.
+
+### Codec Degrade (#563)
+
+Codec Degrade has no recorded numbers and no budget yet. The scenario `codec-degrade-2k` is written to
+measure it end to end. A frame renders the chain from its keyframe, so its cost grows with the GOP
+length and with its position in the GOP: the worst frame in a GOP of `n` runs about `n` optical flow
+solves and `n` coded passes, plus one Encode and one Finish pass. The 16 px DCT does more work per
+pixel than the 8 px one. These are suspicions to check against the scenario, not findings.
 
 ## Platform notes
 

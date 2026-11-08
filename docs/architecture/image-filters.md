@@ -1467,6 +1467,98 @@ within 2e-6 on RGB with exact alpha, warm RAM reuse with zero dispatches, the ne
 the same plan and bit-identical pixels. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
 full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) holds its cost.
 
+## Codec Degrade
+
+`bloom.codec-degrade`, schema 1, under Stylize (issue #563), has one Image in, `input`, one Image out,
+`image`, and the optional effect mask every filter takes. It imitates the look of block-coded video;
+no encoder runs. `quality` and `persistence` have sockets and can be keyed or driven; the other three
+are constants:
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `quality` | 40 | 0 to 100 | The JPEG quality scale of the quantiser |
+| `persistence` | 0.5 | 0 to 1 | The share of the previous picture a predicted block keeps |
+| `blockSize` | 8 px | 8 px (0), 16 px (1) | The edge of a coded block. Constant |
+| `gopLength` | 12 frames | 1, 2, 4, 6, 8, 12, 15, 24, 30 frames (0 to 8) | Frames from one keyframe to the next. Constant |
+| `chromaBleed` | on | off, on | Colour at half resolution in each direction (4:2:0 chroma subsampling). Constant |
+
+**One coded picture.** The colour is first put on a display-referred curve, `e = (1 + k) v / (v + k)`
+with `k = 0.25`, per channel on the straight (alpha divided out) colour, so HDR values keep their
+range and the quantiser sees a perceptual scale; the inverse runs at the end. It is then converted to
+Rec. 709 Y, Cb and Cr. Each plane is cut into `N` by `N` blocks (`N` is 8 or 16) on a grid anchored at
+the image's absolute pixel origin, so a region of interest or another data window changes no block.
+Every block takes an orthonormal type-II DCT, each coefficient is divided by the base step times a
+frequency weight and rounded, and the block is reconstructed with the inverse DCT. The base step is
+`0.0004 * s * N / 8` with the JPEG scale `s = 5000 / q` below 50 and `200 - 2q` from 50 up (`q` at least
+1, `s` at least 1), and the weight grows from 1 at the DC coefficient to 8 at the highest frequency,
+linearly in `u + v`. With `chromaBleed` on, Cb and Cr are first averaged over 2 by 2 pixels, coded at
+that resolution (so a chroma block spans `2N` pixels) and spread back out. Alpha is not touched, and an
+alpha of 0 stays transparent black.
+
+**Predicted pictures.** After a keyframe each picture is coded against the one before it. For each
+luma block the optical-flow vector is averaged over the block, rounded to a whole pixel, and the previous
+picture is read at that offset (clamped at the frame edge) as the prediction. The residual of the
+current picture against the prediction is quantised the same way, with these changes:
+
+```text
+step     = base step * weight * (1 + 3 * min(max(|mx|, |my|) / N, 1))
+residual rounding offset = 0.5 - 0.4 * persistence
+residual kept            = 1 - persistence
+```
+
+So a block that moves is quantised up to four times as coarsely, and persistence widens the dead zone
+and scales the residual that gets through: at 1 nothing new is added and the block is the moved previous
+picture, and at 0 the residual is quantised as in a keyframe. A block with no previous picture is
+predicted from mid grey.
+
+**Time.** The frame `f` is the operation's clock frame, taken as a Time node's frame is, so a retimed
+layer counts its own. Its keyframe is `floor(f / gop) * gop`, and its position `p = f mod gop` (a
+negative frame floors the same way). A frame renders the pictures of the keyframe through `f`, at most
+`gop` of them, never reading a previous render: step 0 is the keyframe's Encoded source, step `i` for
+`1 <= i <= p` is predicted from step `i - 1` with the optical flow between source frames
+`keyframe + i - 1` and `keyframe + i`, and steps beyond `p` are the exact identity. A frame is
+therefore the same in preview, scrubbing, backward play and export. The plan lowers the chain as
+fixed-length: an Encode pass, `gop` Step passes, the optical flow between each pair of consecutive source
+frames (`kFlowMethodDis`, draft quality, extended borders), and a Finish pass. Each time-shifted source is a time
+sample of the same source subgraph, clamped to the keyframe, so the steps beyond `p` fold into
+the identity and their flow solves are shared with the active ones by the operation cache. The
+operations are marked as varying with time, and a change to `quality`, `persistence`, the block size,
+the GOP length or `chromaBleed` is a new plan or new data and a new cache identity.
+
+**On the GPU.** One fixed resident program per pass (`ColorGradeKind::CodecDegrade`) with every value
+and the DCT basis in its table, so there is no per-block host work. An Encode pass converts to the Encoded
+colour, so each Step reads it without repeating the curve. A predicted pass reads the chain so far and
+the flow beside the Encoded colour in an atlas, as Z Defocus does, and a Finish pass inverts the curve and
+the colour matrix. The arithmetic is additions, multiplications, floor and correctly rounded
+divisions in one fixed order, with the quantiser dividing by a precomputed inverse weight, so the CPU
+reference and the GPU agree exactly on the same input. Under a proxy the block is `round(N * scale)`
+(at least 2) and chroma stays at full resolution below a scale of 0.75; the flow is read at proxy
+resolution.
+
+**Limits.** The motion is the optical flow between source frames, so wrong flow (fast motion, repeating
+patterns, a cut) moves blocks wrongly, and the flow solves differ slightly between the CPU and the GPU
+on a real moving picture, which a quantiser can turn into a visible difference ([Motion blur,
+"Parity"](motion-blur.md#parity-determinism-and-identity) describes the same amplification). The
+test scenes feed identical inputs to both. The look-back is capped at the GOP length (30 frames at most), so a
+frame never reads further back than its keyframe.
+
+**Cost.** A frame runs a chain that is as long as its position in the GOP, so the average cost grows
+with the GOP length and the worst frame costs about `gop` flow solves and coded passes. A 16 px block
+runs a larger DCT per pixel on the GPU than an 8 px block. Neither has been measured yet:
+[Benchmarks](../development/benchmarks.md#codec-degrade-563) lists the scenario that will, and no budget is set.
+
+**Evidence.** `src/runtime/tests/codec_degrade_tests.cpp` holds the colour round trip, the keyframe's
+quantiser and grid, chroma bleed, the predicted pass's persistence, motion and coarsening, absent
+images, windows and proxies, the stages, the program table, the pixel budget, cancellation and row
+bands. Over whole plans it holds a frame independent of how it is reached (a keyframe on its own, scrub
+against play, backward, a still picture), persistence freezing blocks until the next keyframe and
+refreshing at it, blocking worse in the direction of motion, and a changed parameter changing the
+frame. The native harness (`runCodecDegrades`) holds a frame inside a GOP, a keyframe, 16 px blocks
+without chroma bleed, proxies and a region of interest to the CPU oracle with exact alpha, warm RAM
+reuse with zero dispatches, the next frame and a changed value. `effect.CodecDegradeKernel` and
+`node.bloom.codec-degrade` prepare through the production builder at full frame and ROI.
+`testCodecDegradeLowering` holds the lowering.
+
 ## Sharpen
 
 `bloom.sharpen`, schema 1, under Blur & Sharpen (issue #486), has one Image in, `input`, one Image out, `image`,

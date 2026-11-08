@@ -318,6 +318,22 @@ SCENARIOS["camera-shake-2k"] = {
     ],
 }
 
+# #563: Codec Degrade over a plate with the default GOP, coarse blocks and its quality keyed: each frame
+# renders its chain from the last keyframe (the optical flow of every step included), so this is the
+# node's heavy case.
+SCENARIOS["codec-degrade-2k"] = {
+    "description": "A PNG16 plate under Codec Degrade with 16 px blocks and a 12-frame GOP, its "
+                   "quality keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.codec-degrade",
+                      {"blockSize": "16 px", "gopLength": "12 frames", "persistence": 0.75},
+                      {"keys": {"quality": [[0, 60.0], [23, 15.0]]}}]]},
+    ],
+}
+
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
 # is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
 # the render's camera depth and read as data), the focus racking from the near pillars to the back;
