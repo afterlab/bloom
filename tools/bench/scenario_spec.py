@@ -303,6 +303,21 @@ SCENARIOS["sharpen-2k"] = {
     ],
 }
 
+# #564: Frame Rate Hold over a moving plate with a seeded irregular cadence. The plate moves, so every
+# held picture is new work upstream of the hold, and the cadence repeats some of them.
+SCENARIOS["frame-rate-hold-2k"] = {
+    "description": "A moving PNG16 plate held to 12 fps with a seeded irregular cadence.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.transform-2d", {},
+                      {"keys": {"translate": [[0, [-96.0, 0.0]], [23, [96.0, 24.0]]]}}],
+                     ["bloom.frame-rate-hold",
+                      {"rate": 12.0, "irregular": True, "amount": 0.4, "seed": 7}]]},
+    ],
+}
+
 # #512: Camera Shake over a plate with its motion blur on: every frame is new (the shake is a function
 # of the frame), and each frame resamples the plate once per shutter sample.
 SCENARIOS["camera-shake-2k"] = {

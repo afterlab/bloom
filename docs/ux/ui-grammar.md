@@ -1146,7 +1146,7 @@ group is waiting for:
 | Stylize | Vignette, Film Grain, Codec Degrade, + Dither, + Quantize |
 | Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, + Color Matrix, + Tone Map |
 | Color Management | OCIO Color Space Transform, OCIO File Transform |
-| Time | Echo, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
+| Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
 | Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Path Stroke |
 | Instances & Particles | + Point, + Grid, + Scatter, + Points Along Path, + Shape To Points, + Text To Points, + Clone To Points, + Draw Instances, + Particle System |
 | Tracking & Analysis | + Tracker, + Stabilize, + Histogram, + Image Statistics, + Compare, + Audio Amplitude, + Audio Waveform, + Audio Spectrum |

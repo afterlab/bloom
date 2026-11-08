@@ -94,6 +94,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
 - [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount,
   monochrome grain, the response to brightness, and holding or redrawing it over time.
+- [Frame Rate Hold](user-guide/frame-rate-hold.md) — holding frames to a lower rate, with an
+  optional seeded irregular cadence of doubled and dropped frames.
 - [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
   smearing: quality, block size, GOP length and P-frame persistence.
 - [Lens Distortion](user-guide/lens-distortion.md) — undistort or redistort a picture with the standard

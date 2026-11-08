@@ -429,6 +429,16 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.film-grain")
         self.assertNotIn("animation", effect[1], "every frame draws new grain")
 
+    def test_frame_rate_hold_scenario_holds_a_moving_plate_with_a_cadence(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["frame-rate-hold-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effects = scenario["layers"][0]["effects"]
+        self.assertEqual([effect[0] for effect in effects],
+                         ["bloom.transform-2d", "bloom.frame-rate-hold"])
+        self.assertTrue(effects[1][1]["irregular"])
+        self.assertIn("translate", effects[0][2]["keys"])
+
     def test_codec_degrade_scenario_keys_its_quality_over_a_gop(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["codec-degrade-2k"]

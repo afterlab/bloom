@@ -239,10 +239,29 @@ operator (Add, Maximum, Minimum, Screen, Over, Under). **Frame blend** mode is t
 window. **Posterize time** holds the upstream's time at a lower rate before sampling. A sample outside
 the composition is absent, and the sum is over what exists.
 
+## Frame Rate Hold
+
+One `TimeSampleKernel` on an Offset clock, the same mapping as Echo's Posterize time: the node's
+clock time becomes `floor(t * rate) / rate` for a rate of `posterizeNumerator / posterizeDenominator`
+frames a second (exact rational arithmetic, rate in thousandths). Its pixels are its input's at that
+time, so no new kernel exists, the CPU reference and the GPU route share one mapping
+(`offsetTime`), and the operation cache keys everything upstream by the held time: two composition
+frames that hold the same source time reuse one result, in the Viewer, a RAM preview and an export.
+
+With **Irregular cadence** on, `cadenceChance` (thousandths, the node's amount times 500) and
+`cadenceSeed` select held frames that show the frame before them. With `h(s, n)` the SplitMix64
+finalizer of the node's seed offset by the held frame `n` (`core::primitives::hashWord`), a held frame
+repeats when `h(s, n) mod 1000 < chance` and the frame before it did not. The draw is a pure function
+of seed and held frame, so it is the same on every thread, platform and pass, and independent of the
+order frames are asked for. The repeated frame is the doubled one and the frame it replaces is the
+dropped one; repeats are never adjacent, and at the largest amount about one frame in four repeats.
+The seed is a stored constant of the node, hashed from the node id when the node is added, as Camera
+Shake's.
+
 ## Parity, determinism and identity
 
 Every pass is a Required kernel in `gpu_coverage_contract.hpp`, with no exemption and no host
-preparation. `gpu_coverage_contract_tests.cpp` holds 5 effects, 18 `feature.motion.*` axes and 8 node
+preparation. `gpu_coverage_contract_tests.cpp` holds 5 effects, 19 `feature.motion.*` axes and 9 node
 types to production GPU preparation, and `gpu_scene_effect_native_tests.cpp` runs every scene on the
 device against the CPU reference.
 
