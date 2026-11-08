@@ -4,6 +4,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -640,6 +641,17 @@ std::optional<ParameterPresentation> codecDegradePresentation(const std::string_
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #566 Auto Exposure: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> autoExposurePresentation(const std::string_view schemaKey) {
+    const auto* spec = autoExposureParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    if (spec->kind == AutoExposureParameterKind::Count)
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->unit);
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit, spec->displayScale);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -655,6 +667,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *grain;
     if (auto codec = codecDegradePresentation(schemaKey))
         return *codec;
+    if (auto autoExposure = autoExposurePresentation(schemaKey))
+        return *autoExposure;
     if (auto lens = lensDistortionPresentation(schemaKey))
         return *lens;
     if (auto aberration = chromaticAberrationPresentation(schemaKey))

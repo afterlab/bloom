@@ -5,6 +5,7 @@
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
+#include <bloom/document/auto_exposure_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -437,6 +438,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeParameterValueValid(schemaKey, constant.value);
+    // #566 Auto Exposure: every parameter within its document domain.
+    if (autoExposureParameterSpec(schemaKey) != nullptr)
+        return isAutoExposureParameterValueValid(schemaKey, constant.value);
     // #484 the motion-blur nodes and Transform 2D's motion blur.
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionParameterValueValid(schemaKey, constant.value);
@@ -623,6 +627,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isLensFlareConstantSchemaKey(schemaKey) ||
          bloom::document::isFilmGrainConstantSchemaKey(schemaKey) ||
          bloom::document::isCodecDegradeConstantSchemaKey(schemaKey) ||
+         bloom::document::isAutoExposureConstantSchemaKey(schemaKey) ||
          bloom::document::isLensDistortionConstantSchemaKey(schemaKey) ||
          bloom::document::isRollingShutterConstantSchemaKey(schemaKey) ||
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
@@ -707,6 +712,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
            isFilmGrainScalarSchemaKey(schemaKey) || isCodecDegradeScalarSchemaKey(schemaKey) ||
+           isAutoExposureScalarSchemaKey(schemaKey) ||
            isLensDistortionScalarSchemaKey(schemaKey) ||
            isChromaticAberrationScalarSchemaKey(schemaKey) ||
            isLightRaysScalarSchemaKey(schemaKey) ||
@@ -790,6 +796,9 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);
+    // #566 Auto Exposure (auto_exposure_nodes.hpp).
+    if (autoExposureParameterSpec(schemaKey) != nullptr)
+        return isAutoExposureScalarWithinDomain(schemaKey, value);
     // #484 the motion-blur nodes (motion_blur_parameters.hpp).
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionScalarWithinDomain(schemaKey, value);

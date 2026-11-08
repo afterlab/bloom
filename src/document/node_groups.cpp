@@ -54,9 +54,9 @@ constexpr std::array<std::string_view, 6> kLightShadow{"bloom.glow",      "bloom
 constexpr std::array<std::string_view, 3> kStylize{"bloom.vignette", "bloom.film-grain",
                                                    "bloom.codec-degrade"};
 // Planned: Color Matrix, Tone Map.
-constexpr std::array<std::string_view, 9> kColorCorrection{
+constexpr std::array<std::string_view, 10> kColorCorrection{
     "bloom.grade",  "bloom.levels",   "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
-    "bloom.offset", "bloom.multiply", "bloom.invert", "bloom.colorize"};
+    "bloom.offset", "bloom.multiply", "bloom.invert", "bloom.colorize", "bloom.auto-exposure"};
 constexpr std::array<std::string_view, 2> kColorManagement{"bloom.ocio-colour-space-transform",
                                                            "bloom.ocio-file-transform"};
 // Planned: Time Offset, Frame Hold, Time Remap, Flow Retime.

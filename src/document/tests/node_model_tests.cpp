@@ -281,7 +281,7 @@ int main() {
           "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen", "bloom.codec-degrade",
+          "bloom.film-grain", "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure",
           "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter", "bloom.test-card",
           "bloom.video-source",
           "bloom.image-preview"})

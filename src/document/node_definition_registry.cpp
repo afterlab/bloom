@@ -7,6 +7,7 @@
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/codec_degrade_definition.hpp>
+#include <bloom/document/auto_exposure_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
@@ -596,6 +597,9 @@ template <typename Definition>
         // #563 Codec Degrade: the exact generated shape.
         if (definition.key.typeId == kCodecDegradeNodeType)
             return definition == codecDegradeDefinition();
+        // #566 Auto Exposure: the exact generated shape.
+        if (definition.key.typeId == kAutoExposureNodeType)
+            return definition == autoExposureDefinition();
         // #484 the motion-blur nodes: the exact generated shapes.
         if (isMotionBlurNodeType(definition.key.typeId))
             return definition == motionBlurDefinition(definition.key.typeId);
@@ -1697,6 +1701,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         vignetteDefinition(),
         filmGrainDefinition(),
         codecDegradeDefinition(),
+        autoExposureDefinition(),
         lensDistortionDefinition(),
         chromaticAberrationDefinition(),
         rollingShutterDefinition(),

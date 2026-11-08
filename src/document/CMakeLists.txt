@@ -15,6 +15,7 @@ target_sources(
         lens_flare_nodes.cpp
         film_grain_nodes.cpp
         codec_degrade_nodes.cpp
+        auto_exposure_nodes.cpp
         lens_distortion_nodes.cpp
         rolling_shutter_nodes.cpp
         chromatic_aberration_nodes.cpp
