@@ -129,6 +129,9 @@ class FakeRun final : public ExportRun {
             perOutput == 0 ? 0 : frames_ / perOutput, outputs_.empty() ? 0 : outputs_.size() - 1));
     }
     [[nodiscard]] ExportDeviceRoute route() const noexcept override { return route_; }
+    [[nodiscard]] bool waitingOnGpuPreparation() const noexcept override {
+        return script_.waitingOnGpuPreparation && phase_ == ExportJobRunPhase::Rendering;
+    }
     [[nodiscard]] std::vector<ExportLogEntry> takeLog() override { return std::exchange(log_, {}); }
 
   private:

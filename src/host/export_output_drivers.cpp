@@ -605,6 +605,11 @@ class ImageDriver final : public DriverBase {
         return done_ ? std::nullopt : std::optional(next_);
     }
     [[nodiscard]] ExportDeviceRoute route() const override { return liveRoute(route_); }
+    [[nodiscard]] bool waitingOnGpuPreparation() const override {
+        return capacity_.waiting() || std::ranges::any_of(window_, [](const auto& frame) {
+                   return frame.awaitingCapacity || (frame.runner && !frame.outcome);
+               });
+    }
 
   private:
     using CompileHandle =
@@ -1602,6 +1607,9 @@ class MediaDriver final : public DriverBase {
     }
     [[nodiscard]] ExportDeviceRoute route() const override {
         return runner_ && runner_->waitingForCapacity() ? capacityWaitRoute() : liveRoute(route_);
+    }
+    [[nodiscard]] bool waitingOnGpuPreparation() const override {
+        return runner_ && runner_->preparingFrames();
     }
 
   private:

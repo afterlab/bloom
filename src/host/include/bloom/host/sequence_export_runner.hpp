@@ -236,6 +236,9 @@ class SequenceExportRunnerV1 final {
     // or another export holds it) and waits at the frame boundary for a retry. Cancellable and
     // pausable; time spent here counts toward no deadline.
     [[nodiscard]] bool waitingForCapacity() const;
+    // A frame is being prepared (GPU analysis in flight) or waits for processing capacity; not
+    // while only decoding, encoding or writing.
+    [[nodiscard]] bool preparingFrames() const;
     [[nodiscard]] SequenceExportStageV1 stage() const;
     [[nodiscard]] const output::MediaOutputAnalysisV1* analysis() const;
     [[nodiscard]] std::optional<core::Sha256Digest> frameApprovalDigest() const;

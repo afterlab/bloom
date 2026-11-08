@@ -343,6 +343,8 @@ void testStalledJobReportsReason() {
         {{.framesPerPoll = 1, .waitingForViewerAfterFrames = 0, .waitingForViewerPolls = 100000000},
          host::ExportStallReason::Viewer},
         {{.framesPerPoll = 0}, host::ExportStallReason::Worker},
+        {{.framesPerPoll = 0, .waitingOnGpuPreparation = true},
+         host::ExportStallReason::GpuPreparation},
     };
     for (const auto& item : cases) {
         host::ExportQueueServiceLimits limits;

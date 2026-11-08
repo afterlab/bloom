@@ -574,7 +574,9 @@ struct Pump final {
                 stall.reason = ExportStallReason::GpuRecovery;
                 break;
             default:
-                stall.reason = ExportStallReason::Worker;
+                stall.reason = job.runner->waitingOnGpuPreparation()
+                                   ? ExportStallReason::GpuPreparation
+                                   : ExportStallReason::Worker;
                 break;
             }
         }

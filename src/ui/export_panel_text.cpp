@@ -100,6 +100,8 @@ namespace {
         return {tr("No progress: waiting for GPU memory"), since, StatusTone::Neutral};
     case host::ExportStallReason::GpuRecovery:
         return {tr("No progress: waiting for the GPU"), since, StatusTone::Neutral};
+    case host::ExportStallReason::GpuPreparation:
+        return {tr("No progress: waiting for GPU preparation"), since, StatusTone::Neutral};
     case host::ExportStallReason::Worker:
         return {tr("No progress: waiting for a media worker"), since, StatusTone::Neutral};
     }

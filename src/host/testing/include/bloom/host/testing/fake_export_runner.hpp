@@ -36,6 +36,8 @@ struct FakeExportScript final {
     // Writes a small placeholder file at each output's first path when it publishes, for a
     // caller that reads the published file back (MCP capture).
     bool writeDestinations = false;
+    // The stalled run reports waiting on GPU preparation instead of a media worker.
+    bool waitingOnGpuPreparation = false;
 };
 
 class FakeExportRunBackend final : public ExportRunBackend {

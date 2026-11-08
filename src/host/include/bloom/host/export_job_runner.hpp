@@ -143,6 +143,9 @@ class ExportRun {
         return std::nullopt;
     }
     // Log entries produced since the last call (code, severity, output, frame, message).
+    // The run is preparing a frame on the GPU or waits for processing capacity (any route), as
+    // opposed to waiting on a media decode, encode or write.
+    [[nodiscard]] virtual bool waitingOnGpuPreparation() const noexcept { return false; }
     [[nodiscard]] virtual std::vector<ExportLogEntry> takeLog() = 0;
 };
 
@@ -232,6 +235,7 @@ class ExportJobRunner final : public ExportRun {
     [[nodiscard]] std::uint32_t outputIndex() const noexcept override;
     [[nodiscard]] ExportDeviceRoute route() const noexcept override;
     [[nodiscard]] std::optional<std::uint64_t> memoryNeededBytes() const noexcept override;
+    [[nodiscard]] bool waitingOnGpuPreparation() const noexcept override;
     [[nodiscard]] std::vector<ExportLogEntry> takeLog() override;
 
   private:

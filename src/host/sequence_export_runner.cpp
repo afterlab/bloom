@@ -1227,6 +1227,12 @@ bool SequenceExportRunnerV1::waitingForCapacity() const {
     return s.capacity.waiting() ||
            std::ranges::any_of(s.window, [](const auto& frame) { return frame.awaitingCapacity; });
 }
+bool SequenceExportRunnerV1::preparingFrames() const {
+    const auto& s = *state_;
+    return s.capacity.waiting() || std::ranges::any_of(s.window, [](const auto& frame) {
+               return frame.awaitingCapacity || (frame.runner && !frame.runner->isReady());
+           });
+}
 void SequenceExportRunnerV1::poll() {
     auto& s = *state_;
     if (s.stage == Stage::Complete)

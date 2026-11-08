@@ -270,6 +270,10 @@ std::uint32_t ExportJobRunner::outputIndex() const noexcept {
     return static_cast<std::uint32_t>(std::min(state_->current, state_->outputs.size()));
 }
 ExportDeviceRoute ExportJobRunner::route() const noexcept { return state_->route; }
+bool ExportJobRunner::waitingOnGpuPreparation() const noexcept {
+    const auto& s = *state_;
+    return s.phase == ExportJobRunPhase::Rendering && s.driver && s.driver->waitingOnGpuPreparation();
+}
 std::optional<std::uint64_t> ExportJobRunner::memoryNeededBytes() const noexcept {
     return state_->memoryNeeded;
 }

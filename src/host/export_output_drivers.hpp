@@ -49,6 +49,9 @@ class ExportOutputDriver {
     [[nodiscard]] virtual std::optional<std::uint64_t> memoryNeededBytes() const {
         return std::nullopt;
     }
+    // A frame is being prepared on the GPU (or waits for processing capacity), not decoded,
+    // encoded or written.
+    [[nodiscard]] virtual bool waitingOnGpuPreparation() const { return false; }
     [[nodiscard]] virtual std::vector<ExportLogEntry> takeLog() = 0;
     [[nodiscard]] virtual ExportDriverReport takeReport() = 0;
 };

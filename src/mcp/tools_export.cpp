@@ -129,6 +129,8 @@ std::string_view stallReasonName(const host::ExportStallReason reason) {
         return "gpu-capacity";
     case host::ExportStallReason::GpuRecovery:
         return "gpu-recovery";
+    case host::ExportStallReason::GpuPreparation:
+        return "gpu-preparation";
     case host::ExportStallReason::Worker:
         return "worker";
     }

@@ -175,6 +175,8 @@ enum class ExportStallReason : std::uint8_t {
     GpuCapacity,
     // The GPU is reconnecting.
     GpuRecovery,
+    // A frame is being prepared on the GPU, or waits for another processing request, on any route.
+    GpuPreparation,
     // A media, render or encode worker has not delivered the next frame.
     Worker,
 };
