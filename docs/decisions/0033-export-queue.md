@@ -345,6 +345,12 @@ is what the serial runner does. A `--require-device` export still fails instead 
 This strict priority replaces, for GPU phase admission, task-system.md's aging rule that scrubbing
 must not starve an explicit export. The CPU and I/O scheduler keeps that rule.
 
+A capacity refusal is a wait unless nothing else holds the root. Phases retired to retention
+(background caching), retained native images and any remaining claim are other work that gives way
+to a waiting request, so a refusal while they exist waits; "needs more memory than this computer can
+give the export" (`export.capacity.never-fits`) is reported only when the frame is refused with none
+of them present, and its log entry lists the retained phases and images the root holds.
+
 ### 10. Verification replaces the approval prompt
 
 - **Before Start**, every output shows its preset's expected preservation, its preflight issues,
