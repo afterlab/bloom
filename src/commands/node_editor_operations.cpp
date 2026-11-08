@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include "node_operation_support.hpp"
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
@@ -39,10 +40,10 @@ checkAddEditorNodeEligibility(const document::Snapshot& snapshot,
     const auto& graph = composition->graph();
     auto available = snapshot.ids();
     const auto checkConnectionIds = [&](const bool needsSlot, const bool needsEdge) {
-        if ((needsSlot && !available.allocateLayerSlot()) ||
-            (needsEdge && !available.allocateEdge()))
-            return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                             "Document ID space is exhausted");
+        if (needsSlot && !available.allocateLayerSlot())
+            return detail::exhaustedIds("layer slot");
+        if (needsEdge && !available.allocateEdge())
+            return detail::exhaustedIds("edge");
         return eligibility;
     };
     if (input) {

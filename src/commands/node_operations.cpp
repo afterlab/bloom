@@ -537,7 +537,7 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         }
         const auto edgeId = draft.ids().allocateEdge();
         if (!edgeId)
-            return detail::exhaustedIds("layer slot and edge");
+            return detail::exhaustedIds("edge");
         if (existingSlot == nullptr) {
             if (!stack->append({slotId, layerId}))
                 return OperationResult::rejected(OperationIssueCode::InvalidValue,
