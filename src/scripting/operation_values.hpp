@@ -7,9 +7,11 @@
 #include <bloom/scripting/operation_registry.hpp>
 #include <bloom/scripting/value.hpp>
 
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -49,7 +51,18 @@ argumentFailure(const std::string& operationId, std::string argument, std::strin
     return std::nullopt;
 }
 
+// A stable id: a positive integer, or the same value as decimal text ("16"). Asset ids travel as
+// text inside String parameters, so every id argument reads both spellings.
 [[nodiscard]] inline std::optional<std::uint64_t> idOf(const Value& value) {
+    if (const auto* text = std::get_if<std::string>(&value.storage)) {
+        std::uint64_t parsed = 0;
+        const auto [end, error] = std::from_chars(text->data(), text->data() + text->size(), parsed);
+        constexpr auto limit = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        if (text->empty() || error != std::errc{} || end != text->data() + text->size() ||
+            parsed == 0 || parsed > limit)
+            return std::nullopt;
+        return parsed;
+    }
     const auto number = integerOf(value);
     return number.has_value() && *number > 0 ? std::optional(static_cast<std::uint64_t>(*number))
                                              : std::nullopt;

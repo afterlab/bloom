@@ -181,7 +181,9 @@ ExportResolvedDestination resolveDestination(const document::ExportJob& job,
         if (!path || !path->is_absolute()) {
             result.issues.push_back(issue(ExportPreflightCode::NamingInvalid,
                                           ExportPreflightTarget::Destination,
-                                          "The destination is not an absolute file URI"));
+                                          "An external destination is an absolute file URI such "
+                                          "as file:///exports/shot.mov, or an absolute local "
+                                          "path given without portability"));
             return result;
         }
         base = *path;
@@ -198,7 +200,9 @@ ExportResolvedDestination resolveDestination(const document::ExportJob& job,
             result.issues.push_back(issue(ExportPreflightCode::NamingInvalid,
                                           ExportPreflightTarget::Destination,
                                           "A project-relative destination stays below the "
-                                          "project folder"));
+                                          "project folder; for a file elsewhere give an "
+                                          "absolute path, or a file URI with portability "
+                                          "external"));
             return result;
         }
         base = (*context.projectFolder / relative).lexically_normal();

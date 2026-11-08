@@ -243,6 +243,12 @@ exportDestinationForPath(const std::filesystem::path& chosen,
                          const std::optional<std::filesystem::path>& projectFolder,
                          document::ExportOverwritePolicy overwrite =
                              document::ExportOverwritePolicy::AskBeforeReplacing);
+// A client-written destination: a plain absolute local path ("/exports/shot.mov", "C:\\x\\a.mov"),
+// with `portability` left empty or "external", becomes the "external" record holding its file URI.
+// Anything else (a file URI, a project-relative path, an explicit "project-relative") is kept as
+// written. Returns false only when the path is absolute but cannot be a file URI.
+[[nodiscard]] bool normalizeExportDestinationPath(document::ExportDestination& destination,
+                                                  bool portabilityGiven);
 
 // The result of a user-preset file operation, delivered through the catalogue revision.
 enum class ExportUserPresetStatus : std::uint8_t {

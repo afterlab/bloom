@@ -190,8 +190,16 @@ std::optional<document::ParameterValue> coerce(const document::ParameterValue& v
         if (const auto* whole = std::get_if<std::int64_t>(&value))
             return document::ParameterValue(static_cast<double>(*whole));
         return value;
-    case document::ParameterValueKind::Boolean:
     case document::ParameterValueKind::String:
+        // A Font or media asset parameter holds the asset's id as text; the integer an `asset`
+        // query reports is accepted as the same id.
+        if (const auto* whole = std::get_if<std::int64_t>(&value);
+            whole != nullptr && *whole > 0 &&
+            (record.schemaKey == document::kTextFontParameterSchemaKey ||
+             std::string_view(record.schemaKey).ends_with(".asset")))
+            return document::ParameterValue(std::to_string(*whole));
+        return value;
+    case document::ParameterValueKind::Boolean:
     case document::ParameterValueKind::Color4d:
     case document::ParameterValueKind::Vec2d:
     case document::ParameterValueKind::Vec3d:

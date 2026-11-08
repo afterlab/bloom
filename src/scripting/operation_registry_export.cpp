@@ -141,7 +141,10 @@ const std::string kOutputSummary =
     R"("destination": {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every )"
     R"(field is optional. A built-in "preset" (export.presets lists them) with no "settings" takes )"
     R"(that preset's settings; "settings" given with it override them. "overwrite" is "ask", )"
-    R"("replace" or "refuse"; an output with no destination path must be given one before Start.)";
+    R"("replace" or "refuse"; an output with no destination path must be given one before Start. )"
+    R"(A destination is a path below the project folder ("project-relative", the default for a )"
+    R"(relative path), or an absolute local path such as "/exports/shot.mov", which is stored as )"
+    R"(portability "external" with its file:// URI.)";
 
 } // namespace
 
@@ -390,9 +393,11 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
     add("bloom.export.set-output-destination",
         {argument("output", ValueKind::Id, true, StableId{1}, "The output."),
          argument("path", ValueKind::String, true, "Exports/{name}.mp4",
-                  "Project-relative path, or a file URI with portability external."),
+                  "A path below the project folder, or an absolute local path (stored as an "
+                  "external file URI), or a file URI with portability external."),
          argument("portability", ValueKind::String, false, "project-relative",
-                  R"("project-relative" (default) or "external".)"),
+                  R"("project-relative" or "external". Omitted: an absolute local path is )"
+                  R"(external, any other path project-relative.)"),
          argument("overwrite", ValueKind::String, false, "ask",
                   R"("ask" (default), "replace" or "refuse".)")},
         [](const std::string& op, const Arguments& args) {
@@ -402,8 +407,11 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
                 return argumentFailure(op, "path", "Expected an output id and a path.");
             document::ExportDestination destination;
             destination.path = *path;
-            destination.portability =
-                textArgument(args, "portability").value_or("project-relative");
+            const auto portability = textArgument(args, "portability");
+            destination.portability = portability.value_or("project-relative");
+            if (!host::normalizeExportDestinationPath(destination, portability.has_value()))
+                return argumentFailure(op, "path", "The absolute path cannot be written as a file "
+                                                   "URI.");
             if (const auto overwrite = textArgument(args, "overwrite")) {
                 const auto parsed = document::parseExportOverwrite(*overwrite);
                 if (!parsed)

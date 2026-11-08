@@ -356,6 +356,23 @@ exportDestinationForPath(const std::filesystem::path& chosen,
         .portability = "external", .path = *uri, .overwrite = overwrite};
 }
 
+bool normalizeExportDestinationPath(document::ExportDestination& destination,
+                                    const bool portabilityGiven) {
+    if (portabilityGiven && destination.portability != "external")
+        return true;
+    if (destination.path.starts_with("file:") || destination.path.empty())
+        return true;
+    const std::filesystem::path chosen(destination.path);
+    if (!chosen.is_absolute())
+        return true;
+    const auto uri = core::fileUriFromAbsolutePath(chosen.lexically_normal());
+    if (!uri)
+        return false;
+    destination.portability = "external";
+    destination.path = *uri;
+    return true;
+}
+
 std::string_view exportFormatShortName(const ExportFormat format) noexcept {
     switch (format) {
     case ExportFormat::ProResMov:

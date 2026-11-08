@@ -455,6 +455,75 @@ the same IDs and revision, starting at `offset:0` and advancing to each `nextOff
 `complete:true`. Chunks report `totalBytes` and always end on a UTF-8 boundary; no value is
 silently shortened. An `expectedRevision` mismatch is an error.
 
+**Revisions.** A project's revision counts the edits made since it was opened or created.
+`project.open` and `project.new` start it again at 0, whatever revision the file was saved at; it
+is not kept increasing per file. Read the revision again after replacing the project, and treat an
+events cursor that reports `resetRequired` as void.
+
+**Ids.** Every id argument takes a positive integer or the same value as decimal text (`16` or
+`"16"`). A Font, video, image or audio asset parameter holds the asset's id as text, and
+`bloom.parameter.set-source` accepts the integer `query` reports for the asset as well.
+`bloom.asset.import` needs `projectDirectory` only when a path is relative; with absolute paths it
+uses the saved project's folder, and an unsaved project keeps external locators.
+
+**Export destinations.** An output's destination is a path below the project folder
+(`portability` `project-relative`) or an absolute local path such as `/exports/shot.mov`, which is
+stored as `portability` `external` with its `file://` URI. `bloom.export.set-output-destination`
+and the `destination` of an `outputs` entry of `bloom.export.add-job` take either; a file URI with
+`portability` `external` is still accepted.
+
+**Names and roles.** Where an operation takes a `layer` (or `layers`, or a layer operation's
+`parent`), pass `{"name": "Shot 2"}` instead of the id. Where it takes a `parameter`, pass
+`{"layer": "Shot 2", "role": "opacity"}` (`layer` is a name or an id); the layer's own parameters
+are searched first, then its source's. An optional `composition` in the reference scopes the
+lookup; the default is the operation's composition. A name that matches no layer or several lists
+the candidates with their ids, and a role the layer lacks lists the roles it has. Ids still work
+everywhere.
+
+**Filters and projection.** `query` accepts `idPrefix` on `kind:"operations"` (for example
+`"bloom.layer."`), `layer` on `kind:"nodes"` and `kind:"layers"` (a layer id: its nodes and
+everything upstream of it, with `links` and `groups` narrowed to them), and `fields` on any query
+that returns `records`: a list of the member names to keep. A name no record carries is refused,
+listing the members the records have.
+
+**Keys.** `bloom.animation.set-keys` replaces or edits a parameter's keys in one undo step: `keys`
+is a list of `[time, value]` or `[time, value, interpolation]` entries in any order, and `replace`
+clears the existing keys first (an empty list with `replace` returns the parameter to a
+constant). The time of every key operation counts in the unit of the parameter's owner: a layer's
+own parameters (position, opacity and the other Layer Output parameters) in layer time, which
+is the composition frame minus the layer's start; every other parameter in composition time. A
+key that lands outside the layer's start and end is applied and answers a
+`bloom.scripting.operation-warning` naming the layer and its range.
+
+**Duplicating a composition.** `bloom.composition.duplicate` returns the new composition as
+`composition` and, for every copied object, the new id under `<kind>.<original id>`
+(`layer.30`, `node.21`, `edge.50`, `parameter.60`, `slot.40`, `mask.7`, `curve.5`,
+`keyframe.9`, `group.2`), so edits to the copy can address the same layers and nodes.
+
+**Frame statistics.** `capture` with `statistics:true` returns measurements instead of a picture:
+luma (Rec.709 weights of the working-space values) and red, green and blue mean, min, max and a
+histogram (`bins`, 2 to 256, over 0 to 1, with `below` and `above` counting values outside),
+the mean alpha, and the pixel count. The frame is rendered by the same still-export route as
+`render`, written to a scratch OpenEXR in the project's working colour space without a display
+transform, and read back; the result names that space in `colorSpace`. `last` makes a range
+(`frame` to `last`, with a row of means and luma extremes per frame in `frames`) and `region` is
+`[x, y, width, height]` in pixels from the top-left corner. Values are premultiplied, so a
+transparent pixel counts as black.
+
+**Other project files.** `query`, `transact`, `history`, `render`, `export`, `capture`,
+`project.save` and `project.close` take `projectFile`, the absolute path of a project file other
+than the open one. The call runs in a headless session of that file, with the same operations;
+the session stays open between calls (edits, undo and unsaved changes persist), `project.save`
+with `projectFile` writes it and `project.close` releases it (`discardChanges:true` to close with
+unsaved edits). Asking for a file that is open in Bloom, or is the server's own project, is
+refused with `bloom.mcp.preflight-blocked`, because two sessions on one file would overwrite each
+other's saves. At most four files are open this way at once. In the desktop application their
+renders use the CPU reference path.
+
+**Dialogs.** While a modal dialog is open in the application, the calls that need the window
+answer `bloom.mcp.busy` and name the dialog: its title, its text and its buttons, with the
+buttons that discard or overwrite data marked as such.
+
 ## Output and cancellation
 
 `render` and `export` write to `destination`: a file path with the preset's extension (`.png`,

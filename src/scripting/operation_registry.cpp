@@ -5,6 +5,7 @@
 #include <bloom/scripting/operation_registry.hpp>
 
 #include "operation_registry_parity.hpp"
+#include "operation_references.hpp"
 #include "operation_values.hpp"
 
 #include <algorithm>
@@ -1010,6 +1011,23 @@ std::string pythonLiteral(const Value& value) {
                 return "(" + pythonLiteral(Value(held.red)) + ", " +
                        pythonLiteral(Value(held.green)) + ", " + pythonLiteral(Value(held.blue)) +
                        ", " + pythonLiteral(Value(held.alpha)) + ")";
+            } else if constexpr (std::is_same_v<Held, ObjectReference>) {
+                std::string text = "{";
+                const auto field = [&text](const char* key, const std::string& rendered) {
+                    text += (text.size() > 1 ? ", " : "") + std::string("\"") + key + "\": " +
+                            rendered;
+                };
+                if (held.name)
+                    field("name", "\"" + *held.name + "\"");
+                if (held.layerName)
+                    field("layer", "\"" + *held.layerName + "\"");
+                if (held.layerId)
+                    field("layer", std::to_string(*held.layerId));
+                if (held.role)
+                    field("role", "\"" + *held.role + "\"");
+                if (held.composition)
+                    field("composition", std::to_string(*held.composition));
+                return text + "}";
             } else if constexpr (std::is_same_v<Held, document::PathValue>) {
                 const auto handle = [](const std::optional<document::Vec2d>& point) {
                     return point ? pythonLiteral(Value(*point)) : std::string("None");
@@ -1172,6 +1190,80 @@ OperationRegistry OperationRegistry::builtIn() {
                         std::nullopt);
                 },
                 *value);
+        });
+
+    add("bloom.animation.set-keys",
+        {compositionArgument(),
+         need("parameter", ValueKind::Id, StableId{1}, "The parameter to key."),
+         need("keys", ValueKind::Array,
+              ValueArray{Value(ValueArray{Value(std::int64_t{0}), Value(0.0), Value("linear")}),
+                         Value(ValueArray{Value(std::int64_t{24}), Value(1.0)})},
+              "The keys as [time, value] or [time, value, interpolation] entries, in any order. "
+              "Times count in the parameter owner's unit: layer time for a layer's own "
+              "parameters (the composition frame minus the layer's start), composition time for "
+              "every other parameter. Each value has the parameter's own width. Interpolation is "
+              "the one leaving the key (default linear); the last key's is always linear. An "
+              "empty list needs replace."),
+         maybe("replace", ValueKind::Boolean, true,
+               "Clear the existing keys first, returning the parameter to the constant it was "
+               "animated from. With an empty keys list the parameter ends constant. Default "
+               "false: keys at existing times are updated and the others added.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto parameter = id(args, op, "parameter", error);
+            const auto entries =
+                list(args, op, "keys", error, "expects a list of [time, value, interpolation] keys");
+            const auto replace = boolean(args, op, "replace", error, false);
+            if (!composition || !parameter || !entries || error) {
+                return error;
+            }
+            std::vector<commands::ParameterKey> keys;
+            keys.reserve(entries->size());
+            for (std::size_t index = 0; index < entries->size(); ++index) {
+                const auto where = "keys[" + std::to_string(index) + "]";
+                const auto* entry = std::get_if<ValueArray>(&(*entries)[index].storage);
+                if (entry == nullptr || entry->size() < 2 || entry->size() > 3) {
+                    return failure(op, "keys",
+                                   where + " expects [time, value] or [time, value, interpolation]");
+                }
+                commands::ParameterKey key;
+                const auto time = rationalOf((*entry)[0]);
+                if (!time) {
+                    return failure(op, "keys",
+                                   where + " time expects a whole frame or an exact "
+                                           "(numerator, denominator) time");
+                }
+                key.time = *time;
+                if (const auto* path = std::get_if<document::PathValue>(&(*entry)[1].storage)) {
+                    key.value = *path;
+                } else if (const auto* gradient =
+                               std::get_if<document::GradientValue>(&(*entry)[1].storage)) {
+                    key.value = *gradient;
+                } else if (const auto authoredValue = animationValueOf((*entry)[1])) {
+                    std::visit([&](const auto& held) { key.value = held; }, *authoredValue);
+                } else {
+                    return failure(op, "keys",
+                                   where + " value expects a number, (x, y), (x, y, z), "
+                                           "(r, g, b, a), a path or a gradient");
+                }
+                if (entry->size() == 3) {
+                    const auto mode = interpolationOf((*entry)[2]);
+                    if (!mode) {
+                        return failure(op, "keys",
+                                       where + " interpolation expects \"hold\", \"linear\", "
+                                               "\"ease-in-out\" or an easing equation name");
+                    }
+                    key.interpolation = *mode;
+                }
+                keys.push_back(std::move(key));
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::SetParameterKeys>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::ParameterId::fromRaw(*parameter), std::move(keys),
+                    replace.value_or(false)),
+                std::nullopt);
         });
 
     add("bloom.animation.create-for-parameter",
@@ -1829,10 +1921,12 @@ OperationRegistry OperationRegistry::builtIn() {
         });
 
     add("bloom.asset.import",
-        {need("paths", ValueKind::Array, ValueArray{Value("footage/plate.exr")},
+        {need("paths", ValueKind::Array, ValueArray{Value("/footage/plate.exr")},
               "Absolute or project-relative media files or folders to import."),
-         need("projectDirectory", ValueKind::String, ".",
-              "The project directory the locators are made relative to."),
+         maybe("projectDirectory", ValueKind::String, ".",
+               "The project directory the locators are made relative to. Omit it when every path "
+               "is absolute: the saved project's folder is used, and an unsaved project keeps "
+               "external locators. A relative path needs it."),
          maybe("folder", ValueKind::Id, StableId{1},
                "The Assets folder the new assets land in. Omit for the project root."),
          // #381: the Import dialog's options and the Import preferences.
@@ -1855,11 +1949,19 @@ OperationRegistry OperationRegistry::builtIn() {
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto paths = strings(args, op, "paths", error);
-            const auto directory = text(args, op, "projectDirectory", error);
+            const auto directory = text(args, op, "projectDirectory", error, false);
             const auto folder = id(args, op, "folder", error, false);
-            if (!paths || !directory || error) {
+            if (!paths || error) {
                 return error;
             }
+            if (!directory)
+                for (const auto& entry : *paths)
+                    if (const std::filesystem::path path(entry);
+                        !path.is_absolute() && !path.has_root_directory())
+                        return failure(op, "projectDirectory",
+                                       "is required because the path \"" + entry +
+                                           "\" is relative; pass projectDirectory or an "
+                                           "absolute path");
             detail::parity::Reader read(op, args);
             const auto asSequence = read.boolean("asSequence");
             const auto firstFrame = read.integer("firstFrame");
@@ -1904,12 +2006,30 @@ OperationRegistry OperationRegistry::builtIn() {
                 files.emplace_back(entry);
             }
             auto import = std::make_unique<commands::ImportAssets>(
-                files, std::filesystem::path(*directory), std::function<bool()>{},
-                commands::ImportProgressCallback{}, options);
+                files, directory ? std::filesystem::path(*directory) : std::filesystem::path{},
+                std::function<bool()>{}, commands::ImportProgressCallback{}, options);
             if (folder.has_value())
                 import->setFolder(document::AssetFolderId::fromRaw(*folder));
             return OperationCreateResult(std::move(import), std::nullopt);
         });
+
+    // Without projectDirectory, an import is made relative to the saved project's folder.
+    all.back().contextualFactory = [factory = all.back().factory](
+                                       const std::string& op, const Arguments& args,
+                                       const OperationContext& context) {
+        if (!args.contains("projectDirectory") && context.source) {
+            if (const auto source = context.source();
+                source && !source->assetBaseDirectory.empty()) {
+                auto resolved = args;
+                const auto bytes = source->assetBaseDirectory.generic_u8string();
+                resolved.insert_or_assign(
+                    "projectDirectory",
+                    Value(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size())));
+                return factory(op, resolved);
+            }
+        }
+        return factory(op, args);
+    };
 
     add("bloom.asset.relink",
         {need("asset", ValueKind::Id, StableId{1}, "The asset to repoint."),
@@ -3784,6 +3904,10 @@ OperationCreateResult OperationRegistry::create(const std::string_view typeId, A
                                                 const OperationContext& context) const {
     if (const auto* descriptor = find(typeId); descriptor != nullptr) {
         static_cast<void>(applyContextDefaults(descriptor->schema, arguments, context));
+        // #574: a layer or parameter given by name and role becomes the id it names.
+        if (auto refused =
+                detail::resolveObjectReferences(descriptor->schema, arguments, context))
+            return OperationCreateResult(nullptr, std::move(refused));
     }
     return createWith(typeId, arguments, &context);
 }

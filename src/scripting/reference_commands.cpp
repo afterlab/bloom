@@ -46,6 +46,22 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
                                   .summary = "The previous page's nextCursor; stale after any "
                                              "edit."};
     constexpr std::string_view time = "{frames, seconds:[n, d]}";
+    // #575: any query that returns records can name the members it wants.
+    constexpr ArgumentSpec fields{.name = "fields",
+                                  .type = "array of strings",
+                                  .summary = "Return only these members of every record, such as "
+                                             "[\"id\", \"name\"]. A name the records do not "
+                                             "have is refused, listing the ones they do. Default: "
+                                             "every member.",
+                                  .unit = "member names of the records this kind returns"};
+    constexpr ArgumentSpec layerFilter{
+        .name = "layer",
+        .type = "integer",
+        .summary = "Only this layer: its record and Merge entries (layers), or its Layer Output "
+                   "node (or its entry's source) and every node upstream of it, with the links "
+                   "and groups among them (nodes). Default: every layer.",
+        .unit = "layer id (query:layers .id)",
+        .range = ">= 1"};
 
     kind("project", "The project's id and name.", {}, "{revision, project:{id, name}}", {},
          R"({"name":"query","arguments":{"kind":"project"}})");
@@ -59,7 +75,7 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
              " (the timecode label of frame 0), dropFrame, workArea:{start, end}|null (end "
              "exclusive), backgroundColor:[r, g, b, a] (display-only), workingColorSpace|null, "
              "safeAreas:{action, title}, layerCount, folder|null}]}",
-         {}, R"({"name":"query","arguments":{"kind":"compositions"}})");
+         {fields}, R"({"name":"query","arguments":{"kind":"compositions"}})");
     kind("layers", "A composition's layers, topmost first, with timing, masks and parameter ids.",
          "Each layer's `parameters` maps its transform roles (position, anchor, scale, rotation, "
          "opacity, blendMode, timeRemap) to parameter ids; `sourceParameters` maps the source "
@@ -85,7 +101,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
              "sourceNode|null, sourceType|null, name|null, enabled, solo, locked, shy, pivot, "
              "adjustment|null, shared, nestedMerge|null, parameters:{role: id}, "
              "values:{role: value|null}}]}",
-         {composition}, R"({"name":"query","arguments":{"kind":"layers","composition":1}})");
+         {composition, layerFilter, fields},
+         R"({"name":"query","arguments":{"kind":"layers","composition":1,"fields":["id","name"]}})");
     kind("nodes", "A composition's node graph: nodes, ports, links, card positions and groups.",
          "Input ports list what feeds them; output ports list where they lead. Merge nodes also "
          "list their layer stack, each row with the same entry fields as query:layers "
@@ -97,7 +114,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "sourceNode, sourceType, name, enabled, solo, locked, shy, pivot, adjustment, shared, "
          "nestedMerge, parameters, values}]}], links:[{id, source:{node, port}, "
          "target:{node, port}|{node, role, slot}}], groups:[{id, name, members}]}",
-         {composition}, R"({"name":"query","arguments":{"kind":"nodes","composition":1}})");
+         {composition, layerFilter, fields},
+         R"({"name":"query","arguments":{"kind":"nodes","composition":1,"layer":2}})");
     kind("node-types", "Every node type bloom.node.add accepts, or one type in full.",
          "Without nodeType: every type with its category, ports and parameter roles. With "
          "nodeType: the type's ports and every parameter with value kind, default, unit, range, "
@@ -110,7 +128,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          {{.name = "nodeType",
            .type = "string",
            .summary = "One type to describe in full.",
-           .unit = "node type id such as bloom.solid-source"}},
+           .unit = "node type id such as bloom.solid-source"},
+          fields},
          R"({"name":"query","arguments":{"kind":"node-types","nodeType":"bloom.solid-source"}})");
     kind("parameters", "A composition's parameters: full records, or summary pages.",
          "Without pageSize or cursor: every full record. With them: bounded summaries whose "
@@ -118,7 +137,7 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "{revision, records:[{id, schemaKey, source:\"constant\"|\"curve\"|\"driver\", value?, "
          "label? (an enumeration member's), curveId?, nodeId? and port? (a driver)}], nextCursor?, "
          "totalRecords?}",
-         {composition, page, cursor},
+         {composition, page, cursor, fields},
          R"({"name":"query","arguments":{"kind":"parameters","composition":1,"pageSize":64}})");
     kind("parameter",
          "One parameter's record and its metadata: value kind, unit, range, default, accepted "
@@ -199,23 +218,31 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
            .unit = "animation curve id",
            .range = ">= 1"},
           page,
-          cursor},
+          cursor,
+          fields},
          R"({"name":"query","arguments":{"kind":"keyframes","composition":1,"parameter":5}})");
     kind("enums", "The keyframe vocabularies with their tokens and stable ids.",
          "interpolation, ease, handleMode and easyEase: each value has an id, a token the "
          "animation operations take, and a label.",
-         "{revision, records:[{enum, values:[{id, token, label}]}]}", {},
+         "{revision, records:[{enum, values:[{id, token, label}]}]}", {fields},
          R"({"name":"query","arguments":{"kind":"enums"}})");
     kind("assets", "Every asset: kind, file, size, folder and tags.", {},
          "{revision, records:[{id, name, kind:\"image\"|\"sequence\"|\"audio\"|\"font\"|\"video\""
          "|\"lut\", path, width, height, frames, digest, folder|null, tags}], folders:[{id, "
          "name, parent|null}]}",
-         {}, R"({"name":"query","arguments":{"kind":"assets"}})");
+         {fields}, R"({"name":"query","arguments":{"kind":"assets"}})");
     kind("operations", "Every operation schema transact accepts.",
-         "The same schemas help describes, as data.",
+         "The same schemas help describes, as data. The full list is large (hundreds of "
+         "thousands of characters); narrow it with idPrefix and fields.",
          "{revision, records:[{id, description, arguments:[{name, kind, required, contextual, "
          "context, summary, unit?, minimum?, maximum?, default?, choices?}], example}]}",
-         {}, R"({"name":"query","arguments":{"kind":"operations"}})");
+         {{.name = "idPrefix",
+           .type = "string",
+           .summary = "Only operations whose id starts with this text, such as "
+                      "\"bloom.animation.\". Default: every operation.",
+           .unit = "operation id prefix"},
+          fields},
+         R"({"name":"query","arguments":{"kind":"operations","idPrefix":"bloom.animation.","fields":["id","example"]}})");
     kind("context", "The editor context omitted contextual arguments fall back to.",
          "In the desktop application: the Viewer's composition, the playhead, the selection and "
          "the Viewer's display and view. On stdio: the session defaults (concept:context).",

@@ -87,6 +87,14 @@ std::string utf8(const std::filesystem::path& path) {
 document::AssetLocator locator(const std::filesystem::path& path,
                                const std::filesystem::path& base) {
     const auto absolute = std::filesystem::absolute(path).lexically_normal();
+    // No project folder to be relative to: the file is external.
+    if (base.empty()) {
+        const auto uri = core::fileUriFromAbsolutePath(absolute);
+        if (!uri || uri->size() > 16384)
+            throw std::runtime_error(
+                "The asset path cannot be represented as an absolute file URI");
+        return {"file", "external", *uri, *uri};
+    }
     const auto relative =
         absolute.lexically_relative(std::filesystem::absolute(base).lexically_normal());
     const auto uri = core::fileUriFromAbsolutePath(absolute);

@@ -376,10 +376,13 @@ std::optional<document::ExportOutput> exportOutputFromJson(const std::string_vie
         output.settings = preset->settings;
     }
     if (const auto* destination = parsed->find("destination")) {
-        if (const auto* portability = string(*destination, "portability"))
+        const auto* portability = string(*destination, "portability");
+        if (portability != nullptr)
             output.destination.portability = *portability;
         if (const auto* path = string(*destination, "path"))
             output.destination.path = *path;
+        if (!normalizeExportDestinationPath(output.destination, portability != nullptr))
+            return refuse("Its destination path cannot be written as a file URI.");
         if (const auto* overwrite = string(*destination, "overwrite")) {
             const auto policy = document::parseExportOverwrite(*overwrite);
             if (!policy)
