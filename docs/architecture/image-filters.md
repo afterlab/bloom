@@ -1378,8 +1378,8 @@ interest draws the whole frame's pixels. A value change is new program data and 
 ## Film Grain
 
 `bloom.film-grain`, schema 1, under Stylize (issue #486), has one Image in, `input`, one Image out,
-`image`, and the optional effect mask every filter takes. Every value below but the last three has a
-socket and can be keyed or driven:
+`image`, and the optional effect mask every filter takes. Every Scalar below has a socket and can be
+keyed or driven; `animation`, `seed`, `monochrome` and `mode` are constants:
 
 | Role | Default | Domain | Meaning |
 |---|---|---|---|
@@ -1390,6 +1390,14 @@ socket and can be keyed or driven:
 | `animation` | Every Frame | Every Frame (0), Held (1) | Whether each frame has its own grain. Constant |
 | `seed` | 1 | 0 to 2^31 - 1 | Which grain. Constant |
 | `monochrome` | off | off, on | One grain pattern shared by every channel. Constant and optional: a node saved before it opens with it off ([project format](project-format.md#film-grain-monochrome)) |
+| `mode` | Film | Film (0), Sensor Noise (1) | Which model draws the grain (#565). Constant and optional: a node saved before it opens in Film ([project format](project-format.md#film-grain-sensor-noise)) |
+| `shadowWeighting` | 1 | 0 to 10 | Sensor Noise: how strongly the noise favors the shadows. Optional |
+| `chromaBlotches` | 0.5 | 0 to 10 | Sensor Noise: the strength of the low-frequency chroma blotches, relative to the intensity. Optional |
+| `blotchSize` | 24 | 1 to 512 | Sensor Noise: how wide a blotch is, in full-resolution pixels. Optional |
+| `fixedPattern` | 0 | 0 to 10 | Sensor Noise: the strength of the pattern that never changes from frame to frame, relative to the intensity; 0 is off. Optional |
+
+Everything above this row's `mode` describes Film, the node as it always was. Sensor Noise is described
+after the GPU paragraph below.
 
 **The pixel.** With premultiplied `rgb` and `a`, `L = max(luma(rgb) / a, 0)` the pixel's straight
 Rec. 709 luma, `n` the noise below (each channel's own, or with `monochrome` red's in all three) and
@@ -1451,6 +1459,41 @@ one 0 or 1 in the data that one branch in the program reads. The hash is integer
 and the sum is additions and multiplications the program marks `precise`, each exact on every device;
 the luma's division is the wrapper's correctly rounded one. A pixel whose response is 0 runs no noise.
 
+**Sensor Noise (#565).** With `mode` Sensor Noise the node draws the noise of a small sensor: strong in
+the shadows, soft colored blotches over it, and optionally a pattern that stays put. It reads
+`intensity`, `size`, the three amounts, `monochrome`, `shadowWeighting`, `chromaBlotches`,
+`blotchSize` and `fixedPattern`, and not `shadows`, `midtones` or `highlights`; Film reads none of the
+four Sensor Noise values. With `L` as above, `w = 1 / (1 + shadowWeighting * L / 0.18)` (1 at black,
+0.5 at mid grey when `shadowWeighting` is 1, and falling toward white; 0 makes the noise even),
+`i = intensity * sqrt(15 / pi)`, and the noise `n` of one stream at the pixel:
+
+```text
+rgb' = rgb + a * w * i * k * n_grain             (n_grain per channel, or red's with monochrome)
+          + a * w * i * chromaBlotches * (n_blotch - mean(n_blotch))
+          + a * w * i * fixedPattern * n_fixed
+```
+
+The first term is the Film grain, here weighted by `w`. The second reads the same noise at a scale of
+`size / blotchSize` (so a blotch is `blotchSize` pixels wide) from a stream of its own, and subtracts
+the mean of its three channels, so the blotches shift color and not brightness. The third is the noise
+at the grain's scale from a third stream. Each stream is the seed offset by a whole 2^32 (so it is past
+every seed) mixed as above; the grain and the blotches take the frame (`Held` takes 0), and the fixed
+pattern always takes frame 0, so it is the same on every frame and under `Every Frame`. A term whose
+amount is 0 adds nothing and runs no noise.
+
+*Cache identity.* The prepared table gains eight values after the geometry, and holds the two frame
+streams and the fixed one. Film's table, identity, pixels and program text are as before the mode
+existed. A frame that has only the fixed pattern (no grain amount and no blotches) names no frame, so
+every frame has one identity and, on the GPU, one resident result; with any grain or blotches each
+frame has its own. Film mode lowers only the values Film reads and Sensor Noise only its own (the others
+keep their defaults with no identity), so moving a value the mode ignores neither invalidates a cache
+entry nor changes a pixel.
+
+*On the GPU.* The same program holds one more function and one line that enters it when the table's
+mode slot is 2 or 3 (Sensor Noise, plus one with `monochrome`). Division is the wrapper's correctly
+rounded one, additions and multiplications are `precise`, and the mean is taken with the binary32
+nearest 1/3.
+
 **Evidence.** `src/runtime/tests/film_grain_tests.cpp` pins the hash's values, holds the noise to its
 mean, deviation and independence (in sign and in strength) at several spacings, the pixel to the formula over HDR and partial
 alpha, and each promise above, frame and seed identity through the evaluator's memoization, the
@@ -1458,13 +1501,20 @@ domains, the fixed program, the pixel budget and cancellation. It also pins dige
 build before `monochrome` existed, of the pixels of every path, the program data, the cache identity
 and the program with that one branch removed, and holds `monochrome` to its formula, its red channel
 to the bits it has with the option off, a neutral pixel to neutral, and each state to its own cache
-identity. The native harness (`runFilmGrains`) holds fourteen cases (the default, every path at three
-sizes, held, a proxy and a region of interest, each with `monochrome` off and on) to the CPU oracle
+identity. For Sensor Noise it holds the formula to an independent reading, the shadow weighting
+(darker is noisier, 0 is even), blotches that add no brightness, are soft and widen with their size,
+a fixed pattern the same on every frame and animation while the grain varies, seeds, the cache identity
+of each case, and Film mode to ignoring every Sensor Noise value; the digests and program pin above
+hold with the Sensor Noise function and its entry line removed. The native harness (`runFilmGrains`)
+holds twenty-two cases (the default, every path at three sizes, held, a proxy and a region of interest,
+each with `monochrome` off and on, and Sensor Noise with every term, `monochrome`, held, fine, coarse,
+a proxy, a region of interest and a fixed pattern alone) to the CPU oracle
 within 2e-6 on RGB with exact alpha, warm RAM reuse with zero dispatches, the next frame with new grain
 (held: zero dispatches and the same pixels), a changed value re-running with parity, and a toggle of
 `monochrome` re-running with parity while going back finds its own entry with zero dispatches.
 `tests/integration/film_grain_monochrome_migration_tests.cpp` opens a node saved without the option to
-the same plan and bit-identical pixels. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
+the same plan and bit-identical pixels, and `tests/integration/film_grain_sensor_noise_tests.cpp` does
+the same for a node saved without the mode and its values, and round-trips a Sensor Noise node. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
 full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) holds its cost.
 
 ## Codec Degrade

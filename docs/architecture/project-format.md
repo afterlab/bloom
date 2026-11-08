@@ -996,6 +996,15 @@ does, on the open path only. The node stays at schema 1 and the document schema 
 `monochrome` defaults to off, and the compiler already lowered an unbound role with that default, so the
 plan and every pixel are the same. [Image filters](image-filters.md#film-grain) specifies the node.
 
+#### Film Grain Sensor Noise
+
+Opening a project (#565) binds the optional `bloom.film-grain` parameters `mode`, `shadowWeighting`,
+`chromaBlotches`, `blotchSize` and `fixedPattern` on a node that lacks them, through the same
+migration as `monochrome`. The node stays at schema 1 and the document schema version is unchanged.
+`mode` defaults to Film, which reads none of the others, so the plan and every pixel are the same.
+The compiler also lowers an unbound role at its default. [Image filters](image-filters.md#film-grain)
+specifies the node.
+
 #### Glow Controls
 
 Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and

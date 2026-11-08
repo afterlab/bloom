@@ -23,7 +23,14 @@ Nothing clips: HDR values keep their range, and grain may take a dark value slig
   channels no longer partly cancel in the brightness: at the same **Intensity** Monochrome grain looks
   about a third stronger. Lower **Intensity** to match.
 
-## Response to brightness
+## Mode
+
+**Mode** picks how the grain is drawn. **Film** is the grain described here and below. **Sensor Noise**
+draws the noise of a small camera sensor instead (see the next section). Switching mode changes which
+rows the card shows, and keeps every value: switch back and nothing is lost. A project saved before the
+mode existed opens in Film and renders as it did.
+
+## Response to brightness (Film)
 
 How much grain a pixel takes depends on its own brightness (Rec. 709 luma, with its alpha taken out).
 The graph on the card shows this over a ramp from black to white, with the grain drawn on it. Drag its
@@ -38,6 +45,25 @@ three handles up and down, or use the rows below it:
 Between them the share runs in a straight line. Above white it grows with the brightness, so an HDR
 highlight keeps the same share of grain instead of going clean. Double-click a handle to reset it.
 
+## Sensor Noise
+
+Choose **Sensor Noise** under **Mode** for the look of a phone camera: noise that is strong in the
+shadows, soft colored blotches, and, if you want it, a pattern that never changes. It uses **Intensity**,
+**Size**, the three **amounts**, **Monochrome**, **Seed** and **Grain changes** as above, and replaces
+the three response rows with:
+
+- **Shadow weighting** is how much the noise favors the shadows. At 100% the noise is half as strong at
+  mid grey as at black and falls further toward white; at 0% it is even across the picture.
+- **Chroma blotches** is the strength of soft, low-frequency color blotches, relative to **Intensity**.
+  They shift color and not brightness. 0% turns them off.
+- **Blotch size** is how wide a blotch is, in full-resolution pixels.
+- **Fixed pattern** is the strength of a noise pattern that is the same on every frame, as a sensor's
+  own pixel-to-pixel differences are. It follows **Seed** but never **Grain changes**: with **Every
+  Frame** the grain and blotches change and the pattern stays. It is off at 0%, the default.
+
+The graph shows the shadow weighting over the ramp. As with Film, a different **Seed** gives different
+noise, the noise is added in proportion to alpha, and nothing clips.
+
 ## Seed and time
 
 - **Seed** picks which grain. The same seed and frame always give the same grain, on the CPU and the
@@ -51,7 +77,7 @@ Under a retimed layer the frame is the layer's own.
 ## Limiting it
 
 Connect a Mask to **Mask** to keep the grain to part of the image, or an image read through **Mask
-channel**. Every value but **Seed**, **Grain changes** and **Monochrome** can be keyed or driven
+channel**. Every value but **Mode**, **Seed**, **Grain changes** and **Monochrome** can be keyed or driven
 through its socket.
 
 ## Cost

@@ -417,6 +417,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `depth-effects-2k` | 1920×1080 | 24 | Depth effects from both depth encodings (#483): a PNG16 plate through Depth Fog (exponential) and a physical-lens Z Defocus (85 mm, f/2, focus racking 8 to 24 m) from its derived 16-bit PNG mist pass read as data, under the beauty pass (multilayer EXR) through Depth Fog and Z Defocus (polygon bokeh, highlight boost) from its own float `ViewLayer.Depth.Z` channel; fog before defocus in both |
 | `lens-flare-2k` | 1920×1080 | 24 | A PNG16 plate under a Lens Flare (#507) with every element on at its largest counts (8 streak lines, 16 ghosts, 12 irises of 12 blades, the anamorphic streak), its intensity keyed so every frame is new and its brightness read from the plate through the probes' atlas |
 | `film-grain-2k` | 1920×1080 | 24 | A PNG16 plate under strong Film Grain (#486) of 1.5 pixels, 5% with more in the blue, drawn anew for every frame with no key, so each frame is new |
+| `film-grain-sensor-noise-2k` | 1920×1080 | 24 | A PNG16 plate under Film Grain in Sensor Noise mode (#565) of 1.5 pixels, 5%, with shadow weighting, 60% chroma blotches of 24 pixels and a 40% fixed pattern, drawn anew for every frame with no key. Written, not yet run: it has no recorded numbers and no budget |
 | `motion-blur-2k` | 1920×1080 | 24 | Moving plates through Transform 2D's shutter and Directional Blur at High, Motion Blur at Draft and Echo, under a CG layer blurred by Vector Motion Blur (#484) from a per-pixel vector image (the bench media's mist pass stands in: it has no vector pass) |
 | `motion-blur-flow-2k` | 1920×1080 | 24 | A PNG16 plate through Optical Flow Motion Blur with a matte (#484): two layers and eight solves, at Draft |
 | `sharpen-2k` | 1920×1080 | 24 | A PNG16 plate under Sharpen (#486) with a radius of 8 pixels, its amount keyed from 50% to 200% so every frame is new |
@@ -774,6 +775,12 @@ ms with the program's build, and warm runs under 0.01 ms with no dispatch. Each 
 Frame grain is new data on the same program, a frame's cold cost without a build. The grain is one pass
 that always hashes nine cells, so its size does not move its cost; the noise itself adds about 0.1 ms
 at 2160p to the pass on this GPU. `NODE_COST_BUDGETS` holds each case about 25% over this run.
+The Sensor Noise cases (#565), `film-grain-sensor-noise` (every term) and
+`film-grain-sensor-noise-grain-only`, are written for the benchmarking hardware and not yet run: they
+have no recorded numbers and no budget of their own (they fall under the default one). The mode reads
+the noise up to three times for a pixel (the grain, the blotches and the fixed pattern), where Film
+reads it once, so its cost may follow the number of terms on; the grain-only case separates that.
+
 ### Motion blur (#484)
 
 `bloom_runtime_gpu_motion_node_bench` (a 64x64 smoke run is the CTest
