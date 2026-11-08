@@ -21,6 +21,75 @@
 
 namespace bloom::host {
 
+namespace {
+
+// Plain names for the log: a frame that takes the CPU reference path always says why (#553).
+const char* frameStatusName(const runtime::GpuProcessFrameStatus status) noexcept {
+    using Status = runtime::GpuProcessFrameStatus;
+    switch (status) {
+    case Status::Evaluated:
+        return "evaluated";
+    case Status::Disabled:
+        return "GPU rendering is disabled";
+    case Status::DeviceUnavailable:
+        return "no usable GPU device";
+    case Status::UnsupportedGpuSubset:
+        return "the composition is outside the GPU-prepared subset";
+    case Status::Cancelled:
+        return "cancelled";
+    case Status::Failed:
+        return "the GPU render failed";
+    }
+    return "unknown status";
+}
+
+const char* frameCodeName(const runtime::GpuProcessFrameDiagnosticCode code) noexcept {
+    using Code = runtime::GpuProcessFrameDiagnosticCode;
+    switch (code) {
+    case Code::None:
+        return "none";
+    case Code::Disabled:
+        return "disabled";
+    case Code::LoaderUnavailable:
+        return "loader-unavailable";
+    case Code::DeviceUnavailable:
+        return "device-unavailable";
+    case Code::SceneUnsupported:
+        return "scene-unsupported";
+    case Code::InvalidArgument:
+        return "invalid-argument";
+    case Code::InvalidRequest:
+        return "invalid-request";
+    case Code::OverBudget:
+        return "over-budget";
+    case Code::AwaitingCapacity:
+        return "awaiting-capacity";
+    case Code::BudgetRefused:
+        return "budget-refused";
+    case Code::DeadlineExceeded:
+        return "deadline-exceeded";
+    case Code::Cancelled:
+        return "cancelled";
+    case Code::DeviceLost:
+        return "device-lost";
+    case Code::ReadbackFailed:
+        return "readback-failed";
+    case Code::ReadbackOverBudget:
+        return "readback-over-budget";
+    case Code::CacheUnavailable:
+        return "cache-unavailable";
+    case Code::ExecutorUnavailable:
+        return "executor-unavailable";
+    case Code::BadAllocation:
+        return "bad-allocation";
+    case Code::InternalInvariant:
+        return "internal-invariant";
+    }
+    return "unknown";
+}
+
+} // namespace
+
 OutputMediaDisplayCommandV1::OutputMediaDisplayCommandV1(
     std::shared_ptr<const output::PreparedOutputDisplayV1> display,
     const runtime::EvaluationColorIntent& intent)
@@ -542,6 +611,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         gpuProvenance.encodedPayloadBytes =
                             gpuOutcome.outputColorCounters.encodedPayloadBytes;
                         gpuProvenance.outputCommandIdentity = gpuOutcome.outputCommandIdentity;
+                        if (gpuOutcome.status != runtime::GpuProcessFrameStatus::Evaluated)
+                            gpuProvenance.cpuFallbackReason =
+                                std::string(frameStatusName(gpuOutcome.status)) + " (" +
+                                frameCodeName(gpuOutcome.diagnostic.code) + "): " +
+                                gpuOutcome.diagnostic.message;
                         if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
                             evaluatedFrame = gpuOutcome.frame;
                             frameOnGpu = evaluatedFrame != nullptr;
@@ -588,6 +662,19 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     }
                 }
                 if (evaluatedFrame == nullptr) {
+                    // The CPU reference frame names why it is not a GPU frame (#553).
+                    if (forceCpuFallback)
+                        gpuProvenance.cpuFallbackReason =
+                            "the requested display transform could not be prepared on the GPU";
+                    else if (gpuProvider == nullptr)
+                        gpuProvenance.cpuFallbackReason =
+                            "this export has no GPU provider (GPU rendering was not selected)";
+                    else if (gpuProvenance.status ==
+                             runtime::GpuProcessFrameStatus::DeviceUnavailable &&
+                             gpuProvenance.cpuFallbackReason.empty())
+                        gpuProvenance.cpuFallbackReason = "no usable GPU device";
+                    if (gpuProvenance.cpuFallbackReason.empty())
+                        gpuProvenance.cpuFallbackReason = "the GPU evaluator is not available";
                     if (context.isCancellationRequested()) {
                         return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                     }

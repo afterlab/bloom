@@ -85,6 +85,9 @@ struct OutputAnalysisAttemptGpuProvenanceV1 final {
     std::uint64_t processPayloadBytes = 0;
     std::uint64_t encodedPayloadBytes = 0;
     core::Sha256Digest outputCommandIdentity{};
+    // Why this frame was evaluated on the CPU reference path rather than the GPU; empty for a GPU
+    // frame. Never empty for a CPU frame: a fallback always carries its reason (#553).
+    std::string cpuFallbackReason;
 
     [[nodiscard]] bool gpuEvaluated() const noexcept {
         return status == runtime::GpuProcessFrameStatus::Evaluated;

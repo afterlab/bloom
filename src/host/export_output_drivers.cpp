@@ -983,12 +983,17 @@ class ImageDriver final : public DriverBase {
             route_ = ExportDeviceRoute::Gpu;
         } else if (outcome) {
             ++report_.verification.provenance.cpuReferenceFrames;
+            const std::string provenanceReason =
+                outcome.gpuProvenance() ? outcome.gpuProvenance()->cpuFallbackReason
+                                        : std::string{};
             route_ = ExportDeviceRoute::CpuReference;
             // A device-required run never publishes a CPU reference frame.
             if (input_.requireDevice && !stopRequested_) {
                 log(runtime::DiagnosticSeverity::Error, "export.device.required",
-                    "This frame was evaluated on the CPU reference path; the export requires a "
-                    "GPU device",
+                    "This frame was evaluated on the CPU reference path (" +
+                        (provenanceReason.empty() ? std::string("no reason was recorded")
+                                                  : provenanceReason) +
+                        "); the export requires a GPU device",
                     tailIndex_);
                 return failNow(failure(ExportFailureCode::ResourceRefused, "export.device.required",
                                     "Bloom couldn't render frame " + std::to_string(tailIndex_) +
@@ -998,7 +1003,10 @@ class ImageDriver final : public DriverBase {
             }
             if (report_.verification.provenance.cpuReferenceFrames == 1)
                 log(runtime::DiagnosticSeverity::Warning, "export.device.cpu-reference",
-                    "This frame was evaluated on the CPU reference path", tailIndex_);
+                    "This frame was evaluated on the CPU reference path: " +
+                        (provenanceReason.empty() ? std::string("no reason was recorded")
+                                                  : provenanceReason),
+                    tailIndex_);
         }
         if (!outcome) {
             const auto* attemptFailure = outcome.failure();

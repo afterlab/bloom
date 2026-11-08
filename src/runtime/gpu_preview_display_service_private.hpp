@@ -92,6 +92,9 @@ struct PreviewDisplayStageRecord final {
     std::optional<render::PackedRgba8Storage> preparedPackedHost;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> residentProcessor;
     bool resident = false;
+    // Why this stage took the CPU path (#553). Set where the fallback is counted and carried in the
+    // fallback task's name, so a fallback is never silent in the task list.
+    std::string cpuFallbackReason;
     ResidentNativePhase residentPhase = ResidentNativePhase::None;
     // Bounded owner-thread retirement pumps spent while proving an unretired resident submission.
     std::size_t residentRetirePumps = 0;
@@ -149,6 +152,28 @@ struct PreviewDisplayStageRecord final {
 // long-lived service instance's ownership and destruction order stay obvious; the resulting ~59
 // padding bytes are negligible for one service and reordering would obscure that grouping.
 // NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
+// Plain name of a CPU fallback reason, for the fallback task's name and the diagnostics.
+[[nodiscard]] inline const char*
+cpuFallbackReasonName(const GpuPreviewCpuFallbackReason reason) noexcept {
+    switch (reason) {
+    case GpuPreviewCpuFallbackReason::GpuUnavailable:
+        return "GPU unavailable";
+    case GpuPreviewCpuFallbackReason::NonNeutralRequest:
+        return "non-Neutral display request";
+    case GpuPreviewCpuFallbackReason::NotWorthwhile:
+        return "CPU display measured faster";
+    case GpuPreviewCpuFallbackReason::Ineligible:
+        return "stage not eligible for the native display";
+    case GpuPreviewCpuFallbackReason::UnsupportedGpuSubset:
+        return "outside the supported GPU subset";
+    case GpuPreviewCpuFallbackReason::NativeFailure:
+        return "native GPU failure";
+    case GpuPreviewCpuFallbackReason::NativeTimeout:
+        return "native GPU timeout";
+    }
+    return "unrecorded";
+}
+
 struct PreviewDisplayServiceCore final {
     PreviewDisplayServiceCore() = default;
     PreviewDisplayServiceCore(const PreviewDisplayServiceCore&) = delete;
@@ -317,6 +342,15 @@ struct PreviewDisplayServiceCore final {
         counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
         counterCpuFallbacksByReason[static_cast<std::size_t>(reason)].fetch_add(
             1, std::memory_order_relaxed);
+    }
+    // Counts the fallback and records its reason on the stage that takes it.
+    void recordCpuFallback(const GpuPreviewCpuFallbackReason reason,
+                           PreviewDisplayStageRecord& stage) noexcept {
+        recordCpuFallback(reason);
+        try {
+            stage.cpuFallbackReason = cpuFallbackReasonName(reason);
+        } catch (...) {
+        }
     }
     std::atomic<std::uint64_t> counterGpuAdmissionRefusals{0};
     std::atomic<std::uint64_t> counterFullFrameReadbacks{0};

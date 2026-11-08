@@ -774,6 +774,7 @@ struct SequenceExportRunnerV1::State {
     // export holds memory, waits at the frame boundary with backoff and a stall rule.
     OutputAnalysisCapacityWaitV1 capacity;
     bool capacityLogged = false;
+    bool cpuFallbackLogged = false;
     [[nodiscard]] const runtime::GpuProcessingPhasePolicy* processingPolicy() const {
         if (!work || !work->request.gpuProvider)
             return nullptr;
@@ -987,6 +988,14 @@ struct SequenceExportRunnerV1::State {
             work->gpuEncodedPayloadBytes += provenance->encodedPayloadBytes;
             if (provenance->deviceOwnershipEpoch != 0)
                 work->gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
+        } else if (result && result.gpuProvenance().has_value() &&
+                   !std::exchange(cpuFallbackLogged, true)) {
+            // A CPU reference frame always names its reason (#553).
+            const auto& reason = result.gpuProvenance()->cpuFallbackReason;
+            std::cerr << "Bloom export: frame " << work->request.range.firstFrame + frame.offset
+                      << " was evaluated on the CPU reference path: "
+                      << (reason.empty() ? std::string("no reason was recorded") : reason)
+                      << '\n';
         }
         if (work->isCancelled()) {
             fail({Error::Cancelled, "Composition export cancelled"});

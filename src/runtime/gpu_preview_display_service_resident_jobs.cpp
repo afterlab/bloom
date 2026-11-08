@@ -291,7 +291,7 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
         completeAwaitingCapacity(stage, *capacityWait);
         return;
     }
-    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
+    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure, *stage);
     dispatchResidentCpuFallbackChild(core, stage);
 }
 
@@ -342,7 +342,7 @@ void finishResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& 
         completeAwaitingCapacity(stage, *capacityWait);
         return;
     }
-    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
+    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure, *stage);
     dispatchResidentCpuFallbackChild(core, stage);
 }
 
@@ -363,7 +363,7 @@ void teardownTerminalResidentRoute(const std::shared_ptr<PreviewDisplayServiceCo
             core->stopping.load(std::memory_order_acquire)) {
             completeCancelled(ahead);
         } else {
-            core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
+            core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure, *ahead);
             dispatchResidentCpuFallbackChild(core, ahead);
         }
     }
@@ -498,7 +498,7 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
                                                 submission.pixelStorageByteLimit)
                 : 0;
         if (allowance == 0) {
-            core->recordCpuFallback(GpuPreviewCpuFallbackReason::GpuUnavailable);
+            core->recordCpuFallback(GpuPreviewCpuFallbackReason::GpuUnavailable, *stage);
             dispatchResidentCpuFallbackChild(core, stage);
             if (stage->phase != StagePhase::Done)
                 core->stages.push_back(std::move(stage));
@@ -556,8 +556,12 @@ void dispatchResidentCpuFallbackChild(const std::shared_ptr<PreviewDisplayServic
         completeCancelled(stage);
         return;
     }
-    TaskRequest request("GPU preview resident CPU fallback", stage->owner, stage->priority,
-                        TaskExecutor::Cpu);
+    // The task list names why the frame left the GPU (#553); never an unexplained fallback.
+    TaskRequest request("GPU preview resident CPU fallback (" +
+                            (stage->cpuFallbackReason.empty() ? std::string("reason not recorded")
+                                                              : stage->cpuFallbackReason) +
+                            ")",
+                        stage->owner, stage->priority, TaskExecutor::Cpu);
     request.groupId = stage->groupId;
     request.sourceVersion = stage->sourceVersion;
     request.coalescingKey = stage->childCoalescingKey;
@@ -687,7 +691,7 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
         outcome.stage == nullptr) {
         // The composition compiled but is outside the prepared GPU subset: take the FULL original
         // CPU path. No fake empty frame and no silently different subset.
-        core->recordCpuFallback(GpuPreviewCpuFallbackReason::UnsupportedGpuSubset);
+        core->recordCpuFallback(GpuPreviewCpuFallbackReason::UnsupportedGpuSubset, *stage);
         stage->phase = StagePhase::AwaitingCpuFallbackDispatch;
         return;
     }
@@ -702,7 +706,7 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
     std::string reason;
     const bool eligible = residentStageIsEligible(core, *stage, reason);
     if (!eligible) {
-        core->recordCpuFallback(GpuPreviewCpuFallbackReason::Ineligible);
+        core->recordCpuFallback(GpuPreviewCpuFallbackReason::Ineligible, *stage);
         const std::string detail =
             reason.empty() ? std::string("the resident stage was not eligible") : reason;
         {
