@@ -1929,8 +1929,11 @@ class AssetOps:
         Side effects:
           - Files the project already holds are reused: no second asset is made and the existing asset's
           id is reported.
-          - In a project that has never been saved there is no project folder, so the assets keep
-          external locators (the file's absolute location); a relative path then needs projectDirectory.
+          - A project that has never been saved is supported: it has no project folder, so an absolute
+          path imports and the assets keep external locators (the file's absolute location, portability
+          `external`) instead of project-relative ones. The file is not copied, so the asset stays valid
+          after Save As, and it stops resolving if the file moves; relink it then. A relative path in
+          that project is refused unless projectDirectory is given, and nothing is imported.
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -1944,6 +1947,10 @@ class AssetOps:
               When: A path cannot be read or is not a supported format
               Do: it is reported as a bloom.scripting.operation-warning diagnostic and skipped; fix the
               path and import it again.
+          bloom.scripting.invalid-argument
+              When: A relative path in a project that has never been saved, with no projectDirectory
+              Do: refused before anything is imported, because there is no project folder to resolve it
+              against; pass an absolute path, or projectDirectory, or save the project first.
           bloom.scripting.invalid-argument
               When: an argument is missing, of the wrong kind or out of range
               Do: the message names the argument and a working example call
