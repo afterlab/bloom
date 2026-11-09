@@ -645,7 +645,7 @@ void testSearchKeyboardAndMenus() {
                   "Rolling Shutter", "ST Map"},
                  "Distort holds the lens warp, the colour fringe, the shutter skew and the pins "
                  "and maps");
-        hasGroup("Tracking & Analysis", {"Histogram", "Image Compare"},
+        hasGroup("Tracking & Analysis", {"Histogram", "Image Compare", "Audio Amplitude", "Audio Waveform", "Audio Spectrum"},
                  "Tracking & Analysis holds the analysis nodes");
         for (const auto* empty : {"Instances & Particles"})
             expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +

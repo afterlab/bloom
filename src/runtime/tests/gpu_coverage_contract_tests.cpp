@@ -38,6 +38,7 @@
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
+#include "audio_plot_test_support.hpp"
 #include "histogram_test_support.hpp"
 #include "pixel_math_test_support.hpp"
 #include "film_grain_test_support.hpp"
@@ -2126,6 +2127,73 @@ displayProofRunner(const bool customView) {
                 return runHistogram({ht::HistogramValues{}}, 349900,
                                     "production Histogram node: the defaults over the gradient, "
                                     "full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #347 Audio Waveform and Audio Spectrum: the prepared analysis of a generated WAV drawn by the
+    // one plot pass, the HDR/partial-alpha colors, both axes, separate lanes, silence and an ROI, on
+    // the production preparation chain and the CPU reference.
+    {
+        namespace apt = bloom::audio_plot_test;
+        const auto runAudioPlot = [](const std::vector<apt::AudioPlotValues>& variants,
+                                     std::uint64_t idBase, std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            const bloom::runtime::CpuCompositionEvaluator evaluator;
+            const auto& directory = apt::sharedAudioFixture().directory;
+            for (const auto& values : variants) {
+                const auto plan = apt::audioPlotPlan(values, idBase);
+                idBase += 200;
+                auto run = runMediaBuilder(plan, evaluator, directory);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+                if (!run.prepared)
+                    combined.evidence += run.evidence + "; ";
+            }
+            if (combined.prepared)
+                combined.evidence = std::move(evidence);
+            return combined;
+        };
+        apt::AudioPlotValues waveform;
+        apt::AudioPlotValues separate;
+        separate.separate = true;
+        separate.values = {1.0, 2.0, 0.0, 0.0};
+        separate.color = {3.0, 0.0, 0.5, 0.75};
+        apt::AudioPlotValues silent;
+        silent.withSource = false;
+        apt::AudioPlotValues linear = apt::spectrumValues();
+        apt::AudioPlotValues logarithmic = apt::spectrumValues();
+        logarithmic.logarithmic = true;
+        logarithmic.fftSize = 4096;
+        logarithmic.values = {30.0, 16000.0, -60.0, -6.0};
+        logarithmic.background = {0.25, 0.25, 0.25, 1.0};
+        add(
+            "effect.AudioPlotKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime audio analysis tests",
+            [runAudioPlot, waveform, separate, silent, linear, logarithmic] {
+                return runAudioPlot({waveform, separate, silent, linear, logarithmic}, 347800,
+                                    "production Audio Waveform and Audio Spectrum: mixed and "
+                                    "separate lanes, linear and logarithmic axes, an HDR "
+                                    "partial-alpha line and silence");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.audio-waveform", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime audio analysis tests",
+            [runAudioPlot, waveform] {
+                return runAudioPlot({waveform}, 347900,
+                                    "production Audio Waveform node: the defaults over a generated "
+                                    "stereo WAV");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.audio-spectrum", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime audio analysis tests",
+            [runAudioPlot, linear] {
+                return runAudioPlot({linear}, 348100,
+                                    "production Audio Spectrum node: the defaults over a generated "
+                                    "stereo WAV");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }

@@ -2500,3 +2500,10 @@ bloom_enable_warnings(bloom_runtime_point_tracker_test)
 bloom_enable_strict_floating_point(bloom_runtime_point_tracker_test)
 bloom_add_test(NAME bloom.runtime.point_tracker COMMAND bloom_runtime_point_tracker_test
     LABELS unit runtime)
+
+add_executable(bloom_runtime_audio_analysis_test audio_analysis_tests.cpp)
+target_include_directories(bloom_runtime_audio_analysis_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_audio_analysis_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_audio_analysis_test)
+bloom_enable_strict_floating_point(bloom_runtime_audio_analysis_test)
+bloom_add_test(NAME bloom.runtime.audio-analysis COMMAND bloom_runtime_audio_analysis_test LABELS unit runtime render)

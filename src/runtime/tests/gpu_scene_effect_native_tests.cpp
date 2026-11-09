@@ -19,6 +19,7 @@
 #include "auto_exposure_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
+#include "audio_plot_test_support.hpp"
 #include "histogram_test_support.hpp"
 #include "pixel_math_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -2926,6 +2927,109 @@ void runHistograms(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #347 Audio Waveform and Audio Spectrum: the production chain (the prepared analysis drawn by the one
+// plot pass) over a generated WAV against the CPU oracle at the strict gate, the windows, no
+// per-operation readback, warm reuse with zero dispatches and a changed time that re-runs with parity.
+void runAudioPlots(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    namespace apt = bloom::audio_plot_test;
+    const CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(apt::sharedAudioFixture().directory);
+    auto media = GpuSceneMediaContext::fromEvaluator(evaluator);
+    media.assetBaseDirectory = apt::sharedAudioFixture().directory;
+    const CpuGpuSceneBuilder builder(nullptr, media, ocioContext());
+    struct Case final {
+        apt::AudioPlotValues values;
+        const char* name;
+        bool roi = false;
+    };
+    std::vector<Case> cases;
+    cases.push_back({apt::AudioPlotValues{}, "waveform"});
+    {
+        apt::AudioPlotValues values;
+        values.separate = true;
+        values.values = {1.0, 2.0, 0.0, 0.0};
+        values.color = {3.0, 0.0, 0.5, 0.75};
+        cases.push_back({values, "waveform, separate lanes, HDR line"});
+        values = apt::spectrumValues();
+        cases.push_back({values, "spectrum, linear"});
+        values.logarithmic = true;
+        values.fftSize = 4096;
+        values.values = {30.0, 16000.0, -60.0, -6.0};
+        values.background = {0.25, 0.25, 0.25, 1.0};
+        cases.push_back({values, "spectrum, logarithmic"});
+        values = apt::spectrumValues();
+        values.withSource = false;
+        cases.push_back({values, "silence"});
+    }
+    cases.push_back({apt::spectrumValues(), "a region of interest", true});
+    std::uint64_t id = 347000;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("audio plot native (") + item.name + "): ";
+        const auto plan = apt::audioPlotPlan(item.values, id);
+        id += 200;
+        auto request = requestFor(*plan);
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(10, 6, 30, 40);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared) {
+            if (!prepared)
+                std::cerr << name << "prepare diagnostic: " << prepared.diagnostic.message << '\n';
+            continue;
+        }
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches >= 1 && coldCounters.readbacks == 0,
+                            name + "a resident plot dispatch and no per-operation readback");
+        expectations.expect(unreachableCommandCount(*prepared.scene) == 0,
+                            name + "the scene emits only what its output reads");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        if (!item.values.withSource)
+            continue;
+        apt::AudioPlotValues changedValues = item.values;
+        changedValues.startFrame = -30; // 1.25 s: the left sine has stopped
+        const auto changedPlan = apt::audioPlotPlan(changedValues, id - 200);
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "another time prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "another time re-runs with CPU parity: " + detail);
+    }
+}
+
 void runAutoExposures(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::exposure_test::ExposureValues;
     const CpuCompositionEvaluator evaluator;
@@ -3428,6 +3532,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runCodecDegrades(expectations, device, cache);
     runAutoExposures(expectations, device, cache);
     runHistograms(expectations, device, cache);
+    runAudioPlots(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
     runFrameRateHold(expectations, device, cache);
     runSharpens(expectations, device, cache);
