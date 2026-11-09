@@ -842,6 +842,10 @@ BFK_FN vec4 bfk_sample(BFK_CTX, int slot, float x, float y, int filt, int edge) 
         return vec4(0.0f, 0.0f, 0.0f, 0.0f);
     BFK_P float u = fma(x, map.x, map.y);
     BFK_P float v = fma(y, map.z, map.w);
+    // A position that is not a number, or lies so far out that no texel index holds it, reads
+    // transparent: the same on both hosts, where the conversion to an index is not defined.
+    if (!(abs(u) < 1.0e9f) || !(abs(v) < 1.0e9f))
+        return vec4(0.0f, 0.0f, 0.0f, 0.0f);
     if (filt == 1) {
         BFK_P float fu = floor(u);
         BFK_P float fv = floor(v);
@@ -3276,6 +3280,38 @@ BFK_FN vec4 bfk_op_rays(BFK_CTX, int base, vec4 p) {
     return vec4(m, m, m, a);
 }
 
+// --- Homography ---------------------------------------------------------------------------------
+// Block of six vec4 (the first three are the host's, read when a window map is placed, see
+// applyFieldRasterGeometry): the map itself is the last three,
+// [m00, m01, m02, m10] [m11, m12, m20, m21] [centre x, centre y, valid, 0]: a projective map from the
+// position p of an output pixel to the position to read, with d = p - centre and w = m20 dx + m21 dy + 1:
+//   q = ((m00 dx + m01 dy + m02) / w, (m10 dx + m11 dy + m12) / w).
+// The host solves the matrix in binary64 (core::field::homographyFromQuads, similarityHomography). A map
+// that is not valid (a degenerate quad) and a pixel on the far side of the horizon (w <= 0, which a
+// projection would fold back onto the picture) read 1e20, a position no image reaches, so the sample
+// is transparent.
+
+BFK_FN vec4 bfk_op_homography(BFK_CTX, int base, vec4 p) {
+    vec4 h0 = bfk_data(BFK_CTXA, base + 3);
+    vec4 h1 = bfk_data(BFK_CTXA, base + 4);
+    vec4 h2 = bfk_data(BFK_CTXA, base + 5);
+    if (!(h2.z > 0.5f))
+        return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
+    BFK_P float dx = p.x - h2.x;
+    BFK_P float dy = p.y - h2.y;
+    BFK_P float wy = fma(h1.w, dy, 1.0f);
+    BFK_P float w = fma(h1.z, dx, wy);
+    if (!(w > 1.0e-6f))
+        return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
+    BFK_P float ax = fma(h0.y, dy, h0.z);
+    BFK_P float nx = fma(h0.x, dx, ax);
+    BFK_P float ay = fma(h1.x, dy, h1.y);
+    BFK_P float ny = fma(h0.w, dx, ay);
+    BFK_P float qx = bfk_div(nx, w);
+    BFK_P float qy = bfk_div(ny, w);
+    return vec4(qx, qy, 0.0f, 0.0f);
+}
+
 // --- Plumbing -----------------------------------------------------------------------------------------
 
 BFK_FN BFK_P float bfk_lane(vec4 v, float selector) {
@@ -3425,7 +3461,7 @@ BFK_FN vec4 bfk_op_ramp(BFK_CTX, int base, vec4 a) {
 //   8 Image  9 Force  10 Math (in0, in1, in2)  11 Remap  12 Transform (in0 coordinate, in1 warp)
 //   13 Swizzle  14 Combine (in0..in3 x; an absent input is the parameter's lane)  15 Offset [dx, dy]
 //   16 Derivative (in0..in3)  17 Cell Centre  18 Arrow (in0 p, in1 centre, in2 v)
-//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)  22 Test Card (in0 p)  23 Light Rays (in0 p)
+//   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)  22 Test Card (in0 p)  23 Light Rays (in0 p)  24 Homography (in0 p)
 // Every register write is limited to [-1e30, 1e30], so no later operation can see an infinity.
 
 BFK_FN vec4 bfk_limit(vec4 v) {
@@ -3542,6 +3578,9 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             break;
         case 23:
             v = bfk_op_rays(BFK_CTXA, base, x0);
+            break;
+        case 24:
+            v = bfk_op_homography(BFK_CTXA, base, x0);
             break;
         default:
             v = zero;

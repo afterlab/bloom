@@ -71,6 +71,7 @@ enum class FieldOp : std::uint8_t {
     LensWarp = 21,
     TestCard = 22,
     Rays = 23,
+    Homography = 24,
 };
 inline constexpr std::array kFieldOps{
     FieldOp::Coordinate, FieldOp::Constant, FieldOp::Noise,      FieldOp::Voronoi,
@@ -78,7 +79,8 @@ inline constexpr std::array kFieldOps{
     FieldOp::Image,      FieldOp::Force,    FieldOp::Math,       FieldOp::Remap,
     FieldOp::Transform,  FieldOp::Swizzle,  FieldOp::Combine,    FieldOp::Offset,
     FieldOp::Derivative, FieldOp::CellCentre, FieldOp::Arrow,    FieldOp::Streak,
-    FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard,   FieldOp::Rays};
+    FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard,   FieldOp::Rays,
+    FieldOp::Homography};
 
 // Stable lower-case names (coverage ids, diagnostics). No default case: a new op is a -Wswitch
 // error until it is named.
@@ -132,6 +134,8 @@ inline constexpr std::array kFieldOps{
         return "test-card";
     case FieldOp::Rays:
         return "rays";
+    case FieldOp::Homography:
+        return "homography";
     }
     return {};
 }
@@ -405,6 +409,40 @@ struct RaysParameters final {
     double boost = 1.0;
 };
 
+// A projective map from the position of an output pixel to the position to read (field_kernel.glsl,
+// "Homography"): with d = p - (centreX, centreY) and w = m20 dx + m21 dy + 1,
+// q = ((m00 dx + m01 dy + m02) / w, (m10 dx + m11 dy + m12) / w). `valid` false (a degenerate quad)
+// and a pixel with w <= 0 (the far side of the horizon) read a position no image reaches, so the
+// pixel is transparent. The matrix is row-major with m22 = 1.
+//
+// With `windowSlot` >= 0 the map is not known until the raster's image is: it pins the data window
+// of that image slot, its four corners (top left, top right, bottom right, bottom left, in field
+// positions) each moved by `offsets` (x, y pairs, field pixels, y up). applyFieldRasterGeometry
+// solves it once the slot's window is placed; until then the map is invalid.
+struct HomographyParameters final {
+    double centreX = 0.0;
+    double centreY = 0.0;
+    std::array<double, 9> m{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    bool valid = true;
+    int windowSlot = -1;
+    std::array<double, 8> offsets{};
+};
+
+// The projective map that takes the quad `to` (four corners, x then y, in order around it) to the
+// quad `from`, as the parameters for the pixels of `to`: an output pixel inside `to` reads the point
+// of `from` that sits at the same place in it. Solved in binary64 about the quad's centroid. False
+// when either quad is degenerate (two corners together, three in a line, a pinched or self-
+// intersecting quad whose map folds over): `out` is then the invalid map.
+[[nodiscard]] bool homographyFromQuads(const std::array<double, 8>& from,
+                                       const std::array<double, 8>& to, HomographyParameters& out);
+
+// The map of a similarity: an output pixel p reads `pivot + R(-angle) (p - pivot - offset) / scale`,
+// that is the picture is scaled by `scale` and turned by `angleDegrees` (counter-clockwise, +y up)
+// about `pivot`, then moved by `offset`. Zero or non-finite scale gives the invalid map.
+[[nodiscard]] HomographyParameters similarityHomography(double offsetX, double offsetY,
+                                                        double angleDegrees, double scale,
+                                                        double pivotX, double pivotY);
+
 enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
 
 // A lane of a Swizzle: 0..3 a component of the input, 4 zero, 5 one.
@@ -467,6 +505,8 @@ class FieldProgramBuilder final {
 // Null when a value cannot be represented (non-finite, a length outside [0, 1], a negative falloff
 // or boost).
 [[nodiscard]] std::optional<std::vector<float>> encodeRays(const RaysParameters&);
+// Null when a value is not finite; a map too large for binary32 encodes as the invalid map.
+[[nodiscard]] std::optional<std::vector<float>> encodeHomography(const HomographyParameters&);
 [[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);

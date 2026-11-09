@@ -637,6 +637,138 @@ std::optional<std::vector<float>> encodeRays(const RaysParameters& p) {
     return checked(std::move(out));
 }
 
+namespace {
+
+// Solves the 8 x 8 system `a x = b` by Gaussian elimination with partial pivoting. False when a
+// pivot is not above `floor` (the system is singular for this purpose).
+bool solveEight(std::array<std::array<double, 9>, 8>& rows, std::array<double, 8>& x,
+                const double floor) {
+    for (std::size_t column = 0; column < 8; ++column) {
+        std::size_t best = column;
+        for (std::size_t row = column + 1; row < 8; ++row)
+            if (std::fabs(rows[row][column]) > std::fabs(rows[best][column]))
+                best = row;
+        if (!(std::fabs(rows[best][column]) > floor))
+            return false;
+        std::swap(rows[column], rows[best]);
+        for (std::size_t row = column + 1; row < 8; ++row) {
+            const double factor = rows[row][column] / rows[column][column];
+            for (std::size_t k = column; k < 9; ++k)
+                rows[row][k] -= factor * rows[column][k];
+        }
+    }
+    for (std::size_t row = 8; row-- > 0;) {
+        double value = rows[row][8];
+        for (std::size_t k = row + 1; k < 8; ++k)
+            value -= rows[row][k] * x[k];
+        x[row] = value / rows[row][row];
+    }
+    return true;
+}
+
+} // namespace
+
+bool homographyFromQuads(const std::array<double, 8>& from, const std::array<double, 8>& to,
+                         HomographyParameters& out) {
+    out = HomographyParameters{};
+    out.valid = false;
+    for (std::size_t i = 0; i < 8; ++i)
+        if (!finite(from[i]) || !finite(to[i]) || std::fabs(from[i]) > 1.0e9 ||
+            std::fabs(to[i]) > 1.0e9)
+            return false;
+    double cdx = 0.0;
+    double cdy = 0.0;
+    double csx = 0.0;
+    double csy = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        cdx += 0.25 * to[2 * i];
+        cdy += 0.25 * to[2 * i + 1];
+        csx += 0.25 * from[2 * i];
+        csy += 0.25 * from[2 * i + 1];
+    }
+    double reach = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        reach = std::max({reach, std::fabs(to[2 * i] - cdx), std::fabs(to[2 * i + 1] - cdy),
+                          std::fabs(from[2 * i] - csx), std::fabs(from[2 * i + 1] - csy)});
+    }
+    if (!(reach > 1.0e-6))
+        return false;
+    std::array<std::array<double, 9>, 8> rows{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const double x = (to[2 * i] - cdx) / reach;
+        const double y = (to[2 * i + 1] - cdy) / reach;
+        const double sx = (from[2 * i] - csx) / reach;
+        const double sy = (from[2 * i + 1] - csy) / reach;
+        rows[2 * i] = {x, y, 1.0, 0.0, 0.0, 0.0, -x * sx, -y * sx, sx};
+        rows[2 * i + 1] = {0.0, 0.0, 0.0, x, y, 1.0, -x * sy, -y * sy, sy};
+    }
+    std::array<double, 8> h{};
+    if (!solveEight(rows, h, 1.0e-9))
+        return false;
+    // Back to pixels about the centroids: dx = reach x, and the source is csx + reach X.
+    const double g = h[6] / reach;
+    const double k = h[7] / reach;
+    out.centreX = cdx;
+    out.centreY = cdy;
+    out.m = {h[0] + csx * g,     h[1] + csx * k,     h[2] * reach + csx,
+             h[3] + csy * g,     h[4] + csy * k,     h[5] * reach + csy,
+             g,                  k,                  1.0};
+    for (const auto v : out.m)
+        if (!finite(v))
+            return false;
+    out.valid = true;
+    return true;
+}
+
+HomographyParameters similarityHomography(const double offsetX, const double offsetY,
+                                          const double angleDegrees, const double scale,
+                                          const double pivotX, const double pivotY) {
+    HomographyParameters out;
+    if (!finite(offsetX) || !finite(offsetY) || !finite(angleDegrees) || !finite(scale) ||
+        !finite(pivotX) || !finite(pivotY) || !(std::fabs(scale) > 1.0e-9)) {
+        out.valid = false;
+        return out;
+    }
+    constexpr double kRadians = 0.017453292519943295;
+    const double c = std::cos(angleDegrees * kRadians) / scale;
+    const double s = std::sin(angleDegrees * kRadians) / scale;
+    out.centreX = pivotX + offsetX;
+    out.centreY = pivotY + offsetY;
+    out.m = {c, s, pivotX, -s, c, pivotY, 0.0, 0.0, 1.0};
+    return out;
+}
+
+std::optional<std::vector<float>> encodeHomography(const HomographyParameters& p) {
+    if (!finite(p.centreX) || !finite(p.centreY) || p.windowSlot >= static_cast<int>(kMaxFieldImages))
+        return std::nullopt;
+    for (const auto v : p.m)
+        if (!finite(v))
+            return std::nullopt;
+    for (const auto v : p.offsets)
+        if (!finite(v))
+            return std::nullopt;
+    // A map no binary32 holds is the invalid map, not an error. A window map is invalid until its
+    // window is placed.
+    bool valid = p.valid && p.windowSlot < 0;
+    for (std::size_t i = 0; i < 8; ++i)
+        valid = valid && std::fabs(p.m[i]) < 1.0e15;
+    std::vector<float> out;
+    push(out, p.windowSlot >= 0 ? 1.0 : 0.0, static_cast<double>(std::max(p.windowSlot, 0)),
+         0.0, 0.0);
+    push(out, p.offsets[0], p.offsets[1], p.offsets[2], p.offsets[3]);
+    push(out, p.offsets[4], p.offsets[5], p.offsets[6], p.offsets[7]);
+    if (!valid) {
+        push(out, 0.0, 0.0, 0.0, 0.0);
+        push(out, 0.0, 0.0, 0.0, 0.0);
+        push(out, 0.0, 0.0, 0.0, 0.0);
+        return checked(std::move(out));
+    }
+    push(out, p.m[0], p.m[1], p.m[2], p.m[3]);
+    push(out, p.m[4], p.m[5], p.m[6], p.m[7]);
+    push(out, p.centreX, p.centreY, 1.0, 0.0);
+    return checked(std::move(out));
+}
+
 std::vector<float> encodeSwizzle(const SwizzleParameters& p) {
     std::vector<float> out;
     push(out, std::min<int>(p.lanes[0], 5), std::min<int>(p.lanes[1], 5),
@@ -790,6 +922,66 @@ FieldImageSlot fieldImageSlot(const std::int64_t originX, const std::int64_t ori
     return slot;
 }
 
+namespace {
+
+// Solves every window Homography (field_program.hpp, HomographyParameters::windowSlot) against the
+// window its image slot now has, in binary64, and writes the matrix into the block.
+void placeHomographyWindows(std::vector<float>& table, const FieldRasterGeometry& geometry) {
+    const auto count = static_cast<std::size_t>(std::max(table[2], 0.0F));
+    for (std::size_t i = 0; i < count && (kFieldTableCode + 2U * i + 2U) * 4U <= table.size();
+         ++i) {
+        const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
+        if (a[0] != static_cast<float>(FieldOp::Homography))
+            continue;
+        const auto base = static_cast<std::size_t>(std::max(a[6], 0.0F));
+        if ((base + 6U) * 4U > table.size())
+            continue;
+        float* block = &table[base * 4U];
+        if (block[0] != 1.0F)
+            continue;
+        const auto slotIndex = static_cast<std::size_t>(std::max(block[1], 0.0F));
+        HomographyParameters invalid;
+        invalid.valid = false;
+        const auto write = [&](const HomographyParameters& map) {
+            const double m[9] = {map.m[0], map.m[1], map.m[2], map.m[3], map.m[4],
+                                 map.m[5], map.m[6], map.m[7], map.m[8]};
+            bool ok = map.valid;
+            for (std::size_t k = 0; k < 8; ++k)
+                ok = ok && std::fabs(m[k]) < 1.0e15;
+            for (std::size_t k = 0; k < 8; ++k)
+                block[12U + k] = ok ? narrow(m[k]) : 0.0F;
+            block[20] = ok ? narrow(map.centreX) : 0.0F;
+            block[21] = ok ? narrow(map.centreY) : 0.0F;
+            block[22] = ok ? 1.0F : 0.0F;
+            block[23] = 0.0F;
+        };
+        if (slotIndex >= kMaxFieldImages) {
+            write(invalid);
+            continue;
+        }
+        const auto& slot = geometry.slots[slotIndex];
+        if (slot.width <= 0 || slot.height <= 0 || !finite(slot.kx) || !finite(slot.ky) ||
+            slot.kx == 0.0 || slot.ky == 0.0) {
+            write(invalid);
+            continue;
+        }
+        // The window's corners in field positions: texel (0, 0) is its top left, ky < 0.
+        const double left = (0.0 - slot.cx) / slot.kx;
+        const double right = (static_cast<double>(slot.width) - slot.cx) / slot.kx;
+        const double top = (0.0 - slot.cy) / slot.ky;
+        const double bottom = (static_cast<double>(slot.height) - slot.cy) / slot.ky;
+        const std::array<double, 8> from{left, top, right, top, right, bottom, left, bottom};
+        std::array<double, 8> to = from;
+        for (std::size_t k = 0; k < 8; ++k)
+            to[k] += static_cast<double>(block[4U + k]);
+        HomographyParameters map;
+        static_cast<void>(homographyFromQuads(from, to, map));
+        write(map);
+    }
+}
+
+} // namespace
+
 bool applyFieldRasterGeometry(std::vector<float>& table, const FieldRasterGeometry& geometry) {
     if (table.size() < kFieldTableCode * 4U)
         return false;
@@ -835,6 +1027,7 @@ bool applyFieldRasterGeometry(std::vector<float>& table, const FieldRasterGeomet
             static_cast<double>(slot.originY), static_cast<double>(slot.width),
             static_cast<double>(slot.height));
     }
+    placeHomographyWindows(table, geometry);
     return allFinite(table);
 }
 
@@ -918,6 +1111,8 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
         return 6;
     case FieldOp::Rays:
         return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages) ? 2U : 0U;
+    case FieldOp::Homography:
+        return 6;
     case FieldOp::Ramp:
         return 1U + kFieldRampEntries;
     }
@@ -955,7 +1150,7 @@ bool validFieldTable(const std::span<const float> table) noexcept {
         const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
         const auto* b = a + 4;
         const auto op = a[0];
-        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::Rays) || op != std::floor(op))
+        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::Homography) || op != std::floor(op))
             return false;
         if (!(a[1] >= 0.0F) || a[1] >= static_cast<float>(kFieldRegisterCount))
             return false;

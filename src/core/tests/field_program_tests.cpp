@@ -592,6 +592,199 @@ void testLensWarp(Expectations& e) {
     e.expect(lost[0] == 0.0F && lost[3] == 0.0F, "the straight colour selector drops zero alpha");
 }
 
+// #348 Homography: a quad mapped to a quad against an independent forward map (the square-to-quad
+// closed form), the identity, a similarity against its forward transform, the degenerate quad and
+// the far side of the horizon reading nothing, and the sampler's refusal of an out-of-range position.
+std::array<double, 2> forwardQuad(const std::array<double, 8>& from, const std::array<double, 8>& to,
+                                  const double x, const double y) {
+    // Heckbert's square to quad ("Fundamentals of Texture Mapping and Image Warping", 1989): the
+    // unit square's (0,0), (1,0), (1,1), (0,1) go to the quad's bottom left, bottom right, top right
+    // and top left. `from` is an axis aligned rectangle, so (u, v) is the position in it.
+    const double x0 = to[6];
+    const double y0 = to[7];
+    const double x1 = to[4];
+    const double y1 = to[5];
+    const double x2 = to[2];
+    const double y2 = to[3];
+    const double x3 = to[0];
+    const double y3 = to[1];
+    const double sx = x0 - x1 + x2 - x3;
+    const double sy = y0 - y1 + y2 - y3;
+    const double dx1 = x1 - x2;
+    const double dx2 = x3 - x2;
+    const double dy1 = y1 - y2;
+    const double dy2 = y3 - y2;
+    const double det = dx1 * dy2 - dx2 * dy1;
+    const double g = (sx * dy2 - dx2 * sy) / det;
+    const double h = (dx1 * sy - sx * dy1) / det;
+    const double a = x1 - x0 + g * x1;
+    const double b = x3 - x0 + h * x3;
+    const double d = y1 - y0 + g * y1;
+    const double ee = y3 - y0 + h * y3;
+    const double u = (x - from[6]) / (from[4] - from[6]);
+    const double v = (y - from[7]) / (from[1] - from[7]);
+    const double w = g * u + h * v + 1.0;
+    return {(a * u + b * v + x0) / w, (d * u + ee * v + y0) / w};
+}
+
+std::vector<float> homographyTable(const field::HomographyParameters& p,
+                                   const field::FieldResultKind kind = field::FieldResultKind::Vector) {
+    const auto block = field::encodeHomography(p);
+    return block ? single(FieldOp::Homography, *block, kind) : std::vector<float>{};
+}
+
+void testHomography(Expectations& e) {
+    // The picture's rectangle (corners top left, top right, bottom right, bottom left, y up).
+    const std::array<double, 8> frame{-60.0, 40.0, 60.0, 40.0, 60.0, -40.0, -60.0, -40.0};
+    const std::array<double, 8> quad{-50.0, 45.0, 70.0, 30.0, 55.0, -50.0, -65.0, -35.0};
+    field::HomographyParameters pin;
+    e.expect(field::homographyFromQuads(frame, quad, pin) && pin.valid, "a quad solves");
+    const auto table = homographyTable(pin);
+    e.expect(field::validFieldTable(table), "a homography table is valid");
+    // Each output pixel inside the quad reads the point whose forward image is that pixel.
+    double worst = 0.0;
+    for (int j = -3; j <= 3; ++j)
+        for (int i = -4; i <= 4; ++i) {
+            const double x = 12.0 * i + 3.0;
+            const double y = 9.0 * j - 2.0;
+            const auto read = at(table, x, y);
+            const auto back = forwardQuad(frame, quad, read[0], read[1]);
+            worst = std::max({worst, std::fabs(back[0] - x), std::fabs(back[1] - y)});
+        }
+    e.expect(worst < 5.0e-3, "a pixel reads the point the quad's map sends to it");
+    // The quad's own corners read the frame's corners.
+    double corners = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto read = at(table, quad[2 * i], quad[2 * i + 1]);
+        corners = std::max({corners, std::fabs(read[0] - frame[2 * i]),
+                            std::fabs(read[1] - frame[2 * i + 1])});
+    }
+    e.expect(corners < 2.0e-3, "each corner of the quad reads the matching corner of the frame");
+
+    field::HomographyParameters same;
+    e.expect(field::homographyFromQuads(frame, frame, same), "a quad onto itself solves");
+    const auto identity = at(homographyTable(same), 17.0, -23.0);
+    e.expect(std::fabs(identity[0] - 17.0) < 1.0e-3 && std::fabs(identity[1] + 23.0) < 1.0e-3,
+             "a quad onto itself reads the pixel's own position");
+
+    // A pinched quad (two corners together) and a line cannot be solved: the map is invalid.
+    auto pinched = frame;
+    pinched[2] = pinched[0];
+    pinched[3] = pinched[1];
+    field::HomographyParameters bad;
+    e.expect(!field::homographyFromQuads(frame, pinched, bad) && !bad.valid,
+             "a quad with two corners together is invalid");
+    const std::array<double, 8> line{-60.0, 0.0, -20.0, 0.0, 20.0, 0.0, 60.0, 0.0};
+    e.expect(!field::homographyFromQuads(frame, line, bad), "a quad on one line is invalid");
+    const auto nowhere = at(homographyTable(bad), 3.0, 4.0);
+    e.expect(nowhere[0] > 1.0e15, "an invalid map reads a position no image reaches");
+    e.expect(field::validFieldTable(homographyTable(bad)), "an invalid map still encodes");
+    auto notANumber = frame;
+    notANumber[0] = std::numeric_limits<double>::quiet_NaN();
+    e.expect(!field::homographyFromQuads(notANumber, quad, bad), "a non-finite corner is invalid");
+
+    // A similarity: scaled by 2 and turned a quarter about the pivot, then moved. The output pixel
+    // that the forward transform sends a source point to reads that point.
+    const auto sim = field::similarityHomography(10.0, -5.0, 90.0, 2.0, 4.0, 6.0);
+    const auto simTable = homographyTable(sim);
+    double similarity = 0.0;
+    for (const auto& source : {std::array<double, 2>{0.0, 0.0}, {30.0, 10.0}, {-20.0, 35.0}}) {
+        // Forward: p = pivot + offset + 2 R(90) (q - pivot), R(90) (x, y) = (-y, x).
+        const double rx = source[0] - 4.0;
+        const double ry = source[1] - 6.0;
+        const double px = 4.0 + 10.0 + 2.0 * (-ry);
+        const double py = 6.0 - 5.0 + 2.0 * rx;
+        const auto read = at(simTable, px, py);
+        similarity = std::max({similarity, std::fabs(read[0] - source[0]),
+                               std::fabs(read[1] - source[1])});
+    }
+    e.expect(similarity < 1.0e-3, "a similarity reads the point the forward transform sends here");
+    e.expect(!field::similarityHomography(0.0, 0.0, 0.0, 0.0, 0.0, 0.0).valid,
+             "a zero scale is invalid");
+
+    // The far side of the horizon reads nothing: a strong perspective whose vanishing line crosses
+    // the output.
+    const std::array<double, 8> keystone{-10.0, 40.0, 10.0, 40.0, 60.0, -40.0, -60.0, -40.0};
+    field::HomographyParameters horizon;
+    e.expect(field::homographyFromQuads(frame, keystone, horizon), "a keystone solves");
+    const auto horizonTable = homographyTable(horizon);
+    bool folded = false;
+    bool inside = true;
+    for (double y = -40.0; y < 4000.0; y += 10.0) {
+        const auto read = at(horizonTable, 0.0, y);
+        if (y <= 40.0)
+            inside = inside && std::fabs(read[1]) < 41.0;
+        folded = folded || read[1] > 1.0e15;
+    }
+    e.expect(inside, "pixels inside the keystone read inside the frame");
+    e.expect(folded, "pixels past the vanishing line read nothing instead of folding back");
+
+    // A window map is solved when the image's window is placed: the corners of a 16 x 12 window moved
+    // by offsets read back the window's own corners.
+    {
+        field::HomographyParameters pinWindow;
+        pinWindow.windowSlot = 0;
+        pinWindow.offsets = {-2.0, 1.0, 1.0, -1.5, -1.0, 2.0, 2.5, 0.5};
+        auto window = homographyTable(pinWindow);
+        auto geometry = field::fieldRasterGeometry(0, 0, 16, 12, 16.0, 12.0, 1.0, 1.0, 1);
+        auto unplaced = window;
+        e.expect(field::applyFieldRasterGeometry(unplaced, geometry), "the bare geometry applies");
+        const auto before = field::fieldPixel(unplaced, kNoImages, 3, 4);
+        e.expect(before[0] > 1.0e15F,
+                 "a window map before its window is placed is invalid");
+        geometry.slots[0] = field::fieldImageSlot(0, 0, 16, 12, 16.0, 12.0, 1.0, 1.0);
+        e.expect(field::applyFieldRasterGeometry(window, geometry), "the window geometry applies");
+        const std::array<double, 8> frameCorners{-8.0, 6.0, 8.0, 6.0, 8.0, -6.0, -8.0, -6.0};
+        std::array<double, 8> moved = frameCorners;
+        for (std::size_t k = 0; k < 8; ++k)
+            moved[k] += pinWindow.offsets[k];
+        double windowWorst = 0.0;
+        for (int j = 2; j < 10; j += 3)
+            for (int i = 2; i < 14; i += 3) {
+                const auto pixel = field::fieldPixel(window, kNoImages, i, j);
+                const double x = static_cast<double>(i) + 0.5 - 8.0;
+                const double y = 6.0 - (static_cast<double>(j) + 0.5);
+                const auto back = forwardQuad(frameCorners, moved, static_cast<double>(pixel[0]),
+                                              static_cast<double>(pixel[1]));
+                windowWorst = std::max({windowWorst, std::fabs(back[0] - x), std::fabs(back[1] - y)});
+            }
+        e.expect(windowWorst < 5.0e-3, "a window map reads the window pinned by its offsets");
+        // No offsets: every pixel reads its own position.
+        field::HomographyParameters flat;
+        flat.windowSlot = 0;
+        auto flatTable = homographyTable(flat);
+        e.expect(field::applyFieldRasterGeometry(flatTable, geometry), "the flat geometry applies");
+        const auto own = field::fieldPixel(flatTable, kNoImages, 3, 4);
+        e.expect(std::fabs(own[0] + 4.5F) < 1.0e-3F && std::fabs(own[1] - 1.5F) < 1.0e-3F,
+                 "a window map with no offsets reads the pixel's own position");
+        // An absent image leaves the map invalid.
+        auto absent = homographyTable(flat);
+        auto none = geometry;
+        none.slots[0] = {};
+        e.expect(field::applyFieldRasterGeometry(absent, none), "the absent geometry applies");
+        const auto lost = field::fieldPixel(absent, kNoImages, 3, 4);
+        e.expect(lost[0] > 1.0e15F, "a window map with no image reads nothing");
+    }
+
+    // The sampler refuses a position it cannot index, on the same terms as an edge: transparent.
+    TestImage image{1, 1, {{0.5F, 0.25F, 0.125F, 1.0F}}};
+    const field::FieldImages images{&image, &fetchTest};
+    field::FieldProgramBuilder builder;
+    builder.emit(FieldOp::Constant, 0, field::kNoFieldInputs, field::encodeConstant({1.0e12, 0.0, 0.0, 0.0}));
+    field::ImageParameters read;
+    read.selector = 3;
+    read.edge = field::FieldImageEdge::Clamp;
+    builder.emit(FieldOp::Image, 1, {0, -1, -1, -1}, field::encodeImage(read));
+    auto far = builder.finish(1, field::FieldResultKind::Premultiplied, field::FieldOutputMode::Raw)
+                   .value_or(std::vector<float>{});
+    auto geometry = field::fieldRasterGeometry(0, 0, 1, 1, 1.0, 1.0, 1.0, 1.0, 1);
+    geometry.slots[0] = field::fieldImageSlot(0, 0, 1, 1, 1.0, 1.0, 1.0, 1.0);
+    e.expect(field::applyFieldRasterGeometry(far, geometry), "the far geometry applies");
+    const auto nothing = field::fieldPixel(far, images, 0, 0);
+    e.expect(nothing[3] == 0.0F && nothing[0] == 0.0F,
+             "a position beyond any texel index reads transparent, not the edge pixel");
+}
+
 // #508 Rays: the weighted gather along the segment towards the centre against an independent
 // double-precision reading, the identities (zero length, zero boost, the centre itself), the alpha
 // source, and the encoder's refusals.
@@ -1112,6 +1305,7 @@ int main() {
     testMathAndRemap(expectations);
     testImagesAndRaster(expectations);
     testLensWarp(expectations);
+    testHomography(expectations);
     testTestCard(expectations);
     testRays(expectations);
     testDistanceTransform(expectations);
