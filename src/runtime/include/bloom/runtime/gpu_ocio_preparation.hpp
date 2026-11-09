@@ -77,6 +77,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // padded to the grown window (detail::buildMaskDistanceProgram); `maskDistanceReach` and
     // `maskDistancePass` are its storage-buffer data.
     MaskDistance = 14,
+    // #514 Denoise & Smooth: the one fixed neighborhood program over the input; `denoise`
+    // (detail::denoiseProgramData) is its storage-buffer data.
+    Denoise = 15,
 };
 
 struct GpuOcioTransformSpec final {
@@ -106,6 +109,8 @@ struct GpuOcioTransformSpec final {
     std::array<float, 8> channelSelect{};
     // DirectionalBlur only: detail::directionalBlurProgramData.
     std::vector<float> directionalBlur;
+    // Denoise only: detail::denoiseProgramData.
+    std::vector<float> denoise;
     // MaskDistance only: the reach in evaluation pixels and the pass (0 columns, 1 rows).
     std::int64_t maskDistanceReach = 0;
     int maskDistancePass = 0;

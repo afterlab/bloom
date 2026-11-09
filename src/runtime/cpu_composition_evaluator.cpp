@@ -661,6 +661,10 @@ enum class ScalarDomain : std::uint8_t {
                 if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
                     validKernel = hasValidScalarCurveReference(key->low, plan, index, failure) &&
                                   hasValidScalarCurveReference(key->high, plan, index, failure);
+                if (const auto* denoise = std::get_if<DenoiseKernel>(&effect.kernel))
+                    validKernel =
+                        hasValidScalarCurveReference(denoise->radius, plan, index, failure) &&
+                        hasValidScalarCurveReference(denoise->strength, plan, index, failure);
                 if (const auto* directional = std::get_if<DirectionalBlurKernel>(&effect.kernel))
                     validKernel =
                         std::isfinite(directional->decay) && directional->decay > 0.0 &&
@@ -1429,6 +1433,14 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                            operationSubject) &&
                             registerScalar(key->high, "high", ScalarDomain::LumaKeyThreshold,
                                            operationSubject));
+                    // #514: the domains are checked when the pass is prepared.
+                    if (const auto* denoise = std::get_if<DenoiseKernel>(&effect.kernel))
+                        static_cast<void>(registerScalar(denoise->radius, "radius",
+                                                         ScalarDomain::Unbounded,
+                                                         operationSubject) &&
+                                          registerScalar(denoise->strength, "strength",
+                                                         ScalarDomain::Unbounded,
+                                                         operationSubject));
                     // #506: the spacing's domain is checked when the pass is prepared.
                     if (const auto* directional =
                             std::get_if<DirectionalBlurKernel>(&effect.kernel))
@@ -2425,6 +2437,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<Transform2DKernel>(effect->kernel) ||
                                std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
                                std::holds_alternative<DirectionalBlurKernel>(effect->kernel) ||
+                               std::holds_alternative<DenoiseKernel>(effect->kernel) ||
                                std::holds_alternative<DepthMapKernel>(effect->kernel) ||
                                std::holds_alternative<DefocusKernel>(effect->kernel) ||
                                std::holds_alternative<LensFlareKernel>(effect->kernel) ||
@@ -2702,6 +2715,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (angle && spacing)
                         directionalValues = std::array{angle->value, spacing->value};
                 }
+                if (const auto* denoise = std::get_if<DenoiseKernel>(&effect->kernel)) {
+                    const auto radius = detail::resolveParameter(denoise->radius, *plan, resolved);
+                    const auto strength =
+                        detail::resolveParameter(denoise->strength, *plan, resolved);
+                    if (radius && strength)
+                        directionalValues = std::array{radius->value, strength->value};
+                }
                 std::optional<std::vector<double>> gradeValues;
                 // #347: the audio an Audio Waveform or Spectrum draws is read and reduced here, on
                 // the worker, before its operands are sampled with the prepared analysis.
@@ -2755,6 +2775,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                      std::holds_alternative<Transform2DKernel>(effect->kernel) ||
                      std::holds_alternative<LumaKeyKernel>(effect->kernel) ||
                      std::holds_alternative<DirectionalBlurKernel>(effect->kernel) ||
+                     std::holds_alternative<DenoiseKernel>(effect->kernel) ||
                      isColorGradeKernel(effect->kernel) ||
                      std::holds_alternative<ChannelSelectKernel>(effect->kernel) ||
                      std::holds_alternative<ChannelCombineKernel>(effect->kernel))) {
@@ -3119,6 +3140,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(luma->invert);
                                 parameter(luma->low);
                                 parameter(luma->high);
+                            }
+                            if (const auto* denoise = std::get_if<DenoiseKernel>(&step.kernel)) {
+                                key.add(std::string{"denoise-v1"});
+                                key.add(static_cast<int>(denoise->mode));
+                                parameter(denoise->radius);
+                                parameter(denoise->strength);
                             }
                             if (const auto* directional =
                                     std::get_if<DirectionalBlurKernel>(&step.kernel)) {
@@ -3911,6 +3938,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         preparedEffect->resizeFit || preparedEffect->blur ||
                                         preparedEffect->transform2D || preparedEffect->lumaKey ||
                                         preparedEffect->directionalBlur ||
+                                        preparedEffect->denoise ||
                                         preparedEffect->colorGrade ||
                                         preparedEffect->channelSelect ||
                                         preparedEffect->channelCombine) {

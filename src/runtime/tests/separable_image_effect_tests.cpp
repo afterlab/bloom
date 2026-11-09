@@ -1,3 +1,4 @@
+#include "denoise_image_effect.hpp"
 #include "image_effect.hpp"
 #include <bloom/runtime/gpu_ocio_wrapper.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -5,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <functional>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -75,6 +77,201 @@ void separateAxesTests() {
     const auto proxy = runtime::detail::prepareSeparableBlur(k, 4.0, 0.5, 0.25, 8.0);
     require(proxy && proxy->horizontal.size() == 5 && proxy->vertical.size() == 5,
             "a proxy scales the horizontal and vertical radii by their own factors");
+}
+
+// #514 Denoise & Smooth, the spatial modes, against closed forms. An 8 x 8 image of a flat gray
+// with one hot pixel and (separately) a step edge with grain.
+render::Rgba32fImage denoiseImage(const std::function<std::array<float, 4>(int, int)>& value,
+                                  const int width = 8, const int height = 8) {
+    const auto data = render::ImageWindow::create(0, 0, static_cast<std::uint64_t>(width),
+                                                  static_cast<std::uint64_t>(height));
+    auto descriptor = render::Rgba32fImageDescriptor::create(*data.value(), *data.value(),
+                                                             core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 1U << 20U);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            const auto v = value(x, y);
+            const auto p = render::Rgba32f::fromPremultiplied(v[0], v[1], v[2], v[3]);
+            require(!builder.value()->write(x, y, *p.value()), "denoise pixel writes");
+        }
+    auto image = std::move(*builder.value()).freeze();
+    return std::move(*image.value());
+}
+
+std::array<float, 4> denoiseAt(const render::Rgba32fImage& image, const std::int64_t x,
+                               const std::int64_t y) {
+    const auto pixel = image.read(x, y);
+    require(pixel.hasValue(), "denoise pixel reads");
+    const auto p = *pixel.value();
+    return {p.red(), p.green(), p.blue(), p.alpha()};
+}
+
+void denoiseTests() {
+    using runtime::DenoiseMode;
+    const auto apply = [](const render::Rgba32fImage& image, const DenoiseMode mode,
+                          const double radius, const double strength, const double scale = 1.0) {
+        const runtime::DenoiseKernel kernel{mode, {}, {}};
+        const auto prepared = runtime::detail::prepareDenoise(kernel, radius, strength, scale, scale);
+        require(prepared.has_value(), "denoise prepares");
+        require(!prepared->identity(), "the test radius is not the identity");
+        const auto result = runtime::detail::applyDenoise(*prepared, image, 1U << 20U, {},
+                                                          runtime::OperationIndex::fromRaw(0), {});
+        require(result.image && !result.diagnostic, "denoise publishes");
+        return result.image;
+    };
+    const auto near = [](const float a, const double e, const double tolerance = 1e-5) {
+        return std::abs(static_cast<double>(a) - e) <= tolerance;
+    };
+    const auto flat = [](const int x, const int y) {
+        return x == 4 && y == 4 ? std::array<float, 4>{0.9F, 0.9F, 0.9F, 1.0F}
+                                : std::array<float, 4>{0.2F, 0.3F, 0.4F, 1.0F};
+    };
+    const auto spot = denoiseImage(flat);
+    // Median: a hot pixel in a flat field is replaced by the field, whatever its size; the rest is
+    // untouched; a threshold above its excess keeps it (Dust & Scratches).
+    {
+        const auto out = apply(spot, DenoiseMode::Median, 1.0, 0.0);
+        require(near(denoiseAt(*out, 4, 4)[0], 0.2) && near(denoiseAt(*out, 4, 4)[2], 0.4) &&
+                    near(denoiseAt(*out, 1, 1)[1], 0.3) && near(denoiseAt(*out, 3, 4)[0], 0.2),
+                "a 3 x 3 median removes a single hot pixel and keeps the field");
+        const auto kept = apply(spot, DenoiseMode::Median, 1.0, 0.8);
+        require(near(denoiseAt(*kept, 4, 4)[0], 0.9),
+                "a threshold above the excess keeps the value");
+        const auto removed = apply(spot, DenoiseMode::Median, 1.0, 0.5);
+        require(near(denoiseAt(*removed, 4, 4)[0], 0.2),
+                "a threshold below the excess removes the outlier");
+    }
+    // Median at an edge: the upper middle of the values present (a corner has four).
+    {
+        const auto ramp = denoiseImage([](const int x, const int) {
+            return std::array<float, 4>{static_cast<float>(x), 0.0F, 0.0F, 1.0F};
+        });
+        const auto out = apply(ramp, DenoiseMode::Median, 1.0, 0.0);
+        // Corner (0, 0): columns 0 and 1 over two rows, sorted 0 0 1 1, upper middle index 2 -> 1.
+        // Interior (3, 3): columns 2..4, middle value 3.
+        require(near(denoiseAt(*out, 0, 0)[0], 1.0) && near(denoiseAt(*out, 3, 3)[0], 3.0),
+                "the median is the upper middle of the values present");
+    }
+    // Bilateral: a step edge keeps its sides apart while the noise on each side is averaged, and
+    // the result at a pixel is the weighted mean of the closed form.
+    {
+        const auto edge = denoiseImage([](const int x, const int y) {
+            const float grain = ((x * 7 + y * 13) % 3 - 1) * 0.01F;
+            return std::array<float, 4>{(x < 4 ? 0.2F : 0.8F) + grain, 0.0F, 0.0F, 1.0F};
+        });
+        const auto out = apply(edge, DenoiseMode::Bilateral, 2.0, 0.1);
+        require(denoiseAt(*out, 3, 4)[0] < 0.25F && denoiseAt(*out, 4, 4)[0] > 0.75F,
+                "the bilateral pass keeps the edge");
+        // Independent double-precision reading of pixel (1, 4).
+        double sum = 0.0;
+        double total = 0.0;
+        const auto sample = denoiseAt(edge, 1, 4);
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                // Out-of-window texels are skipped.
+                if (1 + dx < 0 || 4 + dy < 0 || 4 + dy > 7)
+                    continue;
+                const auto t = denoiseAt(edge, 1 + dx, 4 + dy);
+                double d = 0.0;
+                for (std::size_t c = 0; c < 4; ++c)
+                    d += (static_cast<double>(sample[c]) - static_cast<double>(t[c])) *
+                         (static_cast<double>(sample[c]) - static_cast<double>(t[c]));
+                const auto spatial = [](const int i) {
+                    const double u = static_cast<double>(i) / 3.0;
+                    return (1.0 - u * u) * (1.0 - u * u);
+                };
+                const double range = std::max(0.0, 1.0 - d / 0.01);
+                const double w = spatial(dx < 0 ? -dx : dx) * spatial(dy < 0 ? -dy : dy) * range * range;
+                sum += w * static_cast<double>(t[0]);
+                total += w;
+            }
+        require(near(denoiseAt(*out, 1, 4)[0], sum / total, 1e-4),
+                "the bilateral pixel is the weighted mean of its neighbors");
+    }
+    // Spatial: flat noise-free regions stay exact, and grain on a flat field is averaged down.
+    {
+        const auto grainy = denoiseImage([](const int x, const int y) {
+            const float grain = ((x * 5 + y * 11) % 4 - 1.5F) * 0.02F;
+            return std::array<float, 4>{0.5F + grain, 0.5F + grain, 0.5F + grain, 1.0F};
+        });
+        const auto out = apply(grainy, DenoiseMode::Spatial, 3.0, 0.2);
+        double before = 0.0;
+        double after = 0.0;
+        for (int y = 2; y < 6; ++y)
+            for (int x = 2; x < 6; ++x) {
+                before += std::abs(static_cast<double>(denoiseAt(grainy, x, y)[0]) - 0.5);
+                after += std::abs(static_cast<double>(denoiseAt(*out, x, y)[0]) - 0.5);
+            }
+        require(after < before, "the spatial pass reduces the grain on a flat field");
+        const auto constant = denoiseImage([](int, int) { return std::array<float, 4>{0.4F, 0.4F, 0.4F, 1.0F}; });
+        const auto same = apply(constant, DenoiseMode::Spatial, 3.0, 0.1);
+        require(near(denoiseAt(*same, 3, 3)[0], 0.4) && near(denoiseAt(*same, 0, 7)[2], 0.4),
+                "a flat image is unchanged by the spatial pass");
+    }
+    // Domains, identity, scale and cache identity.
+    {
+        const runtime::DenoiseKernel kernel{DenoiseMode::Bilateral, {}, {}};
+        using runtime::detail::prepareDenoise;
+        require(!prepareDenoise(kernel, -1.0, 0.1, 1.0, 1.0) &&
+                    !prepareDenoise(kernel, 7.0, 0.1, 1.0, 1.0) &&
+                    !prepareDenoise(kernel, 2.0, -0.1, 1.0, 1.0) &&
+                    !prepareDenoise(kernel, 2.0, 11.0, 1.0, 1.0) &&
+                    !prepareDenoise(kernel, 2.0, std::numeric_limits<double>::quiet_NaN(), 1.0, 1.0) &&
+                    !prepareDenoise(kernel, 2.0, 0.1, 0.0, 1.0),
+                "radius, strength and scale have closed domains");
+        require(prepareDenoise(kernel, 0.0, 0.1, 1.0, 1.0)->identity() &&
+                    prepareDenoise(kernel, 2.0, 0.1, 0.1, 0.1)->identity(),
+                "a radius that rounds to zero is the identity");
+        const auto full = prepareDenoise(kernel, 4.0, 0.1, 1.0, 1.0);
+        const auto half = prepareDenoise(kernel, 4.0, 0.1, 0.5, 0.5);
+        require(full->radiusX == 4 && half->radiusX == 2 && half->radiusY == 2 &&
+                    runtime::detail::denoiseIdentity(*full) != runtime::detail::denoiseIdentity(*half),
+                "a reduced render scale scales the radius and changes the cache identity");
+        const auto stronger = prepareDenoise(kernel, 4.0, 0.2, 1.0, 1.0);
+        const runtime::DenoiseKernel median{DenoiseMode::Median, {}, {}};
+        require(runtime::detail::denoiseIdentity(*full) != runtime::detail::denoiseIdentity(*stronger) &&
+                    runtime::detail::denoiseIdentity(*full) !=
+                        runtime::detail::denoiseIdentity(*prepareDenoise(median, 4.0, 0.1, 1.0, 1.0)),
+                "strength and mode are part of the cache identity");
+        const auto budget = runtime::detail::applyDenoise(*full, spot, 16, {},
+                                                         runtime::OperationIndex::fromRaw(0), {});
+        require(!budget.image && budget.diagnostic.has_value(), "an output over the budget is refused");
+    }
+}
+
+void denoiseCancellationTest() {
+    const auto input = denoiseImage([](int x, int y) {
+        return std::array<float, 4>{static_cast<float>(x + y) * 0.01F, 0.0F, 0.0F, 1.0F};
+    }, 64, 64);
+    const runtime::DenoiseKernel kernel{runtime::DenoiseMode::Spatial, {}, {}};
+    const auto prepared = runtime::detail::prepareDenoise(kernel, 3.0, 0.1, 1.0, 1.0);
+    runtime::TaskScheduler scheduler(runtime::TaskSchedulerConfig::defaults());
+    const runtime::TaskOwner owner{.kind = runtime::TaskOwnerKind::Composition,
+                                   .id = runtime::TaskOwnerId::fromRaw(514)};
+    auto submission = scheduler.submit<void>(
+        runtime::TaskRequest("Denoise cancellation", owner), [&](runtime::TaskContext& context) {
+            const auto result = runtime::detail::applyDenoise(
+                *prepared, input, 1U << 22U, context.cancellation(),
+                runtime::OperationIndex::fromRaw(0), [&](const runtime::EvaluationProgress& progress) {
+                    if (progress.total && progress.completed == *progress.total / 2)
+                        static_cast<void>(scheduler.cancelOwner(owner));
+                });
+            require(result.cancelled && !result.image, "cancellation publishes no image");
+            return runtime::TaskResult<void>::cancelled();
+        });
+    require(submission.accepted(), "denoise cancellation task admitted");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::optional<runtime::TaskResult<void>> result;
+    while (!result && std::chrono::steady_clock::now() < deadline) {
+        result = submission.handle.tryTakeResult();
+        std::this_thread::yield();
+    }
+    require(result && result->state() == runtime::TaskState::Cancelled,
+            "denoise cancellation observed");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    require(scheduler.isQuiescent(), "the cancelled denoise shuts down safely");
 }
 void referenceTests() {
     const auto input = source();
@@ -580,6 +777,8 @@ int main() {
     try {
         referenceTests();
         separateAxesTests();
+        denoiseTests();
+        denoiseCancellationTest();
         subnormalCoverageTest();
         coverageTests();
         cancellationTest(runtime::BlurChannels::Rgba);

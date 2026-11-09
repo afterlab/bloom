@@ -1156,6 +1156,28 @@ bloom_add_test(
 )
 set_tests_properties(bloom.runtime.gpu_sharpen_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
+# #514 Denoise & Smooth GPU cost benchmark (tools/bench/run_bench.py nodes): every mode at its radii
+# against a Grade and a Gaussian Blur of the same radius, timed cold, warm and per frame; the CTest is
+# a 64x64 smoke run of every case.
+add_executable(bloom_runtime_gpu_denoise_node_bench
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_denoise_node_bench.cpp)
+target_link_libraries(bloom_runtime_gpu_denoise_node_bench
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_render)
+target_include_directories(bloom_runtime_gpu_denoise_node_bench
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_denoise_node_bench PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_denoise_node_bench>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_denoise_node_bench)
+bloom_enable_warnings(bloom_runtime_gpu_denoise_node_bench)
+bloom_add_test(
+    NAME bloom.runtime.gpu_denoise_node_bench_smoke
+    COMMAND bloom_runtime_gpu_denoise_node_bench --smoke
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_denoise_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
 # ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
 # the shared preparer from THIS target's packaged shader tools and must compile at most one shader
 # module and one native program; the native half runs the range cold (CPU-oracle parity, exact

@@ -1,5 +1,6 @@
 #include "node_editor_items.hpp"
 
+#include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -95,6 +96,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.spin-blur", "RadialBlur|Radial Blur"},
     {"bloom.zoom-blur", "RadialBlur|Radial Blur"},
     {"bloom.sharpen", "Unsharp Mask|USM"},
+    {"bloom.denoise", "Median|Bilateral|Smart Blur|Dust and Scratches|Despeckle|Remove Grain|Noise Reduction"},
     // Light & Shadow
     {"bloom.light-wrap", "LightWrap"},
     {"bloom.drop-shadow", "DropShadow|Shadow"},
@@ -233,6 +235,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kLoopValueNodeType)
         return QStringLiteral("loop value repeat cycle ping pong pingpong sawtooth ramp "
                               "looping timer countdown motion");
+    if (typeId == document::kDenoiseNodeType)
+        return QStringLiteral("denoise noise grain median bilateral smooth despeckle dust "
+                              "scratches temporal spatial clean up smart blur");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     if (typeId == document::kFrameRateHoldNodeType)

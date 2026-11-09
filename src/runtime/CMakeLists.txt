@@ -210,6 +210,7 @@ target_sources(
         gpu_scene_media_layer.hpp
         image_effect.cpp
         layer_mask_coverage.cpp
+        denoise_image_effect.cpp
         directional_blur_image_effect.cpp
         luma_key_image_effect.cpp
         color_grade_curves.cpp

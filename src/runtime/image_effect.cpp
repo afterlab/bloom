@@ -374,6 +374,23 @@ PreparedImageEffect ImageEffectContext::prepare(
         prepared.directionalBlur = std::move(blur);
         return prepared;
     }
+    // #514: the sampled radius and strength. A radius that rounds to zero aliases its input.
+    if (const auto* denoise = std::get_if<DenoiseKernel>(&effect.kernel)) {
+        auto spatial = prepareDenoise(
+            *denoise, directionalValues ? std::optional{(*directionalValues)[0]} : std::nullopt,
+            directionalValues ? std::optional{(*directionalValues)[1]} : std::nullopt,
+            horizontalScale, verticalScale);
+        if (!spatial) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Denoise radius or strength is out of domain");
+            return prepared;
+        }
+        if (spatial->identity())
+            return {};
+        prepared.cacheIdentity = denoiseIdentity(*spatial);
+        prepared.denoise = std::move(spatial);
+        return prepared;
+    }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
         prepared.blur =
             prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale,
@@ -511,6 +528,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.directionalBlur)
         return applyDirectionalBlur(*effect.directionalBlur, input, pixelBudget, cancellation,
                                     operation, progress);
+    if (effect.denoise)
+        return applyDenoise(*effect.denoise, input, pixelBudget, cancellation, operation,
+                            progress);
     if (effect.lumaKey)
         return applyLumaKey(*effect.lumaKey, input, pixelBudget, cancellation, operation,
                             progress);

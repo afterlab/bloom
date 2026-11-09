@@ -373,6 +373,13 @@ void blurNodeReopen() {
                                  document::testCardParameterSpec(parameter.schemaKey)->maximum)}
                            : document::ParameterValue{static_cast<std::int64_t>(
                                  document::testCardParameterSpec(parameter.schemaKey)->value + 1.0)})
+                // #514 Denoise & Smooth: the Spatial mode, 7 frames and moved values.
+                : parameter.schemaKey == "bloom.denoise.mode"
+                    ? document::ParameterValue{std::int64_t{2}}
+                : parameter.schemaKey == "bloom.denoise.frames"
+                    ? document::ParameterValue{std::int64_t{7}}
+                : parameter.schemaKey.starts_with("bloom.denoise.")
+                    ? document::ParameterValue{0.5}
                 // #524 Four-Color Gradient: moved points, colors and blend.
                 : document::isFourColorGradientPointSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{document::Vec2d{17.5, -9.25}}

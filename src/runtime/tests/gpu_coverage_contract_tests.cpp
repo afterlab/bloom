@@ -3152,6 +3152,72 @@ displayProofRunner(const bool customView) {
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     add(
+        "effect.DenoiseKernel", GpuCoverageFixtureCriterion::Prepared, "src/runtime denoise tests",
+        [runGrades] {
+            return runGrades(
+                {
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Median,
+                         {ParameterId::fromRaw(idBase + 60), 2.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.0}};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Median,
+                         {ParameterId::fromRaw(idBase + 60), 3.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.5}};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Bilateral,
+                         {ParameterId::fromRaw(idBase + 60), 2.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.4}};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Spatial,
+                         {ParameterId::fromRaw(idBase + 60), 2.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.6}};
+                 }},
+                501000,
+                "production Denoise: Median with and without a threshold, Bilateral and Spatial passes over HDR and partial alpha, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.denoise", GpuCoverageFixtureCriterion::Prepared, "src/runtime denoise tests",
+        [runGrades] {
+            return runGrades(
+                {
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Median,
+                         {ParameterId::fromRaw(idBase + 60), 2.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.0}};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Median,
+                         {ParameterId::fromRaw(idBase + 60), 3.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.5}};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Bilateral,
+                         {ParameterId::fromRaw(idBase + 60), 2.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.4}};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DenoiseKernel{
+                         bloom::runtime::DenoiseMode::Spatial,
+                         {ParameterId::fromRaw(idBase + 60), 2.0},
+                         {ParameterId::fromRaw(idBase + 61), 0.6}};
+                 }},
+                502000,
+                "production Denoise node: the neighborhood pass its lowering builds in every spatial mode, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
         "effect.HighlightRollOffKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime glow primitive tests",
         [runGrades] {

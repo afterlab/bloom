@@ -616,7 +616,7 @@ void testSearchKeyboardAndMenus() {
                   "Transform 2D"},
                  "Transform holds the geometric operations");
         hasGroup("Blur & Sharpen",
-                 {"Box Blur", "Directional Blur", "Gaussian Blur", "Motion Blur", "Optical Flow",
+                 {"Box Blur", "Denoise", "Directional Blur", "Gaussian Blur", "Motion Blur", "Optical Flow",
                   "Optical Flow Motion Blur", "Sharpen", "Spin Blur", "Vector Motion Blur",
                   "Z Defocus", "Zoom Blur"},
                  "Blur & Sharpen holds the blurs and motion blur");

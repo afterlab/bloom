@@ -930,6 +930,15 @@ Echo, Frame Blend and gather rows at Length 8 and 32 read up to 6 ms over their 
 The first use of a kernel pass on an empty driver cache compiles its program: 0.18 s (path) to 2.6 s (DIS).
 The cold column leaves that out, and the scenarios' first frames include it.
 
+### Denoise & Smooth (#514)
+
+`bloom_runtime_gpu_denoise_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_denoise_node_bench_smoke`) has Median, Bilateral and Spatial at radius 1, 3 and 6 beside
+the Gaussian Blur of the same radius, and Temporal over five frames, against a Grade. The case is written
+and builds; it has not been run, and its `NODE_COST_BUDGETS` entries are from the cost model in
+`architecture/image-filters.md`, "Denoise & Smooth", marked unmeasured in `bench_spec.py`. The first
+measured run replaces them and adds its table here.
+
 ### Sharpen (#486)
 
 `bloom_runtime_gpu_sharpen_node_bench` (a 64x64 smoke run is the CTest

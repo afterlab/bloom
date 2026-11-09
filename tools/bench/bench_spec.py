@@ -127,7 +127,8 @@ NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
                 "lens-flare": "src/runtime/tests/bloom_runtime_gpu_lens_flare_node_bench",
                 "film-grain": "src/runtime/tests/bloom_runtime_gpu_film_grain_node_bench",
                 "motion": "src/runtime/tests/bloom_runtime_gpu_motion_node_bench",
-                "sharpen": "src/runtime/tests/bloom_runtime_gpu_sharpen_node_bench"}
+                "sharpen": "src/runtime/tests/bloom_runtime_gpu_sharpen_node_bench",
+                "denoise": "src/runtime/tests/bloom_runtime_gpu_denoise_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
@@ -241,6 +242,22 @@ NODE_COST_BUDGETS = {
     # #486 Sharpen is its Gaussian Blur plus one mask pass, held about 25% over the worst of three
     # 2026-11-06 runs against a Grade and the blur of the same radius. The 1080p times move in steps
     # of about 1 ms, so radius 1 allows one step against a blur that took the lower one.
+    # #514 Denoise & Smooth. UNMEASURED: these budgets come from the cost model, not a run, and are
+    # replaced by the first measured numbers (docs/architecture/image-filters.md, "Denoise &
+    # Smooth", has the model). Median and Bilateral read (2r+1)^2 texels in one pass where a blur
+    # reads 2(2r+1) in two, so against the blur of the same radius they cost about (2r+1)/2 times
+    # as many reads (and Median sorts them); Spatial compares a 3 x 3 patch at every candidate, nine
+    # times Bilateral. The relaxed ratios are those factors with a quarter of headroom.
+    "denoise-median-1": {"reference": 6.0, "comparable": 4.0},
+    "denoise-median-3": {"reference": 25.0, "comparable": 12.0},
+    "denoise-median-6": {"reference": 90.0, "comparable": 30.0},
+    "denoise-bilateral-1": {"reference": 5.0, "comparable": 3.0},
+    "denoise-bilateral-3": {"reference": 15.0, "comparable": 8.0},
+    "denoise-bilateral-6": {"reference": 45.0, "comparable": 16.0},
+    "denoise-spatial-1": {"reference": 12.0, "comparable": 8.0},
+    "denoise-spatial-3": {"reference": 70.0, "comparable": 40.0},
+    "denoise-spatial-6": {"reference": 250.0, "comparable": 120.0},
+    "denoise-temporal-5": {"reference": 8.0, "comparable": 6.0},
     "sharpen-radius-1": {"reference": 1.9, "comparable": 1.9},
     "sharpen-radius-3": {"reference": 2.15, "comparable": 1.6},
     "sharpen-radius-8": {"reference": 2.15, "comparable": 1.55},

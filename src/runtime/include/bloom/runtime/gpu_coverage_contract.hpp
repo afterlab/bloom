@@ -126,6 +126,8 @@ BLOOM_GPU_REQUIRED_EFFECT(ChannelCombineKernel,
 BLOOM_GPU_REQUIRED_EFFECT(GradeKernel, "Grade wheels and primaries straight-colour grade (#494)");
 BLOOM_GPU_REQUIRED_EFFECT(DirectionalBlurKernel,
                           "directional ray blur pass of Glow's Streak mode (#506)");
+BLOOM_GPU_REQUIRED_EFFECT(DenoiseKernel,
+                          "Denoise & Smooth: Median, Bilateral and Spatial neighborhood passes (#514)");
 BLOOM_GPU_REQUIRED_EFFECT(HighlightRollOffKernel,
                           "Glow highlight roll-off over associated colour (#506)");
 BLOOM_GPU_REQUIRED_EFFECT(AlphaAssociationKernel,

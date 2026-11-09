@@ -15,6 +15,7 @@
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
@@ -575,6 +576,24 @@ std::optional<ParameterPresentation> sharpenPresentation(const std::string_view 
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #514 Denoise & Smooth: the mode a choice, the frame count a whole number, radius and strength
+// numbers over their domains.
+std::optional<ParameterPresentation> denoisePresentation(const std::string_view schemaKey) {
+    if (schemaKey == kDenoiseModeSchemaKey)
+        return choice();
+    if (schemaKey == kDenoiseRadiusSchemaKey)
+        return number(0.0, kMaximumDenoiseRadiusPixels, 0.0, kMaximumDenoiseRadiusPixels, 0.1, 1,
+                      "px");
+    if (schemaKey == kDenoiseStrengthSchemaKey)
+        return number(0.0, kMaximumDenoiseStrengthValue, 0.0, 1.0, 0.001, 3);
+    if (schemaKey == kDenoiseFramesSchemaKey)
+        return whole(static_cast<double>(kMinimumDenoiseFrames),
+                     static_cast<double>(kMaximumDenoiseFrames),
+                     static_cast<double>(kMinimumDenoiseFrames),
+                     static_cast<double>(kMaximumDenoiseFrames));
+    return std::nullopt;
+}
+
 // #486 Lens Distortion: one presentation per parameter, from its table; the centre a pixel offset.
 std::optional<ParameterPresentation> lensDistortionPresentation(const std::string_view schemaKey) {
     if (schemaKey == kLensDistortionCenterSchemaKey)
@@ -752,6 +771,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *gradient;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
+    if (auto denoise = denoisePresentation(schemaKey))
+        return *denoise;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

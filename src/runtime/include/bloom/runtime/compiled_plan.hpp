@@ -485,6 +485,16 @@ struct DirectionalBlurKernel final {
     double decay = 1.0;              // each tap's weight over the one before it, (0, 1]
     friend bool operator==(const DirectionalBlurKernel&, const DirectionalBlurKernel&) = default;
 };
+// #514 Denoise & Smooth, the spatial modes (denoise_image_effect.hpp). `radius` is in full-resolution
+// pixels, [0, 6]; `strength` is the Median outlier threshold, or the Bilateral and Spatial tolerance
+// (a difference of stored values beyond it stops a neighbor contributing), [0, 10].
+enum class DenoiseMode : std::uint8_t { Median = 0, Bilateral = 1, Spatial = 2 };
+struct DenoiseKernel final {
+    DenoiseMode mode = DenoiseMode::Median;
+    CompiledScalarParameter radius;
+    CompiledScalarParameter strength;
+    friend bool operator==(const DenoiseKernel&, const DenoiseKernel&) = default;
+};
 // #506 Glow highlight roll-off: associated colour c becomes c / (1 + amount * max(L, 0)), L its
 // Rec. 709 luma, alpha unchanged: one hue-preserving curve that compresses bright glow towards
 // 1 / amount and leaves dim glow nearly unchanged. Amount 0 is the identity. A grade kind
@@ -1116,7 +1126,7 @@ using ImageEffectKernel =
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
                  CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel, StatisticsKernel,
-                 AudioPlotKernel, ColorToolKernel>;
+                 AudioPlotKernel, ColorToolKernel, DenoiseKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {

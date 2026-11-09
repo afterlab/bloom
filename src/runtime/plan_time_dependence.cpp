@@ -154,6 +154,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         return parameter(blur->radius) || (blur->separate && parameter(blur->radiusY));
                     if (const auto* key = std::get_if<LumaKeyKernel>(&step.kernel))
                         return parameter(key->low) || parameter(key->high);
+                    if (const auto* denoise = std::get_if<DenoiseKernel>(&step.kernel))
+                        return parameter(denoise->radius) || parameter(denoise->strength);
                     if (const auto* directional = std::get_if<DirectionalBlurKernel>(&step.kernel))
                         return parameter(directional->angle) || parameter(directional->spacing);
                     // #484: jittered samples are hashed with the frame index.

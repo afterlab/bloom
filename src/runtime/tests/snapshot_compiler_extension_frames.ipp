@@ -92,4 +92,13 @@ void testExtensionFrames(Expectations& expectations) {
         {{"bloom.hue-saturation", {{"vibrance", 1.0}}}});
     run("hue-colorize", kFourColorGradientNodeType, {},
         {{"bloom.hue-saturation", {{"colorize", true}, {"hue", 200.0}, {"saturation", 1.0}}}});
+    // Denoise: grain on the gradient, then each mode.
+    const FrameStep grain{"bloom.film-grain", {{"intensity", 0.12}}};
+    run("denoise-noisy", kFourColorGradientNodeType, {}, {grain});
+    // Median plain (strength 0), Bilateral and Spatial at the grain's own tolerance.
+    for (const auto& [mode, strength] :
+         {std::pair{std::int64_t{0}, 0.0}, std::pair{std::int64_t{1}, 0.7}, std::pair{std::int64_t{2}, 0.4}}) {
+        run("denoise-mode-" + std::to_string(mode), kFourColorGradientNodeType, {},
+            {grain, {"bloom.denoise", {{"mode", mode}, {"radius", 3.0}, {"strength", strength}}}});
+    }
 }

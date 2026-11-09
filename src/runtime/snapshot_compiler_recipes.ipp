@@ -39,6 +39,45 @@ recipeOptionalInput(const document::NodeId nodeId, const std::string_view port,
            typeId == document::kLightWrapNodeType || typeId == document::kEdgeExtendNodeType;
 }
 
+// #514 Denoise & Smooth. Median, Bilateral and Spatial are one DenoiseKernel on the input. Temporal
+// averages the look-back window of the input (the current frame and those before it, each a time
+// sample on the plan's frame grid): a running mean, image i mixed into the mean of the ones before
+// it by 1 / (i + 1), so every frame weighs the same.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerDenoise(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
+    const auto strength = compiledScalarParameter(findParameterBinding(node, "strength"));
+    const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+    const auto* frames = parameterConstant<std::int64_t>(findParameterBinding(node, "frames"));
+    if (!radius || !strength || mode == nullptr || frames == nullptr || *mode < 0 ||
+        *mode >= document::kDenoiseModeCount || *frames < document::kMinimumDenoiseFrames ||
+        *frames > document::kMaximumDenoiseFrames) {
+        addTopologyFailure(node.id, "Denoise parameters could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    if (*mode != static_cast<std::int64_t>(document::DenoiseNodeMode::Temporal))
+        return emitter.effect(*input, runtime::DenoiseKernel{static_cast<runtime::DenoiseMode>(*mode),
+                                                              *radius, *strength});
+    const auto samples = runtime::detail::appendLookBackSamples(emitter, *input, *frames);
+    auto mean = samples.front();
+    for (std::size_t i = 1; i < samples.size(); ++i)
+        mean = emitter.effect(
+            mean,
+            runtime::ImageCombineKernel{
+                runtime::ImageCombineMode::Mix,
+                runtime::detail::RecipeEmitter::constant(1.0 / static_cast<double>(i + 1)),
+                render::ImageCoverageChannel::Alpha},
+            samples[i]);
+    return mean;
+}
+
 // #486 Sharpen: its input's blur and the unsharp mask over the two.
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerSharpen(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,

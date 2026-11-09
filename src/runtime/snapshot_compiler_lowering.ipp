@@ -762,6 +762,17 @@ lower(const std::vector<document::NodeId>& order) {
                 continue;
             }
         }
+        // #514 Denoise & Smooth: one neighborhood pass, or the temporal mean, then the effect mask.
+        if (node->typeId == document::kDenoiseNodeType) {
+            const auto lowered = lowerDenoise(*node, operations, indices);
+            if (!lowered)
+                return {};
+            const auto masked = applyEffectMask(*node, *lowered, indices);
+            if (!masked)
+                return {};
+            indices.emplace(nodeId, *masked);
+            continue;
+        }
         // #486 Sharpen: its input's blur and the unsharp mask, then the effect mask.
         if (node->typeId == document::kSharpenNodeType) {
             const auto lowered = lowerSharpen(*node, operations, indices);

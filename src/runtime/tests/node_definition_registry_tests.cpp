@@ -158,8 +158,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #524 adds Four-Color Gradient.
-    expectations.expect(registry.definitions().size() == 238,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth.
+    expectations.expect(registry.definitions().size() == 239,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -311,7 +311,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Aberration; #587 adds Test Card.
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
-                    "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure"},
+                    "bloom.sharpen", "bloom.denoise", "bloom.codec-degrade", "bloom.auto-exposure"},
                    document::NodeCategory::Filters);
     expectCategory({"bloom.tone-map", "bloom.color-matrix"}, document::NodeCategory::Grade);
     expectCategory({"bloom.hsl-qualifier"}, document::NodeCategory::Compositing);
@@ -1272,7 +1272,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 32>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 33>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
@@ -1281,7 +1281,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                                          "bloom.z-defocus", "bloom.depth-fog", "bloom.film-grain",
                                          "bloom.motion-blur", "bloom.echo", "bloom.frame-rate-hold", "bloom.directional-blur",
                                          "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur",
-                                         "bloom.sharpen", "bloom.codec-degrade",
+                                         "bloom.sharpen", "bloom.denoise", "bloom.codec-degrade",
                                          "bloom.auto-exposure", "bloom.image-math", "bloom.image-map-range",
                                          "bloom.image-clamp", "bloom.tone-map", "bloom.color-matrix"},
         [&](const std::string_view type) {
@@ -1289,7 +1289,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 32,
+    expectations.expect(shaped && named && masked == 33,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);

@@ -5,6 +5,7 @@
 
 #include "channel_static.hpp"
 #include "compositing_recipes.hpp"
+#include "look_back_recipes.hpp"
 #include "depth_effect_recipes.hpp"
 #include "motion_blur_recipes.hpp"
 #include "codec_degrade_recipes.hpp"
@@ -36,6 +37,7 @@
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>

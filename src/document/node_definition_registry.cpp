@@ -20,6 +20,7 @@
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/denoise_definition.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -649,6 +650,9 @@ template <typename Definition>
         // #486 Sharpen: the exact generated shape.
         if (definition.key.typeId == kSharpenNodeType)
             return definition == sharpenDefinition();
+        // #514 Denoise & Smooth: the exact generated shape.
+        if (definition.key.typeId == kDenoiseNodeType)
+            return definition == denoiseDefinition();
         // #518 Tone Map: the exact generated shape.
         if (isColorCleanupNodeType(definition.key.typeId))
             return definition == colorCleanupDefinition(definition.key.typeId);
@@ -1825,6 +1829,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         fourColorGradientDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),
+        denoiseDefinition(),
         colorCleanupDefinition(kToneMapNodeType),
         colorCleanupDefinition(kColorMatrixNodeType),
         colorCleanupDefinition(kHslQualifierNodeType),

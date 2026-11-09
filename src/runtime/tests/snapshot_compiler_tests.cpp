@@ -5,6 +5,7 @@
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/camera_shake.hpp>
+#include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/core/field_program.hpp>
@@ -2139,6 +2140,7 @@ int main() {
         testCanvasLowering(expectations);
         testBlurLowering(expectations);
         testBlurExtensionLowering(expectations);
+        testDenoiseLowering(expectations);
         testHueSaturationExtensionLowering(expectations);
         testTransform2DLowering(expectations);
         testMatteBlurLowering(expectations);

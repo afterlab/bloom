@@ -1344,6 +1344,11 @@ void extensionRows(const char* type, const char* captureName,
 }
 
 void extensionPropertiesRows() {
+    extensionRows("bloom.denoise", "denoise",
+                  {{"mode", QStringLiteral("Mode")},
+                   {"radius", QStringLiteral("Radius (pixels, not Temporal)")},
+                   {"strength", QStringLiteral("Strength (noise tolerance)")},
+                   {"frames", QStringLiteral("Frames (Temporal only)")}});
     extensionRows("bloom.four-color-gradient", "four-color-gradient",
                   {{"point1", QStringLiteral("Point 1")}, {"point4", QStringLiteral("Point 4")},
                    {"color1", QStringLiteral("Color 1")}, {"color4", QStringLiteral("Color 4")},

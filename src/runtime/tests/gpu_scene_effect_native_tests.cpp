@@ -1120,6 +1120,88 @@ void runSeparateBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCac
     }
 }
 
+// #514 Denoise & Smooth: every spatial mode, three radii and strengths, full frame and a reduced
+// render scale with a region of interest, against the CPU oracle.
+void runDenoise(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::DenoiseKernel;
+    using bloom::runtime::DenoiseMode;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::uint64_t id = 7800;
+    for (const auto mode : {DenoiseMode::Median, DenoiseMode::Bilateral, DenoiseMode::Spatial}) {
+        for (const auto [radius, strength] : {std::pair{1.0, 0.0}, std::pair{2.0, 0.4}, std::pair{3.0, 2.0}}) {
+            for (const bool proxy : {false, true}) {
+                cache.clear();
+                const DenoiseKernel kernel{mode, {ParameterId::fromRaw(id + 90), radius},
+                                           {ParameterId::fromRaw(id + 91), strength}};
+                const auto plan = effectPlan(kernel, id);
+                id += 100;
+                auto request = requestFor(*plan);
+                if (proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(7, 6);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                    const auto roi = ImageWindow::create(1, 1, 4, 3);
+                    request.roi = *roi.value();
+                }
+                auto oracleRequest = request;
+                oracleRequest.bypassOperationCache = true;
+                const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+                const auto prepared = builder.build(plan, request);
+                expectations.expect(oracle.frame() && prepared,
+                                    "denoise native: CPU oracle and scene prepare");
+                if (!oracle.frame() || !prepared)
+                    continue;
+                auto executor = GpuSceneExecutor::create(device, cache);
+                if (!executor)
+                    continue;
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto coldCounters = executor.executor->counters();
+                std::string detail;
+                expectations.expect(
+                    cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                    "denoise native: CPU parity: " + detail);
+                const auto& descriptor = *oracle.frame()->processImage().descriptor();
+                expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow(),
+                                    "denoise native: data and display window parity");
+                // The reduced scale (7 of 12 by 6 of 10) keeps every radius at one pixel or more.
+                const std::uint64_t legs = 1U;
+                expectations.expect(coldCounters.ocioEffectDispatches == legs &&
+                                        coldCounters.readbacks == 0,
+                                    "denoise native: one resident dispatch and no internal "
+                                    "readback");
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(
+                    warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                        executor.executor->counters().ocioEffectDispatches ==
+                            coldCounters.ocioEffectDispatches,
+                    "denoise native: warm reuse has identical pixels and zero dispatches");
+                // A changed strength invalidates the result and keeps parity.
+                auto changedDefinition = plan->copyDefinition();
+                std::get<DenoiseKernel>(
+                    std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                    .strength.source = strength + 0.25;
+                const auto changedPlan = std::make_shared<const CompiledCompositionPlan>(
+                    std::move(changedDefinition));
+                const auto changed = builder.build(changedPlan, request);
+                const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+                if (!changed || !changedOracle.frame())
+                    continue;
+                const auto before = executor.executor->counters().ocioEffectDispatches;
+                const auto rerun = runScene(*executor.executor, changed.scene);
+                expectations.expect(
+                    rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(rerun.pixels, changedOracle.frame()->processImage().pixels(),
+                               detail) &&
+                        executor.executor->counters().ocioEffectDispatches > before,
+                    "denoise native: a changed strength re-dispatches with CPU parity: " + detail);
+            }
+        }
+    }
+}
+
 // #337: the Coverage channel policy (Matte Blur) runs through the same harness on the Gaussian
 // kernel, so its alpha-only filter and all-channel write keep exact-alpha CPU parity too. #338
 // Matte Erode/Dilate run the morphology kinds through the same cases.
@@ -3954,6 +4036,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runResizeFit(expectations, device, cache);
     runTransform2D(expectations, device, cache);
     runBlurs(expectations, device, cache);
+    runDenoise(expectations, device, cache);
     runSeparateBlurs(expectations, device, cache);
     runLumaKeys(expectations, device, cache);
     runColorGrades(expectations, device, cache);

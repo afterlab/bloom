@@ -44,8 +44,7 @@ constexpr std::array<std::string_view, 6> kDistort{"bloom.lens-distortion",
                                                    "bloom.corner-pin",
                                                    "bloom.st-map",
                                                    "bloom.displace"};
-// Planned: Denoise.
-constexpr std::array<std::string_view, 11> kBlurSharpen{"bloom.gaussian-blur",
+constexpr std::array<std::string_view, 12> kBlurSharpen{"bloom.gaussian-blur",
                                                         "bloom.box-blur",
                                                         "bloom.z-defocus",
                                                         "bloom.motion-blur",
@@ -54,7 +53,8 @@ constexpr std::array<std::string_view, 11> kBlurSharpen{"bloom.gaussian-blur",
                                                         "bloom.optical-flow-motion-blur",
                                                         "bloom.directional-blur",
                                                         "bloom.spin-blur",
-                                                        "bloom.zoom-blur", "bloom.sharpen"};
+                                                        "bloom.zoom-blur", "bloom.sharpen",
+                                                        "bloom.denoise"};
 // Planned: Inner Shadow, Inner Glow.
 constexpr std::array<std::string_view, 6> kLightShadow{"bloom.glow",      "bloom.light-wrap",
                                                        "bloom.drop-shadow", "bloom.depth-fog",

@@ -3,6 +3,7 @@
 #include "canvas_image_effect.hpp"
 #include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
+#include "denoise_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
 #include "field_raster.hpp"
 #include "layer_mask_coverage.hpp"
@@ -41,6 +42,8 @@ struct PreparedImageEffect final {
     std::optional<PreparedChannelCombine> channelCombine;
     // #506 Directional Blur (absent for a zero spacing, which aliases its input).
     std::optional<PreparedDirectionalBlur> directionalBlur;
+    // #514 Denoise & Smooth (absent for a radius that rounds to zero, which aliases its input).
+    std::optional<PreparedDenoise> denoise;
     // #525 a mask's signed distance (Shape Distance from a mask): never an identity.
     std::optional<MaskDistanceKernel> maskDistance;
     // ADR 0028: prepared layer-mask geometry (null for every other kernel).
@@ -53,7 +56,7 @@ struct PreparedImageEffect final {
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
         if (resizeFit || lumaKey || colorGrade || channelSelect || channelCombine ||
-            directionalBlur || maskDistance)
+            directionalBlur || denoise || maskDistance)
             return false;
         return !diagnostic && !cancelled
                    ? (!combine || (combine->mode == ImageCombineMode::Mix &&

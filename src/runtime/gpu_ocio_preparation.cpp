@@ -2,6 +2,7 @@
 
 #include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
+#include "denoise_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
 #include "field_raster.hpp"
 #include "footage_interpretation_pass.hpp"
@@ -104,6 +105,13 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
         appendText(bytes, "directional-blur");
         appendU64(bytes, transform.directionalBlur.size());
         for (const auto value : transform.directionalBlur)
+            appendF64(bytes, static_cast<double>(value));
+    }
+    // Appended only for #514 Denoise, so every earlier key keeps its exact bytes.
+    if (transform.kind == GpuOcioTransformKind::Denoise) {
+        appendText(bytes, "denoise");
+        appendU64(bytes, transform.denoise.size());
+        for (const auto value : transform.denoise)
             appendF64(bytes, static_cast<double>(value));
     }
     // Appended only for #525 mask distance, so every earlier key keeps its exact bytes.
@@ -331,6 +339,8 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
             return detail::buildChannelSelectProgram(transform.channelSelect);
         case GpuOcioTransformKind::DirectionalBlur:
             return detail::buildDirectionalBlurProgram(transform.directionalBlur);
+        case GpuOcioTransformKind::Denoise:
+            return detail::buildDenoiseProgram(transform.denoise);
         case GpuOcioTransformKind::MaskDistance:
             return detail::buildMaskDistanceProgram(transform.maskDistanceReach,
                                                     transform.maskDistancePass);

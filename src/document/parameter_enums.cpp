@@ -144,6 +144,9 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return sequential({"Clamp", "Repeat", "Mirror"});
     if (schemaKey == "bloom.blur.edge")
         return sequential({"Transparent", "Clamp"});
+    // #514 Denoise & Smooth.
+    if (schemaKey == "bloom.denoise.mode")
+        return sequential({"Median", "Bilateral", "Spatial", "Temporal"});
     // #383 Mask Combine.
     if (schemaKey == kMaskCombineModeSchemaKey)
         return sequential({"Add", "Subtract", "Intersect", "Difference"});

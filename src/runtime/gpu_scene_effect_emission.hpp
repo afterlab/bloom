@@ -22,6 +22,7 @@
 #include "canvas_image_effect.hpp"
 #include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
+#include "denoise_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
@@ -693,6 +694,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* lumaKeyKernel = std::get_if<LumaKeyKernel>(&effect.kernel);
     const auto* selectKernel = std::get_if<ChannelSelectKernel>(&effect.kernel);
     const auto* directionalKernel = std::get_if<DirectionalBlurKernel>(&effect.kernel);
+    const auto* denoiseKernel = std::get_if<DenoiseKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     std::optional<PreparedDirectionalBlur> directional;
     // #505, #486: a Vignette's or Film Grain's table, whose geometry is the input's: its leg is
@@ -700,7 +702,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     std::optional<PreparedColorGrade> positioned;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
         blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr &&
-        selectKernel == nullptr && directionalKernel == nullptr &&
+        selectKernel == nullptr && directionalKernel == nullptr && denoiseKernel == nullptr &&
         !isColorGradeKernel(effect.kernel)) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
@@ -835,6 +837,23 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         GpuOcioTransformSpec leg;
         leg.kind = GpuOcioTransformKind::DirectionalBlur;
         leg.directionalBlur = directionalBlurProgramData(*directional);
+        legs.push_back(std::move(leg));
+    } else if (denoiseKernel != nullptr) {
+        // #514: the CPU reference's prepared table as the one fixed program's data, over the input
+        // window. A radius that rounds to zero aliases its input, as on the CPU.
+        const auto radius = resolveParameter(denoiseKernel->radius, plan, resolved);
+        const auto strength = resolveParameter(denoiseKernel->strength, plan, resolved);
+        const auto denoise = prepareDenoise(
+            *denoiseKernel, radius ? std::optional{radius->value} : std::nullopt,
+            strength ? std::optional{strength->value} : std::nullopt, ctx.hScale, ctx.vScale);
+        if (!denoise)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Denoise radius or strength is out of domain");
+        if (denoise->identity())
+            return identity();
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::Denoise;
+        leg.denoise = denoiseProgramData(*denoise);
         legs.push_back(std::move(leg));
     } else if (isColorGradeKernel(effect.kernel)) {
         // #340: the CPU reference's prepared table as the kind's one fixed program's data; an

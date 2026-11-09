@@ -1645,6 +1645,67 @@ reuse with zero dispatches, the next frame and a changed value. `effect.CodecDeg
 `node.bloom.codec-degrade` prepare through the production builder at full frame and ROI.
 `testCodecDegradeLowering` holds the lowering.
 
+## Denoise & Smooth
+
+Denoise & Smooth (`bloom.denoise`, schema 1, issue #514) is a Filters node: one Image in, one Image out,
+and the effect mask every filter takes. Its roles are `mode` (Median, Bilateral, Spatial, Temporal;
+default Bilateral), `radius` (full-resolution pixels, 0 to 6, default 2, animatable), `strength` (0 to 10
+in linear scene values, default 0.1, animatable) and `frames` (Temporal only, 2 to 16, default 5). The
+radius and strength have sockets, so a value graph drives them.
+
+The three spatial modes are one kernel, `DenoiseKernel` (`denoise_image_effect.hpp`), whose host table is
+the whole interface to the CPU reference and to the one fixed GPU neighborhood program
+(`bloom.render.denoise.v1`, six vec4 of data). The output has the input's data window and reads the
+square of radius (rx, ry) around each pixel, skipping texels outside the window, over the stored
+(associated) channels.
+
+- **Median** takes, per channel, the middle of the sorted values present (the upper middle on an even
+  count). A channel keeps its own value unless it differs from that median by more than `strength`, so
+  strength 0 is the plain median and a larger strength removes only outliers (Dust & Scratches).
+- **Bilateral** is `p + sum(w (q - p)) / sum(w)` over the neighbors q, with `w = ws(dx) ws(dy) wr`. The
+  spatial weight is the compact biweight `(1 - (d / (r + 1))^2)^2`; the range weight is the same shape
+  over the squared distance of the four channels to the center pixel's, divided by `strength^2`, so a
+  neighbor further than `strength` away does not contribute and edges stay.
+- **Spatial** is the same fold with the range weight taken from the mean squared difference of the 3 x 3
+  patch around the center and around the candidate (patches clamp to the window's edge): a non-local
+  means search. Texture that repeats inside the search radius is averaged even where single pixels differ.
+- **Temporal** is not a kernel. It lowers to the look-back window of the input (`look_back_recipes.hpp`,
+  the frames up to and including the current one on the plan's frame grid) and a running mean (image i
+  mixed into the mean of the ones before it by 1 / (i + 1)), built from Time Sample and Image Mix, which
+  already hold CPU and GPU parity. Every frame weighs the same, so it averages noise down by
+  `sqrt(frames)` on static content and ghosts content that moves; it does not search for motion, so
+  Spatial or a stabilized plate suits a moving shot. A frame before the composition's first repeats its
+  first, the same in preview, scrubbing and export.
+
+All weights are polynomials of the host's float inputs and sums are `fma` folds in scan order (dy, then
+dx), so the device repeats the CPU's arithmetic and the mean about the center keeps equal neighbors exact.
+The radius is authored in full-resolution pixels and scaled to the evaluation resolution
+(`round(radius * scale)` per axis, at most 6); a radius that rounds to zero is the identity and aliases its
+input. The cache identity is the prepared table (mode, both radii, threshold or inverse variance), so a
+render scale, a keyed radius or a changed strength never reuses another result.
+
+**Noise profile sampling.** The tolerance of Bilateral, Spatial and Temporal is a noise level. Measure it
+with the nodes that exist: Crop a flat patch of the plate, wire it to Image Statistics, and wire its
+`deviation` (the population standard deviation of one channel, luminance by default) to `strength`. The
+statistics are prepared on a worker before the frame (see `image-statistics.md`), so the profile follows
+the frame it measures. Wiring a multiple of the deviation (about 2 to 3) keeps the noise inside the
+tolerance.
+
+**Cost per pass.** Reads per output pixel: Median and Bilateral (2r+1)^2 texels in one dispatch (Median
+also sorts them per channel, O(n^2) insertion on the device, n up to 169); Spatial 9 patch texel pairs for
+each of the (2r+1)^2 candidates, so nine times Bilateral; Temporal `frames - 1` Time Sample reads and the
+same number of one-dispatch mixes. The compute is the texel reads and their fused multiply-adds; nothing
+waits on the host: the pass is one dispatch with its table in a storage buffer (a keyed radius or strength
+changes data, never the shader), no readback and no upload per frame beyond the six vec4, and the window
+is the input's, so no halo is allocated. The CPU reference is the same loops, checked for cancellation
+every sixteen pixels and every row. `tools/bench` has the cases (`denoise-<mode>-<radius>`,
+`denoise-temporal-5`) and the budgets in `NODE_COST_BUDGETS` are relaxed per mode from this model; they are
+marked unmeasured until a run replaces them.
+
+**Limits.** The radius stops at 6 so the Median sort and the Spatial search stay bounded in registers.
+Median acts on stored channels, so at a soft alpha edge it can move color against coverage; mask or
+Unpremultiply first for that. Spatial's patch is fixed at 3 x 3. Temporal has no motion rejection.
+
 ## Sharpen
 
 `bloom.sharpen`, schema 1, under Blur & Sharpen (issue #486), has one Image in, `input`, one Image out, `image`,

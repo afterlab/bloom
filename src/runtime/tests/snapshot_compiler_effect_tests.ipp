@@ -2363,3 +2363,122 @@ void testVignetteLowering(Expectations& expectations) {
         }
     }
 }
+
+// #514 Denoise & Smooth: Median, Bilateral and Spatial lower to one neighborhood kernel with the
+// authored radius and strength; Temporal lowers to the look-back window and a running mean; a
+// strength wired from Image Statistics over a flat patch (the noise profile) reaches the kernel as a
+// driven value, not a constant.
+void testDenoiseLowering(Expectations& expectations) {
+    using namespace document;
+    const auto* definition = builtInNodeDefinitions().find(kDenoiseNodeType, 1);
+    require(definition != nullptr && definition->parameters.size() == 5,
+            "Denoise has mode, radius, strength, frames and the effect mask channel");
+    for (int scenario = 0; scenario != 5; ++scenario) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto node = NodeId::fromRaw(970);
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 970;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            auto value = parameter.defaultValue;
+            if (parameter.role == "mode")
+                value = std::int64_t{scenario <= 3 ? scenario : 1};
+            if (parameter.role == "radius")
+                value = 3.0;
+            if (parameter.role == "strength")
+                value = 0.25;
+            if (parameter.role == "frames")
+                value = std::int64_t{4};
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{value}}),
+                    "denoise parameter is valid");
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({node, std::string(kDenoiseNodeType), std::move(bindings), 1}),
+                "denoise node adds");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge removed");
+        require(graph.addEdge(
+                    {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{node, "input"}}),
+                "image enters denoise");
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(970),
+                     {node, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "denoise enters Layer");
+        if (scenario == 4) {
+            // The noise profile: Image Statistics over the picture, its deviation driving strength.
+            const auto* statistics = builtInNodeDefinitions().find(kImageStatisticsNodeType, 1);
+            require(statistics != nullptr, "Image Statistics exists");
+            std::vector<ParameterBinding> statBindings;
+            for (const auto& parameter : statistics->parameters) {
+                const auto id = ParameterId::fromRaw(next++);
+                require(composition->parameters().insert(
+                            {id, parameter.schemaKey, ConstantValueSource{parameter.defaultValue}}),
+                        "statistics parameter is valid");
+                statBindings.push_back({parameter.role, id});
+            }
+            const auto stats = NodeId::fromRaw(971);
+            require(graph.addNode({stats, std::string(kImageStatisticsNodeType),
+                                   std::move(statBindings), 1}),
+                    "statistics node adds");
+            require(graph.addEdge({EdgeId::fromRaw(971),
+                                   {kFirstSolidNode, "image"},
+                                   NodeInputRef{stats, "input"}}),
+                    "a patch enters statistics");
+            const auto strength = std::ranges::find_if(graph.nodes(), [&](const auto& candidate) {
+                return candidate.id == node;
+            });
+            require(strength != graph.nodes().end(), "the denoise node exists");
+            const auto binding = std::ranges::find_if(strength->parameters, [](const auto& b) {
+                return b.role == "strength";
+            });
+            require(binding != strength->parameters.end(), "the node has a strength");
+            require(composition->parameters().setSource(binding->parameterId,
+                                                        DriverBindingSource{stats, "deviation"}),
+                    "the deviation drives strength");
+        }
+        expectations.expect(project.validate().ok(), "denoise document validates");
+        runtime::NodeDefinitionRegistry registry;
+        require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+        registry.freeze();
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "denoise graph compiles");
+        if (!result.plan)
+            continue;
+        std::size_t denoises = 0;
+        std::size_t samples = 0;
+        std::size_t mixes = 0;
+        const runtime::DenoiseKernel* kernel = nullptr;
+        for (const auto& operation : result.plan->operations()) {
+            const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+            if (effect == nullptr)
+                continue;
+            if (const auto* found = std::get_if<runtime::DenoiseKernel>(&effect->kernel)) {
+                ++denoises;
+                kernel = found;
+            }
+            samples += std::holds_alternative<runtime::TimeSampleKernel>(effect->kernel) ? 1U : 0U;
+            if (const auto* combine = std::get_if<runtime::ImageCombineKernel>(&effect->kernel))
+                mixes += combine->mode == runtime::ImageCombineMode::Mix ? 1U : 0U;
+        }
+        if (scenario == 3) {
+            expectations.expect(denoises == 0 && samples == 3 && mixes == 3,
+                                "Temporal lowers to the look-back window and a running mean");
+        } else {
+            expectations.expect(denoises == 1 && samples == 0 && kernel != nullptr &&
+                                    static_cast<int>(kernel->mode) == (scenario == 4 ? 1 : scenario),
+                                "a spatial mode lowers to one neighborhood kernel");
+            if (kernel != nullptr && scenario != 4)
+                expectations.expect(std::holds_alternative<double>(kernel->radius.source) &&
+                                        std::get<double>(kernel->radius.source) == 3.0 &&
+                                        std::holds_alternative<double>(kernel->strength.source) &&
+                                        std::get<double>(kernel->strength.source) == 0.25,
+                                    "the kernel keeps the authored radius and strength");
+            if (kernel != nullptr && scenario == 4)
+                expectations.expect(!std::holds_alternative<double>(kernel->strength.source),
+                                    "a strength wired from Image Statistics is a driven value");
+        }
+    }
+}
