@@ -22,6 +22,7 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
@@ -2017,6 +2018,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_chromatic_aberration_tests.ipp"
 #include "snapshot_compiler_light_rays_tests.ipp"
 #include "snapshot_compiler_rolling_shutter_tests.ipp"
+#include "snapshot_compiler_warp_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
 
@@ -2059,6 +2061,12 @@ int main() {
         testLensDistortionPixels(expectations);
         testChromaticAberrationLowering(expectations);
         testChromaticAberrationPixels(expectations);
+        testCornerPinLowering(expectations);
+        testCornerPinPixels(expectations);
+        testStMapLowering(expectations);
+        testStMapPixels(expectations);
+        testDisplaceLowering(expectations);
+        testDisplacePixels(expectations);
         testLightRaysLowering(expectations);
         testLightRaysPixels(expectations);
         testRollingShutterLowering(expectations);

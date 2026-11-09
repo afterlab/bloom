@@ -28,6 +28,7 @@
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
@@ -1124,6 +1125,7 @@ class CompilePass final {
 #include "snapshot_compiler_layer_time.ipp"
 #include "snapshot_compiler_lowering.ipp"
 #include "snapshot_compiler_fields.ipp"
+#include "snapshot_compiler_warp.ipp"
 #include "snapshot_compiler_test_card.ipp"
 #include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_depth.ipp"

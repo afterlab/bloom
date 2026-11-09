@@ -159,7 +159,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
     // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare.
-    expectations.expect(registry.definitions().size() == 211,
+    expectations.expect(registry.definitions().size() == 214,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -467,6 +467,50 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         "#568: Rolling Shutter has a motion image, sockets for the amount and the camera, constants "
         "for the rest");
     expectCategory({"bloom.rolling-shutter"}, document::NodeCategory::Transform);
+    // #348 Corner Pin, ST Map and Displace: the picture, an optional map (not Corner Pin), a socket
+    // per corner or per amount, constants for the choices. No effect mask.
+    const auto* pin = registry.find("bloom.corner-pin", 1);
+    expectations.expect(
+        pin != nullptr && !document::hasEffectMask(*pin) && pin->inputs.size() == 5 &&
+            pin->parameters.size() == 5 && pin->inputs[0].name == "input" &&
+            pin->inputs[1].name == "topLeft" && pin->inputs[4].name == "bottomLeft" &&
+            pin->inputs[1].valueKind == runtime::SocketValueKind::Vector2 &&
+            pin->parameters[0].role == "filter" &&
+            pin->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            !pin->parameters[0].supportsAnimation && pin->parameters[1].role == "topLeft" &&
+            pin->parameters[1].defaultValue == document::ParameterValue{document::Vec2d{}} &&
+            pin->parameters[1].supportsAnimation && pin->outputs.size() == 1 &&
+            pin->outputs[0].name == "image",
+        "#348: Corner Pin has a socket per corner and a constant filter");
+    const auto* stMap = registry.find("bloom.st-map", 1);
+    expectations.expect(
+        stMap != nullptr && !document::hasEffectMask(*stMap) && stMap->inputs.size() == 2 &&
+            stMap->inputs[0].name == "input" && stMap->inputs[1].name == "map" &&
+            !stMap->inputs[1].required &&
+            stMap->inputs[1].valueKind == runtime::SocketValueKind::Image &&
+            stMap->parameters.size() == 4 && stMap->parameters[0].role == "uChannel" &&
+            stMap->parameters[1].role == "vChannel" &&
+            stMap->parameters[1].defaultValue == document::ParameterValue{std::int64_t{1}} &&
+            stMap->parameters[2].role == "filter" && stMap->parameters[3].role == "edges" &&
+            std::ranges::none_of(stMap->parameters,
+                                 [](const auto& p) { return p.supportsAnimation; }) &&
+            stMap->outputs.size() == 1 && stMap->outputs[0].name == "image",
+        "#348: ST Map has an optional map and constants only");
+    const auto* displace = registry.find("bloom.displace", 1);
+    expectations.expect(
+        displace != nullptr && !document::hasEffectMask(*displace) &&
+            displace->inputs.size() == 5 && displace->inputs[1].name == "map" &&
+            !displace->inputs[1].required && displace->inputs[2].name == "xAmount" &&
+            displace->inputs[3].name == "yAmount" && displace->inputs[4].name == "midpoint" &&
+            displace->parameters.size() == 7 && displace->parameters[0].role == "xChannel" &&
+            displace->parameters[2].role == "xAmount" &&
+            displace->parameters[2].defaultValue == document::ParameterValue{20.0} &&
+            displace->parameters[4].role == "midpoint" &&
+            displace->parameters[4].defaultValue == document::ParameterValue{0.5} &&
+            displace->parameters[2].supportsAnimation && !displace->parameters[0].supportsAnimation,
+        "#348: Displace has an optional map, sockets for the amounts and the midpoint");
+    expectCategory({"bloom.corner-pin", "bloom.st-map", "bloom.displace"},
+                   document::NodeCategory::Transform);
     expectCategory({"bloom.light-flicker"}, document::NodeCategory::Values);
     // #563 Codec Degrade: an Image in and out, its block size, GOP length and chroma bleed with no
     // socket, and a socket for Quality and P-frame persistence; the effect mask follows.

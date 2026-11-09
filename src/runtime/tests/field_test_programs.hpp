@@ -239,6 +239,15 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     }
     case FieldOp::TestCard:
         return testCardProgram(idBase, variant % 16, variant % 3, variant % 4, variant % 2 == 0);
+    case FieldOp::Homography: {
+        // The source position of a Corner Pin of a 16 x 12 frame with its corners moved off the
+        // frame, as a vector raster.
+        const auto pinned = b.add(FieldOp::Homography, {c}, {0}, {16.0, 12.0},
+                                  {Vec2d{-2.0, 1.0}, Vec2d{1.0, -1.5}, Vec2d{-1.0, 2.0},
+                                   Vec2d{2.5, 0.5}});
+        b.last().slot = 0;
+        return b.finish(pinned, FieldResultKind::Vector);
+    }
     case FieldOp::Rays: {
         // The rays gathered from an image's luma towards a centre
         // off the middle, as a premultiplied raster.
@@ -404,6 +413,60 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     }
     program.result = static_cast<std::uint8_t>(physicalOf[program.result]);
     return program;
+}
+
+// #348 Corner Pin, ST Map and Displace: the programs their lowerings build over the 16 x 12 test
+// composition, mirroring snapshot_compiler_warp.ipp (the snapshot compiler test holds each to the
+// same instruction sequence).
+[[nodiscard]] inline FieldProgram cornerPinProgram(const std::uint64_t idBase,
+                                                   const std::int64_t filter = 0) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto where = b.add(FieldOp::Homography, {c}, {0}, {},
+                             {Vec2d{-2.0, 1.0}, Vec2d{1.0, -1.5}, Vec2d{-1.0, 2.0}, Vec2d{2.5, 0.5}});
+    b.last().slot = 0;
+    const auto read = b.add(FieldOp::Image, {where}, {filter, 1, 3, 4, 0, 1});
+    b.last().slot = 0;
+    return b.finish(read, FieldResultKind::Premultiplied);
+}
+
+// The map is slot 0 and the picture slot 1; `u` and `v` the map's channels.
+[[nodiscard]] inline FieldProgram stMapProgram(const std::uint64_t idBase,
+                                               const std::int64_t filter = 0,
+                                               const std::int64_t edge = 1,
+                                               const std::int64_t u = 0, const std::int64_t v = 1) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto uv = b.add(FieldOp::Image, {c}, {1, 0, 1, 0, u, v});
+    b.last().slot = 0;
+    const auto scaled = b.add(FieldOp::Swizzle, {uv}, {0, 1, 4, 4}, {16.0, 12.0, 1.0, 1.0});
+    const auto half = b.add(FieldOp::Constant, {}, {}, {8.0, 6.0, 0.0, 0.0});
+    const auto where = b.add(FieldOp::Math, {scaled, half}, {1}, {0.1, 0.0});
+    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
+    b.last().slot = 1;
+    return b.finish(read, FieldResultKind::Premultiplied);
+}
+
+// The picture is slot 0 and the map slot 1.
+[[nodiscard]] inline FieldProgram displaceProgram(const std::uint64_t idBase,
+                                                  const std::int64_t filter = 0,
+                                                  const std::int64_t edge = 1,
+                                                  const std::int64_t first = 0,
+                                                  const std::int64_t second = 1) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto value = b.add(FieldOp::Image, {c}, {0, 0, 1, 0, first, second});
+    b.last().slot = 1;
+    const auto midOnce = b.add(FieldOp::Constant, {}, {}, {0.5, 0.0, 0.0, 0.0});
+    const auto mid = b.add(FieldOp::Swizzle, {midOnce}, {0, 0, 4, 4}, {1.0, 1.0, 1.0, 1.0});
+    const auto relative = b.add(FieldOp::Math, {value, mid}, {1}, {0.1, 0.0});
+    const auto amounts = b.add(FieldOp::Constant, {}, {}, {3.0, 2.0, 0.0, 0.0});
+    const auto moved = b.add(FieldOp::Math, {relative, amounts}, {2}, {0.1, 0.0});
+    const auto shift = b.add(FieldOp::Swizzle, {moved}, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
+    const auto where = b.add(FieldOp::Math, {c, shift}, {1}, {0.1, 0.0});
+    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
+    b.last().slot = 0;
+    return b.finish(read, FieldResultKind::Premultiplied);
 }
 
 } // namespace bloom::field_test_programs

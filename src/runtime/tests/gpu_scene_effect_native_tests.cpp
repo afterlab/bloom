@@ -1990,6 +1990,21 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                  4U});
         id += 100;
     }
+    // #348 Corner Pin, ST Map and Displace: the programs their lowerings build, each filter.
+    for (const std::int64_t filter : {0, 1, 2}) {
+        kernels.emplace_back("corner pin filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::cornerPinProgram(id, filter), 1U});
+        id += 100;
+        kernels.emplace_back("st map filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::stMapProgram(id, filter, filter + 1), 1U});
+        id += 100;
+        kernels.emplace_back("displace filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::displaceProgram(id, filter, filter + 1), 1U});
+        id += 100;
+    }
     // #508 Light Rays: the program its lowering builds, rays gathered from luma and from alpha.
     for (const bool alpha : {false, true}) {
         kernels.emplace_back(alpha ? "light rays alpha" : "light rays luminance",

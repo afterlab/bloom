@@ -1743,6 +1743,41 @@ displayProofRunner(const bool customView) {
                  "production Rolling Shutter lowering: camera and flow terms moving the read "
                  "position, full frame and ROI");
         base += 1000;
+        // #348 Corner Pin, ST Map and Displace: the programs their lowerings build, every filter
+        // and edge rule and channel choice, the picture read through the atlas beside a map.
+        addField("node.bloom.corner-pin",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::cornerPinProgram(base, 0), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::cornerPinProgram(base + 100, 1), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::cornerPinProgram(base + 200, 2), 1}},
+                 base + 300,
+                 "production Corner Pin lowering: the data window pinned to a moved quad, "
+                 "bilinear, nearest and bicubic, full frame and ROI");
+        base += 1000;
+        addField("node.bloom.st-map",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::stMapProgram(base, 0, 1, 0, 1), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::stMapProgram(base + 100, 1, 2, 2, 3), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::stMapProgram(base + 200, 2, 3, 1, 0), 1}},
+                 base + 300,
+                 "production ST Map lowering: a map read as data and the picture read at its "
+                 "positions, every filter and edge rule, full frame and ROI");
+        base += 1000;
+        addField("node.bloom.displace",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::displaceProgram(base, 0, 1), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::displaceProgram(base + 100, 1, 2), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::displaceProgram(base + 200, 2, 3), 1}},
+                 base + 300,
+                 "production Displace lowering: the picture read where a map moved it, every "
+                 "filter and edge rule, full frame and ROI");
+        base += 1000;
         // #587 Test Card: every card, as the raster its lowering builds (four sub-samples, a variant
         // and option where the card has them, the label on every other card).
         {

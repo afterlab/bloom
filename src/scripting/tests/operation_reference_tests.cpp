@@ -244,7 +244,8 @@ void everyNodeGroupIsNamed() {
     pinned({"bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"},
            "keying-mattes");
     pinned({"bloom.vignette", "bloom.film-grain", "bloom.codec-degrade"}, "stylize");
-    pinned({"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter"},
+    pinned({"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
+            "bloom.corner-pin", "bloom.st-map", "bloom.displace"},
            "distort");
     pinned({"bloom.test-card"}, "sources");
     pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");

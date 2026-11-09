@@ -110,6 +110,7 @@ target_sources(
         snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
         snapshot_compiler_fields.ipp
+        snapshot_compiler_warp.ipp
         snapshot_compiler_recipes.ipp
         snapshot_compiler_support.hpp
         snapshot_compiler_value_graph.ipp

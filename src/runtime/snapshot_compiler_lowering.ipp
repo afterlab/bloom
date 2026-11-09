@@ -530,6 +530,22 @@ lower(const std::vector<document::NodeId>& order) {
                 return {};
             continue;
         }
+        // #348 Corner Pin, ST Map and Displace: one field raster each; muting is the input itself.
+        if (node->typeId == document::kCornerPinNodeType) {
+            if (!lowerCornerPin(*node, operations, indices))
+                return {};
+            continue;
+        }
+        if (node->typeId == document::kStMapNodeType) {
+            if (!lowerStMap(*node, operations, indices))
+                return {};
+            continue;
+        }
+        if (node->typeId == document::kDisplaceNodeType) {
+            if (!lowerDisplace(*node, operations, indices))
+                return {};
+            continue;
+        }
         // #364 Cryptomatte: the matte (Mask) and, with an input image, the image multiplied by
         // the matte (MultiplyAlpha, matte in alpha); without one the Image output is the matte.
         if (definition->second->lowering == runtime::NodeLoweringKind::Cryptomatte) {

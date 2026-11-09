@@ -132,7 +132,8 @@ void testEveryOperationRasters() {
                                   0.5F, 1.0F};
             });
             const std::array<const render::Rgba32fImage*, 1> slots{&slot};
-            const auto result = raster(*grade, op == FieldOp::Image || op == FieldOp::Rays
+            const auto result = raster(*grade, op == FieldOp::Image || op == FieldOp::Rays ||
+                                                       op == FieldOp::Homography
                                                    ? std::span<const render::Rgba32fImage* const>(slots)
                                                    : std::span<const render::Rgba32fImage* const>{});
             expect(result.image && !result.diagnostic, name + ": the raster publishes");

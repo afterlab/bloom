@@ -391,6 +391,21 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         p.centreY = -vector(0).y;
         return field::encodeRays(p);
     }
+    case FieldOp::Homography: {
+        field::HomographyParameters p;
+        // Corner Pin: the data window of the input slot with each corner moved by its offset
+        // (vectors, pixels with y down), corners top left, top right, bottom right, bottom left.
+        if (choiceAt(in, 0) == 0) {
+            p.windowSlot = std::max<int>(in.slot, 0);
+            for (std::size_t corner = 0; corner < 4; ++corner) {
+                p.offsets[2 * corner] = vector(corner).x;
+                p.offsets[2 * corner + 1] = -vector(corner).y;
+            }
+        } else {
+            return std::nullopt;
+        }
+        return field::encodeHomography(p);
+    }
     case FieldOp::Combine:
         return field::encodeConstant({scalar(0), scalar(1), scalar(2), scalar(3)});
     case FieldOp::Offset: {
@@ -425,7 +440,7 @@ std::optional<std::vector<float>> buildTable(const FieldProgram& program,
     OperandReader reader(values.first(values.size() - 1U));
     field::FieldProgramBuilder builder;
     for (const auto& instruction : program.instructions) {
-        if (instruction.op > static_cast<std::uint8_t>(FieldOp::Rays))
+        if (instruction.op > static_cast<std::uint8_t>(FieldOp::Homography))
             return std::nullopt;
         const auto block = encode(instruction, reader, seconds, program.compositionSeconds);
         if (!block)
