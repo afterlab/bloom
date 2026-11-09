@@ -1,11 +1,5 @@
-#include <bloom/document/audio_effect_nodes.hpp>
-#include "auto_exposure_image_effect.hpp"
-#include "pixel_math_image_effect.hpp"
-#include "histogram_image_effect.hpp"
-#include "statistics_image_effect.hpp"
 #include "audio_plot_image_effect.hpp"
-#include <bloom/runtime/audio_analysis.hpp>
-#include <bloom/runtime/image_statistics.hpp>
+#include "auto_exposure_image_effect.hpp"
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -15,23 +9,31 @@
 #include "depth_effect_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
 #include "gradient_source.hpp"
+#include "histogram_image_effect.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
 #include "layer_mask_sampling.hpp"
 #include "layer_parent_transform.hpp"
 #include "lens_flare_image_effect.hpp"
+#include "merge_fold_order.hpp"
 #include "motion_blur_image_effect.hpp"
 #include "operation_key.hpp"
+#include "pixel_math_image_effect.hpp"
 #include "plan_time_scopes.hpp"
 #include "resize_fit_geometry.hpp"
 #include "shape_geometry.hpp"
 #include "sharpen_image_effect.hpp"
+#include "statistics_image_effect.hpp"
 #include "transform_2d_geometry.hpp"
 #include "video_source.hpp"
+#include "visible_support.hpp"
+#include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/media/video/colour.hpp>
 #include <bloom/render/path_raster.hpp>
+#include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/composition_time.hpp>
 #include <bloom/runtime/footage_time.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -333,6 +335,84 @@ pixelStoragePeak(const CompiledCompositionPlan& plan, const std::vector<std::siz
             if (count == 0)
                 resident -= outputBytes.empty() ? defaultImageBytes : outputBytes[input.value()];
         });
+    }
+    return {.bytes = peak};
+}
+
+// #343: plan order is kept while it holds at most this many frame-sized images at once.
+constexpr std::size_t kFoldAboveImages = 8;
+
+// #343: the same walk in fold order (merge_fold_order.hpp). A Merge's accumulator is held from its
+// first folded entry, each entry is released as it is folded, and growing the accumulator or
+// cropping it to the Merge's own window briefly holds a second image of its size.
+[[nodiscard]] PixelStoragePeak
+foldedPixelStoragePeak(const CompiledCompositionPlan& plan,
+                       const std::vector<std::size_t>& consumers,
+                       const std::size_t defaultImageBytes, const CancellationToken& cancellation,
+                       const std::span<const std::size_t> outputBytes = {},
+                       const std::span<const std::size_t> childPeaks = {}) {
+    const auto steps = mergeFoldSteps(plan);
+    const auto bytesOf = [&](const std::size_t index) {
+        return outputBytes.empty() ? defaultImageBytes : outputBytes[index];
+    };
+    auto remaining = consumers;
+    std::vector<bool> accumulating(plan.operations().size(), false);
+    std::size_t resident = 0;
+    std::size_t peak = 0;
+    const auto hold = [&](const std::size_t bytes) {
+        std::size_t next = 0;
+        if (!checkedAdd(resident, bytes, next))
+            return false;
+        resident = next;
+        peak = std::max(peak, resident);
+        return true;
+    };
+    const auto transient = [&](const std::size_t bytes) {
+        std::size_t next = 0;
+        if (!checkedAdd(resident, bytes, next))
+            return false;
+        peak = std::max(peak, next);
+        return true;
+    };
+    const auto release = [&](const std::size_t input) {
+        auto& count = remaining[input];
+        --count;
+        if (count == 0)
+            resident -= bytesOf(input);
+    };
+    for (const auto& step : steps) {
+        if (cancellation.isCancellationRequested())
+            return {.cancelled = true};
+        const auto index = step.index;
+        const auto* merge = std::get_if<CompiledMerge>(&plan.operations()[index]);
+        if (step.foldEntry) {
+            if (!accumulating[index]) {
+                accumulating[index] = true;
+                if (!hold(bytesOf(index)))
+                    return {};
+            }
+            if (!transient(bytesOf(index)))
+                return {};
+            release(merge->entries[*step.foldEntry].input.value());
+            continue;
+        }
+        if (!childPeaks.empty() && !transient(childPeaks[index]))
+            return {};
+        if (merge != nullptr) {
+            if (!accumulating[index]) {
+                if (!hold(bytesOf(index)))
+                    return {};
+            } else if (!transient(bytesOf(index))) {
+                return {};
+            }
+            continue;
+        }
+        if (isImageProducing(plan.operations()[index]) && !hold(bytesOf(index)))
+            return {};
+        if (index == plan.output().value())
+            continue;
+        forEachResidentInput(plan, index,
+                             [&](const OperationIndex input) { release(input.value()); });
     }
     return {.bytes = peak};
 }
@@ -1790,11 +1870,26 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
                                                     "Evaluation working set overflowed"));
     const auto peakBytes = *simulated.bytes;
-    if (peakBytes > request.pixelStorageByteLimit) {
+    // #343: a frame whose plan-order peak does not fit is folded Merge by Merge when that fits.
+    const auto folded = foldedPixelStoragePeak(*plan, consumers, imageBytes, cancellation);
+    if (folded.cancelled)
+        return PreflightOutcome::cancellation();
+    if (!folded.bytes)
+        return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::ArithmeticOverflow,
+                                                    "Evaluation working set overflowed"));
+    const auto foldedPeakBytes = *folded.bytes;
+    // A frame folds when that holds less and plan order would hold more than a few images (or
+    // more than its budget). The rule depends on the plan and the budget only, so a storage plan
+    // made with an unbounded budget chooses the order the evaluation then uses.
+    const bool foldMerges = foldedPeakBytes < peakBytes &&
+                            (peakBytes / std::max<std::size_t>(imageBytes, 1) > kFoldAboveImages ||
+                             peakBytes > request.pixelStorageByteLimit);
+    const auto requiredBytes = foldMerges ? foldedPeakBytes : peakBytes;
+    if (requiredBytes > request.pixelStorageByteLimit) {
         return PreflightOutcome::failure(
             diagnostic(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
                        "Evaluation exceeds its pixel-storage budget",
-                       "requiredPeakBytes=" + std::to_string(peakBytes) +
+                       "requiredPeakBytes=" + std::to_string(requiredBytes) +
                            " byteLimit=" + std::to_string(request.pixelStorageByteLimit)));
     }
 
@@ -1860,7 +1955,9 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                                  .color4CurveValues = std::move(color4CurveValues),
                                                  .valueOutputs = std::move(valueGraph.outputs),
                                                  .clockTimes = {},
-                                                 .clockResolutions = {}},
+                                                 .clockResolutions = {},
+                                                 .foldedPeakPixelStorageBytes = foldedPeakBytes,
+                                                 .foldMerges = foldMerges},
                               cancellation, cache, statistics);
 }
 
@@ -2238,7 +2335,15 @@ EvaluationPixelStoragePlan CpuCompositionEvaluator::planPreflightPixelStorage(
                             detail::diagnostic(EvaluationDiagnosticCode::InternalInvariant,
                                                "Evaluation storage preflight produced no result"))};
             const auto& resolved = *checked.resolved;
-            std::size_t peak = resolved.peakPixelStorageBytes;
+            // #343: the order the evaluation will use (merge_fold_order.hpp). The preflight above
+            // measured with no ceiling; the evaluation also folds when plan order exceeds the
+            // caller's own limit and folding holds less.
+            const bool foldMerges =
+                resolved.foldMerges ||
+                (resolved.foldedPeakPixelStorageBytes < resolved.peakPixelStorageBytes &&
+                 resolved.peakPixelStorageBytes > currentRequest.pixelStorageByteLimit);
+            std::size_t peak =
+                foldMerges ? resolved.foldedPeakPixelStorageBytes : resolved.peakPixelStorageBytes;
             const auto& operations = current->operations();
             std::vector<std::size_t> outputBytes;
             std::vector<std::size_t> childPeaks;
@@ -2305,9 +2410,14 @@ EvaluationPixelStoragePlan CpuCompositionEvaluator::planPreflightPixelStorage(
                 outputBytes[index] = *child.outputImageBytes;
             }
             if (!outputBytes.empty()) {
-                const auto simulated = detail::pixelStoragePeak(
-                    *current, resolved.remainingConsumers, resolved.imageBytes, cancellation,
-                    outputBytes, childPeaks);
+                const auto simulated =
+                    foldMerges
+                        ? detail::foldedPixelStoragePeak(*current, resolved.remainingConsumers,
+                                                         resolved.imageBytes, cancellation,
+                                                         outputBytes, childPeaks)
+                        : detail::pixelStoragePeak(*current, resolved.remainingConsumers,
+                                                   resolved.imageBytes, cancellation, outputBytes,
+                                                   childPeaks);
                 if (simulated.cancelled)
                     return {.cancelled = true};
                 if (!simulated.bytes)
@@ -2506,8 +2616,41 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         std::vector<std::shared_ptr<const render::Rgba32fImage>> slots(plan->operations().size());
         std::vector<EvaluatedOperationBounds> bounds(plan->operations().size());
+        // #343: what of each image the frame can show, as the GPU scene builder computes it. A
+        // Layer Output is drawn only there (and, under an Alpha or Luma track matte that reads it
+        // alone, only within the matte's image), and that window is the lattice its resample is
+        // reconstructed over, so the two routes keep producing the same pixels.
+        const auto visible = detail::visibleSupportWindows(
+            *plan, frameResolved, request.time, request.output.value(),
+            frameResolved.imageDescriptor.displayWindow());
+        const auto matteBound = detail::matteBoundedLayers(*plan, visible);
+        const auto matteWindowOf =
+            [&](const std::size_t index) -> std::optional<render::ImageWindow> {
+            if (!matteBound[index] || !slots[*matteBound[index]])
+                return std::nullopt;
+            const auto descriptor = slots[*matteBound[index]]->descriptor();
+            return descriptor ? std::optional(descriptor->dataWindow()) : std::nullopt;
+        };
+        // #343: a Merge folded entry by entry (merge_fold_order.hpp) holds its accumulator here
+        // from its first entry until the Merge runs.
+        struct MergeAccumulator final {
+            std::optional<render::Rgba32fImageBuilder> image;
+            std::optional<render::ImageWindow> window;
+            ContentBounds storage;
+        };
+        const bool foldMerges = frameResolved.foldMerges;
+        std::vector<std::optional<MergeAccumulator>> accumulators(plan->operations().size());
         const auto remainingPixelBudget = [&] {
             auto remaining = request.pixelStorageByteLimit;
+            for (const auto& accumulator : accumulators) {
+                if (!accumulator || !accumulator->window)
+                    continue;
+                const auto bytes = static_cast<std::size_t>(accumulator->window->extent().width()) *
+                                   accumulator->window->extent().height() * sizeof(render::Rgba32f);
+                if (bytes > remaining)
+                    return std::size_t{0};
+                remaining -= bytes;
+            }
             // Identity effects and graph branches can hold the same immutable image in several
             // slots. Rgba32fImage uniquely owns its storage, so charge each image only once.
             std::unordered_set<const render::Rgba32fImage*> residentImages;
@@ -2526,6 +2669,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         const auto releaseInputs = [&](const std::size_t index) {
             if (index == request.output.value())
                 return;
+            // #343: a folded Merge released each entry as it composited it.
+            if (foldMerges && std::holds_alternative<CompiledMerge>(plan->operations()[index])) {
+                accumulators[index].reset();
+                return;
+            }
             detail::forEachResidentInput(*plan, index, [&](const OperationIndex input) {
                 auto& remaining = frameResolved.remainingConsumers[input.value()];
                 --remaining;
@@ -2557,10 +2705,324 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         std::vector<std::optional<RasterChain>> rasterChains(plan->operations().size());
 
-        for (std::size_t index = 0; index < plan->operations().size(); ++index) {
+        // One Merge entry composited over `stackImage`, whose data window is `window`: the Merge
+        // arm's per-entry step, which the folded order (#343) runs as each entry is ready.
+        const auto blendMergeEntry =
+            [&](const CompiledMergeInput* entry, render::Rgba32fImageBuilder& stackImage,
+                const render::ImageWindow window, const EvaluationSubject& operationSubject,
+                std::optional<EvaluationDiagnostic>& operationFailure,
+                bool& operationCancelled) -> void {
+            const auto height = window.extent().height();
+            // Only a direct Layer input contributes its blend mode. An elided
+            // reroute can resolve to a Layer operation while remaining a plain
+            // image input, so the slot identity also participates in this
+            // choice.
+            const auto layerIndex = mergeEntryLayerIndex(*plan, *entry);
+            const auto* layerOutput =
+                std::get_if<CompiledLayerOutput>(&plan->operations()[layerIndex.value()]);
+            // #339: a plain image entry may name its mode explicitly.
+            auto blendMode = entry->blendMode.value_or(core::BlendMode::Normal);
+            if (layerOutput != nullptr && entry->layerId.isValid()) {
+                // Task DRIVE-1: the mode may be driven, so it is READ here
+                // rather than copied out of the plan.
+                // ADR 0024: a retimed layer's driven mode is read on its
+                // own layer clock, not the Merge's.
+                const auto resolvedMode = detail::resolveParameter(
+                    *layerOutput,
+                    detail::resolvedForClock(frameResolved, plan->operationClock(layerIndex)));
+                if (!resolvedMode.has_value()) {
+                    auto modeSubject = operationSubject;
+                    modeSubject.parameterId = layerOutput->blendModeParameterId;
+                    modeSubject.field = "blend-mode";
+                    operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                                  "Layer blend mode could not be resolved", {},
+                                                  std::move(modeSubject));
+                    return;
+                }
+                blendMode = *resolvedMode;
+            }
+            auto sourceView = slots[entry->input.value()]->view();
+            if (!sourceView) {
+                operationFailure = imageDiagnostic(*sourceView.error(), operationSubject,
+                                                   "Layer Stack source image is unavailable");
+                return;
+            }
+            const auto sourceDescriptor = sourceView.value()->descriptor();
+            if (!sourceDescriptor.has_value()) {
+                operationFailure =
+                    diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                               "Layer Stack source image has no descriptor", {}, operationSubject);
+                return;
+            }
+            // A layer's data window is its own transformed bounds, always
+            // inside the composition window, so compositing walks only the rows
+            // the layer occupies and writes into the matching span of each
+            // destination row.
+            const auto sourceWindow = sourceDescriptor->dataWindow();
+            const auto firstColumn = std::max(sourceWindow.originX(), window.originX());
+            const auto lastColumn = std::min(sourceWindow.maxXExclusive(), window.maxXExclusive());
+            // Minimum, Maximum, In, Out and Mask change the backdrop where the
+            // layer has no pixels too (In clears it, Maximum lifts a negative
+            // channel), so those modes walk the whole stack window with a
+            // transparent source outside the layer's own data window -- the
+            // same transparent tap the GPU kernel reads there.
+            const bool wholeWindow = !core::blendModeKeepsBackdropUnderTransparentSource(blendMode);
+            if (lastColumn <= firstColumn && !wholeWindow)
+                return;
+            const auto columnOffset = firstColumn - window.originX();
+            const auto sourceOffset = firstColumn - sourceWindow.originX();
+            const auto columnCount = lastColumn > firstColumn
+                                         ? static_cast<std::size_t>(lastColumn - firstColumn)
+                                         : std::size_t{0};
+            const auto windowWidth = static_cast<std::size_t>(window.extent().width());
+            // Entries fold in order, bottom to top, because each one composites
+            // over what the ones beneath it left behind. The ROWS of one entry
+            // are independent of each other, so they band; the entries
+            // themselves never can.
+            auto& image = stackImage;
+            const auto& source = *sourceView.value();
+            const auto outcome = runRowBandPass(
+                rowBands, cancellation, height, window.originY(),
+                [&image, &source, sourceWindow, columnOffset, sourceOffset, columnCount, blendMode,
+                 wholeWindow, windowWidth, &operationSubject](const std::int64_t y) -> RowFailure {
+                    const bool sourceRowInside =
+                        y >= sourceWindow.originY() && y < sourceWindow.maxYExclusive();
+                    if (!sourceRowInside && !wholeWindow) {
+                        return std::nullopt;
+                    }
+                    auto destinationRow = image.row(y);
+                    if (!destinationRow) {
+                        return imageDiagnostic(*destinationRow.error(), operationSubject,
+                                               "Layer Stack destination row "
+                                               "could not be addressed");
+                    }
+                    if (wholeWindow) {
+                        // One row-sized transparent source carrying the layer's
+                        // own pixels where it has them.
+                        std::vector<render::Rgba32f> aligned(windowWidth,
+                                                             render::Rgba32f::transparent());
+                        if (sourceRowInside && columnCount > 0) {
+                            auto sourceRow = source.row(y);
+                            if (!sourceRow) {
+                                return imageDiagnostic(*sourceRow.error(), operationSubject,
+                                                       "Layer Stack source row could not be "
+                                                       "addressed");
+                            }
+                            const auto span = sourceRow.value()->subspan(
+                                static_cast<std::size_t>(sourceOffset), columnCount);
+                            std::ranges::copy(span, aligned.begin() +
+                                                        static_cast<std::ptrdiff_t>(columnOffset));
+                        }
+                        if (const auto rowStatus = render::blendLinearRec709SceneRow(
+                                blendMode, aligned, *destinationRow.value())) {
+                            return imageDiagnostic(*rowStatus, operationSubject,
+                                                   "Layer Stack blend could not be evaluated");
+                        }
+                        return std::nullopt;
+                    }
+                    auto sourceRow = source.row(y);
+                    if (!sourceRow) {
+                        return imageDiagnostic(*sourceRow.error(), operationSubject,
+                                               "Layer Stack source row could not be addressed");
+                    }
+                    if (const auto rowStatus = render::blendLinearRec709SceneRow(
+                            blendMode,
+                            sourceRow.value()->subspan(static_cast<std::size_t>(sourceOffset),
+                                                       columnCount),
+                            destinationRow.value()->subspan(static_cast<std::size_t>(columnOffset),
+                                                            columnCount))) {
+                        return imageDiagnostic(*rowStatus, operationSubject,
+                                               "Layer Stack blend could not be evaluated");
+                    }
+                    return std::nullopt;
+                });
+            if (outcome.cancelled) {
+                operationCancelled = true;
+                return;
+            }
+            if (outcome.failure.has_value() || outcome.incomplete) {
+                operationFailure = rowPassFailure(outcome, operationSubject);
+                return;
+            }
+        };
+        // Grows a folded Merge's accumulator to hold `needed`. It reaches half again beyond, within
+        // what the frame can show of the Merge and the region of interest, so a stack of scattered
+        // shapes grows a few times rather than once per shape. Pixels it adds are transparent,
+        // which is what every blend mode leaves where neither image has coverage.
+        const auto growAccumulator =
+            [&](const std::size_t merge,
+                const render::ImageWindow needed) -> std::optional<EvaluationDiagnostic> {
+            auto& accumulator = *accumulators[merge];
+            auto left = needed.originX(), top = needed.originY();
+            auto right = needed.maxXExclusive(), bottom = needed.maxYExclusive();
+            if (accumulator.window) {
+                left = std::min(left, accumulator.window->originX());
+                top = std::min(top, accumulator.window->originY());
+                right = std::max(right, accumulator.window->maxXExclusive());
+                bottom = std::max(bottom, accumulator.window->maxYExclusive());
+                if (left == accumulator.window->originX() && top == accumulator.window->originY() &&
+                    right == accumulator.window->maxXExclusive() &&
+                    bottom == accumulator.window->maxYExclusive())
+                    return std::nullopt;
+            }
+            const auto union_ =
+                render::ImageWindow::create(left, top, static_cast<std::uint64_t>(right - left),
+                                            static_cast<std::uint64_t>(bottom - top));
+            if (!union_)
+                return imageDiagnostic(
+                    *union_.error(),
+                    subjectFor(OperationIndex::fromRaw(merge), plan->operations()[merge]),
+                    "Merge bounds are invalid");
+            auto target = *union_.value();
+            const auto slackX = (right - left) / 2, slackY = (bottom - top) / 2;
+            if (const auto grown = render::ImageWindow::create(
+                    left - slackX, top - slackY,
+                    static_cast<std::uint64_t>(right - left + 2 * slackX),
+                    static_cast<std::uint64_t>(bottom - top + 2 * slackY))) {
+                auto capped = detail::clipToVisible(*grown.value(), visible[merge]);
+                if (capped)
+                    capped = clipWindow(*capped, merge);
+                if (capped) {
+                    const auto cl = std::min(capped->originX(), left);
+                    const auto ct = std::min(capped->originY(), top);
+                    const auto cr = std::max(capped->maxXExclusive(), right);
+                    const auto cb = std::max(capped->maxYExclusive(), bottom);
+                    if (const auto both =
+                            render::ImageWindow::create(cl, ct, static_cast<std::uint64_t>(cr - cl),
+                                                        static_cast<std::uint64_t>(cb - ct)))
+                        target = *both.value();
+                }
+            }
+            const auto descriptor = render::Rgba32fImageDescriptor::create(
+                target, frameResolved.imageDescriptor.displayWindow(),
+                frameResolved.imageDescriptor.pixelAspect());
+            const auto subject =
+                subjectFor(OperationIndex::fromRaw(merge), plan->operations()[merge]);
+            if (!descriptor)
+                return imageDiagnostic(*descriptor.error(), subject, "Merge descriptor is invalid");
+            auto created = render::Rgba32fImageBuilder::create(
+                *descriptor.value(), remainingPixelBudget(), render::Rgba32f::transparent());
+            if (!created)
+                return imageDiagnostic(*created.error(), subject,
+                                       "Layer Stack image could not be allocated");
+            auto& grown = *created.value();
+            if (accumulator.image) {
+                const auto& old = *accumulator.window;
+                for (auto y = old.originY(); y < old.maxYExclusive(); ++y) {
+                    const auto from = accumulator.image->row(y);
+                    auto to = grown.row(y);
+                    if (!from || !to)
+                        return diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                          "Layer Stack rows are unavailable", {}, subject);
+                    std::ranges::copy(*from.value(),
+                                      to.value()->begin() + (old.originX() - target.originX()));
+                }
+            }
+            accumulator.image.emplace(std::move(grown));
+            accumulator.window = target;
+            return std::nullopt;
+        };
+        // The folded Merge's image over `descriptor`'s window: the accumulator itself when it is
+        // exactly that window, otherwise that window of it.
+        const auto finishFoldedMerge = [&](const std::size_t merge,
+                                           const render::Rgba32fImageDescriptor& descriptor,
+                                           const EvaluationSubject& subject)
+            -> std::variant<render::Rgba32fImage, EvaluationDiagnostic> {
+            auto& accumulator = accumulators[merge];
+            const auto window = descriptor.dataWindow();
+            if (accumulator && accumulator->image && accumulator->window == window) {
+                auto frozen = std::move(*accumulator->image).freeze();
+                accumulator.reset();
+                if (!frozen)
+                    return imageDiagnostic(*frozen.error(), subject,
+                                           "Layer Stack image could not be published");
+                return std::move(*frozen.value());
+            }
+            auto created = render::Rgba32fImageBuilder::create(descriptor, remainingPixelBudget(),
+                                                               render::Rgba32f::transparent());
+            if (!created)
+                return imageDiagnostic(*created.error(), subject,
+                                       "Layer Stack image could not be allocated");
+            auto& image = *created.value();
+            if (accumulator && accumulator->image) {
+                const auto& held = *accumulator->window;
+                const auto left = std::max(held.originX(), window.originX());
+                const auto right = std::min(held.maxXExclusive(), window.maxXExclusive());
+                const auto top = std::max(held.originY(), window.originY());
+                const auto bottom = std::min(held.maxYExclusive(), window.maxYExclusive());
+                for (auto y = top; left < right && y < bottom; ++y) {
+                    const auto from = accumulator->image->row(y);
+                    auto to = image.row(y);
+                    if (!from || !to)
+                        return diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                          "Layer Stack rows are unavailable", {}, subject);
+                    std::copy(from.value()->begin() + (left - held.originX()),
+                              from.value()->begin() + (right - held.originX()),
+                              to.value()->begin() + (left - window.originX()));
+                }
+            }
+            accumulator.reset();
+            auto frozen = std::move(image).freeze();
+            if (!frozen)
+                return imageDiagnostic(*frozen.error(), subject,
+                                       "Layer Stack image could not be published");
+            return std::move(*frozen.value());
+        };
+        auto steps =
+            foldMerges ? detail::mergeFoldSteps(*plan) : std::vector<detail::EvaluationStep>{};
+        if (!foldMerges) {
+            steps.reserve(plan->operations().size());
+            for (std::size_t index = 0; index < plan->operations().size(); ++index)
+                steps.push_back({index, std::nullopt});
+        }
+        for (const auto& step : steps) {
             if (cancellation.isCancellationRequested()) {
                 return EvaluationResult::cancelled();
             }
+            if (step.foldEntry) {
+                // #343: one entry of a folded Merge, composited into its accumulator and released.
+                const auto merge = step.index;
+                const auto& stack = std::get<CompiledMerge>(plan->operations()[merge]);
+                const auto& entry = stack.entries[*step.foldEntry];
+                const auto input = entry.input.value();
+                const auto mergeIndex = OperationIndex::fromRaw(merge);
+                const bool present = detail::timeForClock(frameResolved, request.time,
+                                                          plan->operationClock(mergeIndex)) &&
+                                     detail::timeForClock(frameResolved, request.time,
+                                                          plan->placementClock(mergeIndex));
+                if (present && slots[input]) {
+                    auto& accumulator = accumulators[merge];
+                    if (!accumulator)
+                        accumulator.emplace();
+                    const auto entryWindow = slots[input]->descriptor()->dataWindow();
+                    accumulator->storage = detail::unionBounds(
+                        accumulator->storage, detail::boundsForWindow(entryWindow, 1.0, 1.0));
+                    if (const auto clipped = clipWindow(entryWindow, merge))
+                        if (auto failure = growAccumulator(merge, *clipped))
+                            return EvaluationResult::failed(std::move(*failure));
+                    if (accumulator->image) {
+                        std::optional<EvaluationDiagnostic> failure;
+                        bool cancelled = false;
+                        blendMergeEntry(&entry, *accumulator->image, *accumulator->window,
+                                        subjectFor(mergeIndex, plan->operations()[merge]), failure,
+                                        cancelled);
+                        if (cancelled || cancellation.isCancellationRequested())
+                            return EvaluationResult::cancelled();
+                        if (failure)
+                            return EvaluationResult::failed(std::move(*failure));
+                    }
+                }
+                reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                                          .operation = mergeIndex,
+                                          .completed = stack.entries.size() - *step.foldEntry,
+                                          .total = stack.entries.size()});
+                auto& remaining = frameResolved.remainingConsumers[input];
+                --remaining;
+                if (remaining == 0)
+                    slots[input].reset();
+                continue;
+            }
+            const auto index = step.index;
             const auto operationIndex = OperationIndex::fromRaw(index);
             const auto operationSubject = subjectFor(operationIndex, plan->operations()[index]);
             // ADR 0024: an operation resolves its operands, and selects media, on its operand clock
@@ -3283,6 +3745,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // changed interpretation must not reuse the previous aspect's image.
                             key.add(step.sourcePixelAspect);
                             key.add(step.framePivot);
+                            // #343: the window it is drawn in follows what the frame shows of it.
+                            for (const auto& window : {visible[index], matteWindowOf(index)}) {
+                                key.add(window.has_value());
+                                if (window) {
+                                    key.add(window->originX());
+                                    key.add(window->originY());
+                                    key.add(window->extent().width());
+                                    key.add(window->extent().height());
+                                }
+                            }
                             authored(step.blendModeParameterId,
                                      core::blendModeStoredValue(step.blendMode),
                                      step.drivenBlendMode);
@@ -4603,8 +5075,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 : parented
                                     ? parented->supportBounds(*workingWindow.value())
                                     : transform.value()->supportBounds(*workingWindow.value());
-                            // The GPU command covers the unclipped support; a region-of-interest
-                            // clip resamples part of that same lattice.
+                            // #343: only what the frame can show (and its track matte lets
+                            // through) is drawn; that is the lattice the GPU command covers too. A
+                            // region-of-interest clip resamples part of that same lattice.
+                            if (layerWindow)
+                                layerWindow = detail::clipToVisible(*layerWindow, visible[index]);
+                            if (layerWindow)
+                                layerWindow =
+                                    detail::clipToVisible(*layerWindow, matteWindowOf(index));
                             const auto latticeWindow = layerWindow;
                             if (layerWindow)
                                 layerWindow = clipWindow(*layerWindow, index);
@@ -4784,7 +5262,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             for (const auto& entry : stack.entries) {
                                 bounds[index].local = detail::unionBounds(
                                     bounds[index].local, bounds[entry.input.value()].output);
-                                if (slots[entry.input.value()]) {
+                                if (!foldMerges && slots[entry.input.value()]) {
                                     const auto view = slots[entry.input.value()]->view();
                                     storage = detail::unionBounds(
                                         storage,
@@ -4792,6 +5270,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                             view.value()->descriptor()->dataWindow(), 1.0, 1.0));
                                 }
                             }
+                            // #343: folded entries were released as they were composited; the
+                            // accumulator recorded their windows.
+                            if (foldMerges && accumulators[index])
+                                storage = accumulators[index]->storage;
                             bounds[index].output = bounds[index].local;
                             auto descriptor = resolved.imageDescriptor;
                             if (!storage.empty()) {
@@ -4819,6 +5301,25 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             if (!clipDescriptor(descriptor, index))
                                 return;
+                            if (foldMerges) {
+                                // The accumulator already holds every entry; the Merge's image is
+                                // its own window of it.
+                                auto finished =
+                                    finishFoldedMerge(index, descriptor, operationSubject);
+                                if (std::holds_alternative<EvaluationDiagnostic>(finished)) {
+                                    operationFailure =
+                                        std::get<EvaluationDiagnostic>(std::move(finished));
+                                    return;
+                                }
+                                reportProgress(progress,
+                                               {.stage = EvaluationProgressStage::Operation,
+                                                .operation = operationIndex,
+                                                .completed = 1,
+                                                .total = 1});
+                                produced.emplace(
+                                    std::get<render::Rgba32fImage>(std::move(finished)));
+                                return;
+                            }
                             auto builder = render::Rgba32fImageBuilder::create(
                                 descriptor, remainingPixelBudget(), render::Rgba32f::transparent());
                             if (!builder) {
@@ -4849,161 +5350,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                     .total = totalRows});
                                     continue;
                                 }
-                                // Only a direct Layer input contributes its blend mode. An elided
-                                // reroute can resolve to a Layer operation while remaining a plain
-                                // image input, so the slot identity also participates in this
-                                // choice.
-                                const auto layerIndex = mergeEntryLayerIndex(*plan, *entry);
-                                const auto* layerOutput = std::get_if<CompiledLayerOutput>(
-                                    &plan->operations()[layerIndex.value()]);
-                                // #339: a plain image entry may name its mode explicitly.
-                                auto blendMode = entry->blendMode.value_or(core::BlendMode::Normal);
-                                if (layerOutput != nullptr && entry->layerId.isValid()) {
-                                    // Task DRIVE-1: the mode may be driven, so it is READ here
-                                    // rather than copied out of the plan.
-                                    // ADR 0024: a retimed layer's driven mode is read on its
-                                    // own layer clock, not the Merge's.
-                                    const auto resolvedMode = detail::resolveParameter(
-                                        *layerOutput,
-                                        detail::resolvedForClock(frameResolved,
-                                                                 plan->operationClock(layerIndex)));
-                                    if (!resolvedMode.has_value()) {
-                                        auto modeSubject = operationSubject;
-                                        modeSubject.parameterId = layerOutput->blendModeParameterId;
-                                        modeSubject.field = "blend-mode";
-                                        operationFailure =
-                                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                                       "Layer blend mode could not be resolved", {},
-                                                       std::move(modeSubject));
-                                        return;
-                                    }
-                                    blendMode = *resolvedMode;
-                                }
-                                auto sourceView = slots[entry->input.value()]->view();
-                                if (!sourceView) {
-                                    operationFailure =
-                                        imageDiagnostic(*sourceView.error(), operationSubject,
-                                                        "Layer Stack source image is unavailable");
+                                blendMergeEntry(&*entry, *builder.value(), window, operationSubject,
+                                                operationFailure, operationCancelled);
+                                if (operationFailure || operationCancelled)
                                     return;
-                                }
-                                const auto sourceDescriptor = sourceView.value()->descriptor();
-                                if (!sourceDescriptor.has_value()) {
-                                    operationFailure =
-                                        diagnostic(EvaluationDiagnosticCode::InternalInvariant,
-                                                   "Layer Stack source image has no descriptor", {},
-                                                   operationSubject);
-                                    return;
-                                }
-                                // A layer's data window is its own transformed bounds, always
-                                // inside the composition window, so compositing walks only the rows
-                                // the layer occupies and writes into the matching span of each
-                                // destination row.
-                                const auto sourceWindow = sourceDescriptor->dataWindow();
-                                const auto firstColumn =
-                                    std::max(sourceWindow.originX(), window.originX());
-                                const auto lastColumn =
-                                    std::min(sourceWindow.maxXExclusive(), window.maxXExclusive());
-                                // Minimum, Maximum, In, Out and Mask change the backdrop where the
-                                // layer has no pixels too (In clears it, Maximum lifts a negative
-                                // channel), so those modes walk the whole stack window with a
-                                // transparent source outside the layer's own data window -- the
-                                // same transparent tap the GPU kernel reads there.
-                                const bool wholeWindow =
-                                    !core::blendModeKeepsBackdropUnderTransparentSource(blendMode);
-                                if (lastColumn <= firstColumn && !wholeWindow)
-                                    continue;
-                                const auto columnOffset = firstColumn - window.originX();
-                                const auto sourceOffset = firstColumn - sourceWindow.originX();
-                                const auto columnCount =
-                                    lastColumn > firstColumn
-                                        ? static_cast<std::size_t>(lastColumn - firstColumn)
-                                        : std::size_t{0};
-                                const auto windowWidth =
-                                    static_cast<std::size_t>(window.extent().width());
-                                // Entries fold in order, bottom to top, because each one composites
-                                // over what the ones beneath it left behind. The ROWS of one entry
-                                // are independent of each other, so they band; the entries
-                                // themselves never can.
-                                auto& image = *builder.value();
-                                const auto& source = *sourceView.value();
-                                const auto outcome = runRowBandPass(
-                                    rowBands, cancellation, height, window.originY(),
-                                    [&image, &source, sourceWindow, columnOffset, sourceOffset,
-                                     columnCount, blendMode, wholeWindow, windowWidth,
-                                     &operationSubject](const std::int64_t y) -> RowFailure {
-                                        const bool sourceRowInside =
-                                            y >= sourceWindow.originY() &&
-                                            y < sourceWindow.maxYExclusive();
-                                        if (!sourceRowInside && !wholeWindow) {
-                                            return std::nullopt;
-                                        }
-                                        auto destinationRow = image.row(y);
-                                        if (!destinationRow) {
-                                            return imageDiagnostic(*destinationRow.error(),
-                                                                   operationSubject,
-                                                                   "Layer Stack destination row "
-                                                                   "could not be addressed");
-                                        }
-                                        if (wholeWindow) {
-                                            // One row-sized transparent source carrying the layer's
-                                            // own pixels where it has them.
-                                            std::vector<render::Rgba32f> aligned(
-                                                windowWidth, render::Rgba32f::transparent());
-                                            if (sourceRowInside && columnCount > 0) {
-                                                auto sourceRow = source.row(y);
-                                                if (!sourceRow) {
-                                                    return imageDiagnostic(
-                                                        *sourceRow.error(), operationSubject,
-                                                        "Layer Stack source row could not be "
-                                                        "addressed");
-                                                }
-                                                const auto span = sourceRow.value()->subspan(
-                                                    static_cast<std::size_t>(sourceOffset),
-                                                    columnCount);
-                                                std::ranges::copy(
-                                                    span,
-                                                    aligned.begin() +
-                                                        static_cast<std::ptrdiff_t>(columnOffset));
-                                            }
-                                            if (const auto rowStatus =
-                                                    render::blendLinearRec709SceneRow(
-                                                        blendMode, aligned,
-                                                        *destinationRow.value())) {
-                                                return imageDiagnostic(
-                                                    *rowStatus, operationSubject,
-                                                    "Layer Stack blend could not be evaluated");
-                                            }
-                                            return std::nullopt;
-                                        }
-                                        auto sourceRow = source.row(y);
-                                        if (!sourceRow) {
-                                            return imageDiagnostic(
-                                                *sourceRow.error(), operationSubject,
-                                                "Layer Stack source row could not be addressed");
-                                        }
-                                        if (const auto rowStatus =
-                                                render::blendLinearRec709SceneRow(
-                                                    blendMode,
-                                                    sourceRow.value()->subspan(
-                                                        static_cast<std::size_t>(sourceOffset),
-                                                        columnCount),
-                                                    destinationRow.value()->subspan(
-                                                        static_cast<std::size_t>(columnOffset),
-                                                        columnCount))) {
-                                            return imageDiagnostic(
-                                                *rowStatus, operationSubject,
-                                                "Layer Stack blend could not be evaluated");
-                                        }
-                                        return std::nullopt;
-                                    });
-                                if (outcome.cancelled) {
-                                    operationCancelled = true;
-                                    return;
-                                }
-                                if (outcome.failure.has_value() || outcome.incomplete) {
-                                    operationFailure = rowPassFailure(outcome, operationSubject);
-                                    return;
-                                }
                                 completedRows += height;
                                 reportProgress(progress,
                                                {.stage = EvaluationProgressStage::Operation,

@@ -115,13 +115,26 @@ namespace bloom::runtime::detail {
 // and releases it before the next (GpuSceneExecutor::Impl::planCommand), so a stack holds its
 // accumulator, the replacement it is writing and one foreground's subtree, however many entries it
 // has. A vector layer's fill, stroke and their composite are held only while that layer runs.
-// A layer's parent lends its matrix, never its image. This is the phase's admission floor: an
-// image larger than the frame (a layer's unclipped support, a gradient drawn in its own window) is
-// drawn against live device capacity when the executor allocates it.
+// A layer's parent lends its matrix, never its image. Before the scene is prepared this is the
+// phase's admission floor, each image taken as one frame. #343: once it is prepared, `windows`
+// (each operation's prepared output window; none where it publishes no image) gives every image its
+// real size, and the phase raises its claim to that when it is more (a gradient drawn in its own
+// window can be larger than the frame).
 [[nodiscard]] inline std::uint64_t
 gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t output,
-                         const std::uint64_t frameBytes) {
+                         const std::uint64_t frameBytes,
+                         const std::vector<std::optional<render::ImageWindow>>* windows = nullptr) {
     const auto& operations = plan.operations();
+    // One operation's image: its prepared window, or one frame before preparation.
+    const auto imageBytes = [&](const std::size_t index) -> std::uint64_t {
+        if (windows == nullptr || index >= windows->size())
+            return frameBytes;
+        const auto& window = (*windows)[index];
+        if (!window)
+            return index == output ? frameBytes : 0;
+        return static_cast<std::uint64_t>(window->extent().width()) * window->extent().height() *
+               sizeof(render::Rgba32f);
+    };
     const auto isVectorChain = [&operations](std::size_t index) {
         while (index < operations.size()) {
             if (std::holds_alternative<CompiledShape>(operations[index]) ||
@@ -140,6 +153,18 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
                 visit(layer->input.value());
             return;
         }
+        // A two-image effect is a blend command, which the executor plans source (the second
+        // image: a track matte, a mix's other image) first and then its destination.
+        if (const auto* effect = std::get_if<CompiledImageEffect>(&operations[index]);
+            effect != nullptr && effect->secondaryInput) {
+            visit(effect->secondaryInput->value());
+            visit(effect->input.value());
+            if (effect->maskInput)
+                visit(effect->maskInput->value());
+            for (const auto image : effect->fieldImages)
+                visit(image.value());
+            return;
+        }
         forEachInput(operations[index],
                      [&visit](const OperationIndex input) { visit(input.value()); });
     };
@@ -154,6 +179,8 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
             asset = image->asset ? &*image->asset : nullptr;
         else if (const auto* video = std::get_if<CompiledVideoSource>(&operation))
             asset = video->asset ? &*video->asset : nullptr;
+        if (windows != nullptr)
+            return imageBytes(index);
         return asset != nullptr ? std::max(frameBytes, static_cast<std::uint64_t>(asset->width) *
                                                            asset->height * sizeof(render::Rgba32f))
                                 : frameBytes;
@@ -162,7 +189,7 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
     const auto scratchBytes = [&](const std::size_t index) -> std::uint64_t {
         const auto& operation = operations[index];
         if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation))
-            return isVectorChain(layer->input.value()) ? 3 * frameBytes : 0;
+            return isVectorChain(layer->input.value()) ? 3 * imageBytes(index) : 0;
         return std::holds_alternative<CompiledImageSource>(operation) ||
                        std::holds_alternative<CompiledVideoSource>(operation)
                    ? heldBytes(index)
@@ -199,17 +226,18 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
         planned[index] = true;
         if (const auto* merge = std::get_if<CompiledMerge>(&operations[index])) {
             bool accumulating = false;
+            const auto stack = imageBytes(index);
             for (auto entry = merge->entries.rbegin(); entry != merge->entries.rend(); ++entry) {
                 plan_(entry->input.value());
                 if (!accumulating) {
-                    alive += frameBytes;
+                    alive += stack;
                     accumulating = true;
                 }
-                peak = std::max(peak, alive + frameBytes);
+                peak = std::max(peak, alive + stack);
                 release(entry->input.value());
             }
             if (!accumulating)
-                alive += frameBytes;
+                alive += stack;
             peak = std::max(peak, alive);
             return;
         }
@@ -220,7 +248,7 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
         pixelInputs(index, release);
     };
     plan_(output);
-    return std::max(peak, frameBytes);
+    return std::max(peak, imageBytes(output));
 }
 
 } // namespace bloom::runtime::detail

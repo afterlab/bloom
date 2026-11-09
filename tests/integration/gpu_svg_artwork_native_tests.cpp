@@ -17,12 +17,14 @@
 // after the CPU half passed; --require-device makes that a failure.
 
 #include "document_render_parity_support.hpp"
+#include "gpu_scene_effect_emission.hpp"
 #include "gpu_scene_preparation_builders.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -53,7 +55,7 @@ using render::composite_proof::parseOptions;
 constexpr std::uint32_t kWidth = 256;
 constexpr std::uint32_t kHeight = 144;
 constexpr std::uint64_t kFrameBytes = std::uint64_t{kWidth} * kHeight * sizeof(render::Rgba32f);
-// The CPU reference of the dense file holds a whole run of 256 layers at once.
+// Room enough for the CPU reference of every fixture here.
 constexpr std::uint64_t kCpuRequestBytes = 1ULL << 30;
 
 // A deterministic generator, so the file is the same on every machine.
@@ -246,7 +248,10 @@ referenceAt(Expectations& expectations, const Fixture& fixture, const core::Rati
     auto oracle = request;
     oracle.bypassOperationCache = true;
     const auto result = runtime::CpuCompositionEvaluator{}.evaluate(compiled.plan, oracle, {});
-    expectations.expect(result.frame() != nullptr, label + ": the CPU reference evaluates");
+    std::string why;
+    for (const auto& diagnostic : result.diagnostics())
+        why += " " + diagnostic.summary + " " + diagnostic.detail;
+    expectations.expect(result.frame() != nullptr, label + ": the CPU reference evaluates:" + why);
     if (result.frame() == nullptr)
         return std::nullopt;
     return Rendered{compiled.plan, request, result.frame()};
@@ -372,9 +377,25 @@ void admissionAndRetirement(Expectations& expectations, const Rendered& dense) {
         runtime::CpuCompositionEvaluator{}.planPreflightPixelStorage(dense.plan, dense.request);
     const auto livePeak = runtime::detail::gpuExecutorLivePeakBytes(
         *dense.plan, dense.request.output.value(), kFrameBytes);
-    expectations.expect(cpuPlan.requiredPreflightBytes &&
-                            *cpuPlan.requiredPreflightBytes >= 256 * kFrameBytes,
-                        "memory: the CPU reference holds a whole run of 256 layers at once");
+    // The CPU reference folds each Merge entry by entry, as the executor does, rather than holding
+    // a whole run of 256 layers at once.
+    expectations.expect(
+        cpuPlan.requiredPreflightBytes && *cpuPlan.requiredPreflightBytes <= 8 * kFrameBytes,
+        "memory: the CPU reference folds its Merges into a few frames (" +
+            std::to_string(cpuPlan.requiredPreflightBytes.value_or(0) / kFrameBytes) + " frames)");
+    {
+        // ...and renders the same pixels within that much storage.
+        auto tight = dense.request;
+        tight.pixelStorageByteLimit = 8 * kFrameBytes;
+        tight.bypassOperationCache = true;
+        const auto folded = runtime::CpuCompositionEvaluator{}.evaluate(dense.plan, tight, {});
+        std::string why;
+        for (const auto& diagnostic : folded.diagnostics())
+            why += " " + diagnostic.summary + " " + diagnostic.detail;
+        expectations.expect(folded.frame() != nullptr &&
+                                samePixels(dense, Rendered{dense.plan, tight, folded.frame()}),
+                            "memory: the folded CPU reference renders within eight frames:" + why);
+    }
     expectations.expect(livePeak <= 8 * kFrameBytes,
                         "memory: the executor's live set is a few frames, not one per layer (" +
                             std::to_string(livePeak / kFrameBytes) + " frames)");
@@ -680,12 +701,268 @@ void editsOnTheDevice(Expectations& expectations, const Device& device, Fixture&
     parityOf(expectations, device, *trimmed, "Trim Path on an imported shape");
 }
 
+// ---- Gradients drawn in their own window (#343, Package 1b) ----
+//
+// Firefox-like artwork at 512x288: elliptical radial gradients (an objectBoundingBox gradient on a
+// non-square shape, turned by gradientTransform), one on a shape wider than the frame, inside
+// nested opacity groups, and a group clipped by a circle (a track matte over a Merge entry). Each
+// gradient layer used to be drawn over its whole transformed window (about ten frames) and its
+// matte and the Merges above inherited that window. Now a layer is drawn only where the frame can
+// show it and its track matte lets it through, on both routes; what is still larger than a frame
+// (the gradient node's own window) is counted at its real size by the phase.
+
+constexpr std::uint32_t kGradientWidth = 512;
+constexpr std::uint32_t kGradientHeight = 288;
+constexpr std::uint64_t kGradientFrameBytes =
+    std::uint64_t{kGradientWidth} * kGradientHeight * sizeof(render::Rgba32f);
+
+std::string gradientSvg() {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 288" width="512" height="288">
+<defs>
+  <radialGradient id="a" cx="60%" cy="30%" r="120%" gradientTransform="rotate(25 .5 .5)">
+    <stop offset=".1" stop-color="#ffe226"/><stop offset=".8" stop-color="#ff7139" stop-opacity=".6"/>
+  </radialGradient>
+  <radialGradient id="b" cx="20%" cy="110%" r="90%">
+    <stop offset="0" stop-color="#960e18"/><stop offset=".6" stop-color="#ff3750" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="l" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#20c0ff"/><stop offset="1" stop-color="#4020ff"/>
+  </linearGradient>
+  <clipPath id="disc"><circle cx="380" cy="150" r="90"/></clipPath>
+</defs>
+<g id="flame" opacity="0.9">
+  <ellipse id="body" cx="200" cy="150" rx="150" ry="60" fill="url(#a)"/>
+  <g id="inner" opacity="0.8">
+    <path id="tail" d="M60 40 C 200 0, 300 120, 470 60 L 520 140 C 300 200, 150 120, 40 120 Z" fill="url(#b)"/>
+    <rect id="wide" x="-80" y="200" width="700" height="40" fill="url(#b)"/>
+  </g>
+</g>
+<g id="clipped" clip-path="url(#disc)">
+  <rect id="sheet" x="250" y="40" width="250" height="230" fill="url(#l)"/>
+  <ellipse id="glow" cx="400" cy="120" rx="120" ry="30" fill="url(#a)"/>
+</g>
+</svg>
+)svg";
+}
+
+// Every operation's prepared output window, read back from the scene's commands.
+[[nodiscard]] std::vector<std::optional<render::ImageWindow>>
+preparedWindows(const runtime::PreparedGpuScene& scene) {
+    std::vector<std::optional<render::ImageWindow>> windows(scene.commandForOperation().size());
+    for (std::size_t index = 0; index < windows.size(); ++index) {
+        const auto command = scene.commandForOperation()[index];
+        if (const auto descriptor =
+                runtime::detail::gpuSceneCommandDescriptorOf(scene.commands(), command, 0))
+            windows[index] = descriptor->data;
+    }
+    return windows;
+}
+
+[[nodiscard]] std::uint64_t windowBytes(const render::ImageWindow window) {
+    return std::uint64_t{window.extent().width()} * window.extent().height() *
+           sizeof(render::Rgba32f);
+}
+
+[[nodiscard]] bool within(const render::ImageWindow inner, const render::ImageWindow outer) {
+    return inner.originX() >= outer.originX() && inner.originY() >= outer.originY() &&
+           inner.maxXExclusive() <= outer.maxXExclusive() &&
+           inner.maxYExclusive() <= outer.maxYExclusive();
+}
+
+// The entry layer the importer made for a group or element of the file.
+[[nodiscard]] const document::LayerOutputBoundary& layerNamed(const Fixture& fixture,
+                                                              const std::string& name) {
+    for (const auto& layer : composition(fixture.document, fixture.main).graph().layerOutputs())
+        if (layer.name == name)
+            return layer;
+    throw std::runtime_error("no layer is named " + name);
+}
+
+// Window sizes and the phase's claim, without a device: every layer image, track matte and Merge
+// is at most a frame and a matted gradient is drawn only inside its matte; the gradient node's own
+// window is larger than the frame, and the phase claims the live set at those real sizes.
+void gradientWindowsAndAdmission(Expectations& expectations, const Rendered& gradients) {
+    const auto built = runtime::CpuGpuSceneBuilder{}.build(gradients.plan, gradients.request);
+    expectations.expect(built.hasValue(), "gradients: prepares: " + built.diagnostic.message);
+    if (!built.hasValue())
+        return;
+    const auto& commands = built.scene->commands();
+    // One pixel of border per nesting level: a layer's bilinear support around a stack.
+    const std::uint64_t frameAndBorder =
+        std::uint64_t{kGradientWidth + 8} * (kGradientHeight + 8) * sizeof(render::Rgba32f);
+    std::uint64_t largestLayerImage = 0;
+    std::uint64_t largestGradientNode = 0;
+    std::size_t mattes = 0;
+    bool mattesBounded = true;
+    for (const auto& command : commands) {
+        const auto index = std::visit([](const auto& item) { return item.index; }, command);
+        const auto descriptor = runtime::detail::gpuSceneCommandDescriptorOf(commands, index, 0);
+        if (!descriptor)
+            continue;
+        const auto bytes = windowBytes(descriptor->data);
+        if (std::holds_alternative<runtime::GpuSceneSolidCommand>(command)) {
+            largestGradientNode = std::max(largestGradientNode, bytes);
+            continue;
+        }
+        if (!std::holds_alternative<runtime::GpuSceneCompositionOutputCommand>(command))
+            largestLayerImage = std::max(largestLayerImage, bytes);
+        if (const auto* blend = std::get_if<runtime::GpuSceneBlendCommand>(&command);
+            blend != nullptr && blend->imageCombine) {
+            ++mattes;
+            const auto matte =
+                runtime::detail::gpuSceneCommandDescriptorOf(commands, blend->source, 0);
+            mattesBounded = mattesBounded && matte && within(blend->outputWindow, matte->data);
+        }
+    }
+    expectations.expect(
+        largestLayerImage <= frameAndBorder,
+        "memory: every layer image, matte and Merge is at most a frame (" +
+            std::to_string(static_cast<double>(largestLayerImage) / kGradientFrameBytes) +
+            " frames)");
+    expectations.expect(mattes >= 4 && mattesBounded,
+                        "memory: each matted gradient is drawn only inside its matte (" +
+                            std::to_string(mattes) + " mattes)");
+    expectations.expect(
+        largestGradientNode > kGradientFrameBytes,
+        "memory: a gradient node's own window is larger than the frame (" +
+            std::to_string(static_cast<double>(largestGradientNode) / kGradientFrameBytes) +
+            " frames)");
+
+    // The admission floor takes each image as a frame; the prepared scene's images at their real
+    // sizes are more, and the phase claims that.
+    const auto windows = preparedWindows(*built.scene);
+    const auto output = gradients.request.output.value();
+    const auto realPeak = runtime::detail::gpuExecutorLivePeakBytes(*gradients.plan, output,
+                                                                    kGradientFrameBytes, &windows);
+    const auto cpuPlan = runtime::CpuCompositionEvaluator{}.planPreflightPixelStorage(
+        gradients.plan, gradients.request);
+    const auto floor =
+        std::max(kGradientFrameBytes,
+                 std::min<std::uint64_t>(cpuPlan.requiredPreflightBytes.value_or(0),
+                                         runtime::detail::gpuExecutorLivePeakBytes(
+                                             *gradients.plan, output, kGradientFrameBytes)));
+    expectations.expect(
+        realPeak > floor && realPeak >= largestGradientNode,
+        "admission: images at their real sizes need more than a frame each (" +
+            std::to_string(static_cast<double>(realPeak) / kGradientFrameBytes) + " against " +
+            std::to_string(static_cast<double>(floor) / kGradientFrameBytes) + " frames)");
+    auto policy = policyWithHost(8 * kGib, 6 * kGib);
+    auto phase = phaseFor(policy, true);
+    phase.envelope.minimumExecutorBytes = kGradientFrameBytes;
+    {
+        const runtime::CpuGpuSceneBuilder builder(nullptr, {}, {}, phase);
+        const auto admitted = builder.build(gradients.plan, gradients.request);
+        expectations.expect(admitted.hasValue() && admitted.phaseLease != nullptr,
+                            "admission: the gradients are admitted: " +
+                                admitted.diagnostic.message);
+        if (admitted.phaseLease) {
+            expectations.expect(admitted.phaseLease->deviceNeedBytes() >=
+                                        phase.envelope.deviceWorkingBytes + realPeak &&
+                                    admitted.phaseLease->executorByteLimit() >= realPeak,
+                                "admission: the phase claims its images at their real sizes");
+        }
+    }
+    expectations.expect(policy->snapshot().reservations.admittedPhases == 0 &&
+                            policy->snapshot().reservations.totalHostClaimBytes == 0,
+                        "retirement: the raised claim returns with the phase");
+    // An executor ceiling between the floor and the real need refuses the scene rather than
+    // drawing past it.
+    auto ceiling = phase;
+    ceiling.envelope.requestedExecutorBytes = floor + kGradientFrameBytes;
+    if (floor + kGradientFrameBytes < realPeak) {
+        const runtime::CpuGpuSceneBuilder builder(nullptr, {}, {}, ceiling);
+        const auto refused = builder.build(gradients.plan, gradients.request);
+        expectations.expect(!refused.hasValue() &&
+                                refused.diagnostic.code ==
+                                    runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                            "admission: a ceiling below the real need is refused, not exceeded: " +
+                                refused.diagnostic.message);
+        expectations.expect(policy->snapshot().reservations.admittedPhases == 0,
+                            "retirement: a refused scene holds nothing");
+    }
+}
+
+// The same picture on the device: cold and warm parity over keyed frames (a frame-pivot group
+// turned and moved partly off the frame, so the visible window passes through a rotation), at half
+// resolution, and a serial live set within what the phase claims.
+void gradientsOnTheDevice(Expectations& expectations, const Device& device, Fixture& fixture) {
+    const auto& flame = layerNamed(fixture, "flame");
+    const auto& graph = composition(fixture.document, fixture.main).graph();
+    const auto* rotation =
+        document::layerParameterBinding(graph, flame, document::kRotationParameterRole);
+    const auto* position =
+        document::layerParameterBinding(graph, flame, document::kPositionParameterRole);
+    expectations.expect(flame.pivot == document::LayerPivot::Frame && rotation && position,
+                        "gradients: the group is a frame-pivot entry layer");
+    if (!rotation || !position)
+        return;
+    const auto rotationId = rotation->parameterId;
+    const auto positionId = position->parameterId;
+    const auto* record = composition(fixture.document, fixture.main).parameters().find(positionId);
+    const auto* constant =
+        record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+    const auto* start = constant ? std::get_if<document::Vec2d>(&constant->value) : nullptr;
+    expectations.expect(start != nullptr, "gradients: the group's position is a constant");
+    if (start == nullptr)
+        return;
+    const auto origin = *start;
+    apply<commands::SetKeyframeAtTimeForParameter>("key the group's turn", fixture.document,
+                                                   fixture.commands, fixture.main, rotationId,
+                                                   core::RationalTime::fromInteger(2), 35.0);
+    apply<commands::SetKeyframeAtTimeForParameter>("key the group's start turn", fixture.document,
+                                                   fixture.commands, fixture.main, rotationId,
+                                                   core::RationalTime{}, 0.0);
+    apply<commands::SetKeyframeAtTimeForParameter>(
+        "key the group off the frame", fixture.document, fixture.commands, fixture.main, positionId,
+        core::RationalTime::fromInteger(2), document::Vec2d{origin.x + 230.0, origin.y - 40.0});
+    apply<commands::SetKeyframeAtTimeForParameter>("key the group's start", fixture.document,
+                                                   fixture.commands, fixture.main, positionId,
+                                                   core::RationalTime{}, origin);
+    for (const int second : {0, 1, 2}) {
+        const auto frame =
+            referenceAt(expectations, fixture, core::RationalTime::fromInteger(second),
+                        "gradients at " + std::to_string(second) + " s");
+        if (!frame)
+            return;
+        parityOf(expectations, device, *frame, "gradients at " + std::to_string(second) + " s");
+        if (second == 1) {
+            const auto scene = prepare(expectations, *frame, "gradients live set");
+            runtime::GpuSceneExecutorBudgets serialBudgets;
+            serialBudgets.enableNativeBatches = false;
+            auto cache = device.cache();
+            auto serial = cache ? executorFor(*device.device, *cache, serialBudgets) : nullptr;
+            if (scene && serial) {
+                expectations.expect(
+                    parity(runScene(*serial, scene), frame->frame->processImage().pixels()),
+                    "gradients: the serial run matches");
+                const auto windows = preparedWindows(*scene);
+                const auto claimed = runtime::detail::gpuExecutorLivePeakBytes(
+                    *frame->plan, frame->request.output.value(), kGradientFrameBytes, &windows);
+                const auto peak = serial->counters().peakLiveImageBytes;
+                std::cout << "gradients 512x288: serial live peak "
+                          << static_cast<double>(peak) / kGradientFrameBytes
+                          << " frames; the phase claims "
+                          << static_cast<double>(claimed) / kGradientFrameBytes << " frames\n";
+                expectations.expect(peak <= claimed + kGradientFrameBytes,
+                                    "memory: the serial live set is within what the phase claims");
+            }
+            const auto halfExtent =
+                render::ImageExtent::create(kGradientWidth / 2, kGradientHeight / 2);
+            const auto half = referenceAt(expectations, fixture, core::RationalTime::fromInteger(1),
+                                          "gradients at half resolution",
+                                          runtime::ProxyResolution{*halfExtent.value()});
+            if (half)
+                parityOf(expectations, device, *half, "gradients at half resolution");
+        }
+    }
+}
+
 // ---- Corpus mode: a real file at a real size ----
 //
 // `--svg <file> --size <W>x<H>` imports the file, prepares and runs the whole frame through the
 // production CpuGpuSceneBuilder and GpuSceneExecutor, and compares every pixel with the CPU
-// reference (2e-6). The CPU reference is evaluated in ROI tiles: it holds a whole Merge of layers
-// at once, which at 3840x2160 is more than this machine gives it for the large files. Not part of
+// reference (2e-6). The CPU reference is evaluated in ROI tiles so the comparison runs on several
+// threads; it folds each Merge entry by entry, and prints what the whole frame holds. Not part of
 // the ctest run (it needs the corpus files); docs/architecture/vector-artwork.md records the
 // results.
 // `--pass device --frame <file>` runs only the device half and writes the GPU frame there;
@@ -809,6 +1086,10 @@ int corpusParity(const CorpusRun& run, const Options& options) {
             std::cerr << "FAIL: the preflight did not resolve\n";
             return 1;
         }
+        const auto windows = preparedWindows(*built.scene);
+        const auto realNeed =
+            std::max(frameBytes, runtime::detail::gpuExecutorLivePeakBytes(
+                                     *compiled.plan, request.output.value(), frameBytes, &windows));
         const auto claimed = std::max(
             frameBytes,
             std::min<std::uint64_t>(checked.resolved->peakPixelStorageBytes,
@@ -818,13 +1099,17 @@ int corpusParity(const CorpusRun& run, const Options& options) {
                   << built.scene->commands().size() << " commands; live image peak "
                   << frames(serialPeak) << " frames serial, " << frames(peak)
                   << " frames batched; the phase's admission floor " << frames(claimed)
-                  << " frames; " << cachedImages << " cached images; largest image "
+                  << " frames, its claim at real image sizes " << frames(realNeed) << " frames; "
+                  << cachedImages << " cached images; largest image "
                   << frames(executor->counters().peakStepImageBytes) << " frames\n";
-        // Images are taken as frames by the floor; one larger than the frame (a layer's unclipped
-        // support) is drawn against live device capacity when allocated, so a peak above the floor
-        // is reported rather than failed here. The generated dense file asserts the bound itself.
+        // The floor takes images as frames; the phase raises its claim to the prepared images'
+        // real sizes (the builder does exactly this), and the serial live set stays within it.
         if (serialPeak == 0) {
             std::cerr << "FAIL: the serial run did not complete\n";
+            return 1;
+        }
+        if (serialPeak > std::max(claimed, realNeed) + frameBytes) {
+            std::cerr << "FAIL: the serial live set is more than the phase claims\n";
             return 1;
         }
         if (run.pass == "device") {
@@ -944,6 +1229,13 @@ int corpusParity(const CorpusRun& run, const Options& options) {
                   << (failure.empty() ? std::string("a tile was not compared") : failure) << '\n';
         return 1;
     }
+    const auto wholeFrame =
+        runtime::CpuCompositionEvaluator{}.planPreflightPixelStorage(compiled.plan, request);
+    const auto frameBytes = static_cast<double>(width) * height * sizeof(render::Rgba32f);
+    std::cout << file.filename().string() << ' ' << width << 'x' << height
+              << ": the CPU reference holds "
+              << static_cast<double>(wholeFrame.requiredPreflightBytes.value_or(0)) / frameBytes
+              << " frames for the whole frame\n";
     std::cout << file.filename().string() << ' ' << width << 'x' << height << ": " << tiles
               << " of " << allTiles << " CPU reference tiles, " << mismatched
               << " pixels outside 2e-6, largest difference " << largest << '\n';
@@ -994,6 +1286,10 @@ int main(int argc, char** argv) {
         Expectations expectations;
         Fixture dense("dense", denseSvg());
         Fixture edges("edges", edgeSvg());
+        const auto gradientFile = writeSvg("gradients", gradientSvg());
+        Fixture gradients(gradientFile, kGradientWidth, kGradientHeight);
+        std::filesystem::remove(gradientFile);
+        const auto gradientFrame = referenceAt(expectations, gradients, {}, "gradients");
         const auto denseFrame = referenceAt(expectations, dense, {}, "dense");
         const auto edgeFrame = referenceAt(expectations, edges, {}, "edges");
         expectations.expect(dense.pathNodes().size() == 1600,
@@ -1004,11 +1300,13 @@ int main(int argc, char** argv) {
                                     alphaOf(*edgeFrame, 254, 142) > 0.0F,
                                 "edges: the frame-sized ellipse covers the corners");
         }
-        if (!denseFrame || !edgeFrame || expectations.failures() != 0) {
+        if (!denseFrame || !edgeFrame || !gradientFrame || expectations.failures() != 0) {
             std::cerr << expectations.failures() << " SVG artwork expectation(s) failed\n";
             return 1;
         }
         admissionAndRetirement(expectations, *denseFrame);
+        if (gradientFrame)
+            gradientWindowsAndAdmission(expectations, *gradientFrame);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " SVG artwork expectation(s) failed\n";
             return 1;
@@ -1032,6 +1330,7 @@ int main(int argc, char** argv) {
         cancellation(expectations, device, *denseFrame);
         denseOnTheDevice(expectations, device, dense, *denseFrame);
         editsOnTheDevice(expectations, device, edges);
+        gradientsOnTheDevice(expectations, device, gradients);
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " SVG artwork expectation(s) failed\n";

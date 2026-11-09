@@ -50,18 +50,25 @@ uniqueCoverageRepresentations(const bloom::runtime::PreparedGpuScene& scene) {
     return seen.size();
 }
 
-// A small composition with a large vector layer: the preflight working set is the composition
-// output, while the coverage window is the layer's own support bounds. The retained coverage charge
-// is therefore the binding constraint, so a width*height R8 charge refuses and the actual geometry
-// charge admits.
+// A small region of a large composition with a large vector layer: the preflight working set is the
+// region of interest, while the coverage window is the layer's support the frame shows (#343: a
+// drawn window is clipped to what the frame shows, not to the region asked for). The retained
+// coverage charge is therefore the binding constraint, so a width*height R8 charge refuses and the
+// actual geometry charge admits.
 void testCoverageHostGeometryBudget(Expectations& expectations) {
     constexpr std::size_t kBudget = 1U << 20U;
+    // The composition's 128x128 centre.
+    const auto regionRequest = [](const CompiledCompositionPlan& plan, const std::size_t bytes) {
+        auto request = requestFor(plan, RationalTime::fromInteger(0), bytes);
+        const auto region = bloom::render::ImageWindow::create(2936, 1936, 128, 128);
+        request.roi = *region.value();
+        return request;
+    };
     const auto simplePlan = shapePlan(
-        format(128, 128), LayerValues{.position = {64.3, 64.7}},
+        format(6000, 4000), LayerValues{.position = {3000.3, 2000.7}},
         ShapeValues{.kind = bloom::document::ShapeKind::Rectangle, .size = {6000.0, 4000.0}},
         250000);
-    const auto simple = CpuGpuSceneBuilder{}.build(
-        simplePlan, requestFor(*simplePlan, RationalTime::fromInteger(0), kBudget));
+    const auto simple = CpuGpuSceneBuilder{}.build(simplePlan, regionRequest(*simplePlan, kBudget));
     expectations.expect(simple.hasValue(),
                         "a 6000x4000 vector prepares under a budget below its 24M R8 mask");
     if (!simple) {
@@ -77,14 +84,13 @@ void testCoverageHostGeometryBudget(Expectations& expectations) {
 
     // Complexity-heavy: a many-point star retains far more spans than the simple rectangle, so the
     // same allowance refuses it on its ACTUAL bytes (still far above the R8 mask).
-    const auto heavyPlan = shapePlan(format(128, 128), LayerValues{.position = {64.3, 64.7}},
+    const auto heavyPlan = shapePlan(format(6000, 4000), LayerValues{.position = {3000.3, 2000.7}},
                                      ShapeValues{.kind = bloom::document::ShapeKind::Star,
                                                  .size = {6000.0, 4000.0},
                                                  .points = 64,
                                                  .innerRatio = 0.5},
                                      251000);
-    const auto heavy = CpuGpuSceneBuilder{}.build(
-        heavyPlan, requestFor(*heavyPlan, RationalTime::fromInteger(0), 1U << 28U));
+    const auto heavy = CpuGpuSceneBuilder{}.build(heavyPlan, regionRequest(*heavyPlan, 1U << 28U));
     expectations.expect(heavy.hasValue(), "the complexity-heavy vector prepares under a large cap");
     if (!heavy) {
         std::cerr << "heavy diagnostic: " << heavy.diagnostic.message << "\n";
@@ -93,18 +99,18 @@ void testCoverageHostGeometryBudget(Expectations& expectations) {
         const std::uint64_t heavyBytes = uniqueCoverageHostBytes(*heavy.scene);
         expectations.expect(heavyBytes > simpleBytes,
                             "the heavy geometry retains more host bytes than the simple one");
-        const auto refused = CpuGpuSceneBuilder{}.build(
-            heavyPlan, requestFor(*heavyPlan, RationalTime::fromInteger(0), kBudget));
+        const auto refused =
+            CpuGpuSceneBuilder{}.build(heavyPlan, regionRequest(*heavyPlan, kBudget));
         expectations.expect(
             !refused.hasValue() && refused.diagnostic.code ==
                                        PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
             "the complexity-heavy geometry is refused when its actual bytes exceed");
-        const auto heavyBoundary = CpuGpuSceneBuilder{}.build(
-            heavyPlan, requestFor(*heavyPlan, RationalTime::fromInteger(0), heavyBytes));
+        const auto heavyBoundary =
+            CpuGpuSceneBuilder{}.build(heavyPlan, regionRequest(*heavyPlan, heavyBytes));
         expectations.expect(heavyBoundary.hasValue(),
                             "the heavy geometry is admitted exactly at its actual byte boundary");
-        const auto heavyBelow = CpuGpuSceneBuilder{}.build(
-            heavyPlan, requestFor(*heavyPlan, RationalTime::fromInteger(0), heavyBytes - 1));
+        const auto heavyBelow =
+            CpuGpuSceneBuilder{}.build(heavyPlan, regionRequest(*heavyPlan, heavyBytes - 1));
         expectations.expect(!heavyBelow.hasValue() &&
                                 heavyBelow.diagnostic.code ==
                                     PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,

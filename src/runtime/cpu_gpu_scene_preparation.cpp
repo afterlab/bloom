@@ -14,6 +14,7 @@
 #include "gpu_scene_vector_emission.hpp"
 
 #include "operation_key.hpp"
+#include "visible_support.hpp"
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/image.hpp>
@@ -295,11 +296,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // The executor needs at least its live-image peak (one float frame at minimum),
             // whether its ceiling was derived above or stated by the caller (a final render,
             // #417); the ceiling is only an upper bound shared with other phases. The preflight's
-            // peak is the CPU reference's, which holds a whole Merge at once; the executor does not
-            // (#343), and never holds more than that. Both count each image as one frame: this is
-            // the admission floor. An image larger than the frame (a layer's unclipped support,
-            // a gradient drawn in its own window) is drawn against live device capacity when it is
-            // allocated, beyond the claimed need, as every allocation past the need is.
+            // peak is the CPU reference's in plan order, which holds a whole Merge at once; the
+            // executor does not (#343), and never holds more than that. This is the admission
+            // floor, taken before any window is known. Once the scene is prepared the phase raises
+            // its claim to the executor's live set with every image at its prepared size (an image
+            // larger than the frame, such as a gradient drawn in its own window, included).
             const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
             const auto frameBytes = static_cast<std::uint64_t>(extent.width()) * extent.height() *
                                     sizeof(render::Rgba32f);
@@ -552,6 +553,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::screenUnsupportedLayers(*plan, request, frameResolved, cancellation)) {
         return fail(error->code, error->message);
     }
+
+    // #343: what of each image the frame can show, exactly as the CPU reference computes it.
+    const auto visible = detail::visibleSupportWindows(*plan, frameResolved, request.time,
+                                                       request.output.value(), fullDisplayWindow);
+    const auto matteBound = detail::matteBoundedLayers(*plan, visible);
 
     // This build's own CPU work counters. They are local to the call -- never shared across
     // concurrent preparation jobs -- and are published either on the prepared scene or, for a
@@ -1082,10 +1088,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             const auto workingWindow =
                 render::ImageWindow::create(-16777216, -16777216, 33554432, 33554432);
-            const auto layerWindow = parented
-                                         ? parented->supportBounds(*workingWindow.value())
-                                         : transform.value()->supportBounds(*workingWindow.value());
-            if (!layerWindow) {
+            const auto supportWindow =
+                parented ? parented->supportBounds(*workingWindow.value())
+                         : transform.value()->supportBounds(*workingWindow.value());
+            if (!supportWindow) {
                 accountForInvisibleLeaf();
                 continue;
             }
@@ -1112,6 +1118,20 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
             }
             geometry.anchor = map({centre.x + anchor->value.x, centre.y + anchor->value.y});
+            // #343: only what the frame can show (and its track matte lets through) is drawn, as on
+            // the CPU reference; the drawn window is the lattice the command resamples over.
+            const auto drawnWindow =
+                [&](const render::ImageWindow window) -> std::optional<render::ImageWindow> {
+                auto drawn = detail::clipToVisible(window, visible[index]);
+                if (drawn && matteBound[index])
+                    drawn = detail::clipToVisible(*drawn, outputWindowOf[*matteBound[index]]);
+                return drawn;
+            };
+            const auto layerWindow = drawnWindow(*supportWindow);
+            if (!layerWindow) {
+                accountForInvisibleLeaf();
+                continue;
+            }
             outputWindowOf[index] = *layerWindow;
 
             const auto isNativeGrid = [&](const detail::LayerMatrix& matrix) {
@@ -1195,7 +1215,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     outputWindowOf[index].reset();
                     continue;
                 }
-                const auto chainLayerWindow = concatenated.supportBounds(*workingWindow.value());
+                const auto chainSupport = concatenated.supportBounds(*workingWindow.value());
+                const auto chainLayerWindow =
+                    chainSupport ? drawnWindow(*chainSupport) : std::nullopt;
                 if (!chainLayerWindow) {
                     outputWindowOf[index].reset();
                     continue;
@@ -1263,6 +1285,34 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     if (auto unconsumed =
             detail::describeUnconsumedVectorLeaf(*plan, reachable, textConsumed, shapeConsumed)) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation, std::move(*unconsumed));
+    }
+    // #343: the admission took each image as one frame. Now that every image has its window, the
+    // phase needs the executor's live set at those sizes, and claims it when that is more (an image
+    // larger than the frame, such as a gradient drawn in its own window). The device admits, waits
+    // for or refuses the larger need as it did the first. Each image is counted at its requested
+    // extent; the allocator's rounding of it is not known here and is drawn against live device
+    // capacity, as every allocation past a phase's need is.
+    if (phaseLease && !phase_.admittedLease && phase_.envelope.native) {
+        const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
+        const auto frameBytes =
+            static_cast<std::uint64_t>(extent.width()) * extent.height() * sizeof(render::Rgba32f);
+        const auto live = detail::gpuExecutorLivePeakBytes(*plan, request.output.value(),
+                                                           frameBytes, &outputWindowOf);
+        switch (phaseLease->raiseExecutorNeed(live)) {
+        case render::GpuProcessingPhaseAdmission::Accepted:
+            break;
+        case render::GpuProcessingPhaseAdmission::AwaitingCapacity:
+            return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                        "GPU preparation is awaiting device-memory capacity for the scene's images",
+                        mediaStatistics);
+        case render::GpuProcessingPhaseAdmission::BudgetRefused:
+            return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                        "The scene's images do not fit the current device-memory capacity",
+                        mediaStatistics);
+        default:
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "The scene's device need could not be raised", mediaStatistics);
+        }
     }
 
     ProcessFrameIdentity identity{

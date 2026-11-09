@@ -337,6 +337,14 @@ lowerMergeEntries(const document::NodeId merge, const runtime::NodeDefinition& d
         }
         const auto* layer = entryLayerOf(merge, entry.slotId);
         std::optional<runtime::OperationIndex> input;
+        // #343: a track matte source layer is lowered before the layer it mattes, so the matte's
+        // image exists when that layer is drawn and bounds what of it is drawn
+        // (runtime::detail::matteBoundedLayers). lowerTrackMatte reuses this operation.
+        if (layer != nullptr && layer->trackMatte && !layer->trackMatte->node) {
+            if (const auto* source = composition_->graph().findLayer(layer->trackMatte->source);
+                source != nullptr && !layerOperationOf(*source, indices) && hasFailure_)
+                return std::nullopt;
+        }
         if (layer != nullptr && layer->entryOwned()) {
             input = entryLayerOperation(*layer, indices);
             if (!input)

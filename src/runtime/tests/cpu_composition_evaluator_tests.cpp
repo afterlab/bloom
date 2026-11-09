@@ -1381,6 +1381,101 @@ void testEmptyStackIsTransparent(Expectations& expectations) {
         "an empty layer stack publishes exact transparent process and display pixels");
 }
 
+// #343: a stack too large for its budget in plan order is folded entry by entry instead. The same
+// plan evaluated both ways must give the same image, bit for bit, for every blend mode: six
+// scattered layers of different sizes, some reaching past the frame, the fourth from the bottom
+// (and the top one) blended with the mode under test, so the accumulator grows several times
+// while a whole-window mode clears what lies outside its layer.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+scatteredStackPlan(const core::BlendMode mode) {
+    struct Layer final {
+        document::Vec2d position;
+        double width;
+        double height;
+        core::Color4d color;
+    };
+    const std::array<Layer, 6> layers{{
+        {{3.0, 2.0}, 5.0, 3.0, {0.9, 0.2, 0.1, 0.8}},
+        {{29.5, 3.0}, 7.0, 4.0, {0.1, 0.7, 0.3, 1.0}},
+        {{16.25, 8.5}, 12.0, 9.0, {0.2, 0.3, 0.9, 0.6}},
+        {{6.0, 13.75}, 9.0, 6.0, {0.8, 0.8, 0.1, 0.9}},
+        {{24.0, 14.0}, 6.0, 5.0, {0.5, 0.1, 0.6, 0.4}},
+        {{12.5, 6.0}, 20.0, 3.0, {0.3, 0.9, 0.9, 0.7}},
+    }};
+    std::vector<runtime::CompiledOperation> operations;
+    std::vector<runtime::CompiledMergeInput> entries;
+    for (std::size_t index = 0; index < layers.size(); ++index) {
+        const auto& layer = layers.at(index);
+        const auto base = 9000 + index * 20;
+        const auto id = [&](const std::size_t offset) {
+            return document::ParameterId::fromRaw(base + offset);
+        };
+        operations.emplace_back(runtime::CompiledSolid{document::NodeId::fromRaw(base),
+                                                       {id(1), layer.color},
+                                                       {id(2), layer.width},
+                                                       {id(3), layer.height}});
+        const LayerParameterIds ids{id(4), id(5), id(6), id(7), id(8), id(9)};
+        const auto blend = index == 2 || index == 5 ? mode : core::BlendMode::Normal;
+        operations.emplace_back(
+            layerOutput(document::NodeId::fromRaw(base + 10), document::LayerId::fromRaw(base + 11),
+                        runtime::OperationIndex::fromRaw(2 * index), ids,
+                        {.position = layer.position, .opacity = 0.9, .blendMode = blend}));
+        // Entries list the top layer first.
+        entries.insert(entries.begin(), runtime::CompiledMergeInput{
+                                            document::LayerSlotId::fromRaw(base + 12),
+                                            document::LayerId::fromRaw(base + 11),
+                                            runtime::OperationIndex::fromRaw(2 * index + 1)});
+    }
+    operations.emplace_back(runtime::CompiledMerge{kStackNode, std::move(entries)});
+    operations.emplace_back(runtime::CompiledCompositionOutput{
+        kOutputNode, runtime::OperationIndex::fromRaw(2 * layers.size())});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(
+        runtime::CompiledCompositionPlanDefinition{
+            document::Revision::fromRaw(7), kProjectId, kCompositionId, format(32, 16),
+            std::move(operations), runtime::OperationIndex::fromRaw(2 * layers.size() + 1)});
+}
+
+void testFoldedMergeMatchesPlanOrder(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    for (const auto mode : core::kBlendModes) {
+        const auto label = "blend mode " + std::to_string(static_cast<int>(mode)) + ": ";
+        const auto plan = scatteredStackPlan(mode);
+        // Plan order: every layer image is resident when the stack runs.
+        const auto planned =
+            evaluator.planPreflightPixelStorage(plan, requestFor(*plan, 1U << 20U));
+        expectations.expect(planned.requiredPreflightBytes.has_value(),
+                            label + "plan order is planned");
+        if (!planned.requiredPreflightBytes)
+            continue;
+        const auto planOrderBytes = *planned.requiredPreflightBytes;
+        // One byte less than plan order holds: the stack is folded entry by entry, in less.
+        const auto folded =
+            evaluator.planPreflightPixelStorage(plan, requestFor(*plan, planOrderBytes - 1));
+        expectations.expect(folded.requiredPreflightBytes &&
+                                *folded.requiredPreflightBytes < planOrderBytes,
+                            label + "a budget below plan order folds the stack into less");
+        auto inOrder = requestFor(*plan, planOrderBytes);
+        inOrder.bypassOperationCache = true;
+        auto inFolds = requestFor(*plan, planOrderBytes - 1);
+        inFolds.bypassOperationCache = true;
+        const auto reference = evaluator.evaluate(plan, inOrder, {});
+        const auto foldedResult = evaluator.evaluate(plan, inFolds, {});
+        expectations.expect(reference.frame() != nullptr && foldedResult.frame() != nullptr,
+                            label + "both orders evaluate");
+        if (reference.frame() == nullptr || foldedResult.frame() == nullptr)
+            continue;
+        const auto& expected = reference.frame()->processImage();
+        const auto& actual = foldedResult.frame()->processImage();
+        const auto left = expected.pixels();
+        const auto right = actual.pixels();
+        expectations.expect(expected.descriptor()->dataWindow() ==
+                                    actual.descriptor()->dataWindow() &&
+                                left.size_bytes() == right.size_bytes() &&
+                                std::memcmp(left.data(), right.data(), left.size_bytes()) == 0,
+                            label + "the folded stack is the plan-order image, bit for bit");
+    }
+}
+
 void testProxyAndPeakBudget(Expectations& expectations) {
     const runtime::CpuCompositionEvaluator evaluator;
     const auto plan = oneSolidPlan();
@@ -1416,11 +1511,12 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                             near(proxyEdgePixel->alpha(), 128.0F / 255.0F),
                         "absolute authoring displacement is scaled independently for a proxy");
 
-    // A 4x2 layer's image is its transformed bounds grown by one pixel on every side for the
-    // bilinear support -- 6x4 RGBA32F, 384 bytes. This plan peaks at the layer image and the stack
-    // image it composites into, two resident 6x4 images (768 bytes).
-    const auto below = evaluator.evaluate(plan, requestFor(*plan, 767), {});
-    const auto exact = evaluator.evaluate(plan, requestFor(*plan, 768), {});
+    // A 4x2 layer's support is its transformed bounds grown by one pixel on every side for the
+    // bilinear support -- 6x4 -- but it draws only what the 4x2 frame shows (#343): a 4x2 RGBA32F
+    // image, 128 bytes. This plan peaks at the layer image and the stack image it composites into,
+    // two resident 4x2 images (256 bytes).
+    const auto below = evaluator.evaluate(plan, requestFor(*plan, 255), {});
+    const auto exact = evaluator.evaluate(plan, requestFor(*plan, 256), {});
     expectations.expect(below.status() == runtime::EvaluationStatus::Failed &&
                             !below.diagnostics().empty() &&
                             below.diagnostics().front().code ==
@@ -1441,8 +1537,9 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                             underCap.diagnostic->code ==
                                 runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
                         "preflight planning preserves the caller's explicit storage cap");
-    const auto twoBelow = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 1151), {});
-    const auto twoExact = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 1152), {});
+    // Both 4x2 layer images and the 4x2 stack are resident while stacking: 384 bytes.
+    const auto twoBelow = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 383), {});
+    const auto twoExact = evaluator.evaluate(twoLayers, requestFor(*twoLayers, 384), {});
     expectations.expect(twoBelow.status() == runtime::EvaluationStatus::Failed &&
                             twoExact.status() == runtime::EvaluationStatus::Evaluated,
                         "peak simulation accounts for both live layers while stacking");
@@ -2430,6 +2527,7 @@ int main(int argc, char* argv[]) {
         testLayerRangeIsHalfOpen(expectations);
         testEmptyStackIsTransparent(expectations);
         testProxyAndPeakBudget(expectations);
+        testFoldedMergeMatchesPlanOrder(expectations);
         testIdentityAndPreparedHandoff(expectations);
         testPublishedPlanOwnsItsImmutableDefinition(expectations);
         testStructuredFailuresAndProgress(expectations);

@@ -49,6 +49,11 @@ struct ResolvedEvaluation final {
     // retimed layer, and entry 0 is never read (this object is clock 0).
     std::vector<std::optional<core::RationalTime>> clockTimes{};
     std::vector<ResolvedEvaluation> clockResolutions{};
+    // #343: the same live-image peak when Merges are folded entry by entry (merge_fold_order.hpp),
+    // and whether this frame is evaluated that way: it is when folding holds less and the
+    // plan-order peak is more than eight images or more than the request's budget.
+    std::size_t foldedPeakPixelStorageBytes = 0;
+    bool foldMerges = false;
 };
 
 // The resolution an operation's operands use on clock `clock`.
