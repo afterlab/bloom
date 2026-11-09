@@ -5,6 +5,8 @@
 // never as a made-up value.
 #include "core_internal.hpp"
 
+#include <bloom/document/font_id.hpp>
+#include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/profiler_snapshot.hpp>
 #include <bloom/scripting/node_reference.hpp>
 #include <bloom/scripting/readings.hpp>
@@ -80,9 +82,9 @@ const Face& faceArgument(yyjson_val* value) {
                 return face;
     }
     throw InvalidInput(
-        "font names one of the built-in faces: \"DejaVu Sans\", \"Inter Regular\", \"Inter "
-        "Medium\", \"Inter SemiBold\" (or its stored value 0 to 3, or its family|style|digest "
-        "reference). A font asset's own metrics are not measured here.");
+        "font is a font ID such as \"source=system;family=Inter;style=Regular;weight=400;"
+        "italic=false\", or one of the built-in faces: \"DejaVu Sans\", \"Inter Regular\", "
+        "\"Inter Medium\", \"Inter SemiBold\" (or its stored value 0 to 3).");
 }
 
 yyjson_mut_val* textMetrics(Json& out, McpCall& call, yyjson_val* arguments) {
@@ -93,19 +95,47 @@ yyjson_mut_val* textMetrics(Json& out, McpCall& call, yyjson_val* arguments) {
     auto* size = member(arguments, "size");
     if (!yyjson_is_num(size))
         throw InvalidInput("size is a number: pixels per em");
-    const auto& face = faceArgument(member(arguments, "font"));
+    auto* fontArgument = member(arguments, "font");
+    std::optional<document::FontId> fontId;
+    if (yyjson_is_str(fontArgument))
+        fontId = document::decodeFontId(string(fontArgument, 1024));
     scripting::TextMetricsRequest request;
     request.text = string(text, 4096);
-    request.font = face.value;
     request.size = yyjson_get_num(size);
+    // A font ID is measured in the face a render would use now: a font that is still downloading
+    // answers with its fallback and says so, so this read never waits on the network.
+    std::optional<runtime::fonts::FontResolution> resolution;
+    const Face* face = nullptr;
+    if (fontId) {
+        resolution =
+            runtime::fonts::processFontResolver().resolve(*fontId, runtime::fonts::FontFetch::Background);
+        request.font = static_cast<std::int64_t>(resolution->builtinFace);
+        request.fontBytes = resolution->bytes;
+        request.fontDigest = resolution->digest;
+        request.fontFaceIndex = resolution->faceIndex;
+    } else {
+        face = &faceArgument(fontArgument);
+        request.font = face->value;
+    }
     const auto measured = scripting::measureText(request);
     if (!measured.ok)
         throw InvalidInput(measured.diagnostic);
     auto* result = out.object();
     out.set(result, "revision", out.number(call.session.snapshot().revision().value()));
     auto* font = out.object();
-    out.set(font, "value", out.signedNumber(face.value));
-    out.set(font, "label", out.text(std::string(face.label)));
+    if (fontId) {
+        out.set(font, "id", out.text(document::encodeFontId(*fontId)));
+        out.set(font, "usedFamily", out.text(resolution->usedFamily));
+        out.set(font, "usedStyle", out.text(resolution->usedStyle));
+        out.set(font, "fallback", out.boolean(resolution->isFallback()));
+        out.set(font, "downloading", out.boolean(resolution->pendingDownload()));
+        out.set(font, "diagnostic",
+                resolution->diagnostic.empty() ? out.null()
+                                               : out.text(resolution->diagnostic));
+    } else {
+        out.set(font, "value", out.signedNumber(face->value));
+        out.set(font, "label", out.text(std::string(face->label)));
+    }
     out.set(result, "font", font);
     out.set(result, "size", out.real(request.size));
     out.set(result, "unit", out.text("pixels"));

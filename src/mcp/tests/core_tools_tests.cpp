@@ -992,6 +992,13 @@ void inspectionQueries() {
             R"re("advance":([0-9.]+))re");
         expect(!narrow.empty() && !wide.empty() && std::stod(wide) > std::stod(narrow) * 0.5,
                "a larger size has a larger advance");
+        // A font ID that cannot be resolved here is measured in its fallback, and says so.
+        metrics = server.call(
+            "query",
+            R"({"kind":"text-metrics","text":"Hi","size":20,"font":"source=google;family=NoSuchFamilyAtAll;style=Regular;weight=400;italic=false"})");
+        expect(contains(metrics, R"("isError":false)") && contains(metrics, R"("fallback":true)") &&
+                   contains(metrics, R"("advance":)"),
+               "a font ID is resolved and a fallback is named: " + metrics);
         metrics = server.call("query", R"({"kind":"text-metrics","text":"a\nb","size":20})");
         expect(contains(metrics, R"("index":1)"), "a newline starts a second line: " + metrics);
         metrics = server.call("query", R"({"kind":"text-metrics","text":"   ","size":20})");

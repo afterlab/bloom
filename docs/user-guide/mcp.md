@@ -528,8 +528,9 @@ everywhere.
 **Readings.** Beyond the project records, `query` answers measurements and window state, all
 through the same route (`help` lists them with their arguments):
 
-- `kind:"text-metrics"` with `text`, optional `font` and `size` (pixels per em) returns the advance
-  and the ink bounds per line.
+- `kind:"text-metrics"` with `text`, optional `font` (a font ID or a built-in face's name) and `size`
+  (pixels per em) returns the advance and the ink bounds per line. A font ID is measured in the face a
+  render would use now, and `font` in the answer says when that is a fallback or still downloading.
 - `kind:"layer-bounds"` with `composition`, `layer` and optional `time` returns the evaluated
   bounds: `local` (the content rectangle before the layer transform), `corners` (four corners after
   it) and `output` (their axis-aligned box), with the space stated in the answer; a time outside the

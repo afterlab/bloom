@@ -251,8 +251,11 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "pixels at 1:1: x to the right of the text origin (the left edge of the first glyph's "
          "advance), y down from the top of the first line. `advance` is the widest line's width; "
          "`ink` is the union of every glyph's ink in whole pixels (null for text without ink). "
-         "Only the four built-in faces are measured; a font asset's own metrics are not.",
-         "{revision, font:{value, label}, size, unit:\"pixels\", space, advance, lineHeight, "
+         "`font` is a font ID or a built-in face's name. A font ID is measured in the face a render "
+         "would use now: `font.fallback` says when that is a stand-in, and `font.downloading` when "
+         "the font is on its way, so ask again.",
+         "{revision, font:{value, label} or {id, usedFamily, usedStyle, fallback, downloading, "
+         "diagnostic}, size, unit:\"pixels\", space, advance, lineHeight, "
          "lines:[{index, x, y, advance, height, byteBegin, byteEnd}], "
          "ink:{x, y, width, height}|null}",
          {{.name = "text",

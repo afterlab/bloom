@@ -3,8 +3,11 @@
 // Text metrics: the reference text layout (the one every render uses), without rasterizing a
 // frame (#390). Qt-free; heavy enough to belong on a client thread, never the UI thread.
 
+#include <bloom/core/sha256.hpp>
+
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,6 +18,10 @@ struct TextMetricsRequest final {
     // The text layer's font choice: 0 DejaVu Sans, 1 Inter Regular, 2 Inter Medium, 3 Inter
     // SemiBold (the `bloom.text.font` values).
     std::int64_t font = 0;
+    // A resolved font file to measure instead of `font`; null measures the built-in face.
+    std::shared_ptr<const std::vector<std::uint8_t>> fontBytes;
+    core::Sha256Digest fontDigest{};
+    std::uint32_t fontFaceIndex = 0;
     // Pixels per em.
     double size = 0.0;
 };

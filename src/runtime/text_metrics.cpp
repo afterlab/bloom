@@ -31,7 +31,11 @@ TextMetricsResult measureText(const TextMetricsRequest& request) {
         result.diagnostic = "size cannot be used for text";
         return result;
     }
-    const render::TextFont font = face;
+    const render::TextFont font =
+        request.fontBytes != nullptr
+            ? render::TextFont{render::ExternalFontFile{request.fontBytes, request.fontDigest,
+                                                        request.fontFaceIndex}}
+            : render::TextFont{face};
     // Point text: no box, no wrapping; a newline starts a new line.
     const auto layout = render::layoutText(font, request.text, *parameters.value());
     if (!layout) {

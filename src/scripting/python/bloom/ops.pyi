@@ -1818,74 +1818,6 @@ class AssetOps:
         Related: transact
         """
         ...
-    def ensure_font(self, path: str, digest: str, family: str = ..., style: str = ..., index: int = ..., portability: str = ..., relinkHint: str = ..., name: str = ..., tags: tuple = ...) -> Mapping[str, Any] | None:
-        """bloom.asset.ensure-font  (operation, asset)
-        Adds a font face as an asset, or returns the existing asset with the same digest, so a Text
-        layer can use it.
-
-        Arguments:
-          path  str  required
-              The face's file path, or an embedded locator path.
-          digest  str  required
-              The face's SHA-256 content digest, 64 lowercase hex characters.
-              Unit: 64 lowercase hexadecimal characters (SHA-256)
-          family  str  optional
-              The family name.
-          style  str  optional
-              The style name.
-          index  int  optional
-              The face index inside a collection file.
-              Unit: zero-based position
-              Range: >= 0
-          portability  str  optional, default system
-              Locator portability: "system" (path is an absolute file path) or "builtin" (an embedded
-              face).
-              Values:
-                "system"  System font
-                "builtin"  Built-in font
-                "project-relative"  Project-relative file
-          relinkHint  str  optional
-              Required: for "system", the path's file:// URI (it must start with "file:"); for
-              "builtin", "font:" followed by a face name.
-          name  str  optional
-              The asset name.
-          tags  array  optional
-              Asset tags.
-
-        Effects: undoable: one undo step per transact call; marks the project unsaved.
-
-        Outputs (ids the result carries):
-          asset asset
-
-        Prerequisites:
-          - The current revision, from any query result, as transact's expectedRevision.
-
-        Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: asset (each
-          {operationIndex, name, id}).
-
-        Errors:
-          bloom.scripting.invalid-argument
-              When: an argument is missing, of the wrong kind or out of range
-              Do: the message names the argument and a working example call
-          bloom.scripting.command-rejected
-              When: the document refused the edit (a stale id, a locked layer, an impossible value)
-              Do: re-read the ids with the related query and fix the value
-          bloom.scripting.stale-revision  (retry)
-              When: the project moved on since expectedRevision
-              Do: re-query and retry with the current revision
-
-        Examples:
-          MCP:
-            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.asset.ensure-font","args":{"path":"/usr/share/fonts/DejaVuSans.ttf","digest":"0000000000000000000000000000000000000000000000000000000000000000"}}]}}
-          Python:
-            bloom.ops.asset.ensure_font(path="/usr/share/fonts/DejaVuSans.ttf", digest="0000000000000000000000000000000000000000000000000000000000000000")
-          CLI:
-            bloom-cli run edits.json   # [{"op":"bloom.asset.ensure-font","args":{"path":"/usr/share/fonts/DejaVuSans.ttf","digest":"0000000000000000000000000000000000000000000000000000000000000000"}}]
-
-        Related: bloom.asset.relink-font, query:assets, transact
-        """
-        ...
     def import_(self, paths: tuple, projectDirectory: str = ..., folder: int | Proxy = ..., asSequence: bool = ..., firstFrame: int = ..., lastFrame: int = ..., skipMissingFrames: bool = ..., sequenceFrameRate: str = ..., stillDuration: int = ...) -> Mapping[str, Any] | None:
         """bloom.asset.import  (operation, asset)
         Imports media files and folders into Assets in one step: hashes and probes each file (image
@@ -2156,90 +2088,17 @@ class AssetOps:
         Related: query:assets, transact
         """
         ...
-    def relink_font(self, asset: int | Proxy, path: str, digest: str, family: str = ..., style: str = ..., index: int = ..., portability: str = ..., relinkHint: str = ..., name: str = ..., tags: tuple = ...) -> Mapping[str, Any] | None:
-        """bloom.asset.relink-font  (operation, asset)
-        Points a font asset at another file with the given digest.
-
-        Arguments:
-          asset  id  required
-              The font asset to repoint.
-              Unit: asset id (query:assets)
-              Range: >= 1
-          path  str  required
-              The face's file path, or an embedded locator path.
-          digest  str  required
-              The face's SHA-256 content digest, 64 lowercase hex characters.
-              Unit: 64 lowercase hexadecimal characters (SHA-256)
-          family  str  optional
-              The family name.
-          style  str  optional
-              The style name.
-          index  int  optional
-              The face index inside a collection file.
-              Unit: zero-based position
-              Range: >= 0
-          portability  str  optional, default system
-              Locator portability: "system" (path is an absolute file path) or "builtin" (an embedded
-              face).
-              Values:
-                "system"  System font
-                "builtin"  Built-in font
-                "project-relative"  Project-relative file
-          relinkHint  str  optional
-              Required: for "system", the path's file:// URI (it must start with "file:"); for
-              "builtin", "font:" followed by a face name.
-          name  str  optional
-              The asset name.
-          tags  array  optional
-              Asset tags.
-
-        Effects: undoable: one undo step per transact call; marks the project unsaved.
-
-        Outputs (ids the result carries):
-          asset asset
-
-        Prerequisites:
-          - The current revision, from any query result, as transact's expectedRevision.
-          - Existing ids for the id arguments; each argument's unit names the query that lists them.
-
-        Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: asset (each
-          {operationIndex, name, id}).
-
-        Errors:
-          bloom.scripting.invalid-argument
-              When: an argument is missing, of the wrong kind or out of range
-              Do: the message names the argument and a working example call
-          bloom.scripting.command-rejected
-              When: the document refused the edit (a stale id, a locked layer, an impossible value)
-              Do: re-read the ids with the related query and fix the value
-          bloom.scripting.stale-revision  (retry)
-              When: the project moved on since expectedRevision
-              Do: re-query and retry with the current revision
-
-        Examples:
-          MCP:
-            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.asset.relink-font","args":{"asset":1,"path":"/usr/share/fonts/DejaVuSans.ttf","digest":"0000000000000000000000000000000000000000000000000000000000000000"}}]}}
-          Python:
-            bloom.ops.asset.relink_font(asset=1, path="/usr/share/fonts/DejaVuSans.ttf", digest="0000000000000000000000000000000000000000000000000000000000000000")
-          CLI:
-            bloom-cli run edits.json   # [{"op":"bloom.asset.relink-font","args":{"asset":1,"path":"/usr/share/fonts/DejaVuSans.ttf","digest":"0000000000000000000000000000000000000000000000000000000000000000"}}]
-
-        Related: bloom.asset.ensure-font, transact
-        """
-        ...
     def reload(self, asset: int | Proxy) -> Mapping[str, Any] | None:
         """bloom.asset.reload  (operation, asset)
         Reads an asset's own file again, as Reload Footage in the Assets panel does: the media is probed
         again the way the asset was imported (a still stays a still, a sequence keeps its frame range)
         and the asset takes the file's current size, duration and digest. The probe runs when the
         operation is created, off the UI thread, and stops when the request is cancelled. Reload several
-        assets by giving one operation per asset. Outputs: none. Errors: "Asset N does not exist"; "A
-        font reloads from the system catalogue" - use bloom.asset.relink-font; "The asset has no file to
-        read" - a data asset or an empty or unusable locator; the probe's own reason when the file is
-        missing or unreadable (bloom.asset.relink then points the asset at another file);
-        bloom.scripting.cancelled. Undo: one step restores the asset as it was. MCP example:
-        {"op":"bloom.asset.reload","args":{"asset":3}}.
+        assets by giving one operation per asset. Outputs: none. Errors: "Asset N does not exist"; "The
+        asset has no file to read" - a data asset or an empty or unusable locator; the probe's own
+        reason when the file is missing or unreadable (bloom.asset.relink then points the asset at
+        another file); bloom.scripting.cancelled. Undo: one step restores the asset as it was. MCP
+        example: {"op":"bloom.asset.reload","args":{"asset":3}}.
 
         Arguments:
           asset  id  required
@@ -5008,7 +4867,7 @@ class LayerOps:
         """bloom.layer.add-text  (operation, layer)
         Adds a text layer on top of the layer stack. Font, alignment, box and the other text parameters
         are edited afterwards with bloom.parameter.set-source; their ids are in the outputs and in
-        query:layers.
+        query:layers. The font is a font ID string (family, style, weight and source), never an asset.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -9021,7 +8880,10 @@ class ParameterOps:
         Sets what drives a parameter: exactly one of a constant `value`, an existing `curve`, or a
         value-graph `driverNode` with `driverPort`. Enumerations (blend mode, loop mode, text alignment
         and so on) take either the stored value or its label, matched case-insensitively (3 or "screen"
-        for the Screen blend mode); query {kind:"parameter"} lists the choices.
+        for the Screen blend mode); query {kind:"parameter"} lists the choices. A text font takes a font
+        ID as a string, for example "source=google;family=Roboto;style=Bold;weight=700;italic=false"
+        (source is system, google or builtin; family is required; style, weight, italic, axes, ps and
+        version are optional); query {kind:"parameter"} reports it with its fontStatus.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
