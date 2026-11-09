@@ -11,6 +11,7 @@
 #include <bloom/platform/owner_only_secret.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/runtime/profiler_gpu_reader.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -291,6 +292,8 @@ int serve(scripting::Session& session) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // An export that needs a Google font waits for the download (docs/architecture/fonts.md).
+    bloom::runtime::fonts::installHeadlessFontTransport();
     try {
         if (argc != 1 && !(argc == 3 && std::string_view(argv[1]) == "--project")) {
             std::cerr << "usage: bloom-mcp [--project <file>]\n";

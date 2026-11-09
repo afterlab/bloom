@@ -51,7 +51,7 @@ target_link_libraries(bloom_runtime PUBLIC bloom_core Threads::Threads)
 bloom_enable_warnings(bloom_runtime)
 
 # Font IDs to font files: installed fonts, the per-user cache, Google Fonts downloads and the
-# fallback table (docs/architecture/fonts.md). No Qt and no network library: the transport is a seam
+# fallback table (docs/architecture/fonts.md). No Qt and no linked network library: the transport is a seam
 # the application fills.
 add_library(bloom_runtime_fonts STATIC)
 
@@ -63,6 +63,7 @@ target_sources(
         google_catalogue.cpp
         google_catalogue_data.cpp
         google_fonts.cpp
+        headless_font_transport.cpp
         system_font_index.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -73,8 +74,18 @@ target_sources(
             include/bloom/runtime/font_transport.hpp
             include/bloom/runtime/google_catalogue.hpp
             include/bloom/runtime/google_fonts.hpp
+            include/bloom/runtime/headless_font_transport.hpp
             include/bloom/runtime/system_font_index.hpp
 )
+
+# The headless transport (command-line tools, MCP, Python) speaks through the system's HTTP client
+# library, loaded at run time on Linux; elsewhere it reports that downloads are not available.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(bloom_runtime_fonts PRIVATE headless_font_transport_curl.cpp)
+    target_link_libraries(bloom_runtime_fonts PRIVATE ${CMAKE_DL_LIBS})
+else()
+    target_sources(bloom_runtime_fonts PRIVATE headless_font_transport_unavailable.cpp)
+endif()
 
 target_compile_features(bloom_runtime_fonts PUBLIC cxx_std_20)
 target_link_libraries(bloom_runtime_fonts PUBLIC bloom_core bloom_document bloom_platform

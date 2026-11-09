@@ -72,9 +72,14 @@ static instance; axes in a request are sorted with lowercase tags first. Font fi
 from `https://fonts.gstatic.com/`. The family version is read from the file URL.
 
 The transport is a seam (`FontTransport`). The desktop application installs a Qt Network
-implementation; the command-line tools, the MCP server and Python have no network transport and
-report "downloads are not available here" for a font that is not already installed or cached. Tests
-use a fake transport.
+implementation. The command-line tools, the MCP server and Python install a headless one
+(`makeHeadlessFontTransport`, `src/runtime/headless_font_transport_curl.cpp`) at start-up: a blocking,
+cancellable HTTPS GET with a size cap and a stall timeout, run on the same font worker and writing the
+same per-user cache. It speaks through the system's own HTTP client library, loaded when first needed,
+so no network library is linked and none is bundled. Where that library is absent, and on Windows and
+macOS (where this transport has not been written or run), the headless programs report "is not
+installed and cannot be downloaded here" for a font that is not already installed or cached, as
+before. Offline still ends in the fallback face with the usual diagnostic. Tests use a fake transport.
 
 ## Fallback table
 

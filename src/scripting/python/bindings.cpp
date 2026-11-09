@@ -1,5 +1,6 @@
 #include "native.hpp"
 
+#include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/scripting/operation_reference.hpp>
 
 #include <nanobind/stl/optional.h>
@@ -13,6 +14,8 @@
 namespace bloom::scripting::python {
 
 void bindHost(nb::module_& module) {
+    // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
+    runtime::fonts::installHeadlessFontTransport();
     auto roots = PythonRootRetirements::create();
     // Constructor failure leaves ownership with this scope; successful construction transfers
     // the exact holder to the capsule, including if later module attribute assignment fails.

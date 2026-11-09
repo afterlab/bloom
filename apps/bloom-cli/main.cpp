@@ -8,6 +8,7 @@
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/export.hpp>
@@ -496,6 +497,8 @@ frameRange(std::string_view value) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
+    runtime::fonts::installHeadlessFontTransport();
 #if defined(BLOOM_BUILD_PYTHON)
     if ((argc == 2 && std::string_view(argv[1]) == "python") ||
         (argc == 3 && std::string_view(argv[1]) == "run" &&

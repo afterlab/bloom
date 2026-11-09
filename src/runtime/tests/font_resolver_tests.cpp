@@ -5,6 +5,7 @@
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/google_catalogue.hpp>
 #include <bloom/runtime/google_fonts.hpp>
+#include <bloom/runtime/headless_font_transport.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -404,6 +405,41 @@ void previewSubsetIsFetchedOnlyOnRequest() {
         expect(text, "the subset request carries only the family name");
     }
 }
+// The command-line tools, MCP and Python download through the same resolver and cache. Nothing
+// here reaches the network: the address refuses connections.
+void headlessTransportFailsOfflineAndCancels() {
+    const auto transport = makeHeadlessFontTransport();
+#if defined(__linux__)
+    if (!transport) {
+        std::cerr << "SKIP: the system HTTP client is not installed here\n";
+        return;
+    }
+    const auto refused = transport->get("https://127.0.0.1:1/font", 1 << 20, [] { return false; }, {});
+    expect(refused.status == FontHttpStatus::Offline && refused.body.empty(),
+           "a refused connection is an offline error");
+    const auto cancelled = transport->get("https://127.0.0.1:1/font", 1 << 20, [] { return true; }, {});
+    expect(cancelled.status == FontHttpStatus::Cancelled, "a cancelled transfer says so");
+
+    // Through the resolver: the wait ends in the fallback with the existing offline diagnostic.
+    const auto root = std::filesystem::temp_directory_path() / "bloom-font-headless-test";
+    std::filesystem::remove_all(root);
+    FontResolver::Options options;
+    options.cacheDirectory = root;
+    options.transport = transport;
+    options.stylesheetEndpoint = "https://127.0.0.1:1/css2";
+    FontResolver resolver(std::move(options));
+    const auto resolution = resolver.resolve(googleId("Test Family", 700, "v7"), FontFetch::Wait);
+    expect(resolution.missing() && resolution.reason == FontMissingReason::Offline &&
+               resolution.diagnostic.find("Test Family") != std::string::npos,
+           "offline ends in the fallback with the diagnostic: " + resolution.diagnostic);
+    expect(!std::filesystem::exists(resolver.cachePathFor(googleId("Test Family", 700, "v7"))),
+           "nothing is cached for a failed download");
+    std::filesystem::remove_all(root);
+#else
+    expect(!transport, "where no system client is wired the transport is absent");
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -418,5 +454,6 @@ int main() {
     systemFontMissingButOnGoogleIsFetched();
     cancellationStopsTheWait();
     previewSubsetIsFetchedOnlyOnRequest();
+    headlessTransportFailsOfflineAndCancels();
     return failures == 0 ? 0 : 1;
 }
