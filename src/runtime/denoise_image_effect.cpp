@@ -41,6 +41,14 @@ std::optional<PreparedDenoise> prepareDenoise(const DenoiseKernel& kernel,
         return std::nullopt;
     PreparedDenoise prepared;
     prepared.mode = kernel.mode;
+    if (kernel.mode == DenoiseMode::Temporal) {
+        // A step has no search radius: its patch is 3 x 3 at every resolution.
+        prepared.first = kernel.first;
+        prepared.last = kernel.last;
+        const double sigma = std::max(*strength, 1.0e-6);
+        prepared.inverseVariance = static_cast<float>(1.0 / (sigma * sigma));
+        return prepared;
+    }
     prepared.radiusX = scaledRadius(*radius, horizontalScale);
     prepared.radiusY = scaledRadius(*radius, verticalScale);
     if (prepared.identity())
@@ -61,8 +69,10 @@ std::optional<PreparedDenoise> prepareDenoise(const DenoiseKernel& kernel,
 
 std::string denoiseIdentity(const PreparedDenoise& denoise) {
     OperationKey key;
-    key.add(std::string("denoise-v1"));
+    key.add(std::string("denoise-v2"));
     key.add(static_cast<std::int64_t>(denoise.mode));
+    key.add(denoise.first);
+    key.add(denoise.last);
     key.add(static_cast<std::int64_t>(denoise.radiusX));
     key.add(static_cast<std::int64_t>(denoise.radiusY));
     key.add(static_cast<double>(denoise.threshold));
@@ -197,6 +207,9 @@ ImageEffectResult applyDenoise(const PreparedDenoise& denoise, const render::Rgb
                                const EvaluationProgressCallback& progress) {
     if (cancellation.isCancellationRequested())
         return ImageEffectResult{{}, {}, true};
+    if (denoise.mode == DenoiseMode::Temporal)
+        return failed(EvaluationDiagnosticCode::InternalInvariant,
+                      "A temporal denoise step reads its frames: applyTemporalDenoise runs it");
     const auto window = input.descriptor()->dataWindow();
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), budget);
     if (!builder)
@@ -237,6 +250,119 @@ ImageEffectResult applyDenoise(const PreparedDenoise& denoise, const render::Rgb
     return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}, false};
 }
 
+namespace {
+
+// A pixel by global coordinate: transparent outside the image's data window (or with no image).
+Texel globalTexel(const render::Rgba32fImage* image, const std::int64_t x, const std::int64_t y) {
+    if (image == nullptr)
+        return Texel{};
+    const auto window = image->descriptor()->dataWindow();
+    if (x < window.originX() || y < window.originY() || x >= window.maxXExclusive() ||
+        y >= window.maxYExclusive())
+        return Texel{};
+    const auto sample = image->read(x, y);
+    if (!sample)
+        return Texel{};
+    const auto p = *sample.value();
+    return Texel{p.red(), p.green(), p.blue(), p.alpha()};
+}
+
+} // namespace
+
+ImageEffectResult applyTemporalDenoise(const PreparedDenoise& denoise,
+                                       const render::Rgba32fImage& mean,
+                                       const render::Rgba32fImage& current,
+                                       const render::Rgba32fImage* earlier, const std::size_t budget,
+                                       const CancellationToken& cancellation,
+                                       const OperationIndex operation,
+                                       const EvaluationProgressCallback& progress) {
+    if (cancellation.isCancellationRequested())
+        return ImageEffectResult{{}, {}, true};
+    if (denoise.mode != DenoiseMode::Temporal)
+        return failed(EvaluationDiagnosticCode::InternalInvariant,
+                      "A temporal denoise step was prepared for another mode");
+    const auto window = current.descriptor()->dataWindow();
+    if (mean.descriptor()->dataWindow() != window)
+        return failed(EvaluationDiagnosticCode::InternalInvariant,
+                      "A temporal denoise mean does not cover its current frame");
+    auto builder = render::Rgba32fImageBuilder::create(*current.descriptor(), budget);
+    if (!builder)
+        return failed(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                      "Denoise output exceeds the pixel budget");
+    const auto rows = window.extent().height();
+    reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, rows});
+    for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+        if (cancellation.isCancellationRequested())
+            return ImageEffectResult{{}, {}, true};
+        auto row = builder.value()->row(y);
+        if (!row)
+            return failed(EvaluationDiagnosticCode::InternalInvariant,
+                          "Denoise row is unavailable");
+        for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+            if ((static_cast<std::uint64_t>(x - window.originX()) & 15U) == 0 &&
+                cancellation.isCancellationRequested())
+                return ImageEffectResult{{}, {}, true};
+            const auto c = globalTexel(&current, x, y);
+            const auto a = globalTexel(&mean, x, y);
+            float patch = 0.0F;
+            for (int py = -1; py <= 1; ++py)
+                for (int px = -1; px <= 1; ++px)
+                    patch += squaredDistance(globalTexel(&current, x + px, y + py),
+                                             globalTexel(earlier, x + px, y + py));
+            const float spread = patch * (1.0F / 36.0F);
+            const float w = rangeWeight(spread, denoise.inverseVariance);
+            const auto sample = globalTexel(earlier, x, y);
+            const float total = denoise.first ? 1.0F : 1.0F / a[3];
+            const float next = total + w;
+            const float k = w / next;
+            Texel out{};
+            for (std::size_t ch = 0; ch < 3; ++ch) {
+                const float m = denoise.first ? c[ch] : a[ch];
+                out[ch] = std::fma(k, sample[ch] - m, m);
+            }
+            out[3] = denoise.last ? c[3] : 1.0F / next;
+            const auto pixel = render::Rgba32f::fromPremultiplied(out[0], out[1], out[2], out[3]);
+            if (!pixel)
+                return failed(EvaluationDiagnosticCode::InvalidPixel,
+                              "Denoise produced nonfinite HDR pixels");
+            (*row.value())[static_cast<std::size_t>(x - window.originX())] = *pixel.value();
+        }
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                  static_cast<std::uint64_t>(y - window.originY() + 1), rows});
+    }
+    if (cancellation.isCancellationRequested())
+        return ImageEffectResult{{}, {}, true};
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return failed(EvaluationDiagnosticCode::InvalidPixel, "Denoise image publication failed");
+    return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}, false};
+}
+
+std::optional<std::vector<float>>
+temporalDenoiseProgramData(const PreparedDenoise& d, const std::int64_t width,
+                           const std::int64_t height, const TemporalDenoiseCell& current,
+                           const TemporalDenoiseCell& earlier) {
+    constexpr std::int64_t exact = std::int64_t{1} << 24;
+    const auto fits = [](const std::int64_t value) { return value > -exact && value < exact; };
+    std::vector<float> data(24, 0.0F);
+    data[0] = static_cast<float>(static_cast<int>(DenoiseMode::Temporal));
+    data[1] = static_cast<float>((d.first ? 1 : 0) + (d.last ? 2 : 0));
+    data[2] = static_cast<float>(width);
+    data[3] = static_cast<float>(height);
+    data[5] = d.inverseVariance;
+    if (!fits(width) || !fits(height))
+        return std::nullopt;
+    std::size_t at = 8;
+    for (const auto& cell : {current, earlier})
+        for (const auto value :
+             {cell.shiftX, cell.shiftY, cell.lowX, cell.lowY, cell.width, cell.height}) {
+            if (!fits(value))
+                return std::nullopt;
+            data[at++] = static_cast<float>(value);
+        }
+    return data;
+}
+
 std::vector<float> denoiseProgramData(const PreparedDenoise& d) {
     std::vector<float> data(24, 0.0F);
     data[0] = static_cast<float>(static_cast<int>(d.mode));
@@ -259,9 +385,15 @@ render::OcioGpuProgramResult buildDenoiseProgram(const std::vector<float>& data)
             return render::OcioGpuProgramResult::failure(
                 render::OcioGpuProgramError::InvalidRequest);
     const float mode = data[0];
-    if ((mode != 0.0F && mode != 1.0F && mode != 2.0F) || data[1] < 0.0F ||
-        data[1] > static_cast<float>(kMaximumDenoiseRadius) || data[2] < 0.0F ||
-        data[2] > static_cast<float>(kMaximumDenoiseRadius))
+    const bool temporal = mode == 3.0F;
+    const bool spatialValid = (mode == 0.0F || mode == 1.0F || mode == 2.0F) && data[1] >= 0.0F &&
+                              data[1] <= static_cast<float>(kMaximumDenoiseRadius) &&
+                              data[2] >= 0.0F &&
+                              data[2] <= static_cast<float>(kMaximumDenoiseRadius);
+    const bool temporalValid = temporal && data[1] >= 0.0F && data[1] <= 3.0F && data[2] >= 1.0F &&
+                               data[3] >= 1.0F && data[12] >= 0.0F && data[13] >= 0.0F &&
+                               data[18] >= 0.0F && data[19] >= 0.0F;
+    if (!spatialValid && !temporalValid)
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     static const std::string text =
         "layout(set = 0, binding = 0, std430) readonly buffer BloomDenoiseData { vec4 values[]; } "
@@ -279,11 +411,51 @@ render::OcioGpuProgramResult buildDenoiseProgram(const std::vector<float>& data)
         "float bloom_denoise_axis(int table, int i) {\n"
         " return bloom_denoise_data.values[table + (i >> 2)][i & 3];\n"
         "}\n"
+        "float bloom_denoise_value(int i) { return bloom_denoise_data.values[i >> 2][i & 3]; }\n"
+        "vec4 bloom_denoise_cell(int base, ivec2 p) {\n"
+        " ivec2 low = ivec2(int(bloom_denoise_value(base + 2)), int(bloom_denoise_value(base + 3)));\n"
+        " ivec2 high = low + ivec2(int(bloom_denoise_value(base + 4)), "
+        "int(bloom_denoise_value(base + 5)));\n"
+        " if (any(lessThan(p, low)) || any(greaterThanEqual(p, high))) return vec4(0.0);\n"
+        " return imageLoad(bloom_ocio_input, p + ivec2(int(bloom_denoise_value(base)), "
+        "int(bloom_denoise_value(base + 1))));\n"
+        "}\n"
+        "vec4 bloom_denoise_temporal(ivec2 c, vec4 head, vec4 knob) {\n"
+        " vec4 held = imageLoad(bloom_ocio_input, c);\n"
+        " if (c.x >= int(head.z) || c.y >= int(head.w)) return held;\n"
+        " int flags = int(head.y);\n"
+        " bool first = (flags & 1) != 0;\n"
+        " bool last = (flags & 2) != 0;\n"
+        " vec4 now = bloom_denoise_cell(8, c);\n"
+        " precise float patch_sum = 0.0;\n"
+        " for (int py = -1; py <= 1; ++py) {\n"
+        "  for (int px = -1; px <= 1; ++px) {\n"
+        "   ivec2 q = c + ivec2(px, py);\n"
+        "   patch_sum += bloom_denoise_distance(bloom_denoise_cell(8, q), bloom_denoise_cell(14, q));\n"
+        "  }\n"
+        " }\n"
+        " precise float spread = patch_sum * (1.0 / 36.0);\n"
+        " float w = bloom_denoise_weight(spread, knob.y);\n"
+        " vec4 sample_value = bloom_denoise_cell(14, c);\n"
+        " precise float total = first ? 1.0 : bloom_ocio_cpu_div(1.0, held.a);\n"
+        " precise float next = total + w;\n"
+        " precise float k = bloom_ocio_cpu_div(w, next);\n"
+        " vec4 result;\n"
+        " for (int ch = 0; ch < 3; ++ch) {\n"
+        "  float m = first ? now[ch] : held[ch];\n"
+        "  precise float moved = fma(k, sample_value[ch] - m, m);\n"
+        "  result[ch] = moved;\n"
+        " }\n"
+        " result.a = last ? now.a : bloom_ocio_cpu_div(1.0, next);\n"
+        " if (result.a == 0.0) result = vec4(0.0);\n"
+        " return result;\n"
+        "}\n"
         "vec4 bloom_denoise(ivec2 c) {\n"
         " ivec2 size = imageSize(bloom_ocio_input);\n"
         " vec4 head = bloom_denoise_data.values[0];\n"
         " vec4 knob = bloom_denoise_data.values[1];\n"
         " int mode = int(head.x);\n"
+        " if (mode == 3) return bloom_denoise_temporal(c, head, knob);\n"
         " int rx = int(head.y);\n"
         " int ry = int(head.z);\n"
         " vec4 center = imageLoad(bloom_ocio_input, c);\n"

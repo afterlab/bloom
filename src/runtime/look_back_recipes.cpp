@@ -18,4 +18,27 @@ std::vector<OperationIndex> appendLookBackSamples(RecipeEmitter& emitter, const 
     return samples;
 }
 
+std::optional<OperationIndex> appendTemporalDenoise(RecipeEmitter& emitter,
+                                                   const OperationIndex input,
+                                                   const std::int64_t frames,
+                                                   const CompiledScalarParameter& strength) {
+    if (frames < 2)
+        return std::nullopt;
+    const auto samples = appendLookBackSamples(emitter, input, frames);
+    if (samples.size() < 2)
+        return std::nullopt;
+    const auto current = samples.back();
+    const auto steps = samples.size() - 1;
+    auto mean = current;
+    for (std::size_t step = 0; step < steps; ++step) {
+        DenoiseKernel kernel{DenoiseMode::Temporal, CompiledScalarParameter{},
+                             step == 0 ? strength : emitter.reuse(strength)};
+        kernel.first = step == 0;
+        kernel.last = step + 1 == steps;
+        mean = emitter.effect(mean, std::move(kernel));
+        emitter.setImages(mean, {current, samples[steps - 1 - step]});
+    }
+    return mean;
+}
+
 } // namespace bloom::runtime::detail

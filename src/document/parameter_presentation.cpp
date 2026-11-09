@@ -591,6 +591,8 @@ std::optional<ParameterPresentation> denoisePresentation(const std::string_view 
                      static_cast<double>(kMaximumDenoiseFrames),
                      static_cast<double>(kMinimumDenoiseFrames),
                      static_cast<double>(kMaximumDenoiseFrames));
+    if (schemaKey == kDenoiseSampleFromSchemaKey || schemaKey == kDenoiseSampleToSchemaKey)
+        return pixels(-kMaximumDenoiseSampleOffset, kMaximumDenoiseSampleOffset, 4096.0);
     return std::nullopt;
 }
 

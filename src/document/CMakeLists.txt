@@ -49,6 +49,7 @@ target_sources(
         path_value.cpp
         parameter_enums.cpp
         parameter_presentation.cpp
+        parameter_activity.cpp
         shape.cpp
         persisted_text.cpp
         export_queue.cpp
@@ -89,6 +90,7 @@ target_sources(
             include/bloom/document/parameter.hpp
             include/bloom/document/parameter_enums.hpp
             include/bloom/document/parameter_presentation.hpp
+            include/bloom/document/parameter_activity.hpp
             include/bloom/document/shape.hpp
             include/bloom/document/persisted_text.hpp
             include/bloom/document/project.hpp

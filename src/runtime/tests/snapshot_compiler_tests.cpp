@@ -1,6 +1,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/platform/font_catalog.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
@@ -11,6 +12,7 @@
 #include <bloom/core/field_program.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <map>
+#include <set>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
@@ -2125,6 +2127,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_test_card_tests.ipp"
 #include "snapshot_compiler_four_color_gradient_tests.ipp"
 #include "snapshot_compiler_extension_frames.ipp"
+#include "snapshot_compiler_denoise_tests.ipp"
 #include "snapshot_compiler_audio_amplitude_tests.ipp"
 #include "snapshot_compiler_node_group_tests.ipp"
 
@@ -2141,6 +2144,7 @@ int main() {
         testBlurLowering(expectations);
         testBlurExtensionLowering(expectations);
         testDenoiseLowering(expectations);
+        testDenoiseAutoStrength(expectations);
         testHueSaturationExtensionLowering(expectations);
         testTransform2DLowering(expectations);
         testMatteBlurLowering(expectations);

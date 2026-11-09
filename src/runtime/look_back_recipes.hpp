@@ -9,6 +9,7 @@
 #include "compositing_recipes.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace bloom::runtime::detail {
@@ -23,5 +24,15 @@ inline constexpr std::int64_t kMaximumLookBackFrames = 64;
 // from two frames is one result. Empty when `frames` is outside [1, kMaximumLookBackFrames].
 [[nodiscard]] std::vector<OperationIndex>
 appendLookBackSamples(RecipeEmitter& emitter, OperationIndex input, std::int64_t frames);
+
+// #514 Temporal denoise: the look-back window of `input` (`frames` frames, the current one last)
+// and one weighted DenoiseKernel step per earlier frame, nearest first, each reading the current
+// frame and its earlier frame (denoise_image_effect.hpp). The first step's mean is the current frame
+// and the last ends the chain. An authored `strength` drives the first step and is reused by the
+// rest. Null when `frames` is outside [2, kMaximumLookBackFrames]. The snapshot compiler lowers the
+// node with this function; the tests and the coverage fixtures build their plans with it.
+[[nodiscard]] std::optional<OperationIndex>
+appendTemporalDenoise(RecipeEmitter& emitter, OperationIndex input, std::int64_t frames,
+                      const CompiledScalarParameter& strength);
 
 } // namespace bloom::runtime::detail

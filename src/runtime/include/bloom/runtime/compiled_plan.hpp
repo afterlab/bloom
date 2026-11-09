@@ -485,14 +485,21 @@ struct DirectionalBlurKernel final {
     double decay = 1.0;              // each tap's weight over the one before it, (0, 1]
     friend bool operator==(const DirectionalBlurKernel&, const DirectionalBlurKernel&) = default;
 };
-// #514 Denoise & Smooth, the spatial modes (denoise_image_effect.hpp). `radius` is in full-resolution
-// pixels, [0, 6]; `strength` is the Median outlier threshold, or the Bilateral and Spatial tolerance
-// (a difference of stored values beyond it stops a neighbor contributing), [0, 10].
-enum class DenoiseMode : std::uint8_t { Median = 0, Bilateral = 1, Spatial = 2 };
+// #514 Denoise & Smooth (denoise_image_effect.hpp). `radius` is in full-resolution pixels, [0, 6];
+// `strength` is the Median outlier threshold, or the Bilateral, Spatial and Temporal tolerance (a
+// difference of stored values beyond it stops a neighbor contributing), [0, 10].
+//
+// Temporal is one step of the similarity-weighted temporal mean: its input is the running mean so
+// far (the current frame itself on the first step) and `fieldImages` are the current frame and
+// one earlier frame; the earlier frame joins the mean with the weight its 3 x 3 patch's similarity
+// to the current frame's gives it. `first` and `last` mark the chain's ends; `radius` is not read.
+enum class DenoiseMode : std::uint8_t { Median = 0, Bilateral = 1, Spatial = 2, Temporal = 3 };
 struct DenoiseKernel final {
     DenoiseMode mode = DenoiseMode::Median;
     CompiledScalarParameter radius;
     CompiledScalarParameter strength;
+    bool first = false;
+    bool last = false;
     friend bool operator==(const DenoiseKernel&, const DenoiseKernel&) = default;
 };
 // #506 Glow highlight roll-off: associated colour c becomes c / (1 + amount * max(L, 0)), L its

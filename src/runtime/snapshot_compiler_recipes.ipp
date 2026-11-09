@@ -40,9 +40,13 @@ recipeOptionalInput(const document::NodeId nodeId, const std::string_view port,
 }
 
 // #514 Denoise & Smooth. Median, Bilateral and Spatial are one DenoiseKernel on the input. Temporal
-// averages the look-back window of the input (the current frame and those before it, each a time
-// sample on the plan's frame grid): a running mean, image i mixed into the mean of the ones before
-// it by 1 / (i + 1), so every frame weighs the same.
+// is the look-back window of the input (the current frame and those before it, each a time sample
+// on the plan's frame grid) and one weighted step per earlier frame, nearest first: each step adds
+// one earlier frame to the running mean with the weight its patch similarity to the current frame
+// gives it (denoise_image_effect.hpp). With Auto strength the strength is measured: the deviation of
+// the stored green channel over the sample region of the input (an Image Statistics plan of the
+// node's own, run for the frame through the statistics route and its one named readback) times the
+// mode's factor, limited to the strength's domain.
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerDenoise(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
              std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
@@ -53,39 +57,54 @@ lowerDenoise(const document::NodeRecord& node, std::vector<runtime::CompiledOper
     }
     const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
     const auto* frames = parameterConstant<std::int64_t>(findParameterBinding(node, "frames"));
+    const auto* automatic = parameterConstant<bool>(findParameterBinding(node, "autoStrength"));
     if (mode == nullptr || frames == nullptr || *mode < 0 || *mode >= document::kDenoiseModeCount ||
         *frames < document::kMinimumDenoiseFrames || *frames > document::kMaximumDenoiseFrames) {
         addTopologyFailure(node.id, "Denoise parameters could not be lowered.");
         return std::nullopt;
     }
-    const bool temporal = *mode == static_cast<std::int64_t>(document::DenoiseNodeMode::Temporal);
-    // The temporal mean reads neither the radius nor the strength, so an animated one must not
-    // register a curve nothing reads (a plan with an unreferenced animation curve is refused).
+    const auto nodeMode = static_cast<document::DenoiseNodeMode>(*mode);
+    const bool temporal = nodeMode == document::DenoiseNodeMode::Temporal;
+    const bool measured = automatic != nullptr && *automatic;
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    // Only the values the mode reads are lowered (document::isParameterInactive): Temporal has no
+    // radius, and a measured strength replaces the authored one.
     const auto radius = temporal ? std::optional<runtime::CompiledScalarParameter>{
                                        runtime::CompiledScalarParameter{}}
                                  : compiledScalarParameter(findParameterBinding(node, "radius"));
-    const auto strength = temporal ? std::optional<runtime::CompiledScalarParameter>{
-                                         runtime::CompiledScalarParameter{}}
-                                   : compiledScalarParameter(findParameterBinding(node, "strength"));
+    std::optional<runtime::CompiledScalarParameter> strength;
+    if (measured) {
+        const auto sample = lowerStatisticsPlan(node);
+        if (!sample.ok) {
+            addTopologyFailure(node.id, "The Denoise sample region could not be measured.");
+            return std::nullopt;
+        }
+        const auto first = recipeValueSink()(
+            runtime::CompiledValueKernel{runtime::CompiledValueImageStatistics{node.id, sample.plan}},
+            5);
+        const runtime::CompiledScalarParameter deviation{
+            {}, runtime::ValueOutputIndex::fromRaw(first.value() + 3)};
+        using core::primitives::ScalarPrimitive;
+        strength = emitter.scalar(
+            ScalarPrimitive::Minimum,
+            {emitter.scalar(ScalarPrimitive::Multiply,
+                            {deviation, runtime::detail::RecipeEmitter::constant(
+                                            document::denoiseAutoStrengthFactor(nodeMode))}),
+             runtime::detail::RecipeEmitter::constant(document::kMaximumDenoiseStrengthValue)});
+    } else {
+        strength = compiledScalarParameter(findParameterBinding(node, "strength"));
+    }
     if (!radius || !strength) {
         addTopologyFailure(node.id, "Denoise parameters could not be lowered.");
         return std::nullopt;
     }
-    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
     if (!temporal)
         return emitter.effect(*input, runtime::DenoiseKernel{static_cast<runtime::DenoiseMode>(*mode),
                                                               *radius, *strength});
-    const auto samples = runtime::detail::appendLookBackSamples(emitter, *input, *frames);
-    auto mean = samples.front();
-    for (std::size_t i = 1; i < samples.size(); ++i)
-        mean = emitter.effect(
-            mean,
-            runtime::ImageCombineKernel{
-                runtime::ImageCombineMode::Mix,
-                runtime::detail::RecipeEmitter::constant(1.0 / static_cast<double>(i + 1)),
-                render::ImageCoverageChannel::Alpha},
-            samples[i]);
-    return mean;
+    const auto lowered = runtime::detail::appendTemporalDenoise(emitter, *input, *frames, *strength);
+    if (!lowered)
+        addTopologyFailure(node.id, "Denoise look-back window is out of bounds.");
+    return lowered;
 }
 
 // #486 Sharpen: its input's blur and the unsharp mask over the two.
@@ -213,6 +232,48 @@ lowerAutoExposure(const document::NodeRecord& node,
     return lowered;
 }
 
+// #514: the sample region of a Denoise node's Auto strength, cut out of the picture, reduced to the
+// statistics of the stored green channel. The corners are full-resolution pixels from the
+// composition's centre, +y up; the crop's margins are measured from the display window's edges, so
+// the region scales with the render like any crop. A region is kept inside the frame and at least
+// one pixel wide and tall.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerDenoiseSampleReduction(const document::NodeRecord& node, const runtime::OperationIndex input,
+                            std::vector<runtime::CompiledOperation>& operations) {
+    // A node saved without a region measures the default one.
+    const auto* from =
+        parameterConstant<document::Vec2d>(findParameterBinding(node, "sampleFrom"));
+    const auto* to = parameterConstant<document::Vec2d>(findParameterBinding(node, "sampleTo"));
+    if (from == nullptr)
+        from = &document::kDefaultDenoiseSampleFrom;
+    if (to == nullptr)
+        to = &document::kDefaultDenoiseSampleTo;
+    const auto width = static_cast<double>(composition_->format().width());
+    const auto height = static_cast<double>(composition_->format().height());
+    // In pixels from the frame's left and top edges.
+    const auto clampTo = [](const double value, const double high) {
+        return std::clamp(value, 0.0, high);
+    };
+    auto left = clampTo(width / 2.0 + std::min(from->x, to->x), width - 1.0);
+    auto right = clampTo(width / 2.0 + std::max(from->x, to->x), width);
+    auto top = clampTo(height / 2.0 - std::max(from->y, to->y), height - 1.0);
+    auto bottom = clampTo(height / 2.0 - std::min(from->y, to->y), height);
+    right = std::max(right, left + 1.0);
+    bottom = std::max(bottom, top + 1.0);
+    using runtime::detail::RecipeEmitter;
+    RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    const auto region = emitter.effect(
+        input, runtime::CanvasImageKernel{runtime::CanvasImageEffect::Crop,
+                                          {RecipeEmitter::constant(left), RecipeEmitter::constant(top),
+                                           RecipeEmitter::constant(width - right),
+                                           RecipeEmitter::constant(height - bottom)}});
+    runtime::detail::StatisticsOperands operands;
+    operands.channel = document::kStatisticsGreen;
+    operands.straight = false;
+    operands.opaqueOnly = false;
+    return runtime::detail::appendStatistics(emitter, region, operands);
+}
+
 // #349 Image Statistics: the reduction of the picture an Image Statistics node reads, to the
 // two-pixel result its tap plan ends in.
 [[nodiscard]] std::optional<runtime::OperationIndex>
@@ -223,6 +284,10 @@ lowerStatisticsReduction(const document::NodeId statisticsNode, const runtime::O
         addTopologyFailure(statisticsNode, "The Image Statistics node disappeared before lowering.");
         return std::nullopt;
     }
+    // #514: a Denoise node's Auto strength measures the noise of its input over its sample region:
+    // the region cut out with the canvas crop, then the deviation of the stored green channel.
+    if (node->typeId == document::kDenoiseNodeType)
+        return lowerDenoiseSampleReduction(*node, input, operations);
     const auto choice = [&](const std::string_view role, const std::int64_t high,
                             std::int64_t& target) {
         const auto* value = parameterConstant<std::int64_t>(findParameterBinding(*node, role));

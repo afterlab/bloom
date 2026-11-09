@@ -594,6 +594,13 @@ enum class ScalarDomain : std::uint8_t {
                     // #507: a lens flare reads at most its one occlusion matte.
                     validKernel = validKernel && effect.fieldImages.size() <= 1 &&
                                   std::ranges::all_of(effect.fieldImages, earlier);
+                } else if (const auto* denoise = std::get_if<DenoiseKernel>(&effect.kernel)) {
+                    // #514: a temporal step reads the current frame and one earlier frame; the
+                    // spatial modes read nothing beside their input.
+                    validKernel = validKernel &&
+                                  effect.fieldImages.size() ==
+                                      (denoise->mode == DenoiseMode::Temporal ? 2U : 0U) &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
                 } else if (std::holds_alternative<SharpenKernel>(effect.kernel)) {
                     // #486: a Sharpen reads its one blur.
                     validKernel = validKernel && effect.fieldImages.size() == 1 &&
@@ -3142,8 +3149,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 parameter(luma->high);
                             }
                             if (const auto* denoise = std::get_if<DenoiseKernel>(&step.kernel)) {
-                                key.add(std::string{"denoise-v1"});
+                                key.add(std::string{"denoise-v2"});
                                 key.add(static_cast<int>(denoise->mode));
+                                key.add(denoise->first);
+                                key.add(denoise->last);
                                 parameter(denoise->radius);
                                 parameter(denoise->strength);
                             }
@@ -3811,8 +3820,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 if (gradeKind == detail::ColorGradeKind::AutoExposure)
                                     for (const auto image : effect.fieldImages)
                                         autoExposureSlots.push_back(slots[image.value()].get());
+                                // #514: a temporal denoise step reads the current frame and
+                                // one earlier frame beside the running mean.
+                                const bool temporalDenoise =
+                                    preparedEffect->denoise.has_value() &&
+                                    preparedEffect->denoise->mode == DenoiseMode::Temporal &&
+                                    effect.fieldImages.size() == 2 &&
+                                    slots[effect.fieldImages[0].value()] != nullptr;
                                 auto result =
-                                    gradeKind == detail::ColorGradeKind::PixelMath
+                                    temporalDenoise
+                                        ? detail::applyTemporalDenoise(
+                                              *preparedEffect->denoise, *slots[index],
+                                              *slots[effect.fieldImages[0].value()],
+                                              slots[effect.fieldImages[1].value()].get(),
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress)
+                                    : gradeKind == detail::ColorGradeKind::PixelMath
                                         ? detail::applyPixelMath(
                                               *preparedEffect->colorGrade, *slots[index],
                                               effect.secondaryInput

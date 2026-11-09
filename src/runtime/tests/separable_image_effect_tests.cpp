@@ -316,6 +316,216 @@ void denoiseCancellationTest() {
         std::this_thread::yield();
     require(scheduler.isQuiescent(), "the cancelled denoise shuts down safely");
 }
+// #514 Temporal denoise against references. A static flat field with independent noise in each
+// frame: the weighted mean of the steps comes closer to the clean field than the current frame (and
+// about as close as the plain mean). A sharp edge moving 6 pixels a frame over a noisy field: the
+// plain mean of the frames ghosts the edge's earlier places, and the weighted mean keeps it where
+// the current frame has it. Both compared with the clean current frame.
+struct TemporalRun final {
+    std::vector<render::Rgba32fImage> frames; // oldest first, the current frame last
+    std::vector<render::Rgba32fImage> clean;
+};
+
+// A value of hashed noise in [-1, 1].
+float temporalNoise(const int x, const int y, const int frame, const int channel) {
+    std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093U ^
+                      static_cast<std::uint32_t>(y) * 19349663U ^
+                      static_cast<std::uint32_t>(frame) * 83492791U ^
+                      static_cast<std::uint32_t>(channel) * 2654435761U;
+    h ^= h >> 13U;
+    h *= 0x5bd1e995U;
+    h ^= h >> 15U;
+    return static_cast<float>(h & 0xffffU) / 32767.5F - 1.0F;
+}
+
+TemporalRun temporalRun(const bool moving, const float sigma, const int count = 5) {
+    TemporalRun run;
+    for (int frame = 0; frame < count; ++frame) {
+        const auto edge = moving ? 8 + frame * 6 : 1000;
+        const auto clean = [edge](const int x, const int) {
+            return x < edge ? std::array<float, 4>{0.8F, 0.7F, 0.6F, 1.0F}
+                            : std::array<float, 4>{0.1F, 0.15F, 0.2F, 1.0F};
+        };
+        run.clean.push_back(denoiseImage(
+            [&](const int x, const int y) { return clean(x, y); }, 48, 24));
+        run.frames.push_back(denoiseImage(
+            [&](const int x, const int y) {
+                auto v = clean(x, y);
+                // Uniform noise of deviation sigma (a uniform [-1, 1] has deviation 1 / sqrt 3).
+                for (int c = 0; c < 3; ++c)
+                    v[static_cast<std::size_t>(c)] += sigma * 1.7320508F * temporalNoise(x, y, frame, c);
+                return v;
+            },
+            48, 24));
+    }
+    return run;
+}
+
+// The production chain of steps (snapshot_compiler_recipes.ipp lowerDenoise), nearest frame first.
+std::shared_ptr<const render::Rgba32fImage> temporalChain(const TemporalRun& run,
+                                                          const double strength) {
+    const auto& current = run.frames.back();
+    std::shared_ptr<const render::Rgba32fImage> mean;
+    const auto steps = run.frames.size() - 1;
+    for (std::size_t step = 0; step < steps; ++step) {
+        runtime::DenoiseKernel kernel{runtime::DenoiseMode::Temporal, {}, {}};
+        kernel.first = step == 0;
+        kernel.last = step + 1 == steps;
+        const auto prepared = runtime::detail::prepareDenoise(kernel, 0.0, strength, 1.0, 1.0);
+        require(prepared && !prepared->identity(), "a temporal step prepares");
+        const auto result = runtime::detail::applyTemporalDenoise(
+            *prepared, mean ? *mean : current, current, &run.frames[steps - 1 - step], 1U << 22U,
+            {}, runtime::OperationIndex::fromRaw(0), {});
+        require(result.image && !result.diagnostic, "a temporal step publishes");
+        mean = result.image;
+    }
+    return mean;
+}
+
+// Root mean square difference of the colour from the clean current frame, over columns [x0, x1).
+double temporalError(const render::Rgba32fImage& image, const render::Rgba32fImage& clean,
+                     const int x0, const int x1) {
+    double sum = 0.0;
+    std::size_t count = 0;
+    for (int y = 0; y < 24; ++y)
+        for (int x = x0; x < x1; ++x) {
+            const auto a = denoiseAt(image, x, y);
+            const auto b = denoiseAt(clean, x, y);
+            for (std::size_t c = 0; c < 3; ++c) {
+                const double d = static_cast<double>(a[c]) - static_cast<double>(b[c]);
+                sum += d * d;
+                ++count;
+            }
+        }
+    return std::sqrt(sum / static_cast<double>(count));
+}
+
+// The plain mean of the frames (the look-back mean before motion rejection).
+render::Rgba32fImage temporalPlainMean(const TemporalRun& run) {
+    return denoiseImage(
+        [&](const int x, const int y) {
+            std::array<float, 4> sum{};
+            for (const auto& frame : run.frames) {
+                const auto v = denoiseAt(frame, x, y);
+                for (std::size_t c = 0; c < 4; ++c)
+                    sum[c] += v[c] / static_cast<float>(run.frames.size());
+            }
+            return sum;
+        },
+        48, 24);
+}
+
+void temporalDenoiseTests() {
+    constexpr float sigma = 0.03F;
+    // The Auto strength of Temporal: sqrt(6) deviations.
+    const double strength = 2.449489742783178 * static_cast<double>(sigma);
+    {
+        const auto run = temporalRun(false, sigma);
+        const auto out = temporalChain(run, strength);
+        const double before = temporalError(run.frames.back(), run.clean.back(), 1, 47);
+        const double after = temporalError(*out, run.clean.back(), 1, 47);
+        const double plain = temporalError(temporalPlainMean(run), run.clean.back(), 1, 47);
+        require(after < 0.6 * before,
+                "on a static noisy sequence the weighted mean reduces the noise");
+        require(after < 1.35 * plain,
+                "on a static sequence the weighted mean is close to the plain mean");
+        // Alpha is the current frame's, exactly.
+        require(denoiseAt(*out, 5, 5)[3] == 1.0F, "the output keeps the current coverage");
+    }
+    {
+        const auto run = temporalRun(true, sigma);
+        const auto out = temporalChain(run, strength);
+        const auto plain = temporalPlainMean(run);
+        // The current edge is at x = 32; the earlier frames had it at 8, 14, 20 and 26.
+        const double ghost = temporalError(plain, run.clean.back(), 8, 32);
+        const double kept = temporalError(*out, run.clean.back(), 8, 32);
+        const double noise = temporalError(run.frames.back(), run.clean.back(), 8, 32);
+        require(ghost > 0.15, "the plain mean ghosts the moving edge");
+        require(kept < 1.2 * noise,
+                "the weighted mean does not ghost the moving edge (no worse than the noise)");
+        // Where the field has been the same in every frame it is still denoised.
+        require(temporalError(*out, run.clean.back(), 34, 47) <
+                    0.75 * temporalError(run.frames.back(), run.clean.back(), 34, 47),
+                "the static part of a moving shot is still denoised");
+    }
+    {
+        // A noiseless moving edge: every pixel is exactly the current frame's.
+        const auto run = temporalRun(true, 0.0F);
+        const auto out = temporalChain(run, 0.05);
+        require(temporalError(*out, run.clean.back(), 0, 48) == 0.0,
+                "a noiseless moving edge is returned exactly");
+    }
+    {
+        // A transparent current frame stays transparent; an absent earlier frame is transparent.
+        const auto clear = denoiseImage([](int, int) { return std::array<float, 4>{}; }, 8, 8);
+        const auto solid = denoiseImage(
+            [](int, int) { return std::array<float, 4>{0.5F, 0.5F, 0.5F, 1.0F}; }, 8, 8);
+        runtime::DenoiseKernel kernel{runtime::DenoiseMode::Temporal, {}, {}};
+        kernel.first = true;
+        kernel.last = true;
+        const auto prepared = runtime::detail::prepareDenoise(kernel, 0.0, 0.1, 1.0, 1.0);
+        const auto empty = runtime::detail::applyTemporalDenoise(
+            *prepared, clear, clear, &solid, 1U << 20U, {}, runtime::OperationIndex::fromRaw(0),
+            {});
+        require(empty.image && denoiseAt(*empty.image, 3, 3) == std::array<float, 4>{},
+                "a transparent current frame stays transparent");
+        const auto alone = runtime::detail::applyTemporalDenoise(
+            *prepared, solid, solid, nullptr, 1U << 20U, {}, runtime::OperationIndex::fromRaw(0),
+            {});
+        require(alone.image && denoiseAt(*alone.image, 3, 3) == denoiseAt(solid, 3, 3),
+                "a frame unlike any earlier one (an absent frame reads transparent) is kept");
+        // The budget is checked before the output is built, and the step prepares a program.
+        const auto refused = runtime::detail::applyTemporalDenoise(
+            *prepared, solid, solid, &solid, 16, {}, runtime::OperationIndex::fromRaw(0), {});
+        require(!refused.image && refused.diagnostic.has_value(),
+                "a temporal step over the budget is refused");
+        const auto data = runtime::detail::temporalDenoiseProgramData(
+            *prepared, 8, 8, {0, 0, 0, 0, 8, 8}, {8, 0, 0, 0, 8, 8});
+        require(data.has_value() && runtime::detail::buildDenoiseProgram(*data).succeeded(),
+                "a temporal step's table builds the denoise program");
+        require(!runtime::detail::temporalDenoiseProgramData(
+                     *prepared, std::int64_t{1} << 25, 8, {}, {}),
+                "geometry beyond exact binary32 is refused");
+    }
+}
+
+void temporalDenoiseCancellationTest() {
+    const auto input = denoiseImage([](int x, int y) {
+        return std::array<float, 4>{static_cast<float>(x + y) * 0.01F, 0.0F, 0.0F, 1.0F};
+    }, 64, 64);
+    runtime::DenoiseKernel kernel{runtime::DenoiseMode::Temporal, {}, {}};
+    kernel.first = true;
+    kernel.last = true;
+    const auto prepared = runtime::detail::prepareDenoise(kernel, 0.0, 0.1, 1.0, 1.0);
+    runtime::TaskScheduler scheduler(runtime::TaskSchedulerConfig::defaults());
+    const runtime::TaskOwner owner{.kind = runtime::TaskOwnerKind::Composition,
+                                   .id = runtime::TaskOwnerId::fromRaw(515)};
+    auto submission = scheduler.submit<void>(
+        runtime::TaskRequest("Temporal denoise cancellation", owner),
+        [&](runtime::TaskContext& context) {
+            const auto result = runtime::detail::applyTemporalDenoise(
+                *prepared, input, input, &input, 1U << 22U, context.cancellation(),
+                runtime::OperationIndex::fromRaw(0), [&](const runtime::EvaluationProgress& progress) {
+                    if (progress.total && progress.completed == *progress.total / 2)
+                        static_cast<void>(scheduler.cancelOwner(owner));
+                });
+            require(result.cancelled && !result.image, "a cancelled step publishes no image");
+            return runtime::TaskResult<void>::cancelled();
+        });
+    require(submission.accepted(), "temporal denoise cancellation task admitted");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::optional<runtime::TaskResult<void>> result;
+    while (!result && std::chrono::steady_clock::now() < deadline) {
+        result = submission.handle.tryTakeResult();
+        std::this_thread::yield();
+    }
+    require(result && result->state() == runtime::TaskState::Cancelled,
+            "temporal denoise cancellation observed");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    require(scheduler.isQuiescent(), "the cancelled temporal denoise shuts down safely");
+}
 void referenceTests() {
     const auto input = source();
     for (const auto kind :
@@ -822,6 +1032,8 @@ int main() {
         separateAxesTests();
         denoiseTests();
         denoiseCancellationTest();
+        temporalDenoiseTests();
+        temporalDenoiseCancellationTest();
         subnormalCoverageTest();
         coverageTests();
         cancellationTest(runtime::BlurChannels::Rgba);

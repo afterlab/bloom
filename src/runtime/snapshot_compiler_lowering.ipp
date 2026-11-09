@@ -225,6 +225,12 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
             if (cancelled()) {
                 return std::nullopt;
             }
+            // #524, #514: a value the node does not read in its current mode is not lowered, so its
+            // curve is not compiled either (a compiled curve nothing references refuses the plan).
+            if (const auto* parameter = findParameter(binding.parameterId);
+                parameter != nullptr &&
+                document::isParameterInactive(*composition_, *node, parameter->schemaKey))
+                continue;
             addParameterCurve(binding.parameterId);
         }
         // ADR 0028: a reachable layer's masks own their parameters outside any node binding.

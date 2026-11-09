@@ -9,6 +9,7 @@
 #include "font_picker.hpp"
 #include "value_presentation.hpp"
 #include <bloom/document/denoise_nodes.hpp>
+#include <bloom/document/parameter_activity.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
@@ -78,39 +79,10 @@ document::ShapeKind nodeShapeKind(const document::Composition& composition,
         }
     return document::ShapeKind::Rectangle;
 }
-namespace {
-[[nodiscard]] std::optional<std::int64_t> nodeConstantInteger(const document::Composition& composition,
-                                                              const document::NodeRecord& node,
-                                                              const std::string_view role) {
-    for (const auto& binding : node.parameters)
-        if (binding.role == role) {
-            const auto* p = composition.parameters().find(binding.parameterId);
-            const auto* c = p ? std::get_if<document::ConstantValueSource>(&p->source) : nullptr;
-            if (const auto* integer = c ? std::get_if<std::int64_t>(&c->value) : nullptr)
-                return *integer;
-            if (const auto* flag = c ? std::get_if<bool>(&c->value) : nullptr)
-                return *flag ? 1 : 0;
-        }
-    return std::nullopt;
-}
-
-} // namespace
 
 bool propertiesRowInactive(const document::Composition& composition,
                            const document::NodeRecord& node, const std::string_view schemaKey) {
-    if (schemaKey == "bloom.blur.radius-y")
-        return nodeConstantInteger(composition, node, "separate").value_or(0) == 0;
-    if (schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
-        schemaKey == "bloom.blur.blue-scale" || schemaKey == "bloom.blur.alpha-scale")
-        return nodeConstantInteger(composition, node, "perChannel").value_or(0) == 0;
-    constexpr auto temporal = static_cast<std::int64_t>(document::DenoiseNodeMode::Temporal);
-    if (schemaKey == "bloom.denoise.frames")
-        return nodeConstantInteger(composition, node, "mode").value_or(0) != temporal;
-    // The temporal mean reads neither the radius nor the strength today. The strength row returns
-    // for Temporal when the motion-rejecting temporal filter makes it the similarity tolerance.
-    if (schemaKey == "bloom.denoise.radius" || schemaKey == "bloom.denoise.strength")
-        return nodeConstantInteger(composition, node, "mode").value_or(0) == temporal;
-    return false;
+    return document::isParameterInactive(composition, node, schemaKey);
 }
 
 // #525: the Fields parameters whose role alone does not say what they do. The noise rows carry the
@@ -161,6 +133,9 @@ bool propertiesRowInactive(const document::Composition& composition,
         Label{"bloom.denoise.radius", "Radius (pixels)"},
         Label{"bloom.denoise.strength", "Strength (noise tolerance)"},
         Label{"bloom.denoise.frames", "Frames"},
+        Label{"bloom.denoise.auto-strength", "Auto strength"},
+        Label{"bloom.denoise.sample-from", "Sample corner 1"},
+        Label{"bloom.denoise.sample-to", "Sample corner 2"},
         Label{"bloom.four-color-gradient.point1", "Point 1"},
         Label{"bloom.four-color-gradient.color1", "Color 1"},
         Label{"bloom.four-color-gradient.point2", "Point 2"},

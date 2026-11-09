@@ -210,6 +210,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_motion_emission.ipp"
 #include "gpu_scene_sharpen_emission.ipp"
 #include "gpu_scene_codec_degrade_emission.ipp"
+#include "gpu_scene_temporal_denoise_emission.ipp"
 #include "gpu_scene_auto_exposure_emission.ipp"
 #include "gpu_scene_pixel_math_emission.ipp"
 #include "gpu_scene_histogram_emission.ipp"
@@ -452,6 +453,20 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Image pixel math values are out of domain");
         return emitPixelMathSecondCommand(effect, *grade, operationIndex, ctx, ocioContext,
+                                          cancellation, emit, charge, chargeCoverage, result);
+    }
+    // #514 Temporal denoise: one step of the weighted mean over its atlas.
+    if (const auto* temporal = std::get_if<DenoiseKernel>(&effect.kernel);
+        temporal != nullptr && temporal->mode == DenoiseMode::Temporal) {
+        const auto radius = resolveParameter(temporal->radius, plan, resolved);
+        const auto strength = resolveParameter(temporal->strength, plan, resolved);
+        const auto denoise = prepareDenoise(
+            *temporal, radius ? std::optional{radius->value} : std::nullopt,
+            strength ? std::optional{strength->value} : std::nullopt, ctx.hScale, ctx.vScale);
+        if (!denoise)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Denoise strength is out of domain");
+        return emitTemporalDenoiseCommand(effect, *denoise, operationIndex, ctx, ocioContext,
                                           cancellation, emit, charge, chargeCoverage, result);
     }
     // #486 Sharpen: one two-input dispatch over the input and its blur.

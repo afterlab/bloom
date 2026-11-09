@@ -311,7 +311,9 @@ void testBlurLowering(Expectations& expectations) {
 }
 
 // Gaussian Blur's separate axes and per-channel radii: the kernel keeps the vertical radius, and a
-// per-channel blur lowers to five blurs and four channel combines over the input.
+// per-channel blur lowers to five blurs and four channel combines over the input. An animated
+// vertical radius with per-channel radii on and separate axes off is read by nothing: it is not
+// lowered, and its frames still render.
 void testBlurExtensionLowering(Expectations& expectations) {
     using namespace document;
     const auto* definition = builtInNodeDefinitions().find("bloom.gaussian-blur", 1);
@@ -320,7 +322,7 @@ void testBlurExtensionLowering(Expectations& expectations) {
     require(definition != nullptr && definition->parameters.size() == 10,
             "Gaussian Blur has its radius, edge, separate axes, vertical radius, per-channel and "
             "four channel radii");
-    for (int scenario = 0; scenario != 3; ++scenario) {
+    for (int scenario = 0; scenario != 4; ++scenario) {
         auto project = makeProject(singleLayerOptions());
         auto* composition = project.findComposition(kCompositionId);
         auto& graph = composition->graph();
@@ -337,12 +339,24 @@ void testBlurExtensionLowering(Expectations& expectations) {
             if (parameter.role == "separate")
                 value = scenario == 1;
             if (parameter.role == "perChannel")
-                value = scenario == 2;
+                value = scenario == 2 || scenario == 3;
             if (parameter.role == "redScale")
                 value = 0.5;
             require(composition->parameters().insert(
                         {id, parameter.schemaKey, ConstantValueSource{value}}),
                     "blur parameter is valid");
+            if (scenario == 3 && parameter.role == "radiusY") {
+                const auto curveId = AnimationCurveId::fromRaw(965);
+                require(composition->animationCurves().insert(ScalarAnimationCurve{
+                            curveId,
+                            {{KeyframeId::fromRaw(966), core::RationalTime::fromInteger(0), 0.0,
+                              KeyframeInterpolation::Linear},
+                             {KeyframeId::fromRaw(967), core::RationalTime::fromInteger(1), 9.0,
+                              KeyframeInterpolation::Linear}}}),
+                        "a vertical radius curve is publishable");
+                require(composition->parameters().setSource(id, AnimationCurveSource{curveId}),
+                        "the vertical radius animates");
+            }
             bindings.push_back({parameter.role, id});
         }
         require(graph.addNode({node, "bloom.gaussian-blur", std::move(bindings), 1}),
@@ -377,9 +391,36 @@ void testBlurExtensionLowering(Expectations& expectations) {
             }
             combines += std::holds_alternative<runtime::ChannelCombineKernel>(effect->kernel);
         }
-        if (scenario == 2) {
+        if (scenario == 2 || scenario == 3) {
             expectations.expect(blurs == 5 && combines == 4,
                                 "a per-channel blur is five blurs and four channel combines");
+            if (scenario == 3) {
+                bool curveRead = false;
+                for (const auto& operation : result.plan->operations())
+                    if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation))
+                        if (const auto* blur =
+                                std::get_if<runtime::SeparableBlurKernel>(&effect->kernel))
+                            curveRead = curveRead || blur->separate ||
+                                        !std::holds_alternative<double>(blur->radiusY.source);
+                expectations.expect(!curveRead && result.plan->scalarCurves().empty(),
+                                    "an animated vertical radius with per-channel radii and no "
+                                    "separate axes is neither lowered nor compiled");
+                // The frames render: the curve nothing reads does not refuse the plan.
+                for (const std::int64_t frame : {0, 1}) {
+                    runtime::EvaluationRequest request{core::RationalTime::fromInteger(frame),
+                                                       result.plan->output(),
+                                                       runtime::CompositionFormatResolution{}};
+                    request.quality = runtime::EvaluationQuality::Reference;
+                    request.colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
+                    request.pixelStorageByteLimit = std::size_t{1} << 29U;
+                    request.bypassOperationCache = true;
+                    const auto evaluated =
+                        runtime::CpuCompositionEvaluator{}.evaluate(result.plan, request, {});
+                    expectations.expect(evaluated.frame() != nullptr,
+                                        "a per-channel blur with an unread animated vertical "
+                                        "radius renders frame " + std::to_string(frame));
+                }
+            }
         } else {
             expectations.expect(blurs == 1 && combines == 0 && first != nullptr &&
                                     first->separate == (scenario == 1),
@@ -2365,14 +2406,15 @@ void testVignetteLowering(Expectations& expectations) {
 }
 
 // #514 Denoise & Smooth: Median, Bilateral and Spatial lower to one neighborhood kernel with the
-// authored radius and strength; Temporal lowers to the look-back window and a running mean; a
-// strength wired from Image Statistics over a flat patch (the noise profile) reaches the kernel as a
+// authored radius and strength; Temporal lowers to the look-back window and one weighted step per
+// earlier frame; a strength wired from Image Statistics over a flat patch reaches the kernel as a
 // driven value, not a constant.
 void testDenoiseLowering(Expectations& expectations) {
     using namespace document;
     const auto* definition = builtInNodeDefinitions().find(kDenoiseNodeType, 1);
-    require(definition != nullptr && definition->parameters.size() == 5,
-            "Denoise has mode, radius, strength, frames and the effect mask channel");
+    require(definition != nullptr && definition->parameters.size() == 8,
+            "Denoise has mode, radius, strength, frames, Auto strength, the sample region and the "
+            "effect mask channel");
     for (int scenario = 0; scenario != 6; ++scenario) {
         auto project = makeProject(singleLayerOptions());
         auto* composition = project.findComposition(kCompositionId);
@@ -2440,8 +2482,9 @@ void testDenoiseLowering(Expectations& expectations) {
                     "the deviation drives strength");
         }
         if (scenario == 5) {
-            // Temporal reads neither the radius nor the strength: keys on them (left from another
-            // mode) must not leave a curve nothing reads, which would refuse the whole plan.
+            // Temporal reads the strength (its tolerance between frames) but not the radius: a key
+            // on the radius (left from another mode) must not leave a curve nothing reads, which
+            // would refuse the whole plan, and the keyed strength drives the steps.
             std::uint64_t curve = 1500;
             for (const char* role : {"radius", "strength"}) {
                 const auto owner = std::ranges::find_if(graph.nodes(), [&](const auto& candidate) {
@@ -2475,13 +2518,28 @@ void testDenoiseLowering(Expectations& expectations) {
         std::size_t denoises = 0;
         std::size_t samples = 0;
         std::size_t mixes = 0;
+        std::size_t steps = 0;
+        bool stepsWellFormed = true;
         const runtime::DenoiseKernel* kernel = nullptr;
-        for (const auto& operation : result.plan->operations()) {
-            const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+        std::optional<runtime::OperationIndex> current;
+        for (std::size_t index = 0; index < result.plan->operations().size(); ++index) {
+            const auto* effect =
+                std::get_if<runtime::CompiledImageEffect>(&result.plan->operations()[index]);
             if (effect == nullptr)
                 continue;
             if (const auto* found = std::get_if<runtime::DenoiseKernel>(&effect->kernel)) {
-                ++denoises;
+                if (found->mode == runtime::DenoiseMode::Temporal) {
+                    // Each step reads the current frame and one earlier frame; the first's mean is
+                    // the current frame and the last ends the chain.
+                    stepsWellFormed = stepsWellFormed && effect->fieldImages.size() == 2 &&
+                                      found->first == (steps == 0) && found->last == (steps == 2) &&
+                                      (!current || effect->fieldImages[0] == *current) &&
+                                      (steps != 0 || effect->input == effect->fieldImages[0]);
+                    current = effect->fieldImages[0];
+                    ++steps;
+                } else {
+                    ++denoises;
+                }
                 kernel = found;
             }
             samples += std::holds_alternative<runtime::TimeSampleKernel>(effect->kernel) ? 1U : 0U;
@@ -2489,8 +2547,29 @@ void testDenoiseLowering(Expectations& expectations) {
                 mixes += combine->mode == runtime::ImageCombineMode::Mix ? 1U : 0U;
         }
         if (scenario == 3 || scenario == 5) {
-            expectations.expect(denoises == 0 && samples == 3 && mixes == 3,
-                                "Temporal lowers to the look-back window and a running mean");
+            expectations.expect(denoises == 0 && samples == 3 && mixes == 0 && steps == 3 &&
+                                    stepsWellFormed,
+                                "Temporal lowers to the look-back window and one weighted step per "
+                                "earlier frame");
+            if (kernel != nullptr && scenario == 3)
+                expectations.expect(std::holds_alternative<double>(kernel->strength.source) &&
+                                        std::get<double>(kernel->strength.source) == 0.25,
+                                    "the temporal steps keep the authored strength");
+            if (scenario == 5) {
+                expectations.expect(result.plan->scalarCurves().size() == 1,
+                                    "Temporal compiles the strength's curve and not the radius's");
+                runtime::EvaluationRequest request{core::RationalTime::fromInteger(1),
+                                                   result.plan->output(),
+                                                   runtime::CompositionFormatResolution{}};
+                request.quality = runtime::EvaluationQuality::Reference;
+                request.colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
+                request.pixelStorageByteLimit = std::size_t{1} << 29U;
+                request.bypassOperationCache = true;
+                expectations.expect(
+                    runtime::CpuCompositionEvaluator{}.evaluate(result.plan, request, {}).frame() !=
+                        nullptr,
+                    "a Temporal denoise with a keyed radius and strength renders");
+            }
         } else {
             expectations.expect(denoises == 1 && samples == 0 && kernel != nullptr &&
                                     static_cast<int>(kernel->mode) == (scenario == 4 ? 1 : scenario),
