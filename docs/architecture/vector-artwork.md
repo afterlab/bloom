@@ -103,11 +103,62 @@ and gradient stops are resampled so the encoded-space ramp is followed, but tran
 and alpha ramps composite in linear light and look lighter than a gamma-space blend. This is a
 property of Bloom's colour model, not of the importer.
 
-## Rendering and budget
+## Rendering and memory
 
 Nothing here adds an image-producing lowering: an imported file renders through the Shape, Path,
 Gradient, Text, Merge and track-matte lowerings already covered by the GPU coverage contract, at any
-render scale. Every layer is a full-frame image when a frame is drawn, so very dense files cost
-memory in proportion to the layer count; the import warns when a file has more than 2,000 shapes.
-A 4,000-element file renders at a smaller frame, and at 800 by 800 the GPU admission refuses it
-with a budget diagnostic rather than falling back silently.
+render scale. The import still warns when a file has more than 2,000 shapes.
+
+On the GPU a frame holds a few images however many layers the file has. The executor folds each
+Merge entry into the stack as it is drawn and frees it, a shape layer holds its fill, stroke and
+composite only while it runs, and the phase claims that live set rather than one image per layer.
+Coverage masks, command storage and the scene cache are counted as what they are: see
+[GPU Backend, Scenes of many layers](gpu-backend.md#scenes-of-many-layers-343). Before this, a
+4,000-element file was refused at 800 by 800, worldmap fell to the CPU on the command ceiling at
+1920 by 1080, and tiger, bike and worldmap waited for device memory at 3840 by 2160 until the export
+stopped.
+
+Results on the production headless export route (`bloom-cli run`, PNG still, the export requiring a
+GPU device, one frame each). The memory columns come from the corpus mode of
+`bloom.runtime.gpu_svg_artwork_native` (the same builder and executor). Where the last column has a
+value, the whole GPU frame was compared with the CPU reference, evaluated in tiles, at 2e-6; at
+these sizes that compare is extra evidence, not the parity requirement, and the stress file was not
+compared at 4K:
+
+| File | Size | Route result | PNG | Commands | Live peak, serial / batched (frames) | Admission floor (frames) | Full-frame CPU compare |
+|---|---|---|---|---|---|---|---|
+| tiger (482 layers) | 1920x1080 | GPU | 216,093 B | 854 | 1.76 / 4.69 | 5 | exact |
+| tiger | 3840x2160 | GPU | 524,084 B | 854 | 1.66 / 2.11 | 5 | exact |
+| bike (626 layers) | 1920x1080 | GPU | 205,099 B | 1,027 | 1.88 / 4.20 | 9 | exact |
+| bike | 3840x2160 | GPU | 501,295 B | 1,027 | 1.74 / 1.79 | 9 | exact |
+| firefox | 1920x1080 | GPU | 233,590 B | 76 | 42.5 / 42.5 | 6 | within 1.8e-7 |
+| firefox | 3840x2160 | GPU | 543,192 B | 76 | 41.9 / 41.9 | 6 | within 1.8e-7 |
+| worldmap | 1920x1080 | GPU | 141,463 B | 7,301 | 2.28 / 4.87 | 7 | exact |
+| worldmap | 3840x2160 | GPU | 369,562 B | 7,301 | 2.27 / 2.27 | 7 | exact |
+| gen-dense-4000 | 1920x1080 | GPU | 1,030,099 B | 13,045 | 5.58 / 6.77 | 7 | within 8.9e-8 |
+| gen-dense-4000 | 3840x2160 | GPU | 2,927,949 B | 13,045 | 5.40 / 5.40 | 7 | not compared (stress file) |
+
+CPU/GPU parity is proven at 512 by 288 on every corpus file, whole frame, at 2e-6:
+
+| File | Commands | Live peak, serial / batched (frames) | Admission floor (frames) | GPU against CPU reference |
+|---|---|---|---|---|
+| tiger | 854 | 2.25 / 7.33 | 5 | exact |
+| bike | 1,027 | 2.04 / 4.75 | 9 | exact |
+| firefox | 76 | 42.3 / 67.9 | 6 | within 1.2e-7 |
+| worldmap | 7,301 | 2.46 / 5.45 | 7 | exact |
+| gen-dense-4000 | 13,045 | 6.73 / 12.2 | 7 | within 6.0e-8 |
+
+The live image peak is measured with batching off; batched submission keeps up to eight kernels'
+outputs until their fence, within its own byte bound. The phase's admission floor counts each image
+as one frame. An image larger than the frame is drawn against live device memory when the executor
+allocates it, like any allocation beyond a phase's claimed need. Examples are a layer whose
+transformed support extends past the frame, and a gradient drawn in its own window. Firefox's
+elliptical gradient layers are about ten frames each, and the Merges over them take the same
+window, hence its peak of about 42 frames. The CPU reference sizes those images the same way.
+Such an image is never assumed to fit.
+
+The CPU reference route still holds every entry of a Merge at once and counts each image as one
+frame. Without a GPU device, an export of tiger, bike, worldmap or the 4,000-element file at 3840
+by 2160 stops before writing with "Frame 0 needs more memory than this computer can give the
+export, so the export stopped. Try a smaller resolution". At 1920 by 1080 the CPU route renders all
+five, and its PNGs match the GPU's within one 8-bit code (byte-identical except firefox).

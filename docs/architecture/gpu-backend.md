@@ -1867,6 +1867,49 @@ residuals still need allocation-owned accounting. This slice establishes no aggr
 width-two execution, sustained throughput, or native macOS/Windows qualification. The
 [GPU reliability plan](../plans/gpu-reliability-and-preview.md) owns the remaining gates.
 
+### Scenes of many layers (#343)
+
+An imported SVG is hundreds or thousands of Shape layers in nested Merges. Before #343 such a scene
+was refused or fell to the CPU at real frame sizes for reasons that were not memory the executor
+held: the phase claimed the CPU reference's peak, retained coverage had a fixed allowance, the
+command and coverage ceilings counted the whole scene, and the scene cache filled the device's image
+slots. Each is now counted as what it is; no budget was raised.
+
+- **The phase claims the executor's live set.** The CPU reference holds every entry of a Merge at
+  once (its `peakPixelStorageBytes`). The executor folds a Merge into its accumulator one entry at a
+  time and frees each entry after its fold, so a Merge holds the accumulator, one entry and the new
+  output. `detail::gpuExecutorLivePeakBytes` walks the plan in executor order (a vector layer adds
+  three frames of scratch; Shape and Text leaves hold nothing until their layer rasterises them;
+  image and video sources are held at their own size) and the phase's minimum executor bytes is the
+  smaller of that and the CPU peak, never less than one frame. A non-Normal fold plans its
+  destination first (`GpuSceneBlendCommand::planDestinationFirst`) so the accumulator, not the
+  entry, is the image kept across the fold.
+- **Retained scene storage grows through the host root.** A phase whose envelope sets
+  `growsRetainedSceneStorage` (preview and final render) claims coverage past
+  `retainedCoverageByteLimit`, and the command storage past `metadataBytes`, from its host lease in
+  16 MiB steps (`GpuProcessingPhaseLease::claimRetainedHostBytes`). The root admits, waits or refuses
+  that claim like any other host claim, and it returns on release. A phase without the flag refuses
+  as before.
+- **Ceilings guard what they protect.** `GpuSceneExecutorBudgets::maxCoverageBytes` (256 MiB) bounds
+  one coverage mask, not their sum; the sum is the host claim above. `maxCommands` is a
+  runaway-plan guard at 2^20: a command holds no pixels, its storage is charged to the host claim,
+  and the importer stops at 20,000 elements, so the former 4,096 refused real files for no memory
+  reason.
+- **The scene cache keeps stacks, not every layer.** A device has a fixed number of image slots
+  (4096 per family, whatever their size). `GpuSceneCacheBudgets::maxRetainedImages` (2048) evicts by
+  count as it evicts by bytes, and a scene of more than
+  `GpuSceneExecutorBudgets::maxCommandsOfferingEveryImage` (1024) commands offers only its output and
+  its Merges of three or more entries to the cache, so an edit re-runs one stack and a warm frame
+  dispatches nothing.
+- **Leaf shapes flatten like the CPU reference.** A shape whose path is already on the layer's pixel
+  grid is flattened by `PathRaster::create` at the plain scale, as the CPU leaf arm does, instead of
+  through the transformed path at the matrix norm, so curved outlines cover the same pixels.
+
+Native batching still keeps up to eight kernels' outputs until their fence, bounded by
+`maxNativeBatchOutputBytes`; the live set itself is asserted with batching off.
+`bloom.runtime.gpu_svg_artwork_native` asserts each point as image sizes, never times. Results per
+file and size are in [Vector Artwork](vector-artwork.md#rendering-and-memory).
+
 ### Rooted native image suballocation ownership (bounded two-family slice)
 
 The implemented native follow-on covers explicitly rooted backing created by `createResidentImage`
