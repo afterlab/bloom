@@ -1272,7 +1272,7 @@ void autoExposureCard() {
         std::cerr << "could not write the Auto Exposure neighbors capture\n";
 }
 
-// #481 and #341: each new Channels and Math node is a plain card that paints inside itself with no
+// #481, #349 and #341: each new Channels, analysis and Math node is a plain card that paints inside itself with no
 // label cut short. With BLOOM_GRAMMAR_ARTIFACT_DIR set, each is written beside its group's neighbors.
 void pixelAndMotionCards() {
     struct Spec final {
@@ -1283,6 +1283,8 @@ void pixelAndMotionCards() {
         {"bloom.image-math", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
         {"bloom.image-map-range", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
         {"bloom.image-clamp", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
+        {"bloom.histogram", {"bloom.image-math", "bloom.levels", "bloom.invert"}},
+        {"bloom.image-compare", {"bloom.image-math", "bloom.levels", "bloom.invert"}},
         {"bloom.oscillator", {"bloom.math", "bloom.map-range", "bloom.random"}},
         {"bloom.wiggle", {"bloom.math", "bloom.map-range", "bloom.random"}},
         {"bloom.loop-value", {"bloom.math", "bloom.map-range", "bloom.random"}}};
@@ -2375,7 +2377,7 @@ void motionBlurCards() {
         expect(card->shutterDial() != nullptr && card->shutterDial()->isVisibleTo(card),
                "Motion Blur's shutter is a dial");
         expect(!card->showsRole("shutterAngle"), "the dial replaces the shutter's number row");
-        expect(!card->phaseDial()->isVisibleTo(card), "a Centred shutter has no phase");
+        expect(!card->phaseDial()->isVisibleTo(card), "a Centered shutter has no phase");
         expect(!card->curveEditor()->isVisibleTo(card), "a Box shutter has no curve editor");
         const auto cost = card->costLabel()->text();
         expect(cost.contains(QStringLiteral("16")), "a Standard Motion Blur costs 16 upstream renders");
