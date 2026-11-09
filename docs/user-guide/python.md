@@ -112,10 +112,12 @@ An edit's result also carries `compile_warnings`: after an edit that changed the
 edited composition is compiled once (never rendered), and what still compiles but degrades is listed
 as `[{composition, code, detail, subject: {composition, node, parameter}}]`, as MCP `transact` does
 in `compileWarnings`. For example a text layer whose font is not installed and not in the Google Fonts cache, which is
-drawn in a fallback face and reports `bloom.runtime.compile.font-missing`. Python has no network
-transport, so it never downloads a font; set a text `font` with `bloom.parameter.set-source` and a font
-ID string such as `source=google;family=Roboto;style=Bold;weight=700;italic=false`. An empty list
-means nothing degrades.
+drawn in a fallback face and reports `bloom.runtime.compile.font-missing`. A Google font that is not
+installed or cached is downloaded into the per-user cache the first time a render or export needs
+it, and that render waits for it; offline, it is drawn in the fallback face with the same warning.
+Set a text `font` with `bloom.parameter.set-source` and a font ID string such as
+`source=google;family=Roboto;style=Bold;weight=700;italic=false`. An empty list means nothing
+degrades.
 
 ```python
 bloom.ops.layer.add_solid("Red", (1, 0, 0, 1))

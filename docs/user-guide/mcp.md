@@ -473,9 +473,9 @@ composition compiles.
 
 `compileWarnings` lists what still compiles but degrades, in the same record shape: for example a
 text layer whose font is not installed and cannot be fetched, which is
-drawn in a fallback face chosen by category (`bloom.runtime.compile.font-missing`). The MCP server has
-no network transport: a Google font that is not already cached is reported missing here, while the
-desktop application downloads it.
+drawn in a fallback face chosen by category (`bloom.runtime.compile.font-missing`). A Google font
+that is not installed or cached is downloaded into the per-user cache like the desktop application
+does, and an export waits for it; offline, the font is reported missing and drawn in the fallback.
 
 **Events.** Besides command events (`kind` `revision`, `history` or `rejected`), `events` reports
 `{kind, revision, message, composition?, subject?, path?, projectName?, sequence}` records for
