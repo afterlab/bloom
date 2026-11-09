@@ -664,14 +664,28 @@ void everyBuiltInLabelIsShownWhole() {
             properties.resize(width, 1500);
             properties.show();
             QCoreApplication::processEvents();
+            // BLOOM_LABEL_CAPTURE_DIR saves Properties pictures for review; BLOOM_LABEL_CAPTURE_TYPES
+            // (comma-separated type ids) picks the nodes and then every audited width is saved,
+            // named with BLOOM_LABEL_CAPTURE_SCALE (the scale factor the run was started with).
             if (const auto directory = qEnvironmentVariable("BLOOM_LABEL_CAPTURE_DIR");
-                !directory.isEmpty() && width == 900 &&
-                (typeId == document::kCameraShakeNodeType ||
-                 typeId == document::kTransform2DNodeType)) {
-                QDir().mkpath(directory);
-                properties.grab().save(directory + QLatin1Char('/') +
-                                       QString::fromStdString(typeId) +
-                                       QStringLiteral("-900.png"));
+                !directory.isEmpty()) {
+                const auto types =
+                    qEnvironmentVariable("BLOOM_LABEL_CAPTURE_TYPES").split(QLatin1Char(','),
+                                                                            Qt::SkipEmptyParts);
+                const bool listed = types.contains(QString::fromStdString(typeId));
+                const bool legacy = types.isEmpty() && width == 900 &&
+                                    (typeId == document::kCameraShakeNodeType ||
+                                     typeId == document::kTransform2DNodeType);
+                if (listed || legacy) {
+                    QDir().mkpath(directory);
+                    const auto scale = qEnvironmentVariable("BLOOM_LABEL_CAPTURE_SCALE");
+                    properties.grab().save(directory + QLatin1Char('/') +
+                                           QString::fromStdString(typeId) + QLatin1Char('-') +
+                                           QString::number(width) +
+                                           (scale.isEmpty() ? QString()
+                                                            : QStringLiteral("-dpr") + scale) +
+                                           QStringLiteral(".png"));
+                }
             }
             for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel")) {
                 if (!label->isVisibleTo(&properties) || label->toolTip().isEmpty())
