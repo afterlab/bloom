@@ -32,6 +32,7 @@
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
 #include "histogram_image_effect.hpp"
+#include "audio_plot_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -210,6 +211,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_auto_exposure_emission.ipp"
 #include "gpu_scene_pixel_math_emission.ipp"
 #include "gpu_scene_histogram_emission.ipp"
+#include "gpu_scene_audio_plot_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -398,6 +400,32 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Histogram values are out of domain");
         return emitHistogramCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
+                                    emit, charge, chargeCoverage, result);
+    }
+    // #347 Audio Waveform and Spectrum: the analysis is read and reduced here, on the worker, then
+    // one pass draws it over the canvas.
+    if (const auto* plot = std::get_if<AudioPlotKernel>(&effect.kernel)) {
+        const auto plotTime =
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex));
+        const auto operands = sampleColorGradeOperandsOnly(effect.kernel, plan, resolved, plotTime);
+        if (!operands)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Audio plot values are out of domain");
+        const auto prepared = prepareAudioPlotAnalysis(*plot, *operands, plotTime,
+                                                       ctx.assetBaseDirectory, cancellation);
+        if (prepared.outcome == AudioAnalysisOutcome::Cancelled)
+            return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
+                        "Audio plot preparation was cancelled");
+        if (prepared.outcome == AudioAnalysisOutcome::Unavailable)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "The audio this plot draws is unavailable: " + prepared.detail);
+        const auto values = sampleColorGradeOperands(effect.kernel, plan, resolved, plotTime);
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Audio plot values are out of domain");
+        return emitAudioPlotCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
                                     emit, charge, chargeCoverage, result);
     }
     // #481 Image Math with a second image: one dispatch over an atlas of the input and the second.

@@ -63,7 +63,10 @@ enum class ColorGradeKind : std::uint8_t {
     PixelMath,
     // #349: Histogram (histogram_image_effect.hpp), the geometry of the image it follows appended
     // where it is applied.
-    Histogram
+    Histogram,
+    // #347: Audio Waveform and Audio Spectrum (audio_plot_image_effect.hpp), the prepared analysis
+    // of the audio in its table.
+    AudioPlot
 };
 
 // The packed table, always a whole number of vec4s:
@@ -121,6 +124,13 @@ struct PreparedColorGrade final {
 sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
                          const ResolvedEvaluation& resolved,
                          std::optional<core::RationalTime> time);
+// The same operands without the analysis an Audio Waveform or Spectrum then reads (nothing is
+// looked up), so a worker can name the analysis to prepare. Equal to the above for every other
+// kernel.
+[[nodiscard]] std::optional<std::vector<double>>
+sampleColorGradeOperandsOnly(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
+                             const ResolvedEvaluation& resolved,
+                             std::optional<core::RationalTime> time);
 // Null for a non-grade kernel, a value outside its document domain (non-finite, |v| > 1e6, gamma
 // outside [0.01, 100], saturation outside [0, 1000], a curve outside its domain) or Curves points
 // too close to represent.

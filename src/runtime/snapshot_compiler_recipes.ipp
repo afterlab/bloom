@@ -165,6 +165,80 @@ lowerHistogram(const document::NodeRecord& node, std::vector<runtime::CompiledOp
     return runtime::detail::appendHistogram(emitter, *input, operands);
 }
 
+// #347 Audio Waveform and Audio Spectrum: a transparent canvas of the plot's size and the pass that
+// draws the analysis of the audio on it. A muted node draws nothing.
+[[nodiscard]] bool
+lowerAudioPlot(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+               std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    const bool spectrum = node.typeId == kAudioSpectrumNodeType;
+    const auto integer = [&](const std::string_view role, const std::int64_t high,
+                             std::int64_t& target) {
+        const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+        if (value == nullptr || *value < 0 || *value > high)
+            return false;
+        target = *value;
+        return true;
+    };
+    runtime::AudioPlotKernel kernel;
+    kernel.kind = spectrum ? runtime::AudioPlotKind::Spectrum : runtime::AudioPlotKind::Waveform;
+    std::int64_t choice = 0;
+    std::int64_t axis = 0;
+    bool valid = integer("width", kAudioPlotMaximumSide, kernel.width) &&
+                 integer("height", kAudioPlotMaximumSide, kernel.height) &&
+                 kernel.width >= kAudioPlotMinimumSide && kernel.height >= kAudioPlotMinimumSide;
+    if (spectrum) {
+        valid = valid && integer("transformSize", kAudioSpectrumSizes.size() - 1, choice) &&
+                integer("axis", kAudioAxisLinear, axis);
+        if (valid) {
+            kernel.fftSize = kAudioSpectrumSizes[static_cast<std::size_t>(choice)];
+            kernel.logarithmic = axis == kAudioAxisLogarithmic;
+        }
+    } else {
+        valid = valid && integer("channels", kAudioWaveformSeparate, choice);
+        kernel.separate = choice == kAudioWaveformSeparate;
+    }
+    const std::array<std::string_view, 2> waveformRoles{"window", "verticalScale"};
+    const std::array<std::string_view, 4> spectrumRoles{"lowFrequency", "highFrequency", "floor",
+                                                        "ceiling"};
+    const auto roles = spectrum ? std::span<const std::string_view>(spectrumRoles)
+                                : std::span<const std::string_view>(waveformRoles);
+    for (std::size_t slot = 0; slot < roles.size() && valid; ++slot) {
+        const auto parameter = compiledScalarParameter(findParameterBinding(node, roles[slot]));
+        valid = parameter.has_value();
+        if (parameter)
+            kernel.values[slot] = *parameter;
+    }
+    const auto color = compiledColorParameter(findParameterBinding(node, "plotColor"));
+    const auto background = compiledColorParameter(findParameterBinding(node, "background"));
+    if (!valid || !color || !background) {
+        addTopologyFailure(node.id, "Audio plot parameters could not be lowered.");
+        return false;
+    }
+    kernel.color = *color;
+    kernel.background = *background;
+    if (isMuted(node.id)) {
+        const auto index = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledMerge{node.id, {}});
+        indices.emplace(node.id, index);
+        return true;
+    }
+    const auto lowered = lowerAudioAnalysisSource(node);
+    if (!lowered.ok)
+        return false;
+    kernel.source = lowered.source;
+    const auto canvas = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(runtime::CompiledSolid{
+        node.id,
+        runtime::CompiledColorParameter{document::ParameterId{}, core::Color4d{0.0, 0.0, 0.0, 0.0}},
+        fieldConstant(static_cast<double>(kernel.width)),
+        fieldConstant(static_cast<double>(kernel.height))});
+    const auto plot = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(runtime::CompiledImageEffect{node.id, canvas, std::move(kernel)});
+    indices.emplace(node.id, plot);
+    return true;
+}
+
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {

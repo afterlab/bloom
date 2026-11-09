@@ -725,6 +725,23 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     }
     case runtime::NodeLoweringKind::ValueFieldSample:
         return lowerFieldSample(node, definition);
+    case runtime::NodeLoweringKind::ValueAudioAmplitude: {
+        // #347 Audio Amplitude: the source its `audio` input ends in and its window and offset.
+        const auto* measure =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "measure"));
+        const auto* unit = parameterConstant<std::int64_t>(findParameterBinding(node, "unit"));
+        auto window = operandOf("window");
+        auto offset = operandOf("offset");
+        if (measure == nullptr || unit == nullptr || !window || !offset || *measure < 0 ||
+            *measure > document::kAudioMeasureRms || *unit < 0 ||
+            *unit > document::kAudioUnitDecibels)
+            return std::nullopt;
+        const auto lowered = lowerAudioAnalysisSource(node);
+        if (!lowered.ok)
+            return std::nullopt;
+        return runtime::CompiledValueKernel{runtime::CompiledValueAudioAmplitude{
+            lowered.source, *std::move(window), *std::move(offset), *measure, *unit}};
+    }
     case runtime::NodeLoweringKind::GroupBoundary: {
         // One operand per output, in the definition's order. A pixel slot has no value to carry:
         // the expansion joined it by edge, so a placeholder holds its place.

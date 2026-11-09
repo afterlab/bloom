@@ -2,6 +2,8 @@
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
 #include "histogram_image_effect.hpp"
+#include "audio_plot_image_effect.hpp"
+#include <bloom/runtime/audio_analysis.hpp>
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -2346,6 +2348,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             SourceWorkingSet::frameAt(request.time.numerator(), request.time.denominator(),
                                       rate.numerator(), rate.denominator()));
     }
+    // #347: an Audio Amplitude in the value graph prepares its analysis on this worker.
+    const AudioAnalysisPreparation audioPreparation(mediaBase, cancellation);
     try {
         auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -2389,6 +2393,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<AutoExposureKernel>(effect->kernel) ||
                                // #349 a histogram counts the whole data window.
                                std::holds_alternative<HistogramKernel>(effect->kernel) ||
+                               // #347 a plot is the size of its analysis, whatever region is asked
+                               std::holds_alternative<AudioPlotKernel>(effect->kernel) ||
                                // #486 a field raster that reads images (Lens Distortion's warp)
                                // reads them wherever the position field points.
                                (std::holds_alternative<FieldRasterKernel>(effect->kernel) &&
@@ -2642,6 +2648,28 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         directionalValues = std::array{angle->value, spacing->value};
                 }
                 std::optional<std::vector<double>> gradeValues;
+                // #347: the audio an Audio Waveform or Spectrum draws is read and reduced here, on
+                // the worker, before its operands are sampled with the prepared analysis.
+                if (const auto* plot = std::get_if<AudioPlotKernel>(&effect->kernel)) {
+                    const auto plotTime =
+                        detail::timeForClock(frameResolved, request.time,
+                                             plan->operationClock(OperationIndex::fromRaw(index)));
+                    const auto operands = detail::sampleColorGradeOperandsOnly(
+                        effect->kernel, *plan, resolved, plotTime);
+                    if (!operands)
+                        return EvaluationResult::failed(
+                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                       "Audio plot values are not evaluable", {}, operationSubject));
+                    const auto prepared = detail::prepareAudioPlotAnalysis(
+                        *plot, *operands, plotTime, mediaBase, cancellation);
+                    if (prepared.outcome == AudioAnalysisOutcome::Cancelled)
+                        return EvaluationResult::cancelled();
+                    if (prepared.outcome == AudioAnalysisOutcome::Unavailable)
+                        return EvaluationResult::failed(
+                            diagnostic(EvaluationDiagnosticCode::MediaSourceUnavailable,
+                                       "The audio this plot draws is unavailable", prepared.detail,
+                                       operationSubject));
+                }
                 if (isColorGradeKernel(effect->kernel))
                     gradeValues = detail::sampleColorGradeOperands(
                         effect->kernel, *plan, resolved,
@@ -3039,6 +3067,24 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(directional->decay);
                                 parameter(directional->angle);
                                 parameter(directional->spacing);
+                            }
+                            if (const auto* plot = std::get_if<AudioPlotKernel>(&step.kernel)) {
+                                // #347: the source revision and timing; the time is the
+                                // operation's own, and the analysis is in the prepared table.
+                                key.add(std::string{"audio-plot-v1"});
+                                key.add(static_cast<int>(plot->kind));
+                                key.add(plot->width);
+                                key.add(plot->height);
+                                key.add(plot->separate);
+                                key.add(plot->fftSize);
+                                key.add(plot->logarithmic);
+                                if (plot->source) {
+                                    const auto digest = plot->source->asset.contentDigest.toLowercaseHex();
+                                    key.add(std::string(digest.data(), digest.size()));
+                                    key.add(plot->source->audioStream);
+                                    key.add(plot->source->startFrame);
+                                    key.add(plot->source->loopMode);
+                                }
                             }
                             if (isColorGradeKernel(step.kernel)) {
                                 key.add(std::string{"color-grade-v1"});
@@ -3681,6 +3727,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                   : nullptr,
                                               effectPixelBudget, cancellation, operationIndex,
                                               progress)
+                                    : gradeKind == detail::ColorGradeKind::AudioPlot
+                                        ? detail::applyAudioPlot(
+                                              *preparedEffect->colorGrade, slots[index].get(),
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
                                     : gradeKind == detail::ColorGradeKind::Histogram
                                         ? detail::applyHistogram(
                                               *preparedEffect->colorGrade, slots[index].get(),

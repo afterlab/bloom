@@ -36,6 +36,8 @@
 
 namespace bloom::runtime {
 
+struct AudioAnalysisSource;
+
 // A compiled plan never crosses a process or persistence boundary: it is compiled in-process from a
 // document snapshot and retained only by frames of that same process. What DOES cross such a
 // boundary is ProcessFrameIdentity, and the two numbers it carries for this are
@@ -1007,6 +1009,32 @@ struct HistogramKernel final {
     friend bool operator==(const HistogramKernel&, const HistogramKernel&) = default;
 };
 
+// #347 Audio Waveform and Audio Spectrum (docs/architecture/media-io.md, "Audio analysis"): one pass
+// over a transparent canvas of `width` by `height` pixels that draws the analysis of a window of
+// the audio of `source` at the frame. The analysis (the minimum and maximum of each lane in each
+// column, or the level of each frequency column) is prepared on a worker (audio_analysis.hpp) and
+// reaches the pass as its table, so the pass is a pure function of that table and runs on the CPU
+// reference and the GPU alike. A null `source` is an input with no audio wired: silence.
+//   Waveform  values: the window in seconds and the vertical scale; `separate` draws a lane for
+//             each channel instead of their mean.
+//   Spectrum  values: the lowest and highest frequency in hertz and the floor and ceiling in
+//             decibels; `fftSize` is the transform length and `logarithmic` the frequency axis.
+// `color` is the line or bars and `background` the fill behind them, both straight colors.
+enum class AudioPlotKind : std::uint8_t { Waveform, Spectrum };
+struct AudioPlotKernel final {
+    AudioPlotKind kind = AudioPlotKind::Waveform;
+    std::shared_ptr<const AudioAnalysisSource> source;
+    std::int64_t width = 1024;
+    std::int64_t height = 256;
+    bool separate = false;
+    std::int64_t fftSize = 2048;
+    bool logarithmic = true;
+    std::array<CompiledScalarParameter, 4> values{};
+    CompiledColorParameter color;
+    CompiledColorParameter background;
+    friend bool operator==(const AudioPlotKernel&, const AudioPlotKernel&) noexcept;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -1017,7 +1045,8 @@ using ImageEffectKernel =
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
-                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel>;
+                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel,
+                 AudioPlotKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1226,6 +1255,15 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
                 visit(value);
         return true;
     }
+    // #347: the window and scale, or the range of the axes, then the two colors.
+    if (const auto* plot = std::get_if<AudioPlotKernel>(&kernel)) {
+        const std::size_t count = plot->kind == AudioPlotKind::Waveform ? 2 : 4;
+        for (std::size_t index = 0; index < count; ++index)
+            visit(plot->values[index]);
+        visit(plot->color);
+        visit(plot->background);
+        return true;
+    }
     return isMotionKernel(kernel);
 }
 
@@ -1247,7 +1285,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<CodecDegradeKernel>(kernel) ||
            std::holds_alternative<AutoExposureKernel>(kernel) ||
            std::holds_alternative<PixelMathKernel>(kernel) ||
-           std::holds_alternative<HistogramKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<HistogramKernel>(kernel) ||
+           std::holds_alternative<AudioPlotKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

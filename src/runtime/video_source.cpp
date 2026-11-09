@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bloom/media/image.hpp>
 #include <bloom/media/video/colour.hpp>
+#include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/footage_time.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
@@ -568,5 +569,9 @@ std::shared_ptr<detail::VideoSourceContext> CpuCompositionEvaluator::videoContex
 void CpuCompositionEvaluator::setVideoCacheByteBudget(std::size_t budget) const {
     videoContext()->cache.setByteBudget(budget);
 }
-void CpuCompositionEvaluator::clearDecodedVideoCache() const { videoContext()->clear(); }
+void CpuCompositionEvaluator::clearDecodedVideoCache() const {
+    videoContext()->clear();
+    // #347: the prepared audio analyses and their opened sources are decoded media too.
+    clearAudioAnalysis();
+}
 } // namespace bloom::runtime

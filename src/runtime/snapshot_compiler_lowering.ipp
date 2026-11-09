@@ -778,6 +778,13 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *masked);
             continue;
         }
+        // #347 Audio Waveform and Audio Spectrum: a canvas and the plot of the analysis over it.
+        if (node->typeId == document::kAudioWaveformNodeType ||
+            node->typeId == document::kAudioSpectrumNodeType) {
+            if (!lowerAudioPlot(*node, operations, indices))
+                return {};
+            continue;
+        }
         // #349 Histogram: the tile counts, their sum and the plot. It publishes a graph, not a
         // changed input, so it takes no effect mask.
         if (node->typeId == document::kHistogramNodeType) {
@@ -1139,6 +1146,69 @@ struct AudioChain final {
     return chain;
 }
 
+// #347: the audio an analysis node (Audio Amplitude, Waveform, Spectrum) reads: the Audio or Video
+// source its `audio` input ends in, through any audio effects (an analysis reads the source's own
+// sound, so the effects are not applied). `source` is null for an input that is unwired, muted or
+// ends in an unwired effect: silence. `ok` is false after a lowering failure.
+struct AudioAnalysisLowering final {
+    bool ok = true;
+    std::shared_ptr<const runtime::AudioAnalysisSource> source;
+};
+
+[[nodiscard]] AudioAnalysisLowering lowerAudioAnalysisSource(const document::NodeRecord& node) {
+    const auto* edge = audioInputEdge(node.id, document::kAudioAnalysisInputPort);
+    if (edge == nullptr)
+        return {};
+    const auto end = audioChainEnd(edge->source.nodeId);
+    if (!end)
+        return {};
+    const auto* audioSource = findNode(*end);
+    if (audioSource == nullptr)
+        return {};
+    if (audioSource->typeId != document::kAudioSourceNodeType &&
+        audioSource->typeId != "bloom.video-source") {
+        addTopologyFailure(node.id, "Audio analysis needs an Audio or Video source.");
+        return {false, nullptr};
+    }
+    if (isMuted(audioSource->id))
+        return {};
+    const auto* assetText = parameterConstant<std::string>(findParameterBinding(*audioSource, "asset"));
+    const auto* startFrame =
+        parameterConstant<std::int64_t>(findParameterBinding(*audioSource, "startFrame"));
+    std::uint64_t assetRaw = 0;
+    if (assetText == nullptr || startFrame == nullptr || assetText->empty() ||
+        std::from_chars(assetText->data(), assetText->data() + assetText->size(), assetRaw).ec !=
+            std::errc{} ||
+        !document::AssetId::fromRaw(assetRaw).isValid()) {
+        addTopologyFailure(node.id, "The audio source of an analysis could not be lowered.");
+        return {false, nullptr};
+    }
+    const auto* asset = request_.snapshot.project().findAsset(document::AssetId::fromRaw(assetRaw));
+    if (asset == nullptr) {
+        addTopologyFailure(node.id, "The audio source of an analysis names a missing asset.");
+        return {false, nullptr};
+    }
+    auto source = std::make_shared<runtime::AudioAnalysisSource>();
+    source->asset = *asset;
+    source->startFrame = *startFrame;
+    source->compositionRate = composition_->format().frameRate();
+    if (audioSource->typeId == "bloom.video-source") {
+        if (const auto* selected = parameterConstant<std::int64_t>(findParameterBinding(
+                *audioSource, std::string(document::kVideoAudioStreamParameterRole)));
+            selected != nullptr && *selected >= 0 && *selected < 256)
+            source->audioStream = static_cast<std::uint32_t>(*selected);
+        const auto* loop =
+            parameterConstant<std::int64_t>(findParameterBinding(*audioSource, "loopMode"));
+        if (loop != nullptr && (*loop == 1 || *loop == 2)) {
+            source->loopExtent = runtime::resolveVideoStreamExtent(*asset);
+            if (source->loopExtent)
+                source->loopMode = *loop;
+        }
+        source->footage = runtime::footageAudioTiming(*asset);
+    }
+    return {true, std::move(source)};
+}
+
 // #436: the audio mix lowers only what is audible. A Layer is audible exactly when its audio
 // reaches Composition Output through the edges the picture consumes -- so a disabled or muted
 // Merge, and a disabled, muted or solo-excluded layer, are silent, as they are absent from the
@@ -1453,6 +1523,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
+    case NodeLoweringKind::ValueAudioAmplitude:
     // #342: Group Input and Group Output are value-pass nodes. A Node Group the expansion could
     // not replace is reported by resolveDefinitions() and never reaches publication.
     case NodeLoweringKind::GroupBoundary:

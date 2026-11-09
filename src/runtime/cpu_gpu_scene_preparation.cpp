@@ -1,3 +1,4 @@
+#include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include "gpu_media_preparation.hpp"
@@ -197,6 +198,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // source/coverage allowances; native images and scratch belong to the device lease/executor.
     auto validationRequest = request;
     validationRequest.pixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
+    // #347: an Audio Amplitude in the value graph prepares its analysis on this worker.
+    const AudioAnalysisPreparation audioPreparation(media.assetBaseDirectory, cancellation);
     auto checked = detail::preflight(plan, validationRequest, cancellation, {}, nullptr, nullptr);
     if (checked.cancelled || cancellation.isCancellationRequested()) {
         return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");

@@ -40,6 +40,8 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
             // #590: a Function is as time-dependent as the body it runs.
             (function != nullptr && (function->body == nullptr || function->body->timeDependent)) ||
             (plot != nullptr && (plot->body == nullptr || plot->body->timeDependent)) ||
+            // #347: the level of the audio at this time.
+            std::holds_alternative<CompiledValueAudioAmplitude>(operation.kernel) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
               utility->operation == document::ValueUtilityKernel::LightFlicker ||
@@ -166,6 +168,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         // #486: grain drawn anew for every frame.
                         if (const auto* grain = std::get_if<FilmGrainKernel>(&step.kernel))
                             animated = animated || grain->drawsPerFrame();
+                        // #347: a plot draws the audio around its frame.
+                        animated = animated || std::holds_alternative<AudioPlotKernel>(step.kernel);
                         // #563: a step is drawn for its frame's place in the group of pictures.
                         if (const auto* codec = std::get_if<CodecDegradeKernel>(&step.kernel))
                             animated = animated || codec->role == CodecDegradeRole::Step;

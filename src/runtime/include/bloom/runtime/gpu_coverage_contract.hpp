@@ -192,6 +192,10 @@ BLOOM_GPU_REQUIRED_EFFECT(HistogramKernel,
                           "Histogram: the per-tile counts of a frame's values in equal bins, "
                           "their sums and the bar graph of the sums (#349)");
 
+BLOOM_GPU_REQUIRED_EFFECT(AudioPlotKernel,
+                          "Audio Waveform and Audio Spectrum: the line or bars of a prepared audio "
+                          "analysis drawn over a canvas (#347)");
+
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
 
@@ -658,6 +662,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::NodeGroup:
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
+    case NodeLoweringKind::ValueAudioAmplitude:
         return false;
     }
     return false;
@@ -727,6 +732,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
+    case NodeLoweringKind::ValueAudioAmplitude:
         return "scope.value";
     case NodeLoweringKind::NodeGroup:
         return "scope.expansion";

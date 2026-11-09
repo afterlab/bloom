@@ -6,6 +6,7 @@
 #include <bloom/runtime/value_utility_kernels.hpp>
 
 #include "field_raster.hpp"
+#include <bloom/runtime/audio_analysis.hpp>
 #include "gradient_source.hpp"
 #include "operation_key.hpp"
 #include <deque>
@@ -275,7 +276,10 @@ class Evaluator final {
             std::optional<document::ParameterId> oversizedStringOperand;
             const bool cacheable =
                 memoization_.cache != nullptr &&
-                !std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel);
+                !std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel) &&
+                // #347: the level is read from the analysis cache under its own identity (source
+                // revision and exact time), which a memoized value's key would not carry.
+                !std::holds_alternative<runtime::CompiledValueAudioAmplitude>(operation.kernel);
             const auto currentOperation = operationIndex++;
             if (cacheable) {
                 key.add(std::string("value"));
@@ -505,6 +509,8 @@ class Evaluator final {
                           const runtime::CompiledValueFunction& kernel);
     void evaluateFunctionPlot(const runtime::CompiledValueOperation& operation,
                               const runtime::CompiledValueFunctionPlot& kernel);
+    void evaluateAudioAmplitude(const runtime::CompiledValueOperation& operation,
+                                const runtime::CompiledValueAudioAmplitude& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -569,11 +575,69 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateFunction(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFunctionPlot>) {
                 evaluateFunctionPlot(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueAudioAmplitude>) {
+                evaluateAudioAmplitude(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
         },
         operation.kernel);
+}
+
+// #347: the level of the source's audio over the window around this frame (plus the offset). The
+// measurement was prepared on a worker; it is read from the cache here and never decoded, so a frame
+// evaluated on the interface thread never waits on a file. A frame whose analysis is not prepared
+// reads silence and says so.
+void Evaluator::evaluateAudioAmplitude(const runtime::CompiledValueOperation& operation,
+                                       const runtime::CompiledValueAudioAmplitude& kernel) {
+    constexpr double kSilenceDecibels = -120.0;
+    const auto silence = [&] {
+        write(operation, 0, kernel.unit == 1 ? kSilenceDecibels : 0.0);
+    };
+    const auto* window = asScalar(operandOf(kernel.window));
+    const auto* offset = asScalar(operandOf(kernel.offset));
+    if (window == nullptr || offset == nullptr) {
+        fail(operation, kernel.window.id, "Audio Amplitude operand has the wrong kind",
+             "The window and the offset must reach the node as Scalars.");
+        silence();
+        return;
+    }
+    if (!kernel.source) {
+        silence();
+        return;
+    }
+    const auto query = runtime::audioAmplitudeQuery(kernel, time_, *window, *offset);
+    if (!query) {
+        fail(operation, kernel.window.id, "Audio Amplitude values are outside their range",
+             "The window is 1 to 60000 milliseconds and the offset within a day.");
+        silence();
+        return;
+    }
+    auto found = runtime::findAudioAnalysis(*query);
+    // A worker that evaluates the frame prepares the analysis here, with the operand values this
+    // evaluation resolved; an evaluation outside a worker's preparation only reads what is prepared.
+    if (!found) {
+        if (const auto status = runtime::AudioAnalysisPreparation::prepareHere(*query)) {
+            if (status->outcome == runtime::AudioAnalysisOutcome::Ready) {
+                found = runtime::findAudioAnalysis(*query);
+            } else {
+                if (status->outcome == runtime::AudioAnalysisOutcome::Unavailable)
+                    fail(operation, {}, "Audio Amplitude audio is unavailable", status->detail);
+                silence();
+                return;
+            }
+        }
+    }
+    if (!found) {
+        fail(operation, {}, "Audio Amplitude is not prepared",
+             "The audio at this time has not been analyzed yet; the level reads as silence until it is.");
+        silence();
+        return;
+    }
+    const double linear = found->amplitude;
+    write(operation, 0,
+          kernel.unit == 1 ? std::max(kSilenceDecibels, 20.0 * std::log10(std::max(linear, 1.0e-6)))
+                           : linear);
 }
 
 void Evaluator::evaluateBoundsReadout(const runtime::CompiledValueOperation& operation,

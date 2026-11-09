@@ -10,6 +10,7 @@
 #include "codec_degrade_recipes.hpp"
 #include "auto_exposure_recipes.hpp"
 #include "histogram_recipes.hpp"
+#include <bloom/runtime/audio_analysis_source.hpp>
 #include "motion_shutter.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"

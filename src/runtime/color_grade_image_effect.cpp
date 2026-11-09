@@ -9,6 +9,7 @@
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
 #include "histogram_image_effect.hpp"
+#include "audio_plot_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
@@ -955,6 +956,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return pixelMathProgramText();
     case ColorGradeKind::Histogram:
         return histogramProgramText();
+    case ColorGradeKind::AudioPlot:
+        return audioPlotProgramText();
     case ColorGradeKind::Sharpen: {
         // ImageCombineV1's Unsharp mode; buildColorGradeProgram refuses this kind.
         static const std::string none;
@@ -981,10 +984,11 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
 }
 } // namespace
 
+namespace {
 std::optional<std::vector<double>>
-sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
-                         const ResolvedEvaluation& resolved,
-                         const std::optional<core::RationalTime> time) {
+sampleOperandsImpl(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
+                   const ResolvedEvaluation& resolved, const std::optional<core::RationalTime> time,
+                   const bool operandsOnly) {
     // #484: a motion kernel's operands include the shutter's sub-frame samples.
     if (isMotionKernel(kernel))
         return sampleMotionOperands(kernel, plan, resolved, time);
@@ -1063,6 +1067,11 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
     });
     if (!grade || !evaluable)
         return std::nullopt;
+    // #347: then the prepared analysis the pass draws, which a worker prepared for this exact time.
+    if (const auto* plot = std::get_if<AudioPlotKernel>(&kernel); plot != nullptr && !operandsOnly) {
+        if (!time || !appendAudioPlotAnalysis(*plot, values, *time))
+            return std::nullopt;
+    }
     // #525: a field program then reads the clock time itself (a looping evolution, a pattern's
     // speed), in exact seconds converted once here.
     if (std::holds_alternative<FieldRasterKernel>(kernel)) {
@@ -1106,6 +1115,21 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
     }
     return values;
 }
+} // namespace
+
+std::optional<std::vector<double>>
+sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
+                         const ResolvedEvaluation& resolved,
+                         const std::optional<core::RationalTime> time) {
+    return sampleOperandsImpl(kernel, plan, resolved, time, false);
+}
+
+std::optional<std::vector<double>>
+sampleColorGradeOperandsOnly(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
+                             const ResolvedEvaluation& resolved,
+                             const std::optional<core::RationalTime> time) {
+    return sampleOperandsImpl(kernel, plan, resolved, time, true);
+}
 
 std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& kernel,
                                                     const std::span<const double> values) {
@@ -1145,6 +1169,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return preparePixelMathGrade(*pixelMath, values);
     if (const auto* histogram = std::get_if<HistogramKernel>(&kernel))
         return prepareHistogramGrade(*histogram, values);
+    if (const auto* plot = std::get_if<AudioPlotKernel>(&kernel))
+        return prepareAudioPlotGrade(*plot, values);
     if (const auto* sharpen = std::get_if<SharpenKernel>(&kernel))
         return prepareSharpenGrade(*sharpen, values);
     return std::nullopt;
@@ -1181,7 +1207,7 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::CodecDegrade ||
         grade.kind == ColorGradeKind::AutoExposure || grade.kind == ColorGradeKind::Motion ||
         grade.kind == ColorGradeKind::Sharpen || grade.kind == ColorGradeKind::PixelMath ||
-        grade.kind == ColorGradeKind::Histogram)
+        grade.kind == ColorGradeKind::Histogram || grade.kind == ColorGradeKind::AudioPlot)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1315,9 +1341,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::Motion ? validMotionProgramData(data)
                         : kind == ColorGradeKind::PixelMath ? validPixelMathProgramData(data)
                         : kind == ColorGradeKind::Histogram ? validHistogramProgramData(data)
+                        : kind == ColorGradeKind::AudioPlot ? validAudioPlotProgramData(data)
                             : data.size() == kHueSaturationFloats;
     if ((static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) &&
-         kind != ColorGradeKind::PixelMath && kind != ColorGradeKind::Histogram) ||
+         kind != ColorGradeKind::PixelMath && kind != ColorGradeKind::Histogram &&
+         kind != ColorGradeKind::AudioPlot) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1421,8 +1449,15 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.resourcePrefix = "bloom_histogram_";
         program.semanticsId = "bloom.render.histogram.v1";
         break;
+    case ColorGradeKind::AudioPlot:
+        program.functionName = "bloom_audio_plot";
+        program.resourcePrefix = "bloom_audio_plot_";
+        program.semanticsId = "bloom.render.audio-plot.v1";
+        break;
     }
-    program.shaderText = kind == ColorGradeKind::Histogram
+    program.shaderText = kind == ColorGradeKind::AudioPlot
+                             ? audioPlotProgramText()
+                         : kind == ColorGradeKind::Histogram
                              ? histogramProgramText()
                          : kind == ColorGradeKind::PixelMath
                              ? pixelMathProgramText()

@@ -1,5 +1,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 
+#include <bloom/runtime/audio_analysis_source.hpp>
+
 #include <algorithm>
 #include <utility>
 #include <variant>
@@ -104,6 +106,24 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
 } // namespace bloom::runtime
 
 namespace bloom::runtime {
+
+bool sameAudioAnalysisSource(const std::shared_ptr<const AudioAnalysisSource>& left,
+                             const std::shared_ptr<const AudioAnalysisSource>& right) noexcept {
+    return left == right || (left != nullptr && right != nullptr && *left == *right);
+}
+
+// #347: two audio kernels are equal when the audio they read and their operands are.
+bool operator==(const CompiledValueAudioAmplitude& a, const CompiledValueAudioAmplitude& b) noexcept {
+    return sameAudioAnalysisSource(a.source, b.source) && a.window == b.window &&
+           a.offset == b.offset && a.measure == b.measure && a.unit == b.unit;
+}
+
+bool operator==(const AudioPlotKernel& a, const AudioPlotKernel& b) noexcept {
+    return a.kind == b.kind && sameAudioAnalysisSource(a.source, b.source) && a.width == b.width &&
+           a.height == b.height && a.separate == b.separate && a.fftSize == b.fftSize &&
+           a.logarithmic == b.logarithmic && a.values == b.values && a.color == b.color &&
+           a.background == b.background;
+}
 
 // #525: two Field Samples are equal when their programs are, wherever each is held.
 bool operator==(const CompiledValueFieldSample& a, const CompiledValueFieldSample& b) noexcept {

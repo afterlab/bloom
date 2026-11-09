@@ -118,6 +118,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/runtime/audio_analysis_source.hpp
             include/bloom/runtime/compiled_plan.hpp
             include/bloom/runtime/compiled_composition_source.hpp
             include/bloom/runtime/channel_expression.hpp
@@ -205,6 +206,8 @@ target_sources(
         auto_exposure_image_effect.cpp
         pixel_math_image_effect.cpp
         histogram_image_effect.cpp
+        audio_analysis.cpp
+        audio_plot_image_effect.cpp
         motion_blur_image_effect.cpp
         motion_blur_planner.cpp
         sharpen_image_effect.cpp
@@ -299,6 +302,7 @@ target_sources(
             include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp
+            include/bloom/runtime/audio_analysis.hpp
             include/bloom/runtime/audio_stream_key.hpp
             include/bloom/runtime/video_source_report.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp

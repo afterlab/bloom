@@ -393,6 +393,22 @@ struct CompiledValueFunctionPlot final {
     friend bool operator==(const CompiledValueFunctionPlot&, const CompiledValueFunctionPlot&);
 };
 
+// #347 Audio Amplitude: the level of the audio of a source over a window around the frame, one
+// Scalar. The measurement is prepared on a worker before the frame is evaluated (audio_analysis.hpp)
+// and read here from the analysis cache; a frame whose analysis is not prepared reads 0 and says so.
+// A null `source` is an input with no audio wired: the level is 0. `window` is milliseconds and
+// `offset` seconds, both operands; `measure` is 0 Peak or 1 RMS and `unit` 0 Linear or 1 Decibels.
+struct AudioAnalysisSource;
+struct CompiledValueAudioAmplitude final {
+    std::shared_ptr<const AudioAnalysisSource> source;
+    CompiledValueOperand window;
+    CompiledValueOperand offset;
+    std::int64_t measure = 1;
+    std::int64_t unit = 0;
+    friend bool operator==(const CompiledValueAudioAmplitude&,
+                           const CompiledValueAudioAmplitude&) noexcept;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
@@ -401,7 +417,7 @@ using CompiledValueKernel =
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
                  CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
-                 CompiledValueFunctionPlot>;
+                 CompiledValueFunctionPlot, CompiledValueAudioAmplitude>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -422,6 +438,9 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 for (const auto& operand : step.operands)
                     visit(operand);
                 visit(step.position);
+            } else if constexpr (std::is_same_v<Step, CompiledValueAudioAmplitude>) {
+                visit(step.window);
+                visit(step.offset);
             } else if constexpr (std::is_same_v<Step, CompiledValueShake>) {
                 visit(step.amplitudeX);
                 visit(step.amplitudeY);
