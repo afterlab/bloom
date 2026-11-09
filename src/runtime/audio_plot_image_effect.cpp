@@ -53,18 +53,39 @@ struct Pixel final {
     return {sr + br, sg + bg, sb + bb, sa + ba};
 }
 
+// The analysis columns a canvas column draws: the analysis is always the node's own width, so a
+// canvas of another size (a reduced render) folds or repeats columns. At the node's own width this
+// is exactly column x.
+struct ColumnRange final {
+    std::int64_t first = 0;
+    std::int64_t end = 0;
+};
+[[nodiscard]] ColumnRange columnsOf(const float* const d, const std::int64_t x,
+                                    const std::int64_t canvasWidth) noexcept {
+    const auto analysis = static_cast<std::int64_t>(d[1]);
+    const auto first = (x * analysis) / canvasWidth;
+    const auto end = std::min(std::max(((x + 1) * analysis + canvasWidth - 1) / canvasWidth, first + 1),
+                              analysis);
+    return {first, end};
+}
+
 [[nodiscard]] float waveformCoverage(const float* const d, const std::int64_t x,
-                                     const std::int64_t y) noexcept {
-    const auto height = static_cast<std::int64_t>(d[2]);
+                                     const std::int64_t y, const std::int64_t canvasWidth,
+                                     const std::int64_t height) noexcept {
     const auto lanes = static_cast<std::int64_t>(d[3]);
     const auto lane = (y * lanes) / height;
     const auto top = (lane * height) / lanes;
     const auto bottom = ((lane + 1) * height) / lanes;
     const float half = 0.5F * static_cast<float>(bottom - top);
     const float mid = static_cast<float>(top) + half;
-    const auto slot = static_cast<std::size_t>((x * lanes + lane) * 2);
-    const float low = level(d, slot);
-    const float high = level(d, slot + 1);
+    const auto columns = columnsOf(d, x, canvasWidth);
+    float low = 0.0F;
+    float high = 0.0F;
+    for (std::int64_t column = columns.first; column < columns.end; ++column) {
+        const auto slot = static_cast<std::size_t>((column * lanes + lane) * 2);
+        low = column == columns.first ? level(d, slot) : std::min(low, level(d, slot));
+        high = column == columns.first ? level(d, slot + 1) : std::max(high, level(d, slot + 1));
+    }
     const float scale = d[5];
     const float up = std::min(std::max(high * scale, -1.0F), 1.0F);
     const float down = std::min(std::max(low * scale, -1.0F), 1.0F);
@@ -82,9 +103,13 @@ struct Pixel final {
 }
 
 [[nodiscard]] float spectrumCoverage(const float* const d, const std::int64_t x,
-                                     const std::int64_t y) noexcept {
-    const auto height = static_cast<std::int64_t>(d[2]);
-    const float fill = level(d, static_cast<std::size_t>(x)) * static_cast<float>(height);
+                                     const std::int64_t y, const std::int64_t canvasWidth,
+                                     const std::int64_t height) noexcept {
+    const auto columns = columnsOf(d, x, canvasWidth);
+    float peak = level(d, static_cast<std::size_t>(columns.first));
+    for (std::int64_t column = columns.first + 1; column < columns.end; ++column)
+        peak = std::max(peak, level(d, static_cast<std::size_t>(column)));
+    const float fill = peak * static_cast<float>(height);
     const float fromBottom = static_cast<float>(height - 1 - y);
     const float over = fill - fromBottom;
     return std::min(std::max(over, 0.0F), 1.0F);
@@ -214,6 +239,9 @@ std::optional<PreparedColorGrade> prepareAudioPlotGrade(const AudioPlotKernel& k
     d[1] = static_cast<float>(kernel.width);
     d[2] = static_cast<float>(kernel.height);
     d[3] = static_cast<float>(lanes);
+    // The canvas it is drawn on: the node's own size until a render at another scale sets it.
+    d[14] = d[1];
+    d[15] = d[2];
     d[4] = kernel.separate ? static_cast<float>(kFlagSeparate) : 0.0F;
     if (kernel.kind == AudioPlotKind::Waveform) {
         if (!finite(values[1]) || values[1] < 0.0 || values[1] > kMaximumScale)
@@ -236,6 +264,19 @@ std::optional<PreparedColorGrade> prepareAudioPlotGrade(const AudioPlotKernel& k
     return grade;
 }
 
+bool audioPlotCanvasMatches(const std::vector<float>& data, const std::int64_t width,
+                            const std::int64_t height, const double horizontalScale,
+                            const double verticalScale) noexcept {
+    if (data.size() < kAudioPlotHeaderFloats || width < 1 || height < 1 ||
+        width > kAudioPlotMaximumSide || height > kAudioPlotMaximumSide ||
+        !(horizontalScale > 0.0) || !(verticalScale > 0.0))
+        return false;
+    // The canvas is the node's size scaled and rounded up, or the scaled frame when the node is
+    // the frame's size: within one pixel of the scaled size.
+    return std::abs(static_cast<double>(width) - static_cast<double>(data[1]) * horizontalScale) <= 1.0 &&
+           std::abs(static_cast<double>(height) - static_cast<double>(data[2]) * verticalScale) <= 1.0;
+}
+
 bool validAudioPlotProgramData(const std::vector<float>& d) noexcept {
     if (d.size() < kAudioPlotHeaderFloats || d.size() % 4 != 0 ||
         !std::ranges::all_of(d, [](const float v) { return std::isfinite(v); }))
@@ -247,7 +288,9 @@ bool validAudioPlotProgramData(const std::vector<float>& d) noexcept {
         !whole(d[1], static_cast<float>(kAudioPlotMinimumSide), static_cast<float>(kAudioPlotMaximumSide)) ||
         !whole(d[2], static_cast<float>(kAudioPlotMinimumSide), static_cast<float>(kAudioPlotMaximumSide)) ||
         !whole(d[3], 1.0F, static_cast<float>(media::audio::analysis::kMaximumLanes)) ||
-        !whole(d[4], 0.0F, 1.0F))
+        !whole(d[4], 0.0F, 1.0F) ||
+        !whole(d[14], 1.0F, static_cast<float>(kAudioPlotMaximumSide)) ||
+        !whole(d[15], 1.0F, static_cast<float>(kAudioPlotMaximumSide)))
         return false;
     const auto width = static_cast<std::size_t>(d[1]);
     const auto count = d[0] == 0.0F ? width * static_cast<std::size_t>(d[3]) * 2 : width;
@@ -260,17 +303,28 @@ const std::string& audioPlotProgramText() {
     static const std::string text = std::string(R"GLSL(
 layout(set = 0, binding = 0, std430) readonly buffer BloomAudioPlotData { vec4 values[]; } bloom_audio_plot_data;
 float bap(int i) { return bloom_audio_plot_data.values[i >> 2][i & 3]; }
-float bap_waveform(int x, int y) {
- int height = int(bap(2));
+int bap_first(int x, int canvas_width) { return (x * int(bap(1))) / canvas_width; }
+int bap_end(int x, int canvas_width) {
+ int analysis = int(bap(1));
+ int first = bap_first(x, canvas_width);
+ return min(max(((x + 1) * analysis + canvas_width - 1) / canvas_width, first + 1), analysis);
+}
+float bap_waveform(int x, int y, int canvas_width, int height) {
  int lanes = int(bap(3));
  int lane = (y * lanes) / height;
  int top = (lane * height) / lanes;
  int bottom = ((lane + 1) * height) / lanes;
  precise float half_height = 0.5 * float(bottom - top);
  precise float mid = float(top) + half_height;
- int slot = (x * lanes + lane) * 2;
- float low = bap(16 + slot);
- float high = bap(16 + slot + 1);
+ int first = bap_first(x, canvas_width);
+ int end = bap_end(x, canvas_width);
+ float low = 0.0;
+ float high = 0.0;
+ for (int column = first; column < end; ++column) {
+  int slot = (column * lanes + lane) * 2;
+  low = (column == first) ? bap(16 + slot) : min(low, bap(16 + slot));
+  high = (column == first) ? bap(16 + slot + 1) : max(high, bap(16 + slot + 1));
+ }
  float scale = bap(5);
  precise float high_scaled = high * scale;
  precise float low_scaled = low * scale;
@@ -292,18 +346,22 @@ float bap_waveform(int x, int y) {
  precise float over = min(row_end, edge_bottom) - max(row, edge_top);
  return min(max(over, 0.0), 1.0);
 }
-float bap_spectrum(int x, int y) {
- int height = int(bap(2));
- precise float fill = bap(16 + x) * float(height);
+float bap_spectrum(int x, int y, int canvas_width, int height) {
+ int first = bap_first(x, canvas_width);
+ int end = bap_end(x, canvas_width);
+ float peak = bap(16 + first);
+ for (int column = first + 1; column < end; ++column) { peak = max(peak, bap(16 + column)); }
+ precise float fill = peak * float(height);
  float from_bottom = float(height - 1 - y);
  precise float over = fill - from_bottom;
  return min(max(over, 0.0), 1.0);
 }
 vec4 bloom_audio_plot(ivec2 c) {
- int width = int(bap(1));
- int height = int(bap(2));
+ int width = int(bap(14));
+ int height = int(bap(15));
  if (c.x >= width || c.y >= height) { return vec4(0.0); }
- float coverage = (int(bap(0)) == 0) ? bap_waveform(c.x, c.y) : bap_spectrum(c.x, c.y);
+ float coverage = (int(bap(0)) == 0) ? bap_waveform(c.x, c.y, width, height)
+                                      : bap_spectrum(c.x, c.y, width, height);
  precise float sr = bap(6) * coverage;
  precise float sg = bap(7) * coverage;
  precise float sb = bap(8) * coverage;
@@ -324,7 +382,8 @@ ImageEffectResult applyAudioPlot(const PreparedColorGrade& grade,
                                  const CancellationToken& cancellation,
                                  const OperationIndex operation,
                                  const EvaluationProgressCallback& progress,
-                                 CpuRowBandExecutor* const rowBands) {
+                                 CpuRowBandExecutor* const rowBands, const double horizontalScale,
+                                 const double verticalScale) {
     if (cancellation.isCancellationRequested())
         return ImageEffectResult{{}, {}, true};
     if (input == nullptr) {
@@ -337,12 +396,13 @@ ImageEffectResult applyAudioPlot(const PreparedColorGrade& grade,
                       "Audio plot values are out of domain");
     const float* const d = grade.data.data();
     const auto sourceWindow = input->descriptor()->dataWindow();
-    const auto width = static_cast<std::int64_t>(d[1]);
-    const auto height = static_cast<std::int64_t>(d[2]);
-    if (static_cast<std::int64_t>(sourceWindow.extent().width()) != width ||
-        static_cast<std::int64_t>(sourceWindow.extent().height()) != height)
+    // The plot is drawn over the canvas it follows, whatever its size: at a reduced render that is
+    // the node's size scaled.
+    const auto width = static_cast<std::int64_t>(sourceWindow.extent().width());
+    const auto height = static_cast<std::int64_t>(sourceWindow.extent().height());
+    if (!audioPlotCanvasMatches(grade.data, width, height, horizontalScale, verticalScale))
         return failed(EvaluationDiagnosticCode::IncompatibleImageDescriptor,
-                      "The audio plot canvas is not the size of the analysis");
+                      "The audio plot canvas is not the size of the plot at this render scale");
     const auto descriptor = render::Rgba32fImageDescriptor::create(
         sourceWindow, input->descriptor()->displayWindow(), input->descriptor()->pixelAspect());
     if (!descriptor)
@@ -367,7 +427,8 @@ ImageEffectResult applyAudioPlot(const PreparedColorGrade& grade,
                                             {}};
             const auto y = absoluteY - sourceWindow.originY();
             for (std::int64_t x = 0; x < width; ++x) {
-                const float coverage = waveform ? waveformCoverage(d, x, y) : spectrumCoverage(d, x, y);
+                const float coverage = waveform ? waveformCoverage(d, x, y, width, height)
+                                           : spectrumCoverage(d, x, y, width, height);
                 const auto p = compose(d, coverage);
                 const auto pixel = render::Rgba32f::fromPremultiplied(p.r, p.g, p.b, p.a);
                 if (!pixel)

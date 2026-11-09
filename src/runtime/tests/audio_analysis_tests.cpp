@@ -47,7 +47,9 @@ struct Rendered final {
 
 Rendered render(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
                 const std::filesystem::path& base,
-                const std::optional<render::ImageWindow>& roi = std::nullopt) {
+                const std::optional<render::ImageWindow>& roi = std::nullopt,
+                const std::optional<runtime::ProxyResolution>& proxy = std::nullopt,
+                const runtime::CancellationToken& cancellation = {}) {
     runtime::CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(base);
     runtime::EvaluationRequest request{core::RationalTime::fromInteger(0), plan->output(),
@@ -55,7 +57,9 @@ Rendered render(const std::shared_ptr<const runtime::CompiledCompositionPlan>& p
     request.pixelStorageByteLimit = 1U << 28U;
     if (roi)
         request.roi = *roi;
-    const auto result = evaluator.evaluate(plan, request, {});
+    if (proxy)
+        request.resolution = *proxy;
+    const auto result = evaluator.evaluate(plan, request, cancellation);
     Rendered out;
     for (const auto& diagnostic : result.diagnostics())
         out.diagnostic += diagnostic.summary + " " + diagnostic.detail + "; ";
@@ -228,6 +232,86 @@ void regionOfInterest() {
     expect(identical, "a region reads the pixels of the full frame");
 }
 
+runtime::ProxyResolution proxyOf(const std::uint32_t width, const std::uint32_t height) {
+    auto extent = render::ImageExtent::create(width, height);
+    return runtime::ProxyResolution{*extent.value()};
+}
+
+// The share of a column the shape covers: the fill is alpha 0.5 and the line alpha 1.
+double columnCoverage(const Rendered& frame, const Box& box, const std::int64_t x) {
+    double covered = 0.0;
+    for (std::int64_t y = box.y0; y <= box.y1; ++y)
+        covered += std::clamp((static_cast<double>(frame.at(x, y)[3]) - 0.5) / 0.5, 0.0, 1.0);
+    return covered / static_cast<double>(box.y1 - box.y0 + 1);
+}
+
+// #347: below full render scale (an Image Preview always renders at its drawn size; the Viewer can) the
+// canvas is the plot's size scaled, and the plot draws the same picture over it. The analysis stays the
+// node's own width, so the scale changes the pixel size and not what the plot says.
+void reducedRenderScale() {
+    // Spectrum: the 937.5 Hz bar stands in column 2 of 48; at half size it is column 1 of 24.
+    {
+        const auto plan = apt::audioPlotPlan(apt::spectrumValues(), 347800);
+        const auto full = render(plan, scratch);
+        const auto reduced = render(plan, scratch, std::nullopt, proxyOf(32, 32));
+        expect(reduced.evaluated, "a spectrum evaluates at half the render scale: " + reduced.diagnostic);
+        if (!full.evaluated || !reduced.evaluated)
+            return;
+        const auto fullBox = canvasOf(full);
+        const auto box = canvasOf(reduced);
+        expect(box.x1 - box.x0 + 1 == 24 && box.y1 - box.y0 + 1 == 16,
+               "the spectrum's canvas is its size scaled");
+        const double want = columnCoverage(full, fullBox, fullBox.x0 + 2);
+        const double got = columnCoverage(reduced, box, box.x0 + 1);
+        expect(std::fabs(got - want) < 0.08, "the bar is as tall, relative to the plot, as at full scale");
+        expect(same(reduced.at(box.x0 + 1, box.y1), kLine), "the reduced bar stands on the bottom");
+        expect(same(reduced.at(box.x0 + 1, box.y0), kFill), "the reduced column is the fill above its bar");
+        expect(same(reduced.at(box.x0 + 20, box.y1), kFill), "a column with no energy shows only the fill");
+    }
+    // Waveform: every column draws a trace one or more rows thick, in the same place in the plot.
+    {
+        const auto plan = apt::audioPlotPlan(apt::AudioPlotValues{}, 347900);
+        const auto full = render(plan, scratch);
+        const auto reduced = render(plan, scratch, std::nullopt, proxyOf(32, 32));
+        expect(reduced.evaluated, "a waveform evaluates at half the render scale: " + reduced.diagnostic);
+        if (!full.evaluated || !reduced.evaluated)
+            return;
+        const auto fullBox = canvasOf(full);
+        const auto box = canvasOf(reduced);
+        expect(box.x1 - box.x0 + 1 == 24 && box.y1 - box.y0 + 1 == 16,
+               "the waveform's canvas is its size scaled");
+        const auto centreOf = [](const Rendered& frame, const Box& b, const std::int64_t x) {
+            double sum = 0.0, weight = 0.0;
+            for (std::int64_t y = b.y0; y <= b.y1; ++y) {
+                const double c = std::clamp((static_cast<double>(frame.at(x, y)[0])) / 1.0, 0.0, 1.0);
+                sum += c * static_cast<double>(y - b.y0);
+                weight += c;
+            }
+            return weight > 0.0 ? sum / weight / static_cast<double>(b.y1 - b.y0 + 1) : -1.0;
+        };
+        int drawn = 0;
+        for (std::int64_t x = box.x0; x <= box.x1; ++x) {
+            const double reducedCentre = centreOf(reduced, box, x);
+            const double fullCentre = centreOf(full, fullBox, fullBox.x0 + (x - box.x0) * 2);
+            if (reducedCentre >= 0.0) {
+                ++drawn;
+                expect(std::fabs(reducedCentre - fullCentre) < 0.12, "the trace is where it is at full scale");
+            }
+            expect(same(reduced.at(x, box.y0), kFill), "the top row of a reduced column is the fill");
+        }
+        expect(drawn == 24, "every reduced column draws the trace");
+    }
+    // An odd extent, a region of interest and a canvas that is not a whole half all draw.
+    {
+        const auto plan = apt::audioPlotPlan(apt::spectrumValues(), 347950);
+        const auto odd = render(plan, scratch, std::nullopt, proxyOf(37, 29));
+        expect(odd.evaluated, "a spectrum evaluates at an odd render scale: " + odd.diagnostic);
+        const auto box = canvasOf(odd);
+        expect(odd.evaluated && box.x1 - box.x0 + 1 == 28 && box.y1 - box.y0 + 1 == 15,
+               "an odd scale rounds the canvas up");
+    }
+}
+
 void amplitude() {
     runtime::clearAudioAnalysis();
     runtime::CompiledValueAudioAmplitude kernel;
@@ -291,6 +375,7 @@ int main() {
     unavailableSources();
     regionOfInterest();
     amplitude();
+    reducedRenderScale();
     retirement();
     if (failures == 0)
         std::cout << "audio analysis tests passed\n";

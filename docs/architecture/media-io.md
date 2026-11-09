@@ -897,6 +897,20 @@ exceed 1 (HDR); alpha is 0 to 1. A region of interest reads the same pixels as t
 pass is registered in the GPU coverage contract (`effect.AudioPlotKernel`, `node.bloom.audio-waveform`,
 `node.bloom.audio-spectrum`) with a production preparation fixture and a native parity fixture.
 
+**Render scale.** The analysis is always the node's own width in columns, whatever the render scale, so
+a scale change changes the plot's pixel size and not what it says. Below full render scale (an Image
+Preview always renders at its drawn size; the Viewer can) the canvas is the node's size scaled and
+rounded up, and the pass draws the same picture over the canvas it follows: the table carries the canvas
+size (entries 14 and 15), and each canvas column draws the analysis columns it covers (a Waveform the
+lowest minimum and highest maximum among them, a Spectrum the highest level), which at the node's own
+width is exactly one column. Heights and lanes are in canvas rows. The trace stays at least one canvas
+pixel thick and a spectrum bar's top row keeps its fractional coverage, so a trace is never thinner
+than a pixel and is relatively thicker at a small scale; bars keep their share of the height. Both
+backends take the canvas size from the canvas image, and both refuse a canvas that is not within one
+pixel of the node's size at the render's scale ("The audio plot canvas is not the size of the plot at
+this render scale"). The tables of different canvases are different programs, so each scale caches its
+own picture.
+
 **Muting and unwired inputs.** A muted plot is an empty Merge. A plot with nothing wired in draws
 silence (the background only); Amplitude with nothing wired in is 0. Amplitude is a value-graph kernel
 that is not memoized across frames (its key would not carry the source).

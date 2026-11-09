@@ -12,6 +12,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/render_reachability.hpp>
@@ -262,6 +263,37 @@ int main(int argc, char** argv) {
         if (shown.state != State::Ready)
             std::cerr << "  mask preview: " << shown.message.toStdString() << '\n';
         expect(shown.state == State::Ready && !shown.image.isNull(), "a Mask is previewed");
+    }
+
+    // #347: Audio Waveform and Audio Spectrum are drawn at the size the preview is, which is always
+    // below the plot's own size. Each is a canvas the plot follows at the render's scale.
+    for (const auto type : {document::kAudioWaveformNodeType, document::kAudioSpectrumNodeType}) {
+        const std::size_t previewsBefore = [&] {
+            std::size_t count = 0;
+            for (const auto& item : session.composition()->graph().nodes())
+                if (item.typeId == document::kImagePreviewNodeType)
+                    ++count;
+            return count;
+        }();
+        expect(fixture.add(type, std::nullopt), "an audio plot node is added");
+        const auto plot = fixture.nodeOfType(type);
+        expect(plot.has_value(), "the audio plot node exists");
+        if (!plot)
+            continue;
+        expect(fixture.add(document::kImagePreviewNodeType, document::OutputPortRef{*plot, "image"}),
+               "an Image Preview is added fed by an audio plot");
+        const auto plotPreview = fixture.nodeOfType(document::kImagePreviewNodeType, previewsBefore);
+        expect(plotPreview.has_value(), "the audio plot's Image Preview exists");
+        if (!plotPreview)
+            continue;
+        shown = fixture.ready(*plotPreview, {64, 64});
+        if (shown.state != State::Ready)
+            std::cerr << "  " << type << " preview: " << shown.message.toStdString() << '\n';
+        expect(shown.state == State::Ready && !shown.image.isNull(),
+               "an audio plot is previewed below its own size");
+        // The plot's background covers the whole picture: the corner is not transparent black.
+        expect(shown.state == State::Ready && shown.image.pixelColor(1, 1).alpha() == 255,
+               "the audio plot's canvas fills the preview");
     }
 
     // The background: session state, one node at a time.

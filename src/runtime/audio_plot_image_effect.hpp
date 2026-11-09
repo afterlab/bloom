@@ -29,7 +29,8 @@ struct ImageEffectResult;
 // The table (a whole number of vec4s):
 //   0 kind (0 Waveform, 1 Spectrum)  1 width  2 height  3 lanes  4 flags (1 separate)  5 scale
 //   6..9 the line or bars, premultiplied r g b a   10..13 the fill behind, premultiplied r g b a
-//   14, 15 reserved, then from kAudioPlotHeaderFloats the analysis:
+//   14, 15 the canvas width and height it is drawn on (the node's own size, or the scaled size at a
+//   reduced render), then from kAudioPlotHeaderFloats the analysis:
 //   Waveform [column][lane][minimum, maximum]   Spectrum [column] one level in [0, 1]
 inline constexpr std::size_t kAudioPlotHeaderFloats = 16;
 
@@ -72,6 +73,13 @@ audioPlotQuery(const AudioPlotKernel& kernel, std::span<const double> operands,
                                                const render::Rgba32fImage* input, std::size_t budget,
                                                const CancellationToken&, OperationIndex,
                                                const EvaluationProgressCallback&,
-                                               CpuRowBandExecutor* rowBands);
+                                               CpuRowBandExecutor* rowBands, double horizontalScale,
+                                               double verticalScale);
+
+// Whether a canvas of `width` by `height` is the plot's size at the render's scale: the analysis is
+// the node's own size, the canvas is that size scaled (rounded up), so within one pixel.
+[[nodiscard]] bool audioPlotCanvasMatches(const std::vector<float>& data, std::int64_t width,
+                                          std::int64_t height, double horizontalScale,
+                                          double verticalScale) noexcept;
 
 } // namespace bloom::runtime::detail

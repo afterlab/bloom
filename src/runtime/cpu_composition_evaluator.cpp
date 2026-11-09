@@ -3758,7 +3758,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         ? detail::applyAudioPlot(
                                               *preparedEffect->colorGrade, slots[index].get(),
                                               effectPixelBudget, cancellation, operationIndex,
-                                              progress, rowBands)
+                                              progress, rowBands, resolved.horizontalScale,
+                                              resolved.verticalScale)
                                     : gradeKind == detail::ColorGradeKind::Statistics
                                         ? detail::applyStatistics(
                                               *preparedEffect->colorGrade, slots[index].get(),

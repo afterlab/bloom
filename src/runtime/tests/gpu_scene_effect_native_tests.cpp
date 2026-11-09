@@ -3210,6 +3210,9 @@ void runAudioPlots(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         apt::AudioPlotValues values;
         const char* name;
         bool roi = false;
+        // A render below full scale: the proxy's width and height, or none.
+        std::uint32_t proxyWidth = 0;
+        std::uint32_t proxyHeight = 0;
     };
     std::vector<Case> cases;
     cases.push_back({apt::AudioPlotValues{}, "waveform"});
@@ -3231,6 +3234,23 @@ void runAudioPlots(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         cases.push_back({values, "silence"});
     }
     cases.push_back({apt::spectrumValues(), "a region of interest", true});
+    // #347: below full render scale the plot draws the same picture over the scaled canvas, with the
+    // CPU reference's bits.
+    cases.push_back({apt::AudioPlotValues{}, "waveform at half scale", false, 32, 32});
+    cases.push_back({apt::spectrumValues(), "spectrum at half scale", false, 32, 32});
+    {
+        apt::AudioPlotValues values;
+        values.separate = true;
+        values.values = {1.0, 2.0, 0.0, 0.0};
+        cases.push_back({values, "waveform, separate lanes, at an odd scale", false, 37, 29});
+        values = apt::spectrumValues();
+        values.logarithmic = true;
+        cases.push_back({values, "spectrum, logarithmic, at an odd scale", false, 37, 29});
+        values = apt::spectrumValues();
+        values.width = 300;
+        values.height = 100;
+        cases.push_back({values, "a wide spectrum folded to a narrow canvas", false, 16, 16});
+    }
     std::uint64_t id = 347000;
     for (const auto& item : cases) {
         cache.clear();
@@ -3238,6 +3258,10 @@ void runAudioPlots(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         const auto plan = apt::audioPlotPlan(item.values, id);
         id += 200;
         auto request = requestFor(*plan);
+        if (item.proxyWidth != 0) {
+            const auto extent = bloom::render::ImageExtent::create(item.proxyWidth, item.proxyHeight);
+            request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        }
         if (item.roi) {
             const auto window = bloom::render::ImageWindow::create(10, 6, 30, 40);
             request.roi = *window.value();

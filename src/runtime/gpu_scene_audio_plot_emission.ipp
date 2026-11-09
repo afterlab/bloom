@@ -32,15 +32,20 @@ emitAudioPlotCommand(const CompiledImageEffect& effect, const PreparedColorGrade
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "The audio plot descriptor is not derivable");
     const auto source = descriptor->data;
+    // The plot draws over the canvas it follows, whatever its size: at a reduced render that is the
+    // node's size scaled, and the table carries it.
+    const auto canvasWidth = static_cast<std::int64_t>(source.extent().width());
+    const auto canvasHeight = static_cast<std::int64_t>(source.extent().height());
     if (!validAudioPlotProgramData(grade.data) ||
-        static_cast<std::int64_t>(source.extent().width()) != static_cast<std::int64_t>(grade.data[1]) ||
-        static_cast<std::int64_t>(source.extent().height()) != static_cast<std::int64_t>(grade.data[2]))
+        !audioPlotCanvasMatches(grade.data, canvasWidth, canvasHeight, ctx.hScale, ctx.vScale))
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                    "The audio plot canvas is not the size of its analysis");
+                    "The audio plot canvas is not the size of the plot at this render scale");
     GpuOcioTransformSpec leg;
     leg.kind = GpuOcioTransformKind::ColorGrade;
     leg.gradeKind = static_cast<std::uint8_t>(ColorGradeKind::AudioPlot);
     leg.gradeData = grade.data;
+    leg.gradeData[14] = static_cast<float>(canvasWidth);
+    leg.gradeData[15] = static_cast<float>(canvasHeight);
     std::shared_ptr<const PreparedGpuOcioCommand> program;
     if (const auto error = prepareFieldLeg(leg, source, ctx, ocioContext, cancellation, program))
         return error;
