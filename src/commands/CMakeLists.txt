@@ -16,6 +16,7 @@ target_sources(
         footage_interpretation_operations.cpp
         node_operations.cpp
         entry_layer_operations.cpp
+        svg_import_operations.cpp
         layer_operations.cpp
         layer_time_operations.cpp
         layer_mask_operations.cpp
@@ -53,6 +54,7 @@ target_sources(
             include/bloom/commands/node_operations.hpp
             include/bloom/commands/group_definition_operations.hpp
             include/bloom/commands/entry_layer_operations.hpp
+            include/bloom/commands/svg_import_operations.hpp
             include/bloom/commands/layer_operations.hpp
             include/bloom/commands/layer_time_operations.hpp
             include/bloom/commands/layer_mask_operations.hpp
@@ -73,7 +75,7 @@ target_sources(
 
 target_compile_features(bloom_commands PUBLIC cxx_std_20)
 target_link_libraries(bloom_commands PUBLIC bloom_document bloom_media_provider
-                      PRIVATE bloom_media_image bloom_media_audio bloom_media_video bloom_color_ocio)
+                      PRIVATE bloom_media_image bloom_media_vector bloom_media_audio bloom_media_video bloom_color_ocio)
 bloom_enable_warnings(bloom_commands)
 
 if(BUILD_TESTING)

@@ -146,3 +146,9 @@ target_link_libraries(bloom_commands_entry_layer_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_entry_layer_test)
 bloom_add_test(NAME bloom.commands.entry-layers COMMAND bloom_commands_entry_layer_test
                LABELS commands unit)
+
+add_executable(bloom_commands_svg_import_test svg_import_tests.cpp)
+target_link_libraries(bloom_commands_svg_import_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_svg_import_test)
+bloom_add_test(NAME bloom.commands.svg-import COMMAND bloom_commands_svg_import_test
+    LABELS commands unit TIMEOUT 60)

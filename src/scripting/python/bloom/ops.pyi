@@ -802,7 +802,8 @@ class AnimationOps:
               node's, a source's, an effect's). A layer key outside the layer's range never plays; the
               edit succeeds and returns a warning naming the range
           value  value  required
-              The value at that time.
+              The value at that time: a number, vector or colour, or a whole path or gradient object (it
+              interpolates point by point or stop by stop with a neighbouring key of the same size).
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -870,7 +871,8 @@ class AnimationOps:
               node's, a source's, an effect's). A layer key outside the layer's range never plays; the
               edit succeeds and returns a warning naming the range
           value  value  required
-              The value at that time.
+              The value at that time: a number, vector or colour, or a whole path or gradient object (it
+              interpolates point by point or stop by stop with a neighbouring key of the same size).
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -4862,6 +4864,66 @@ class LayerOps:
 
         Related: query:layers, bloom.parameter.set-source,
         bloom.animation.set-keyframe-at-time-for-parameter, transact
+        """
+        ...
+    def add_svg(self, path: str, name: str = ..., fit: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.add-svg  (operation, layer)
+        Imports an SVG file as native layers: every drawn element becomes a Shape layer driven by its
+        own Path node (keyable points, Trim Path, Offset Path, Boolean Paths and the other path nodes
+        can be wired to it), every group a nested Merge that keeps its name and order, and text a Text
+        layer. Gradients, clips, masks and dash patterns are built from Gradient nodes, track mattes and
+        Path Stroke. Transforms and the view box are baked into the points. The file is read here
+        (nothing is fetched, no script runs); what could not be imported is listed by name in the
+        operation's warnings. One undo step. `fit` (default true) scales the artwork to fit the
+        composition and centres it.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          path  str  required
+              The SVG file to import: an absolute path, or one relative to the project directory.
+          name  str  optional
+              The name of the group layer that holds the artwork. Defaults to the file's name.
+          fit  bool  optional
+              Scale the artwork to fit inside the composition and center it (the default); false keeps
+              its own pixel size, centered.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          merge merge
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, slot,
+          merge (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.add-svg","args":{"path":"/art/logo.svg"}}]}}
+          Python:
+            bloom.ops.layer.add_svg(path="/art/logo.svg")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.add-svg","args":{"path":"/art/logo.svg"}}]
+
+        Related: query:layers, bloom.node.set-parameter-value, transact
         """
         ...
     def add_text(self, name: str, text: str, position: tuple[float, float] = ..., opacity: float = ..., size: float = ..., color: tuple[float, float, float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:

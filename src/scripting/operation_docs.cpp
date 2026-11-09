@@ -382,6 +382,16 @@ constexpr std::array kNotes{
         "positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter, "
         "blendModeParameter",
         "query:layers bloom.parameter.set-source", ""},
+    OperationNotes{"bloom.layer.add-svg",
+        "Imports an SVG file as native layers: every drawn element becomes a Shape layer driven by "
+        "its own Path node (keyable points, Trim Path, Offset Path, Boolean Paths and the other "
+        "path nodes can be wired to it), every group a nested Merge that keeps its name and order, "
+        "and text a Text layer. Gradients, clips, masks and dash patterns are built from Gradient "
+        "nodes, track mattes and Path Stroke. Transforms and the view box are baked into the points. "
+        "The file is read here (nothing is fetched, no script runs); what could not be imported is "
+        "listed by name in the operation's warnings. One undo step. `fit` (default true) scales the "
+        "artwork to fit the composition and centres it.",
+        "layer, slot, merge", "query:layers bloom.node.set-parameter-value", ""},
     OperationNotes{"bloom.layer.move-before",
         "Reorders the layer stack: moves a slot to sit above another slot, or to the bottom. "
         "query:layers reports each layer's slot; index 0 is the topmost layer.",

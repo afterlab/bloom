@@ -2,6 +2,7 @@
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
 #include "operation_registry_parity.hpp"
@@ -394,6 +395,27 @@ authored(const Arguments& arguments, const std::string& operationId, const std::
          OperationCreateResult& error, const bool required = true) {
     return read(arguments, operationId, name, error, required,
                 "expects a number, (x, y), (x, y, z) or (r, g, b, a)", animationValueOf);
+}
+
+// A keyed value: the animation kinds, plus a whole Path or Gradient (#343: the points of an imported
+// shape are keyed as one Path value, which interpolates point by point between keys of equal shape).
+using KeyedValue = std::variant<double, document::Vec2d, document::Vec3d, core::Color4d,
+                                document::PathValue, document::GradientValue>;
+[[nodiscard]] std::optional<KeyedValue> keyedValueOf(const Value& value) {
+    if (const auto* path = std::get_if<document::PathValue>(&value.storage))
+        return path->isValid() ? std::optional<KeyedValue>(*path) : std::nullopt;
+    if (const auto* gradient = std::get_if<document::GradientValue>(&value.storage))
+        return gradient->isValid() ? std::optional<KeyedValue>(*gradient) : std::nullopt;
+    if (const auto plain = animationValueOf(value))
+        return std::visit([](const auto& held) -> KeyedValue { return held; }, *plain);
+    return std::nullopt;
+}
+[[nodiscard]] std::optional<KeyedValue>
+authoredKey(const Arguments& arguments, const std::string& operationId, const std::string& name,
+            OperationCreateResult& error) {
+    return read(arguments, operationId, name, error, true,
+                "expects a number, (x, y), (x, y, z), (r, g, b, a), a path object or a gradient object",
+                keyedValueOf);
 }
 
 [[nodiscard]] std::optional<ValueArray>
@@ -1496,13 +1518,16 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.animation.set-keyframe-at-time",
         {compositionArgument(), need("curve", ValueKind::Id, StableId{1}, "The curve to key."),
-         timeArgument(), need("value", ValueKind::Value, 0.0, "The value at that time.")},
+         timeArgument(),
+         need("value", ValueKind::Value, 0.0,
+              "The value at that time: a number, vector or colour, or a whole path or gradient object "
+              "(it interpolates point by point or stop by stop with a neighbouring key of the same size).")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
             const auto curve = id(args, op, "curve", error);
             const auto time = rational(args, op, "time", error);
-            const auto value = authored(args, op, "value", error);
+            const auto value = authoredKey(args, op, "value", error);
             if (!composition || !curve || !time || !value) {
                 return error;
             }
@@ -1522,13 +1547,16 @@ OperationRegistry OperationRegistry::builtIn() {
          need("parameter", ValueKind::Id, StableId{1},
               "The parameter to key. A constant parameter becomes animated in the same undo "
               "step, its constant as the first key."),
-         timeArgument(), need("value", ValueKind::Value, 0.0, "The value at that time.")},
+         timeArgument(),
+         need("value", ValueKind::Value, 0.0,
+              "The value at that time: a number, vector or colour, or a whole path or gradient object "
+              "(it interpolates point by point or stop by stop with a neighbouring key of the same size).")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
             const auto parameter = id(args, op, "parameter", error);
             const auto time = rational(args, op, "time", error);
-            const auto value = authored(args, op, "value", error);
+            const auto value = authoredKey(args, op, "value", error);
             if (!composition || !parameter || !time || !value) {
                 return error;
             }
@@ -2737,6 +2765,31 @@ OperationRegistry OperationRegistry::builtIn() {
             return OperationCreateResult(
                 std::make_unique<commands::AddShapeLayer>(
                     document::CompositionId::fromRaw(*composition), *kind, std::move(geometry)),
+                std::nullopt);
+        });
+
+    add("bloom.layer.add-svg",
+        {compositionArgument(),
+         need("path", ValueKind::String, "/art/logo.svg",
+              "The SVG file to import: an absolute path, or one relative to the project directory."),
+         maybe("name", ValueKind::String, "Logo",
+               "The name of the group layer that holds the artwork. Defaults to the file's name."),
+         maybe("fit", ValueKind::Boolean, true,
+               "Scale the artwork to fit inside the composition and center it (the default); false keeps "
+               "its own pixel size, centered.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto path = text(args, op, "path", error);
+            const auto name = text(args, op, "name", error, false);
+            const auto fit = boolean(args, op, "fit", error, false);
+            if (!composition || !path || error) {
+                return error;
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::AddSvgArtwork>(document::CompositionId::fromRaw(*composition), nullptr,
+                                                          std::filesystem::path(*path), name.value_or(std::string{}),
+                                                          fit.value_or(true)),
                 std::nullopt);
         });
 

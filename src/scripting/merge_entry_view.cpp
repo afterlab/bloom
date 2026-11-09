@@ -95,7 +95,10 @@ MergeEntryView viewOf(const document::Composition& composition, const document::
         if (!view.layer->entryOwned())
             view.layerNode = view.layer->nodeId;
         view.pivot = view.layer->pivot;
-        view.shared = document::mergeEntriesOfLayer(graph, view.layer->layerId).size() > 1;
+        // An entry-owned layer belongs to exactly its own slot; only a Layer node can be shared, so
+        // an imported document with thousands of entry layers is not scanned once per entry.
+        view.shared = !view.layer->entryOwned() &&
+                      document::mergeEntriesOfLayer(graph, view.layer->layerId).size() > 1;
     }
     view.adjustment = document::mergeEntryAdjustment(graph, merge.nodeId(), slot);
     view.roles = layerRoleValues(composition, view.layer);
