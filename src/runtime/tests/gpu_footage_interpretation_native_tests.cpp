@@ -315,7 +315,7 @@ int main(const int argc, char** argv) {
               "pixel aspect 10:11 with a matte", false, {}, 1, 10.0 / 11.0);
         checkAspectChange(expectations, *device.device, evaluator, directory, image, ocioContext,
                           95200);
-        // Camera log inputs Bloom synthesizes (#381): the input->working OCIO transform runs as a
+        // Camera log inputs Bloom synthesizes (#381) and the film-scan inputs DPX import uses (#426): the input->working OCIO transform runs as a
         // native program with CPU parity, with no footage pass.
         // Nominal log plates carry code values in [0, 1]; out-of-range codes follow below.
         const auto logPlate = directory / "log.exr";
@@ -327,7 +327,8 @@ int main(const int argc, char** argv) {
         std::uint64_t base = 93600;
         for (const auto* space :
              {"S-Log3 SGamut3 (Bloom)", "LogC4 AWG4 (Bloom)", "V-Log V-Gamut (Bloom)",
-              "Apple Log (Bloom)", "Log3G10 RWG (Bloom)", "C-Log3 CGamut (Bloom)"}) {
+              "Apple Log (Bloom)", "Log3G10 RWG (Bloom)", "C-Log3 CGamut (Bloom)",
+              "Cineon Log (Bloom)"}) {
             auto camera = logImage;
             camera.interpretation.inputColorSpaceId = space;
             check(expectations, *device.device, evaluator, directory, camera, ocioContext, base,
@@ -355,7 +356,7 @@ int main(const int argc, char** argv) {
              {"S-Log3 SGamut3 (Bloom)", "S-Log3 SG3.Cine (Bloom)", "Venice SG3 (Bloom)",
               "Venice SG3.Cine (Bloom)", "LogC3 AWG3 (Bloom)", "LogC4 AWG4 (Bloom)",
               "V-Log V-Gamut (Bloom)", "Log3G10 RWG (Bloom)", "C-Log2 CGamut (Bloom)",
-              "C-Log3 CGamut (Bloom)", "Apple Log (Bloom)"}) {
+              "C-Log3 CGamut (Bloom)", "Apple Log (Bloom)", "Cineon Log (Bloom)"}) {
             auto camera = rangeImage;
             camera.interpretation.inputColorSpaceId = space;
             check(expectations, *device.device, evaluator, directory, camera, ocioContext, base,

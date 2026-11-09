@@ -1,6 +1,7 @@
 #include "exr_backend.hpp"
 #include "image_budget.hpp"
 #include "image_work_statistics.hpp"
+#include "dpx_decoder.hpp"
 #include "stb_image_adapter.hpp"
 #include "tiff_decoder.hpp"
 #include <algorithm>
@@ -96,19 +97,25 @@ constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
 [[nodiscard]] ImageFormat stillFormat(const std::span<const std::byte> bytes) {
     if (detail::isTiffMagic(bytes))
         return ImageFormat::Tiff;
+    if (detail::isDpxMagic(bytes))
+        return ImageFormat::Dpx;
     return isPngMagic(bytes) ? ImageFormat::Png : ImageFormat::Jpeg;
 }
 
-// The plain-language reason a still header was refused: a TIFF's own reason, else the codec's.
+// The plain-language reason a still header was refused: a TIFF's or DPX's own reason, else the
+// codec's.
 [[nodiscard]] std::string invalidStillMessage(const detail::ImageInfo& info) {
-    if (info.tiff)
-        return info.refusal.empty() ? "The TIFF file is damaged or truncated" : info.refusal;
+    if (!info.refusal.empty())
+        return info.refusal;
+    if (info.tiff || info.dpx)
+        return "The image file is damaged or truncated";
     return "Invalid PNG/JPEG header or image dimensions";
 }
 
 [[nodiscard]] std::string decodeFailedMessage(const detail::ImageInfo& info) {
-    return info.tiff ? "The TIFF image data is damaged, truncated or exceeds the pixel budget"
-                     : "PNG/JPEG decode failed or exceeded the pixel budget";
+    return info.tiff || info.dpx
+               ? "The image data is damaged, truncated or exceeds the pixel budget"
+               : "PNG/JPEG decode failed or exceeded the pixel budget";
 }
 
 // ADR 0026: a still has one unnamed part whose channels are its decoded R, G, B and, when the file
@@ -141,6 +148,16 @@ constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
                      "srgb_rec709_display",
                      {}};
     probe.parts.push_back(stillPart(info));
+    if (info.dpx) {
+        // The header's transfer and colorimetric codes decide the colour space (runtime Auto rule);
+        // the part tag stays honest about it rather than claiming sRGB.
+        probe.bitDepth = info.dpx->bitDepth;
+        probe.colorSpace = ImageColorSpace::Auto;
+        probe.colorSpaceTag = "dpx-transfer-" + std::to_string(info.dpx->transfer) +
+                              "-colorimetric-" + std::to_string(info.dpx->colorimetric);
+        probe.parts.front().colorSpaceTag = probe.colorSpaceTag;
+        probe.dpx = info.dpx;
+    }
     return probe;
 }
 
@@ -844,7 +861,7 @@ decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelec
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     const auto format = revision.probe().format;
     if (format != ImageFormat::Exr && format != ImageFormat::Png && format != ImageFormat::Jpeg &&
-        format != ImageFormat::Tiff)
+        format != ImageFormat::Tiff && format != ImageFormat::Dpx)
         return {{},
                 "This image format has no channel-set decoder",
                 false,

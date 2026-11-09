@@ -51,6 +51,86 @@ using bloom::media::provider::ColourTags;
     return bloom::runtime::detail::resolveInputColorConfig(intent);
 }
 
+// #426: a DPX file's transfer and colorimetric codes pick the input color space; every other pair is
+// refused by name, and an explicit legacy choice or config space still wins.
+void testDpxRules(Expectations& expectations) {
+    const auto probeWith = [](const std::uint8_t transfer, const std::uint8_t colorimetric,
+                              const std::uint8_t depth) {
+        ImageProbe probe{1,
+                         1,
+                         depth,
+                         {},
+                         ImageFormat::Dpx,
+                         ImageColorSpace::Auto,
+                         bloom::media::ImageAlphaAssociation::Straight,
+                         "dpx",
+                         {}};
+        bloom::media::ImageDpxHeader header;
+        header.transfer = transfer;
+        header.colorimetric = colorimetric;
+        header.bitDepth = depth;
+        probe.dpx = header;
+        return probe;
+    };
+    struct Case {
+        std::uint8_t transfer, colorimetric, depth;
+        const char* neutral;
+        const char* aces;
+        bool warns;
+    };
+    // Space ids per config; "" means refused.
+    const std::array<Case, 10> cases{{
+        {2, 6, 16, "lin_rec709_scene", "Linear Rec.709 (sRGB)", false},
+        {2, 4, 16, "lin_rec709_scene", "ACEScg", true},
+        {2, 0, 10, "lin_rec709_scene", "ACEScg", true},
+        {4, 4, 8, "srgb_rec709_display", "sRGB - Texture", false},
+        {6, 6, 10, "srgb_rec709_display", "sRGB - Texture", false},
+        {1, 1, 10, "Cineon Log (Bloom)", "Cineon Log (Bloom)", false},
+        {3, 1, 10, "Cineon Log (Bloom)", "Cineon Log (Bloom)", false},
+        {13, 13, 10, "", "", true},
+        {5, 5, 10, "", "", true},
+    }};
+    const auto neutral = neutralConfig();
+    const auto aces = acesConfig();
+    expectations.expect(neutral && aces, "both configs resolve for the DPX rules");
+    if (!neutral || !aces)
+        return;
+    for (const auto& item : cases) {
+        for (const auto* config : {&*neutral, &*aces}) {
+            const bool isNeutral = config == &*neutral;
+            const std::string_view want = isNeutral ? item.neutral : item.aces;
+            const auto resolved = bloom::runtime::detail::resolveImageInputColorSpace(
+                *config, probeWith(item.transfer, item.colorimetric, item.depth),
+                ImageColorSpace::Auto, {});
+            const std::string label = "DPX transfer " + std::to_string(item.transfer) +
+                                      " colorimetric " + std::to_string(item.colorimetric) +
+                                      " depth " + std::to_string(item.depth) +
+                                      (isNeutral ? " (neutral)" : " (aces)");
+            if (want.empty()) {
+                expectations.expect(resolved.id.empty() && !resolved.warning.empty(),
+                                    label + " is refused with a reason");
+                continue;
+            }
+            expectations.expect(resolved.automatic && resolved.id == want &&
+                                    resolved.warning.empty() == !item.warns,
+                                label + " resolves to " + std::string(want) + " (got " +
+                                    resolved.id + ")");
+            const auto prepared = bloom::color::CpuColorSpaceProcessor::prepare(
+                *config, resolved.id, config->processColorSpaceId());
+            expectations.expect(prepared.succeeded(), label + " prepares a processor");
+        }
+    }
+    // An explicit sRGB choice and an explicit config space override the automatic mapping.
+    const auto forced = bloom::runtime::detail::resolveImageInputColorSpace(
+        *neutral, probeWith(5, 5, 10), ImageColorSpace::Srgb, {});
+    expectations.expect(forced.id == neutral->sRgbTextureColorSpaceId(),
+                        "an explicit sRGB choice overrides the DPX codes");
+    const auto explicitId = bloom::runtime::detail::resolveImageInputColorSpace(
+        *neutral, probeWith(5, 5, 10), ImageColorSpace::Auto, "Cineon Log (Bloom)");
+    expectations.expect(explicitId.id == "Cineon Log (Bloom)" && !explicitId.automatic,
+                        "an explicit config space overrides the DPX codes");
+}
+
 void testImageRules(Expectations& expectations) {
     auto config = neutralConfig();
     expectations.expect(config.has_value(), "Bloom Neutral resolves for image Auto rules");
@@ -498,6 +578,7 @@ int main() {
     testSdrVideoColourDefaultAssets(expectations);
     testHlgInputAssets(expectations);
     testImageRules(expectations);
+    testDpxRules(expectations);
     testVideoRules(expectations);
     testSourcePrecedenceAndCache(expectations);
     return expectations.failures() == 0 ? 0 : 1;

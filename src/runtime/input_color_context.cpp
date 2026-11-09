@@ -63,6 +63,80 @@ resolveInputColorConfig(const EvaluationColorIntent& intent) {
     return std::move(resolved).takeResolved();
 }
 
+namespace {
+[[nodiscard]] bool hasColorSpace(const color::ResolvedBloomNeutralConfig& config,
+                                 const std::string_view id) {
+    return std::ranges::any_of(config.colorSpaces(),
+                               [&](const auto& space) { return space.id == id; });
+}
+
+// The config's scene-linear Rec.709 space: Bloom Neutral's lin_rec709_scene, the ACES CG config's
+// "Linear Rec.709 (sRGB)". Empty when the config has none.
+[[nodiscard]] std::string linearRec709Space(const color::ResolvedBloomNeutralConfig& config) {
+    const auto contains = [](std::string_view text, std::string_view part) {
+        return std::search(text.begin(), text.end(), part.begin(), part.end(),
+                           [](char a, char b) {
+                               return std::tolower(static_cast<unsigned char>(a)) ==
+                                      std::tolower(static_cast<unsigned char>(b));
+                           }) != text.end();
+    };
+    std::string linear;
+    for (const auto& space : config.colorSpaces())
+        if (space.id == "lin_rec709_scene" ||
+            (linear.empty() && space.sceneLinear && contains(space.id, "rec.709") &&
+             !contains(space.id, "camera")))
+            linear = space.id;
+    return linear;
+}
+
+// #426: a DPX file's transfer and colorimetric codes (SMPTE ST 268-1) to an input color space.
+// Only combinations with a defined meaning are automatic; every other pair is refused by name so
+// the artist chooses a space in Interpret Footage instead of getting a silent guess.
+[[nodiscard]] InputColorSpaceResolution
+resolveDpxInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
+                          const media::ImageDpxHeader& dpx) {
+    constexpr std::uint8_t kUserDefined = 0, kPrintingDensity = 1, kLinear = 2, kLogarithmic = 3,
+                           kUnspecifiedVideo = 4, kRec709Video = 6;
+    const auto chosen = [](std::string id, std::string warning = {}) {
+        return InputColorSpaceResolution{id, id, std::move(warning), false, true};
+    };
+    const auto missing = [](const std::string_view what) {
+        return InputColorSpaceResolution{
+            "", "",
+            "The OCIO config has no " + std::string(what) + " color space; choose one",
+            false, true};
+    };
+    const auto transfer = dpx.transfer;
+    const auto colorimetric = dpx.colorimetric;
+    if (transfer == kLinear) {
+        const auto linear = linearRec709Space(config);
+        if (colorimetric == kRec709Video) {
+            if (linear.empty())
+                return missing("scene-linear Rec.709");
+            return chosen(linear);
+        }
+        if (colorimetric == kUnspecifiedVideo || colorimetric == kUserDefined)
+            return chosen(std::string(config.processColorSpaceId()),
+                          "DPX primaries are unspecified; the working space is assumed");
+    } else if ((transfer == kUnspecifiedVideo || transfer == kRec709Video) &&
+               (colorimetric == kUnspecifiedVideo || colorimetric == kRec709Video)) {
+        // The same reading Auto gives ordinary SDR video (ADR 0032).
+        return chosen(std::string(config.sRgbTextureColorSpaceId()));
+    } else if ((transfer == kPrintingDensity || transfer == kLogarithmic) &&
+               colorimetric == kPrintingDensity) {
+        if (!hasColorSpace(config, color::kBloomCineonLogColorSpaceId))
+            return missing("Cineon log");
+        return chosen(std::string(color::kBloomCineonLogColorSpaceId));
+    }
+    return InputColorSpaceResolution{
+        "", "",
+        "This DPX file's transfer (code " + std::to_string(transfer) + ") and colorimetric (code " +
+            std::to_string(colorimetric) +
+            ") have no automatic color space; choose an explicit OCIO color space",
+        false, true};
+}
+} // namespace
+
 InputColorSpaceResolution
 resolveImageInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
                             const media::ImageProbe& probe, const media::ImageColorSpace legacy,
@@ -78,6 +152,9 @@ resolveImageInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
                                          {},
                                          false,
                                          false};
+    if (probe.format == media::ImageFormat::Dpx && probe.dpx &&
+        legacy == media::ImageColorSpace::Auto)
+        return resolveDpxInputColorSpace(config, *probe.dpx);
     if (probe.format != media::ImageFormat::Exr || legacy == media::ImageColorSpace::Srgb) {
         if (legacy == media::ImageColorSpace::Auto && probe.bitDepth != 8 && probe.bitDepth != 16)
             return InputColorSpaceResolution{
@@ -106,19 +183,7 @@ resolveImageInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
         // Linear Rec.709/D65 data maps to the config's scene-linear Rec.709 space, never to a
         // camera/video space (that carries the BT.709 OETF): Bloom Neutral's lin_rec709_scene,
         // the ACES CG config's "Linear Rec.709 (sRGB)".
-        const auto contains = [](std::string_view text, std::string_view part) {
-            return std::search(text.begin(), text.end(), part.begin(), part.end(),
-                               [](char a, char b) {
-                                   return std::tolower(static_cast<unsigned char>(a)) ==
-                                          std::tolower(static_cast<unsigned char>(b));
-                               }) != text.end();
-        };
-        std::string linear;
-        for (const auto& space : config.colorSpaces())
-            if (space.id == "lin_rec709_scene" ||
-                (linear.empty() && space.sceneLinear && contains(space.id, "rec.709") &&
-                 !contains(space.id, "camera")))
-                linear = space.id;
+        const auto linear = linearRec709Space(config);
         if (!linear.empty())
             return InputColorSpaceResolution{linear, linear, {}, false, true};
         return InputColorSpaceResolution{

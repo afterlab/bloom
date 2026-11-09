@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/media/dpx_header.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -17,7 +18,9 @@ struct ImageInfo {
     int channels = 0;
     // The still is a TIFF (decoded by tiff_decoder, not the PNG/JPEG codec).
     bool tiff = false;
-    // Plain-language reason a TIFF was refused, when imageInfo or imageSamples fails.
+    // Set for a DPX still: the header fields behind its interpretation.
+    std::optional<ImageDpxHeader> dpx;
+    // Plain-language reason a TIFF or DPX was refused, when imageInfo or imageSamples fails.
     std::string refusal;
 };
 

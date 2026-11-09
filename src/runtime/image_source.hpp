@@ -181,10 +181,10 @@ decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
                      media::ImageDecodeStatistics* decodeStatistics = nullptr,
                      media::ImageChannelsAlongside* alongside = nullptr);
 
-// #422: the same raw decode in its native sample layout (a PNG or JPEG's 16-bit RGBA, an
+// #422: the same raw decode in its native sample layout (a PNG, JPEG, TIFF or DPX's 16-bit RGBA, an
 // all-half OpenEXR layer's binary16 RGBA) for SampleConvertV1 to widen on the device;
 // render::convertNativeSamples() of the result equals decodeRawImageSource(). A missing sequence
-// frame, TIFF or a FLOAT/UINT OpenEXR layer returns NativeSamplesUnavailable.
+// frame or a FLOAT/UINT OpenEXR layer returns NativeSamplesUnavailable.
 [[nodiscard]] media::ImageResult<std::shared_ptr<const render::NativeSampleImage>>
 decodeRawImageSamples(const ImageSourceSelection& selection, std::size_t budget,
                       const CancellationToken& cancel,

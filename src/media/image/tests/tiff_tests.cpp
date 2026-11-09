@@ -6,6 +6,7 @@
 #include "png_test_support.hpp"
 
 #include <bloom/media/image.hpp>
+#include <bloom/render/native_samples.hpp>
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,7 @@
 namespace {
 using namespace bloom_output_png_test_support;
 namespace media = bloom::media;
+namespace render = bloom::render;
 
 using Bytes = std::vector<unsigned char>;
 
@@ -419,6 +421,19 @@ int main() {
         const auto native = media::decodeImageSamples(
             **captured.value, rawInterpretation());
         check.expect(native.value.has_value(), "TIFF has native 16-bit samples: " + describe(spec));
+        if (native.value && decoded.value) {
+            // The device route's reference conversion equals the float decode exactly.
+            const auto converted =
+                render::convertNativeSamples(**native.value, media::kMaxImageStorageBytes);
+            bool equal = converted.hasValue();
+            if (equal) {
+                const auto a = (*decoded.value)->pixels();
+                const auto b = converted.value()->pixels();
+                equal = a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
+            }
+            check.expect(equal, "TIFF native samples convert to the float decode: " +
+                                    describe(spec));
+        }
     }
 
     // A converted decode reaches the working space like PNG does.

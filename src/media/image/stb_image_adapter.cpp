@@ -1,4 +1,5 @@
 #include "stb_image_adapter.hpp"
+#include "dpx_decoder.hpp"
 #include "tiff_decoder.hpp"
 
 #include <algorithm>
@@ -127,7 +128,7 @@ const stbi_io_callbacks kByteCallbacks{readBytes, skipBytes, bytesEof};
 
 namespace bloom::media::detail {
 namespace {
-// A TIFF is random access, so it is read whole, as its source revision is.
+// A TIFF or DPX is random access, so it is read whole, as its source revision is.
 std::vector<std::byte> readWholeFile(std::ifstream& stream) {
     stream.seekg(0, std::ios::end);
     const auto size = stream.tellg();
@@ -140,22 +141,23 @@ std::vector<std::byte> readWholeFile(std::ifstream& stream) {
         return {};
     return bytes;
 }
-bool streamStartsWithTiff(std::ifstream& stream) {
+bool streamStartsWithWholeFileFormat(std::ifstream& stream) {
     std::array<std::byte, 4> head{};
     stream.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
     const auto count = static_cast<std::size_t>(stream.gcount());
     stream.clear();
     stream.seekg(0);
-    return isTiffMagic(std::span<const std::byte>(head.data(), count));
+    const auto view = std::span<const std::byte>(head.data(), count);
+    return isTiffMagic(view) || isDpxMagic(view);
 }
 } // namespace
 bool imageInfo(const std::filesystem::path& path, ImageInfo& info) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
         return false;
-    if (streamStartsWithTiff(stream)) {
+    if (streamStartsWithWholeFileFormat(stream)) {
         const auto bytes = readWholeFile(stream);
-        return tiffInfo(bytes, info);
+        return isDpxMagic(bytes) ? dpxInfo(bytes, info) : tiffInfo(bytes, info);
     }
     if (!stbi_info_from_callbacks(&kFileCallbacks, &stream, &info.width, &info.height,
                                   &info.channels))
@@ -168,6 +170,8 @@ bool imageInfo(const std::filesystem::path& path, ImageInfo& info) {
 bool imageInfo(const std::span<const std::byte> bytes, ImageInfo& info) {
     if (isTiffMagic(bytes))
         return tiffInfo(bytes, info);
+    if (isDpxMagic(bytes))
+        return dpxInfo(bytes, info);
     ByteStream stream{bytes};
     if (!stbi_info_from_callbacks(&kByteCallbacks, &stream, &info.width, &info.height,
                                   &info.channels))
@@ -451,9 +455,9 @@ std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
         return {};
-    if (info.tiff) {
+    if (info.tiff || info.dpx) {
         const auto bytes = readWholeFile(stream);
-        return tiffSamples(bytes, info, pixelBudget);
+        return info.dpx ? dpxSamples(bytes, info, pixelBudget) : tiffSamples(bytes, info, pixelBudget);
     }
     return decodeSamples(kFileCallbacks, &stream, info, pixelBudget);
 }
@@ -466,6 +470,8 @@ std::vector<std::uint16_t> imageSamples(const std::span<const std::byte> bytes,
                                         const ImageInfo& info, const std::size_t pixelBudget) {
     if (info.tiff)
         return tiffSamples(bytes, info, pixelBudget);
+    if (info.dpx)
+        return dpxSamples(bytes, info, pixelBudget);
     if (auto fast = fastPngSamples(bytes, info, pixelBudget))
         return std::move(*fast);
     return stbImageSamples(bytes, info, pixelBudget);

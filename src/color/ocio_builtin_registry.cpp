@@ -825,6 +825,8 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
             config = withBloomRec709CameraInput(config, isNeutral);
             // #381: camera log inputs Interpret Footage offers in every pinned config.
             config = detail::withBloomCameraLogInputs(config, isNeutral);
+            // #426: the Cineon printing density input DPX film scans use.
+            config = detail::withBloomCineonInput(config, isNeutral);
         } catch (const OCIO::Exception&) {
             auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
             result.recomputedRevision_ = recomputed;

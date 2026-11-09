@@ -34,7 +34,7 @@ std::optional<NumberedName> numberedName(const std::filesystem::path& path) {
         return static_cast<char>(std::tolower(ch));
     });
     if (lowered != ".png" && lowered != ".jpg" && lowered != ".jpeg" && lowered != ".exr" &&
-        lowered != ".tif" && lowered != ".tiff")
+        lowered != ".tif" && lowered != ".tiff" && lowered != ".dpx")
         return {};
     const auto stem = path.stem().string();
     const auto isDigit = [](const char ch) { return ch >= '0' && ch <= '9'; };

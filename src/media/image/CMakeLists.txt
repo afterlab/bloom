@@ -1,5 +1,5 @@
 add_library(bloom_media_stb_image OBJECT stb_image_adapter.cpp stb_image_adapter.hpp)
-target_include_directories(bloom_media_stb_image PRIVATE ../third_party/stb_image)
+target_include_directories(bloom_media_stb_image PRIVATE ../third_party/stb_image include)
 target_compile_features(bloom_media_stb_image PUBLIC cxx_std_20)
 if(MSVC)
     target_compile_options(bloom_media_stb_image PRIVATE /w)
@@ -12,9 +12,9 @@ bloom_find_dependency(ZLIB)
 target_link_libraries(bloom_media_stb_image PRIVATE ZLIB::ZLIBSTATIC)
 
 add_library(bloom_media_image STATIC exr_backend.cpp exr_backend.hpp image.cpp image_budget.hpp
-    sequence.cpp tiff_decoder.cpp tiff_decoder.hpp)
+    sequence.cpp tiff_decoder.cpp tiff_decoder.hpp dpx_decoder.cpp dpx_decoder.hpp)
 target_sources(bloom_media_image PUBLIC FILE_SET HEADERS BASE_DIRS include
-    FILES include/bloom/media/image.hpp)
+    FILES include/bloom/media/image.hpp include/bloom/media/dpx_header.hpp)
 target_compile_features(bloom_media_image PUBLIC cxx_std_20)
 target_link_libraries(bloom_media_image PUBLIC bloom_core bloom_render bloom_color_ocio
     bloom_platform_process PRIVATE bloom_media_stb_image)
@@ -40,6 +40,13 @@ if(BUILD_TESTING)
     target_include_directories(bloom_media_tiff_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests)
     bloom_enable_warnings(bloom_media_tiff_test)
     bloom_add_test(NAME bloom.media.tiff COMMAND bloom_media_tiff_test LABELS unit media)
+
+    add_executable(bloom_media_dpx_test tests/dpx_tests.cpp)
+    target_link_libraries(bloom_media_dpx_test PRIVATE bloom_media_image bloom_output
+        ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)
+    target_include_directories(bloom_media_dpx_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests)
+    bloom_enable_warnings(bloom_media_dpx_test)
+    bloom_add_test(NAME bloom.media.dpx COMMAND bloom_media_dpx_test LABELS unit media)
 
     add_executable(bloom_media_image_native_samples_test tests/image_native_samples_tests.cpp)
     target_link_libraries(bloom_media_image_native_samples_test PRIVATE bloom_media_image

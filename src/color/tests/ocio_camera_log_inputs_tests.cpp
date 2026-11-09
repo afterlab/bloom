@@ -69,9 +69,49 @@ void testConfig(const std::string_view uri, const std::string_view working,
                name + " carries a synthesized identity");
     }
 }
+// #426: Cineon printing density decodes reference white (code 685) to 1.0, reference black (code 95)
+// to 0 and a mid code on the density curve, and stays neutral, in both pinned configs.
+void testCineon(const std::string_view uri, const std::string_view working,
+                const std::string& label) {
+    auto config = resolve(uri, working);
+    const auto* resolved = config.resolved();
+    expect(resolved != nullptr, label + ": the config resolves for Cineon");
+    if (resolved == nullptr)
+        return;
+    const auto prepared = bloom::color::CpuColorSpaceProcessor::prepare(
+        *resolved, bloom::color::kBloomCineonLogColorSpaceId, working);
+    expect(prepared.succeeded(), label + ": Cineon prepares");
+    if (!prepared)
+        return;
+    const auto decode = [&](const float code) {
+        std::array<std::array<float, 4>, 1> pixel{{{code, code, code, 1.0F}}};
+        expect(prepared.processor()->apply(pixel), label + ": Cineon applies");
+        return pixel[0];
+    };
+    const auto white = decode(685.0F / 1023.0F);
+    const auto black = decode(95.0F / 1023.0F);
+    // One density step of 0.002 per code at gamma 0.6: code 470 is 215 codes under white.
+    const float expectedMid =
+        (std::pow(10.0F, -215.0F * 0.002F / 0.6F) - 0.010789F) / (1.0F - 0.010789F);
+    const auto mid = decode(470.0F / 1023.0F);
+    for (std::size_t c = 0; c < 3; ++c) {
+        expect(std::abs(white[c] - 1.0F) < 0.01F,
+               label + ": Cineon white decodes to 1.0 (" + std::to_string(white[c]) + ")");
+        expect(std::abs(black[c]) < 0.002F, label + ": Cineon black decodes to 0");
+        expect(std::abs(mid[c] - expectedMid) < 0.01F,
+               label + ": Cineon code 470 decodes on the density curve (" +
+                   std::to_string(mid[c]) + " vs " + std::to_string(expectedMid) + ")");
+    }
+    expect(std::abs(mid[0] - mid[2]) < 0.01F, label + ": Cineon grey stays neutral");
+    expect(bloom::color::synthesizedColorSpaceIdentity(bloom::color::kBloomCineonLogColorSpaceId)
+                   .starts_with("bloom-cineon-log-v1;"),
+           label + ": Cineon carries a synthesized identity");
+}
 } // namespace
 
 int main() {
+    testCineon(bloom::color::kBloomNeutralV1ConfigUri, "lin_rec709_scene", "Bloom Neutral");
+    testCineon(bloom::color::kAcesCgV1ConfigUri, "ACEScg", "ACES 1.3 CG");
     testConfig(bloom::color::kBloomNeutralV1ConfigUri, "lin_rec709_scene", "Bloom Neutral");
     testConfig(bloom::color::kAcesCgV1ConfigUri, "ACEScg", "ACES 1.3 CG");
     return failures == 0 ? 0 : 1;

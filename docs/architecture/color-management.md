@@ -207,6 +207,27 @@ choice of HLG reference white (issue #407). Opening a project saved before docum
 HLG footage shows a one-time note that it now looks about 1.26 times brighter (see
 [project format](project-format.md#keyframe-handle-modes-in-document-132)).
 
+### DPX film-scan input spaces (#426)
+
+DPX files carry a transfer and a colorimetric code (SMPTE ST 268-1). Auto maps only pairs with a
+defined meaning; every other pair is refused by name and the artist picks a space in Interpret
+Footage:
+
+| Transfer / colorimetric | Auto result |
+| --- | --- |
+| linear / Rec.709 video | the config's scene-linear Rec.709 space |
+| linear / unspecified or user defined | the working space, with a warning that the primaries are assumed |
+| unspecified or Rec.709 video / unspecified or Rec.709 video | the config's sRGB texture space, as for SDR video |
+| printing density or logarithmic / printing density | `Cineon Log (Bloom)` |
+
+`Cineon Log (Bloom)` is synthesized into every pinned config as the camera log spaces are: 10-bit
+printing density with reference white at code 685, reference black at code 95, 0.002 density per
+code and a 0.6 gamma, as one OCIO log-affine op on codes normalized by 1023 (white decodes to 1.0,
+black to 0), with Rec.709 primaries and a D65 white assumed (then Bradford to the ACES reference
+in the ACES configs). It carries a synthesized identity and runs as a native GPU program with CPU
+parity. ADX files are refused by name: OCIO's ADX built-ins are lookup-table based and exceed the
+2e-6 GPU parity gate, so they are not offered.
+
 ### Synthesized Rec.2100 PQ input space
 
 Bloom Neutral v1 has no PQ space, so tagged PQ video had no Auto interpretation and failed to

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/media/dpx_header.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
@@ -62,7 +63,7 @@ struct ImageInterpretation {
 // The stored-samples alpha encoding (above): fma(alpha, 0.5, 0.5).
 [[nodiscard]] float storedSampleAlpha(float alpha) noexcept;
 
-enum class ImageFormat : std::uint8_t { Png, Jpeg, Exr, Tiff };
+enum class ImageFormat : std::uint8_t { Png, Jpeg, Exr, Tiff, Dpx };
 
 enum class ImageDiagnosticCode : std::uint8_t {
     None,
@@ -94,7 +95,7 @@ enum class ImageDiagnosticCode : std::uint8_t {
     ChannelNotFound,
     NoColourChannels,
     UnsupportedChannelSetFormat,
-    // #422: the source has no native-sample decode (TIFF, a FLOAT or UINT OpenEXR colour layer, a
+    // #422: the source has no native-sample decode (a FLOAT or UINT OpenEXR colour layer, a
     // converted interpretation); the float decode applies.
     NativeSamplesUnavailable,
 };
@@ -174,6 +175,8 @@ struct ImageProbe {
     // R, G, B and optional A); empty for provider formats. The scalar fields above describe the
     // first part and its root colour layer.
     std::vector<ImagePartInfo> parts{};
+    // Set for a DPX still: the header fields behind its automatic colour interpretation.
+    std::optional<ImageDpxHeader> dpx{};
     [[nodiscard]] const ImagePartInfo* findPart(const std::string_view name) const noexcept {
         if (parts.empty())
             return nullptr;
@@ -229,7 +232,8 @@ class ImageSourceRevision final {
     [[nodiscard]] std::size_t retainedBytes() const noexcept {
         std::size_t total = sizeof(ImageSourceRevision) + bytes_.capacity() +
                             probe_.colorSpaceTag.capacity() +
-                            probe_.interpretationAssumption.capacity();
+                            probe_.interpretationAssumption.capacity() +
+                            (probe_.dpx ? probe_.dpx->timecode.capacity() : 0U);
         for (const auto& part : probe_.parts)
             total += part.retainedBytes();
         return total;
@@ -287,12 +291,12 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
             ImageDecodeStatistics* statistics = nullptr,
             ImageChannelsAlongside* alongside = nullptr);
 
-// #422: the raw decode's samples in their native layout, for the GPU route: a PNG or JPEG's 16-bit
+// #422: the raw decode's samples in their native layout, for the GPU route: a PNG, JPEG, TIFF or DPX's 16-bit
 // RGBA samples, or an all-half OpenEXR colour layer's binary16 samples, with the SampleConvertV1
 // parameters that make render::convertNativeSamples(result) equal decodeImage(revision,
 // interpretation) value for value (and the same repaired-pixel count). `interpretation` must be a
 // raw one (ImageColorSpace::Raw without an input colour space). Any other source or interpretation
-// (TIFF, a FLOAT or UINT OpenEXR layer) returns NativeSamplesUnavailable and the caller decodes to
+// (a FLOAT or UINT OpenEXR layer) returns NativeSamplesUnavailable and the caller decodes to
 // float instead.
 [[nodiscard]] ImageResult<std::shared_ptr<const render::NativeSampleImage>> decodeImageSamples(
     const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
@@ -301,9 +305,9 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
 
 // ADR 0026 channel-set decode. `part` selects an OpenEXR part (empty: the first); `channels` names
 // the channels to decode in order (empty: every channel of the part). Values are source values:
-// never converted, premultiplied, repaired or clamped. PNG and JPEG stills expose their decoded
-// R, G, B (and A when present) as straight Colour channels in [0, 1]; formats without an immutable
-// revision decoder report UnsupportedChannelSetFormat.
+// never converted, premultiplied, repaired or clamped. PNG, JPEG, TIFF and DPX stills expose their
+// decoded R, G, B (and A when present) as straight Colour channels in [0, 1]; formats without an
+// immutable revision decoder report UnsupportedChannelSetFormat.
 struct ImageChannelSelection final {
     std::string part{};
     std::vector<std::string> channels{};
@@ -347,8 +351,8 @@ using ImageProviderEncode =
     std::function<ImageResult<ImageProviderEncodeResponse>(const ImageProviderEncodeRequest&)>;
 
 // A provider is supplied explicitly by the worker composition root. The in-process image library
-// never discovers a provider globally: an absent callback is the typed ProviderMissing outcome
-// required for TIFF until MEDIA-3 wires the worker.
+// never discovers a provider globally: an absent callback is the typed ProviderMissing outcome.
+// Only Encode is used: every still format Bloom reads is decoded in process.
 struct ImageProvider final {
     ImageProviderDecode decode;
     ImageProviderEncode encode;

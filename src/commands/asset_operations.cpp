@@ -140,7 +140,8 @@ std::string lowerExtension(const std::filesystem::path& path) {
 }
 bool isImageExtension(const std::string& extension) {
     return extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
-           extension == ".exr" || extension == ".tif" || extension == ".tiff";
+           extension == ".exr" || extension == ".tif" || extension == ".tiff" ||
+           extension == ".dpx";
 }
 // The artist's words for a LUT the reader refused; the reader's own names are identifiers.
 std::string lutRefusal(const color::LutError error) {

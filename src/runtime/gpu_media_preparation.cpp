@@ -999,8 +999,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     // pixel-identical with no host per-pixel resampling.
     MediaUploadOutcome outcome;
     outcome.frameBounds = imageSourceFrameBounds(selection);
-    // #422: a PNG, JPEG or all-half OpenEXR still crosses as its native samples and
-    // SampleConvertV1 widens it on the device; any other still (TIFF, a FLOAT or UINT OpenEXR
+    // #422: a PNG, JPEG, TIFF, DPX or all-half OpenEXR still crosses as its native samples and
+    // SampleConvertV1 widens it on the device; any other still (a FLOAT or UINT OpenEXR
     // layer, a missing sequence frame) uploads its raw RGBA32F decode.
     const auto samplesKey = rawDecodeUploadKey("image-samples", selection.decodeKey);
     ++statistics.uploadKeyConstructions;

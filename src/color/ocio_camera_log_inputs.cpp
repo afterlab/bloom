@@ -1,5 +1,8 @@
 #include "ocio_camera_log_inputs.hpp"
 
+#include <bloom/color/ocio_builtin_registry.hpp>
+
+#include <cmath>
 #include <array>
 #include <map>
 #include <mutex>
@@ -126,7 +129,64 @@ OCIO::ConstConfigRcPtr withBloomCameraLogInputs(const OCIO::ConstConfigRcPtr& co
     return editable;
 }
 
+namespace {
+// Cineon printing density: code = 685 + (0.6 / 0.002) * log10(x) for 10-bit codes, with x
+// the linear value scaled so reference black (code 95) is 0 and reference white (code 685) is 1.
+// As an OCIO log-affine op on codes normalized by 1023: base 10, log side slope
+// 0.6 / (0.002 * 1023), log side offset 685 / 1023, lin side slope 1 - k and lin side offset k,
+// where k = 10^((95 - 685) * 0.002 / 0.6) is the linear value of the black code before the offset.
+[[nodiscard]] OCIO::LogAffineTransformRcPtr cineonLogToLinear() {
+    constexpr double kDensityPerCode = 0.002;
+    constexpr double kGamma = 0.6;
+    constexpr double kWhiteCode = 685.0;
+    constexpr double kBlackCode = 95.0;
+    constexpr double kCodes = 1023.0;
+    const double black = std::pow(10.0, (kBlackCode - kWhiteCode) * kDensityPerCode / kGamma);
+    auto op = OCIO::LogAffineTransform::Create();
+    op->setBase(10.0);
+    const double logSlope = kGamma / (kDensityPerCode * kCodes);
+    const double logOffset = kWhiteCode / kCodes;
+    op->setLogSideSlopeValue({logSlope, logSlope, logSlope});
+    op->setLogSideOffsetValue({logOffset, logOffset, logOffset});
+    op->setLinSideSlopeValue({1.0 - black, 1.0 - black, 1.0 - black});
+    op->setLinSideOffsetValue({black, black, black});
+    // Forward is linear to log; the colour space needs log to linear.
+    op->setDirection(OCIO::TRANSFORM_DIR_INVERSE);
+    return op;
+}
+} // namespace
+
+OCIO::ConstConfigRcPtr withBloomCineonInput(const OCIO::ConstConfigRcPtr& config,
+                                            const bool isNeutral) {
+    const std::string name(kBloomCineonLogColorSpaceId);
+    if (config->getColorSpace(name.c_str()) != nullptr)
+        return config;
+    auto toReference = OCIO::GroupTransform::Create();
+    toReference->appendTransform(cineonLogToLinear());
+    if (!isNeutral) {
+        // Rec.709 (D65) to XYZ D65, then to the ACES reference (Bradford).
+        auto toXyz = OCIO::MatrixTransform::Create();
+        const auto matrix = rec709ToXyz();
+        toXyz->setMatrix(matrix.data());
+        toReference->appendTransform(toXyz);
+        toReference->appendTransform(embeddedBuiltin("UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD",
+                                                     OCIO::TRANSFORM_DIR_INVERSE));
+    }
+    auto space = OCIO::ColorSpace::Create(OCIO::REFERENCE_SPACE_SCENE);
+    space->setName(name.c_str());
+    space->setFamily("Input");
+    space->setDescription("Bloom-synthesized Cineon printing density (10-bit log, reference white "
+                          "685, reference black 95, Rec.709 primaries assumed)");
+    space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
+    auto editable = config->createEditableCopy();
+    editable->addColorSpace(space);
+    editable->validate();
+    return editable;
+}
+
 std::string cameraLogColorSpaceIdentity(const std::string_view colorSpaceId) {
+    if (colorSpaceId == kBloomCineonLogColorSpaceId)
+        return std::string("bloom-cineon-log-v1;ocio=") + OCIO::GetVersion();
     for (const auto& camera : kCameraLogSpaces)
         if (camera.name == colorSpaceId)
             return std::string("bloom-camera-log-v1;") + std::string(camera.style) +

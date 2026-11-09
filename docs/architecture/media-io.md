@@ -148,6 +148,17 @@ through the isolated FFmpeg worker on Linux. It writes RGBA16 little-endian, wit
 display/view baked into straight RGB, and verifies every decoded sample before publication.
 Platforms without the process backend expose an unavailable preset with its reason.
 
+DPX (SMPTE ST 268-1) is also read natively and in process through the same still path, as 16-bit
+RGBA samples. It reads unsigned 8-, 10-, 12- and 16-bit samples (10- and 12-bit filled method A or
+B), RGB, RGBA, ABGR, luma and single-channel R, G, B or A elements, alone or as several image
+elements that together name each color channel once, in either byte order and with optional
+end-of-line padding. Samples scale by their own full code range and are never reinterpreted.
+Run-length, signed, packed 10/12-bit, floating-point, Y'CbCr and rotated files are refused with a
+plain-language reason. The header fields that drive interpretation (transfer, colorimetric, bit
+depth, packing, data offset, frame rate, time code) are exposed on the probe. Numbered `.dpx` files
+form sequences like PNG and EXR. Auto maps transfer/colorimetric pairs to an input color space
+(see color management); every unmapped pair is refused by name.
+
 | Bound | v0 value |
 | --- | --- |
 | Encoded file | streamed in bounded chunks; no whole-file cap |

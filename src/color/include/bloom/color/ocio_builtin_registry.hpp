@@ -170,6 +170,11 @@ inline constexpr std::string_view kBloomRec2100PqColorSpaceId = "Rec.2100-PQ (Bl
 // interpretation only: Auto shows ordinary Rec.709/601 and untagged SDR video through the config's
 // sRGB texture space, as players do (ADR 0032).
 inline constexpr std::string_view kBloomRec709CameraColorSpaceId = "Rec.709 Camera (Bloom)";
+// Film-scan input space Bloom synthesizes into every resolved pinned config (DPX import, #426).
+// Cineon printing density: 10-bit log with reference white at code 685, reference black at code 95,
+// 0.002 density per code and a 0.6 negative gamma, so white decodes to 1.0 and black to 0, with
+// Rec.709 primaries and a D65 white assumed.
+inline constexpr std::string_view kBloomCineonLogColorSpaceId = "Cineon Log (Bloom)";
 // Identity of a Bloom-synthesized space's math: the definition version and the linked OCIO
 // version whose built-ins it uses. Empty for config-defined spaces. Part of transform identity.
 [[nodiscard]] std::string synthesizedColorSpaceIdentity(std::string_view colorSpaceId);
