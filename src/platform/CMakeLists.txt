@@ -32,6 +32,7 @@ target_sources(
         destination_facts.cpp
         user_data_directory.cpp
         font_catalog.cpp
+        font_catalog_directory.cpp
         staged_artifact.cpp
         staged_artifact_platform.hpp
 )
@@ -45,6 +46,9 @@ elseif(APPLE)
     # implementation (openat/renameatx_np/getentropy).
     target_sources(bloom_platform PRIVATE font_catalog_macos.cpp staged_artifact_macos.cpp)
     target_link_libraries(bloom_platform PUBLIC "-framework CoreText" "-framework CoreFoundation")
+elseif(WIN32)
+    # Windows reads the system and per-user font folders itself (font_catalog_directory.cpp).
+    target_sources(bloom_platform PRIVATE font_catalog_windows.cpp staged_artifact_unsupported.cpp)
 else()
     target_sources(bloom_platform PRIVATE font_catalog_unavailable.cpp staged_artifact_unsupported.cpp)
 endif()

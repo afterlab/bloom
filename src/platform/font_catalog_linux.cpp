@@ -56,14 +56,15 @@ constexpr std::uintmax_t kMaximumFontBytes = static_cast<std::uintmax_t>(64) * 1
 
 } // namespace
 
-FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& cancelled) {
+FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& cancelled,
+                                   const bool digests) {
     FontCatalogue result;
     result.status = FontCatalogueStatus::Available;
     if (!FcInitLoadConfigAndFonts())
         return result;
     FcPattern* query = FcNameParse(reinterpret_cast<const FcChar8*>("*"));
     FcObjectSet* objects = FcObjectSetBuild(FC_FAMILY, FC_STYLE, FC_WEIGHT, FC_WIDTH, FC_SLANT,
-                                            FC_FILE, FC_INDEX, nullptr);
+                                            FC_FILE, FC_INDEX, FC_POSTSCRIPT_NAME, nullptr);
     if (query == nullptr || objects == nullptr) {
         if (objects != nullptr)
             FcObjectSetDestroy(objects);
@@ -87,7 +88,14 @@ FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& ca
         if (family.empty() || style.empty() || file.empty())
             continue;
         const std::filesystem::path path(file);
-        const auto digest = digestFile(path);
+        std::optional<core::Sha256Digest> digest = core::Sha256Digest{};
+        if (digests)
+            digest = digestFile(path);
+        else {
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(path, error) || error)
+                continue;
+        }
         if (!digest.has_value())
             continue;
         // One file can expose multiple faces. The digest is the file identity; retain each face
@@ -106,7 +114,8 @@ FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& ca
         result.faces.push_back({family, style, normalizedWeight, normalizedWidth,
                                 slant == FC_SLANT_ITALIC || slant == FC_SLANT_OBLIQUE, path,
                                 *digest, FontSource::System,
-                                static_cast<std::uint32_t>(std::max(faceIndex, 0))});
+                                static_cast<std::uint32_t>(std::max(faceIndex, 0)),
+                                patternString(pattern, FC_POSTSCRIPT_NAME)});
     }
     FcFontSetDestroy(set);
     return result;

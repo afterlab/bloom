@@ -5,7 +5,8 @@
 
 namespace bloom::platform {
 namespace detail {
-[[nodiscard]] FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation&);
+[[nodiscard]] FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation&,
+                                                 bool digests);
 }
 
 namespace {
@@ -21,7 +22,8 @@ namespace {
             {},
             parsed.value_or(core::Sha256Digest{}),
             FontSource::Embedded,
-            faceIndex};
+            faceIndex,
+            {}};
 }
 } // namespace
 
@@ -46,13 +48,14 @@ FontCatalogue FontCatalogueProvider::embeddedCatalogue() {
     return result;
 }
 
-FontCatalogue FontCatalogueProvider::enumerate(const Cancellation& cancelled) const {
+FontCatalogue FontCatalogueProvider::enumerate(const Cancellation& cancelled,
+                                               const bool digests) const {
     auto result = embeddedCatalogue();
     if (cancelled && cancelled()) {
         result.faces.clear();
         return result;
     }
-    auto system = detail::enumerateSystemFonts(cancelled);
+    auto system = detail::enumerateSystemFonts(cancelled, digests);
     result.faces.insert(result.faces.end(), std::make_move_iterator(system.faces.begin()),
                         std::make_move_iterator(system.faces.end()));
     std::stable_sort(result.faces.begin(), result.faces.end(),

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,9 @@ struct FontFace final {
     core::Sha256Digest contentDigest;
     FontSource source = FontSource::System;
     std::uint32_t faceIndex = 0;
+    // The face's PostScript name when the platform reports one: the most exact way to find an
+    // installed font again (a font ID stores it).
+    std::string postscriptName;
 
     friend bool operator==(const FontFace&, const FontFace&) = default;
 };
@@ -48,7 +53,34 @@ class FontCatalogueProvider final {
     // Enumeration is deliberately synchronous at this low-level boundary. Callers use it from a
     // worker (FontCatalogueCache is the host convenience wrapper); no fontconfig or filesystem
     // work is ever needed by the render evaluator.
-    [[nodiscard]] FontCatalogue enumerate(const Cancellation& cancelled = {}) const;
+    //
+    // `digests` false skips hashing every font file: a lookup by name needs no content identity,
+    // and hashing a few hundred installed fonts is the slow part of a scan. The faces then carry an
+    // empty digest.
+    [[nodiscard]] FontCatalogue enumerate(const Cancellation& cancelled = {},
+                                          bool digests = true) const;
+
+    // Faces read directly from the font files below `directories` (sfnt name and OS/2 tables),
+    // without a platform font database. The Windows catalogue is this over the system and per-user
+    // font folders; it is a public function so the same reader is tested on every platform.
+    [[nodiscard]] static FontCatalogue
+    enumerateDirectories(std::span<const std::filesystem::path> directories,
+                         const Cancellation& cancelled = {}, bool digests = true);
+
+    // The SHA-256 of a font file, or nullopt when it is missing, empty or over 64 MiB.
+    [[nodiscard]] static std::optional<core::Sha256Digest>
+    digestFile(const std::filesystem::path& path);
 };
+
+// The names and style of every face in one font file's bytes (a single font or a collection).
+struct SfntFaceNames final {
+    std::string family;
+    std::string style;
+    std::string postscriptName;
+    std::int32_t weight = 400;
+    bool italic = false;
+    std::uint32_t faceIndex = 0;
+};
+[[nodiscard]] std::vector<SfntFaceNames> readSfntFaceNames(std::span<const std::uint8_t> bytes);
 
 } // namespace bloom::platform

@@ -2,7 +2,7 @@
 
 namespace bloom::platform::detail {
 
-FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation&) {
+FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation&, bool) {
     FontCatalogue result;
     result.status = FontCatalogueStatus::Unavailable;
     return result;

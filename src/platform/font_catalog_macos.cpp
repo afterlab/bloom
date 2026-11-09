@@ -100,7 +100,8 @@ constexpr std::uintmax_t kMaximumFontBytes = static_cast<std::uintmax_t>(64) * 1
 
 } // namespace
 
-FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& cancelled) {
+FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& cancelled,
+                                   const bool digests) {
     FontCatalogue result;
     result.status = FontCatalogueStatus::Available;
 
@@ -134,13 +135,19 @@ FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& ca
         const std::string identity = file + '\n' + family + '\n' + style;
         if (!seen.insert(identity).second)
             continue;
-        auto digestEntry = digestCache.find(file);
-        if (digestEntry == digestCache.end()) {
-            digestEntry = digestCache.emplace(file, digestFile(std::filesystem::path(file))).first;
+        std::optional<core::Sha256Digest> digest = core::Sha256Digest{};
+        if (digests) {
+            auto digestEntry = digestCache.find(file);
+            if (digestEntry == digestCache.end()) {
+                digestEntry =
+                    digestCache.emplace(file, digestFile(std::filesystem::path(file))).first;
+            }
+            digest = digestEntry->second;
         }
-        const auto& digest = digestEntry->second;
         if (!digest.has_value())
             continue;
+        // kCTFontNameAttribute is the face's PostScript name.
+        const std::string postscript = copiedString(descriptor, kCTFontNameAttribute);
 
         auto* rawTraits = static_cast<CFDictionaryRef>(
             CTFontDescriptorCopyAttribute(descriptor, kCTFontTraitsAttribute));
@@ -157,7 +164,8 @@ FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& ca
         const auto width =
             std::clamp(static_cast<std::int32_t>(std::lround(100.0 + widthTrait * 50.0)), 50, 200);
         result.faces.push_back({family, style, weight, width, slantTrait > 0.0,
-                                std::filesystem::path(file), *digest, FontSource::System, 0});
+                                std::filesystem::path(file), *digest, FontSource::System, 0,
+                                postscript});
     }
     CFRelease(descriptors);
     return result;
