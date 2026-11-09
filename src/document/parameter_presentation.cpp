@@ -235,6 +235,7 @@ const std::vector<Entry>& table() {
         {kVideoAudioStreamParameterSchemaKey, whole(0.0, 255.0, 0.0, 16.0)},
         {kAudioLevelParameterSchemaKey, number(0.0, 2.0, 0.0, 2.0, 1.0, 1, kPercent, 100.0)},
         {"bloom.composition-source.composition", choice()},
+        {"bloom.node-group.group", choice()},
         {"bloom.composition-source.loop-mode", choice()},
         {"bloom.composition-source.time-offset",
          number(kLowest, kHighest, -10.0, 10.0, 0.01, 3, kSeconds)},

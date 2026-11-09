@@ -1,5 +1,6 @@
 // #357. Incremental publication validation: a draft is checked against the published project it was
 // drafted from, so an edit costs what it changed rather than what the project holds.
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
 
@@ -78,6 +79,13 @@ Composition::DeclaredIdIndex Composition::buildDeclaredIdIndex(const Content& au
 std::vector<CompositionId> Composition::buildNestedReferences(const Content& authored) {
     std::vector<CompositionId> references;
     for (const auto& node : authored.graph.nodes()) {
+        // #342: a Node Group references the group it names the way a Composition Source references
+        // a composition, so a group that contains itself is a nesting cycle.
+        if (node.typeId == kNodeGroupNodeType) {
+            if (const auto group = nodeGroupReference(node, authored.parameters))
+                references.push_back(*group);
+            continue;
+        }
         if (node.typeId != kCompositionSourceNodeType)
             continue;
         for (const auto& binding : node.parameters) {

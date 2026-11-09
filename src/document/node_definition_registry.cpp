@@ -25,6 +25,7 @@
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/matte_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 
 #include <bloom/document/image_preview.hpp>
 
@@ -972,6 +973,10 @@ template <typename Definition>
                definition.outputs.empty() && !definition.layerSlotInput.has_value();
     case NodeLoweringKind::Unsupported:
         return true;
+    // #342: the generated shape of Group Input, Group Output and Node Group.
+    case NodeLoweringKind::NodeGroup:
+    case NodeLoweringKind::GroupBoundary:
+        return hasValidNodeGroupShape(definition);
     // The value lowerings share ONE shape contract rather than fifteen bespoke ones; see
     // value_node_definitions.cpp for what it requires and why the asymmetry with the five image
     // lowerings above is deliberate.
@@ -1784,6 +1789,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
     for (auto& definition : detail::valueNodeDefinitions()) {
         definitions.push_back(std::move(definition));
     }
+    for (auto& definition : nodeGroupNodeDefinitions())
+        definitions.push_back(std::move(definition));
     if (registry.isFrozen() || std::ranges::any_of(definitions, [&](const auto& definition) {
             return registry.find(definition.key.typeId, definition.key.schemaVersion) != nullptr;
         })) {

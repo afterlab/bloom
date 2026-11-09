@@ -635,7 +635,8 @@ void testSearchKeyboardAndMenus() {
             {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle"},
             "Text & Paths holds Text and the shape presets");
         hasGroup("Utilities",
-                 {"Combine XY", "Combine XYZ", "Reroute", "Separate XY", "Separate XYZ"},
+                 {"Combine XY", "Combine XYZ", "Group Input", "Group Output", "Node Group", "Reroute",
+                  "Separate XY", "Separate XYZ"},
                  "Utilities holds the plumbing");
         hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
         hasGroup("Distort",

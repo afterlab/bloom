@@ -2,11 +2,13 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
+#include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 
 #include <algorithm>
 #include <map>
@@ -714,6 +716,73 @@ void testDuplicateCompositionRemapsEveryReference(TestContext& test) {
     });
     test.expect(none, "no layer id in the copy points into the original");
 }
+
+// #342: a group is made, edited and pointed at in single undo steps, and a group that would contain
+// itself is refused with a message.
+void testGroupDefinitionIsUndoableAndRefusesCycles(TestContext& test) {
+    Document document(
+        document::makeNewProject("Project", "Main", core::RationalTime::fromInteger(10)).project);
+    CommandStack stack(document);
+    const auto main = document::CompositionId::fromRaw(1);
+
+    Transaction addInstance("Add Node Group", document.snapshot().revision());
+    addInstance.emplace<AddNode>(main, std::string(document::kNodeGroupNodeType), Vec2d{0.0, 0.0});
+    const auto added = stack.execute(std::move(addInstance));
+    const auto instance =
+        added.outputId<NodeId>(kAddNodeOutput).value_or(NodeId{});
+    test.expect(added.changed() && instance.isValid(), "a Node Group can be added to a composition");
+
+    Transaction create("Create Group", document.snapshot().revision());
+    create.emplace<CreateGroupDefinition>(main, "Brighten", instance);
+    const auto created = stack.execute(std::move(create));
+    const auto group = created.outputId<document::CompositionId>(kCreateGroupDefinitionOutput)
+                           .value_or(document::CompositionId{});
+    const auto after = document.snapshot();
+    const auto* definition = after.project().findComposition(group);
+    test.expect(created.changed() && definition != nullptr &&
+                    document::isNodeGroupDefinition(*definition) &&
+                    document::findGroupInput(*definition) != nullptr && definition->name() == "Brighten",
+                "creating a group adds a composition holding a Group Input and a Group Output");
+    const auto* host = after.project().findComposition(main);
+    const auto* node = host != nullptr ? host->graph().findNode(instance) : nullptr;
+    test.expect(node != nullptr &&
+                    document::nodeGroupReference(*node, host->parameters()) == group,
+                "creating a group points the Node Group at it in the same step");
+    test.expect(after.project().validate().ok(), "a project with a group is valid document truth");
+
+    test.expect(stack.undo().changed() &&
+                    document.snapshot().project().findComposition(group) == nullptr,
+                "creating a group is one undo step");
+    test.expect(stack.redo().changed() &&
+                    document.snapshot().project().findComposition(group) != nullptr,
+                "redo restores the group");
+
+    // Editing the definition is an ordinary node edit on its composition: one step.
+    const auto beforeEdit = document.snapshot();
+    Transaction edit("Add Exposure", beforeEdit.revision());
+    edit.emplace<AddNode>(group, "bloom.exposure", Vec2d{240.0, 0.0});
+    test.expect(stack.execute(std::move(edit)).changed() &&
+                    document.snapshot().project().findComposition(group)->graph().nodes().size() ==
+                        definition->graph().nodes().size() + 1,
+                "an edit inside a group is an ordinary node edit");
+    test.expect(stack.undo().changed() &&
+                    document.snapshot().project().findComposition(group)->graph().nodes().size() ==
+                        definition->graph().nodes().size(),
+                "an edit inside a group is one undo step");
+
+    // A Node Group inside the group naming the group would contain itself.
+    Transaction inner("Add inner Node Group", document.snapshot().revision());
+    inner.emplace<AddNode>(group, std::string(document::kNodeGroupNodeType), Vec2d{480.0, 240.0});
+    const auto innerAdded = stack.execute(std::move(inner));
+    const auto innerNode = innerAdded.outputId<NodeId>(kAddNodeOutput).value_or(NodeId{});
+    const auto before = document.snapshot().revision();
+    Transaction cycle("Name the group inside itself", before);
+    cycle.emplace<SetNodeParameterValue>(group, innerNode, std::string(document::kNodeGroupReferenceRole),
+                                         static_cast<std::int64_t>(group.value()));
+    const auto refused = stack.execute(std::move(cycle));
+    test.expect(!refused.changed() && document.snapshot().revision() == before,
+                "a group cannot be made to contain itself");
+}
 } // namespace
 } // namespace bloom::commands::test
 
@@ -733,6 +802,7 @@ int main() {
         bloom::commands::test::testDurationShrinkClampsWorkArea(test);
         bloom::commands::test::testSizeChangeKeepsContentAtTheAnchor(test);
         bloom::commands::test::testAddAndUpdateCompositionSettings(test);
+        bloom::commands::test::testGroupDefinitionIsUndoableAndRefusesCycles(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

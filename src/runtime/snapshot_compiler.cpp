@@ -42,6 +42,7 @@
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/matte_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/parameter.hpp>
@@ -134,7 +135,7 @@ class CompilePass final {
         if (!request_.snapshot.project().validateCompositionNesting().ok()) {
             addFailure(runtime::CompileDiagnosticCode::CompositionNestingCycle, {},
                        "Composition nesting cycle",
-                       "Composition sources must form an acyclic graph.");
+                       "Composition sources and Node Groups must form an acyclic graph.");
             return finishWithoutPlan();
         }
         for (const auto& composition : request_.snapshot.project().compositions()) {
@@ -152,6 +153,11 @@ class CompilePass final {
                        "The requested composition does not exist in this document snapshot.");
             return finishWithoutPlan();
         }
+        // #342: every Node Group is replaced by the nodes of the group it names, so the rest of
+        // the pass (and every route that reads the plan) sees ordinary nodes.
+        expansion_ = document::expandNodeGroups(request_.snapshot.project(), *composition_);
+        if (expansion_.composition.has_value())
+            composition_ = &*expansion_.composition;
         if (!indexSourceGraph() || !collectReachableGraph() || !indexReachableGraph() ||
             cancelled()) {
             return cancelled() ? result(runtime::SnapshotCompileStatus::Cancelled)
@@ -610,6 +616,14 @@ class CompilePass final {
                 continue;
             }
             definitions_.emplace(node->id, definition);
+            if (definition->lowering == runtime::NodeLoweringKind::NodeGroup) {
+                const auto reason = expansion_.unresolved.find(node->id);
+                addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                           subject(node->id, "parameter.group"), "Node Group cannot be expanded",
+                           reason == expansion_.unresolved.end()
+                               ? "The group this Node Group names could not be expanded."
+                               : reason->second + ".");
+            }
             if (definition->lowering == runtime::NodeLoweringKind::Unsupported &&
                 !(isMuted(node->id) && hasImageOutput(*definition))) {
                 addUnsupported(
@@ -1174,6 +1188,7 @@ class CompilePass final {
     const runtime::CancellationToken& cancellation_;
     runtime::detail::CompileCheckpointObserver* checkpointObserver_ = nullptr;
     const document::Composition* composition_ = nullptr;
+    document::NodeGroupExpansion expansion_;
     std::unordered_map<document::NodeId, const document::NodeRecord*> nodes_;
     std::unordered_map<document::ParameterId, const document::ParameterRecord*> parameters_;
     // Request-local constant records make every lowering kind use the same override channel.

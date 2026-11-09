@@ -297,6 +297,11 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value && *value >= 0 &&
                (schemaKey == "bloom.composition-source.composition" || *value <= 2);
     }
+    if (schemaKey == "bloom.node-group.group") {
+        // #342: a group definition's composition id; zero names none.
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0;
+    }
     if (schemaKey == "bloom.composition-source.time-offset" ||
         schemaKey == "bloom.composition-source.time-scale") {
         const auto* value = std::get_if<double>(&constant.value);

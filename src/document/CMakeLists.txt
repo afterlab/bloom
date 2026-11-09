@@ -30,6 +30,7 @@ target_sources(
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp
+        node_group_nodes.cpp
         node_groups.cpp
         node_layout.cpp
         layer_masks.cpp

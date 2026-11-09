@@ -357,6 +357,16 @@ struct CompiledValueShake final {
     friend bool operator==(const CompiledValueShake&, const CompiledValueShake&) = default;
 };
 
+// #342: Group Input and Group Output. One operand per output slot, copied through in order. A slot
+// the node cannot carry as a value (an Image, Mask or ChannelSet, which the expansion joined by
+// edges) holds a constant placeholder that nothing reads.
+struct CompiledValueGroupBoundary final {
+    std::vector<CompiledValueOperand> operands;
+
+    friend bool operator==(const CompiledValueGroupBoundary&,
+                           const CompiledValueGroupBoundary&) = default;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
@@ -364,7 +374,7 @@ using CompiledValueKernel =
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
-                 CompiledValuePathCurve>;
+                 CompiledValuePathCurve, CompiledValueGroupBoundary>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -397,7 +407,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                                  std::is_same_v<Step, CompiledValuePromotion>) {
                 visit(step.value);
             } else if constexpr (std::is_same_v<Step, CompiledValueScalarMath> ||
-                                 std::is_same_v<Step, CompiledValueUtility>) {
+                                 std::is_same_v<Step, CompiledValueUtility> ||
+                                 std::is_same_v<Step, CompiledValueGroupBoundary>) {
                 for (const auto& operand : step.operands)
                     visit(operand);
             } else if constexpr (std::is_same_v<Step, CompiledValueCombine>) {

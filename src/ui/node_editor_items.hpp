@@ -14,6 +14,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/node_groups.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
@@ -383,6 +384,14 @@ class NodeItem final : public QGraphicsObject {
         imageSource_ = node.typeId == "bloom.image-source" || videoSource_;
         audioSource_ = node.typeId == "bloom.audio-source";
         imageAsset_ = {};
+        // #342: a Node Group is titled with the group it reads.
+        if (node.typeId == document::kNodeGroupNodeType && session_) {
+            const auto reference = document::nodeGroupReference(node, composition.parameters());
+            const auto* group =
+                reference ? session_->snapshot().project().findComposition(*reference) : nullptr;
+            title_ = group ? QString::fromStdString(group->name())
+                           : (reference ? QObject::tr("Missing group") : QObject::tr("Choose a group"));
+        }
         if ((imageSource_ || audioSource_) && session_)
             for (const auto& binding : node.parameters)
                 if (binding.role == "asset") {
@@ -942,6 +951,10 @@ class NodeItem final : public QGraphicsObject {
         for (const auto& binding : node.parameters) {
             if (node.typeId == document::kCompositionSourceNodeType &&
                 binding.role == "composition")
+                continue;
+            // #342: which group a Node Group reads is chosen in Properties, like a source's.
+            if (node.typeId == document::kNodeGroupNodeType &&
+                binding.role == document::kNodeGroupReferenceRole)
                 continue;
             // #364: the matte list is edited by name in Properties and by picking in the Viewer.
             if (node.typeId == document::kCryptomatteNodeType &&

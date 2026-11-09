@@ -127,10 +127,10 @@ constexpr std::array<std::string_view, 7> kVector{
     "bloom.vector2-math",      "bloom.vector3-math", "bloom.vector2-reduce",
     "bloom.vector3-reduce",    "bloom.rotate-2d",    "bloom.polar-to-cartesian",
     "bloom.cartesian-to-polar"};
-// Planned: Group Input, Group Output, Node Group, File Cache.
-constexpr std::array<std::string_view, 5> kUtilities{"bloom.reroute", "bloom.separate-xy",
-                                                     "bloom.combine-xy", "bloom.separate-xyz",
-                                                     "bloom.combine-xyz"};
+// Planned: File Cache.
+constexpr std::array<std::string_view, 8> kUtilities{
+    "bloom.reroute",       "bloom.separate-xy",  "bloom.combine-xy", "bloom.separate-xyz",
+    "bloom.combine-xyz",   "bloom.group-input",  "bloom.group-output", "bloom.node-group"};
 constexpr std::array<std::string_view, 2> kOutput{"bloom.composition-output",
                                                   "bloom.image-preview"};
 

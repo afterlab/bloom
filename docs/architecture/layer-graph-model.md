@@ -429,8 +429,8 @@ complete node schema. The following actions have distinct meanings:
 - `Drive from Graph` creates a typed connection.
 - `Convert Value to Node` materializes the current literal without changing its value.
 - `Convert Animation to Curve Node` materializes the existing curve without baking it.
-- `Expose as Group Input` applies only inside node group encapsulation (deferred; see
-  **Terminology**).
+- `Expose as Group Input` is not offered: a group exposes a fixed catalogue of typed slots instead
+  (see **Group Definitions**).
 
 A graph-driven property remains visibly driven. Typing into its field must not silently replace the
 connection; the artist chooses how to disconnect or preserve the evaluated value.
@@ -595,9 +595,9 @@ truth on the `LayerOutputBoundary`:
 - `Layer Group`: a nested Layer Stack with explicit compositing semantics.
 - `Node Group`: a named frame over a set of nodes in a composition's layout. It organizes the
   canvas and has no evaluation meaning whatsoever (see **Node Groups**).
-- `Node Group Encapsulation`: the deferred feature that hides a subgraph behind exposed ports.
-  `Expose as Group Input` belongs to it. It is a separate, unimplemented contract: the two are
-  named apart here precisely because one is presentation and the other would be topology.
+- `Group Definition`, `Group Input`, `Group Output` and the `Node Group` node (#342): a subgraph
+  hidden behind exposed ports, shared by every node that names it (see **Group Definitions**). It
+  is topology, where the frame above is presentation; the two are named apart here for that reason.
 - `Nested Composition`: a separate composition used as a source.
 
 Avoid using the generic word `Group` when one of the distinct terms is intended.
@@ -792,6 +792,84 @@ menu offers `Group`, and `Ungroup` when the selection is in one; a right-click o
 `Ungroup`, `Rename` and `Color`. `Enter` keeps its one meaning in this editor -- rename the selected layer
 node -- so a frame's title opens on double-click or from its own menu, and `Enter` commits from
 inside the field. `docs/ux/interaction-model.md` remains the binding key list.
+
+## Group Definitions
+
+A group definition is a composition that holds a Group Output node. Nothing else marks it, so no
+document schema moved when groups were added: a project without them opens exactly as before, and
+one with them opens in a build without them as compositions holding nodes it does not know. Its
+graph is authored with the ordinary node commands, so an edit inside a group is one undo step like
+any other edit, and every Node Group that names it reads the edited graph. The group is a
+composition, so it also shows among the project's compositions and opens in the node editor with
+the node it was made from (`Open` in the Node Group's properties).
+
+Three node types, all in Utilities:
+
+- **Group Input** publishes the group's slots inside the definition. Its value slots are operands
+  whose parameters hold the values an instance supplies.
+- **Group Output** takes the slots inside the definition. Its value slots are operands that read
+  what computes them; it republishes them so what read the instance can read them.
+- **Node Group** names a definition by its composition id (the `group` parameter, a constant) and
+  carries the instance's own values for the definition's Group Input.
+
+Both boundaries are singletons in a composition (`OnePerComposition`).
+
+`CreateGroupDefinition(from, name, instance)` makes a definition holding a Group Input and a Group
+Output, sized like the composition it is made from, and when `instance` names a Node Group there
+points it at the new group in the same step, so making a group is one undo step. A group is chosen,
+opened or made from the Node Group's properties (`Group`, `Open`, `New`); the card shows the group's
+name as its title.
+
+### The slots
+
+The slots are a fixed catalogue of typed sockets; the same name is the same socket on all three
+nodes:
+
+| Slot | Kind |
+| --- | --- |
+| `image1`, `image2` | Image |
+| `mask1` | Mask |
+| `channels1` | ChannelSet |
+| `scalar1` to `scalar4` | Scalar |
+| `vector1` | Vector 2 |
+| `color1` | Color |
+| `integer1` | Integer |
+| `boolean1` | Boolean |
+
+Pixel slots (Image, Mask, ChannelSet) connect by edge, so a group takes and gives render passes as
+well as numbers. Value slots are operands: unlinked they hold the instance's own value, linked they
+read the node that drives them, exactly as every other operand does. A fixed catalogue is what lets
+the registry keep one static definition per node type, and so every surface that reads a node's
+sockets (the card, search, validation, scripting and MCP) read a Node Group the way it reads any
+other node. The cost is that a group cannot name its slots or have more of one kind than the table
+says; both are a larger change to the registry than this one.
+
+### Expansion
+
+The compiler replaces every Node Group with the nodes of the group it names before it lowers
+anything (`document::expandNodeGroups`): the group's nodes are copied under ids derived from the
+instance's id and their own, the instance's pixel inputs replace the sources of the edges that left
+Group Input, what read the instance reads what feeds Group Output, and the instance's value
+operands become the values Group Input publishes. Groups inside groups expand the same way, to a
+depth of eight and twenty thousand nodes in all, past which the instance stays and the compile
+fails with a diagnostic on it. An instance that names no group, or a group with no Group Input and
+Group Output, fails the same way, and only when something reachable reads it.
+
+Because the plan holds ordinary nodes, a group has no evaluator of its own. The CPU reference, the
+GPU route and every export read the same operations a hand-built graph of the same nodes compiles
+to, and the GPU coverage contract classifies Node Group and the two boundaries as lowerings that
+produce no pixels of their own (`scope.expansion`, `scope.value`): the nodes they bring are the
+pixel operations, each covered on its own. A muted node inside a group stays muted in every
+instance; mute on the instance itself is not read.
+
+### Dependencies and cycles
+
+A Node Group names its group the way a Composition Source names a composition. The nesting check
+that refuses a composition containing itself reads both, so a group containing itself, directly or
+through other groups, is refused when the edit is made, with the message "Composition source and
+Node Group references form a nesting cycle". The render reachability of a composition also reads
+the group an instance names, and treats Group Output as a root inside a definition, so an edit
+inside a group invalidates the frames of every composition that reaches it and no others.
 
 ## Node Authoring Commands
 

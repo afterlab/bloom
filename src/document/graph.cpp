@@ -1,6 +1,7 @@
 #include <bloom/document/graph.hpp>
 
 #include <bloom/document/merge_entries.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
@@ -486,6 +487,23 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             }
         }
         validateExpectedBindings(node, parameters, registry, path, result);
+        // #342: which group an instance reads is a choice, never a driven value, and a group
+        // cannot contain an instance of itself.
+        if (node.typeId == kNodeGroupNodeType) {
+            for (const auto& binding : node.parameters) {
+                if (binding.role != kNodeGroupReferenceRole)
+                    continue;
+                const auto* parameter = parameters.find(binding.parameterId);
+                if (parameter != nullptr &&
+                    !std::holds_alternative<ConstantValueSource>(parameter->source))
+                    result.add(ValidationCode::InvalidValue, path + ".group",
+                               "The group a Node Group names must be a constant");
+            }
+            if (const auto group = nodeGroupReference(node, parameters);
+                group && owner.isValid() && group->value() == owner.value())
+                result.add(ValidationCode::CompositionNestingCycle, path + ".group",
+                           "A group cannot contain itself");
+        }
         if (node.typeId == kCompositionSourceNodeType) {
             for (const auto& binding : node.parameters) {
                 if (binding.role != "composition" && binding.role != "loopMode")

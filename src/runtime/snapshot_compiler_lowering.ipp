@@ -1449,6 +1449,10 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
+    // #342: Group Input and Group Output are value-pass nodes. A Node Group the expansion could
+    // not replace is reported by resolveDefinitions() and never reaches publication.
+    case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::NodeGroup:
         break;
     }
     addTopologyFailure(node.id, "Unsupported lowering reached plan publication.");

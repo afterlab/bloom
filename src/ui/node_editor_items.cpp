@@ -1,4 +1,6 @@
 #include "node_editor_items.hpp"
+
+#include <bloom/document/node_group_nodes.hpp>
 #include "value_presentation.hpp"
 #include <QCoreApplication>
 #include <QPainterPathStroker>
@@ -293,6 +295,10 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kRandomNodeType, "Random"},
         LibraryName{document::kLayerBoundsNodeType, "Layer Bounds"},
         LibraryName{document::kRerouteNodeType, "Reroute"},
+        // #342: Group Input and Group Output say Group; the Node Group instance says Node Group.
+        LibraryName{document::kGroupInputNodeType, "Group Input"},
+        LibraryName{document::kGroupOutputNodeType, "Group Output"},
+        LibraryName{document::kNodeGroupNodeType, "Node Group"},
         // #525 Fields. "Random Field" and "Gradient Field" say so beside the Random value and the
         // gradient generators.
         LibraryName{document::kFieldNoiseNodeType, "Noise"},

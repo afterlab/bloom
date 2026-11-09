@@ -391,6 +391,13 @@ enum class NodeLoweringKind {
     TestCard,
     // #383: Mask Combine and Image to Mask (matte_nodes.hpp), lowered to image combines.
     Matte,
+    // #342: a Node Group instance. It has no operation of its own: the compiler replaces it with
+    // the nodes of the group it names (node_group_nodes.hpp) before anything is lowered. One that
+    // cannot be replaced is a compile error naming why.
+    NodeGroup,
+    // #342: a group definition's Group Input or Group Output. Each republishes its value slots
+    // through the value graph; its pixel slots are edges the expansion has already joined.
+    GroupBoundary,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -416,7 +423,10 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
+    case NodeLoweringKind::GroupBoundary:
         return true;
+    case NodeLoweringKind::NodeGroup:
+        return false;
     case NodeLoweringKind::Field:
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:

@@ -652,6 +652,11 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
+    // #342: a Node Group is replaced by its group's nodes before lowering, and Group Input and
+    // Group Output republish values. None produces a pixel of its own: the nodes the group brings
+    // are lowered, and covered, like any other.
+    case NodeLoweringKind::NodeGroup:
+    case NodeLoweringKind::GroupBoundary:
         return false;
     }
     return false;
@@ -719,7 +724,10 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
+    case NodeLoweringKind::GroupBoundary:
         return "scope.value";
+    case NodeLoweringKind::NodeGroup:
+        return "scope.expansion";
     }
     return {};
 }

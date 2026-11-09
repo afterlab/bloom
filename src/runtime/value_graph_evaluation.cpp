@@ -497,6 +497,8 @@ class Evaluator final {
                              const runtime::CompiledValueFieldSample& kernel);
     void evaluatePathCurve(const runtime::CompiledValueOperation& operation,
                            const runtime::CompiledValuePathCurve& kernel);
+    void evaluateGroupBoundary(const runtime::CompiledValueOperation& operation,
+                               const runtime::CompiledValueGroupBoundary& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -555,6 +557,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateFieldSample(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValuePathCurve>) {
                 evaluatePathCurve(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueGroupBoundary>) {
+                evaluateGroupBoundary(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -695,6 +699,19 @@ void Evaluator::evaluatePassthrough(const runtime::CompiledValueOperation& opera
         return;
     }
     write(operation, 0, *value);
+}
+
+void Evaluator::evaluateGroupBoundary(const runtime::CompiledValueOperation& operation,
+                                      const runtime::CompiledValueGroupBoundary& kernel) {
+    for (std::size_t slot = 0; slot < kernel.operands.size(); ++slot) {
+        const auto* value = operandOf(kernel.operands[slot]);
+        if (value == nullptr) {
+            fail(operation, kernel.operands[slot].id, "Value operand is unavailable",
+                 "The operand names a value-graph output that has not been computed.");
+            continue;
+        }
+        write(operation, slot, *value);
+    }
 }
 
 void Evaluator::evaluateTime(const runtime::CompiledValueOperation& operation) {

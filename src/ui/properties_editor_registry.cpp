@@ -9,10 +9,12 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -155,6 +157,53 @@ void PropertiesEditor::configureRegistryRows() {
                         document::CompositionId::fromRaw(selector->currentData().toULongLong()));
                 });
             }
+            // #342: a Node Group names the group it reads, opens it, or makes a new one.
+            if (node->typeId == document::kNodeGroupNodeType) {
+                auto* label = kit::makePropertyRowLabel(tr("Group"), section->body());
+                auto* selector = new kit::KDropdown(section->body());
+                selector->setObjectName("propertiesNodeGroup");
+                auto* open = new kit::KButton(tr("Open"), section->body());
+                open->setObjectName("propertiesOpenNodeGroup");
+                open->setControlSize(kit::KButton::ControlSize::Compact);
+                auto* create = new kit::KButton(tr("New"), section->body());
+                create->setObjectName("propertiesNewNodeGroup");
+                create->setControlSize(kit::KButton::ControlSize::Compact);
+                auto* row = new kit::KPropertyRow(label, nullptr, {selector, open, create},
+                                                  section->body());
+                row->setProperty("rowLabel", tr("Group"));
+                section->bodyLayout()->addWidget(row);
+                const auto nodeId = node->id;
+                for (const auto& binding : node->parameters)
+                    if (binding.role == document::kNodeGroupReferenceRole) {
+                        const auto parameterId = binding.parameterId;
+                        connect(selector, &kit::KDropdown::activated, this,
+                                [this, selector, parameterId](int index) {
+                                    if (index >= 0 &&
+                                        !session_.setParameterValue(
+                                            parameterId,
+                                            static_cast<std::int64_t>(
+                                                selector->itemData(index).toLongLong()),
+                                            tr("Change Group")))
+                                        configureRegistryRows();
+                                });
+                        break;
+                    }
+                connect(open, &kit::KButton::clicked, this, [this, selector] {
+                    (void)session_.setComposition(
+                        document::CompositionId::fromRaw(selector->currentData().toULongLong()));
+                });
+                connect(create, &kit::KButton::clicked, this, [this, nodeId] {
+                    std::size_t groups = 0;
+                    for (const auto& composition : session_.snapshot().project().compositions())
+                        groups += document::isNodeGroupDefinition(composition) ? 1U : 0U;
+                    commands::Transaction transaction("Create Group",
+                                                      session_.snapshot().revision());
+                    transaction.emplace<commands::CreateGroupDefinition>(
+                        session_.compositionId(), tr("Group %1").arg(groups + 1).toStdString(),
+                        nodeId);
+                    (void)session_.executeTransaction(std::move(transaction));
+                });
+            }
             if ((node->typeId == "bloom.image-source" || node->typeId == "bloom.video-source")) {
                 for (const auto& [name, object] :
                      std::array{std::pair{tr("Dimensions"), "propertiesImageDimensions"},
@@ -293,6 +342,8 @@ void PropertiesEditor::configureRegistryRows() {
                 if (handcrafted ||
                     (node->typeId == document::kCompositionSourceNodeType &&
                      declared.role == "composition") ||
+                    (node->typeId == document::kNodeGroupNodeType &&
+                     declared.role == document::kNodeGroupReferenceRole) ||
                     // #493, #498: the curves are drawn and edited by the curve graph.
                     (node->typeId == document::kCurvesNodeType &&
                      document::isGradeCurveSchemaKey(declared.schemaKey)))
@@ -364,6 +415,39 @@ void PropertiesEditor::configureRegistryRows() {
         selector->setEnabled(!session_.composition()->nodeLocked(node->id));
         if (auto* open = findChild<kit::KButton*>("propertiesOpenComposition"))
             open->setEnabled(session_.snapshot().project().findComposition(target) != nullptr);
+    }
+    if (auto* selector = findChild<kit::KDropdown*>("propertiesNodeGroup");
+        selector && node && session_.composition()) {
+        const QSignalBlocker blocker(selector);
+        const auto binding = std::ranges::find(node->parameters, document::kNodeGroupReferenceRole,
+                                               &document::ParameterBinding::role);
+        const auto target = binding == node->parameters.end()
+                                ? document::CompositionId{}
+                                : document::nodeGroupReference(*node, session_.composition()->parameters())
+                                      .value_or(document::CompositionId{});
+        selector->clearItems();
+        selector->addItem(tr("Choose Group"), QVariant::fromValue(qlonglong{0}));
+        for (const auto& composition : session_.snapshot().project().compositions()) {
+            if (composition.id() == session_.compositionId() ||
+                !document::isNodeGroupDefinition(composition) ||
+                composition.id().value() >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                continue;
+            selector->addItem(
+                QString::fromStdString(composition.name()),
+                QVariant::fromValue(static_cast<qlonglong>(composition.id().value())));
+        }
+        const auto stored = QVariant::fromValue(static_cast<qlonglong>(target.value()));
+        auto index = selector->findData(stored);
+        if (index < 0)
+            index = selector->addItem(tr("Missing group"), stored);
+        selector->setCurrentIndex(index);
+        const bool locked = session_.composition()->nodeLocked(node->id);
+        selector->setEnabled(!locked);
+        if (auto* open = findChild<kit::KButton*>("propertiesOpenNodeGroup"))
+            open->setEnabled(session_.snapshot().project().findComposition(target) != nullptr);
+        if (auto* create = findChild<kit::KButton*>("propertiesNewNodeGroup"))
+            create->setEnabled(!locked);
     }
     if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {
         const document::AssetRecord* asset = nullptr;

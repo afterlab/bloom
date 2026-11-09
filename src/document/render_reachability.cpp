@@ -1,5 +1,7 @@
 #include <bloom/document/render_reachability.hpp>
 
+#include <bloom/document/node_group_nodes.hpp>
+
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
@@ -334,6 +336,11 @@ RenderReachability RenderReachability::compute(const Composition& composition,
     }
     for (const auto& node : graph.nodes()) {
         ++result.work_.nodesVisited;
+        // #342: a group definition is read through its Group Output by every Node Group naming it,
+        // so what feeds the output can change another composition's pixels. The compiler of the
+        // definition itself does not follow the output; this set is a superset of it.
+        if (node.typeId == kGroupOutputNodeType)
+            pending.push_back(node.id);
         if (const auto* definition = view.definition(node);
             definition != nullptr && definition->lowering == NodeLoweringKind::ValueBoundsReadout)
             pending.push_back(node.id);
@@ -424,6 +431,19 @@ RenderReachability RenderReachability::compute(const Composition& composition,
             if (const auto target =
                     constantCompositionReference(composition, *node, result.nestedUnknown_))
                 result.nested_.insert(*target);
+        }
+        // #342: a Node Group reads the group it names. An unset group names nothing; one that is
+        // not a constant may name any.
+        if (node->typeId == kNodeGroupNodeType) {
+            if (const auto target = nodeGroupReference(*node, composition.parameters()))
+                result.nested_.insert(*target);
+            else if (const auto binding = std::ranges::find(node->parameters, kNodeGroupReferenceRole,
+                                                            &ParameterBinding::role);
+                     binding != node->parameters.end()) {
+                const auto* parameter = composition.parameters().find(binding->parameterId);
+                if (parameter == nullptr || !std::holds_alternative<ConstantValueSource>(parameter->source))
+                    result.nestedUnknown_ = true;
+            }
         }
     }
     result.known_ = known;

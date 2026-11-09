@@ -32,6 +32,7 @@ target_sources(
         video_source_operations.cpp
         node_duplication.cpp
         node_group_operations.cpp
+        group_definition_operations.cpp
         node_operation_eligibility.cpp
         node_layout_operations.cpp
         render_footprint.cpp
@@ -50,6 +51,7 @@ target_sources(
             include/bloom/commands/track_operations.hpp
             include/bloom/commands/export_queue_operations.hpp
             include/bloom/commands/node_operations.hpp
+            include/bloom/commands/group_definition_operations.hpp
             include/bloom/commands/entry_layer_operations.hpp
             include/bloom/commands/layer_operations.hpp
             include/bloom/commands/layer_time_operations.hpp

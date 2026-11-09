@@ -20,6 +20,7 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
@@ -2023,6 +2024,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_warp_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
+#include "snapshot_compiler_node_group_tests.ipp"
 
 } // namespace
 
@@ -2052,6 +2054,9 @@ int main() {
         testVignetteLowering(expectations);
         testPixelMathLowering(expectations);
         testHistogramCompareLowering(expectations);
+        testNodeGroupExpansion(expectations);
+        testNodeGroupValues(expectations);
+        testNodeGroupRefusals(expectations);
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);

@@ -678,6 +678,24 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     }
     case runtime::NodeLoweringKind::ValueFieldSample:
         return lowerFieldSample(node, definition);
+    case runtime::NodeLoweringKind::GroupBoundary: {
+        // One operand per output, in the definition's order. A pixel slot has no value to carry:
+        // the expansion joined it by edge, so a placeholder holds its place.
+        runtime::CompiledValueGroupBoundary boundary;
+        boundary.operands.reserve(definition.outputs.size());
+        for (const auto& output : definition.outputs) {
+            if (document::isPixelSocketKind(output.valueKind)) {
+                boundary.operands.push_back({{}, runtime::CompiledValue{0.0}});
+                continue;
+            }
+            auto value = operandOf(output.name);
+            if (!value.has_value())
+                return std::nullopt;
+            boundary.operands.push_back(*std::move(value));
+        }
+        return runtime::CompiledValueKernel{std::move(boundary)};
+    }
+    case runtime::NodeLoweringKind::NodeGroup:
     case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:

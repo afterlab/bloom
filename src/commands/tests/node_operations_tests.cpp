@@ -4,6 +4,7 @@
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/grade_curves.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -1316,9 +1317,11 @@ void testAddAndLayout(TestContext& test) {
     // singletons
     // -- the Layer Stack operator and the composition's one evaluation endpoint, and nothing else.
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
-        const bool singleton = definition.key.typeId == kCompositionOutputNodeType;
+        const bool singleton = definition.key.typeId == kCompositionOutputNodeType ||
+                               definition.key.typeId == kGroupInputNodeType ||
+                               definition.key.typeId == kGroupOutputNodeType;
         test.expect((definition.cardinality == NodeCardinality::OnePerComposition) == singleton,
-                    "exactly the Layer Stack and the composition output are one per composition: " +
+                    "only the composition output and the group boundary are one per composition: " +
                         definition.key.typeId);
     }
     const auto id = addSource(fixture);

@@ -755,7 +755,7 @@ ValidationResult Project::validateCompositionNesting() const {
     ValidationResult result;
     if (visited != incoming.size())
         result.add(ValidationCode::CompositionNestingCycle, "compositions",
-                   "Composition source references form a nesting cycle");
+                   "Composition source and Node Group references form a nesting cycle");
     return result;
 }
 
