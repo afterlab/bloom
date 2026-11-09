@@ -133,6 +133,14 @@ struct ApplicationPreferences final {
     // An operating-system notification for a render result while Bloom is not the active window.
     bool renderNotificationsEnabled = true;
 
+    // Agent routes that act on the machine rather than the project. Both are off by default and
+    // only this model (the Preferences window) turns them on: the MCP preferences.set refuses to.
+    // Answer open dialogs: the dialog.answer tool may press a button of the dialog that blocks the
+    // window (#579). Run Python scripts: the script.run tool may run Python in the live session
+    // (#603).
+    bool agentsAnswerDialogs = false;
+    bool agentsRunScripts = false;
+
     friend bool operator==(const ApplicationPreferences&, const ApplicationPreferences&) = default;
 };
 

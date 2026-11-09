@@ -308,6 +308,108 @@ yyjson_mut_val* simpleCall(McpServerCore::State& core, Json& out, const McpReque
     return uiResult(out, result);
 }
 
+// script.run (#603): Python in the live session, through the Script editor's runtime. The artist's
+// Preferences switch gates it in the binding; here the run is bounded (source size, a timeout,
+// output size) and cancellable, and reports a heartbeat while it runs.
+constexpr std::size_t kScriptSourceLimit = 65536;
+constexpr std::size_t kScriptOutputLimit = 65536;
+
+yyjson_mut_val* scriptTool(McpServerCore::State& core, Json& out, yyjson_val* arguments,
+                           const McpRequestControl& control, std::string& summary) {
+    members(arguments, {"source", "timeoutSeconds"}, {"source"});
+    const auto source = string(member(arguments, "source"), kScriptSourceLimit);
+    if (source.empty())
+        throw InvalidInput("source is Python code of 1 to 65536 characters");
+    std::uint64_t timeout = 60;
+    if (member(arguments, "timeoutSeconds")) {
+        timeout = integer(member(arguments, "timeoutSeconds"));
+        if (timeout == 0 || timeout > 600)
+            throw InvalidInput("timeoutSeconds is 1 to 600");
+    }
+    summary = "script.run (" + std::to_string(source.size()) + " bytes)";
+    if (core.liveHost() == nullptr)
+        return refusal(out, McpUiRefusal::NotLive,
+                       "This server has no application window; script.run works only with the "
+                       "in-app MCP server.");
+    const auto& ui = core.dependencies.ui;
+    if (!ui.runScript)
+        return refusal(out, McpUiRefusal::Unbound,
+                       "This Bloom window does not run scripts for agents.");
+    struct Pending {
+        std::mutex mutex;
+        std::condition_variable_any changed;
+        std::optional<McpScriptResult> result;
+    };
+    const auto pending = std::make_shared<Pending>();
+    const auto ran = onOwner(core, control, [&] {
+        ui.runScript({source}, [pending](McpScriptResult result) {
+            {
+                const std::lock_guard lock(pending->mutex);
+                if (!pending->result)
+                    pending->result = std::move(result);
+            }
+            pending->changed.notify_all();
+        });
+    });
+    if (!ran)
+        cancelled();
+    const auto started = std::chrono::steady_clock::now();
+    const auto deadline = started + std::chrono::seconds(timeout);
+    bool stopped = false;
+    std::unique_lock lock(pending->mutex);
+    while (!pending->result) {
+        pending->changed.wait_for(lock, control.stop, std::chrono::milliseconds(500),
+                                  [&] { return pending->result.has_value(); });
+        if (pending->result)
+            break;
+        const auto now = std::chrono::steady_clock::now();
+        if (control.progress)
+            control.progress({std::chrono::duration<double>(now - started).count(), std::nullopt,
+                              "Running the script"});
+        if (!stopped && (control.stop.stop_requested() || now >= deadline)) {
+            stopped = true;
+            const bool timedOut = !control.stop.stop_requested();
+            lock.unlock();
+            // The Script editor's Cancel: the script and the commits it queued stop.
+            static_cast<void>(onOwner(core, {}, [&] {
+                if (ui.cancelScript)
+                    ui.cancelScript();
+            }));
+            lock.lock();
+            if (!pending->result)
+                pending->changed.wait_for(lock, std::chrono::seconds(5),
+                                          [&] { return pending->result.has_value(); });
+            if (!pending->result)
+                throw ToolFailure(timedOut ? McpToolErrorCode::DeadlineExceeded
+                                           : McpToolErrorCode::Cancelled,
+                                  timedOut ? "The script did not finish within timeoutSeconds and "
+                                             "was asked to stop; it may still be stopping."
+                                           : "The request was canceled; the script was asked to "
+                                             "stop and may still be stopping.");
+            if (timedOut)
+                pending->result->output += "\n[stopped: timeoutSeconds elapsed]";
+        }
+    }
+    auto result = *pending->result;
+    lock.unlock();
+    if (!result.ok())
+        return refusal(out, result.refusal,
+                       result.message.empty() ? "Bloom refused the request." : result.message);
+    if (result.output.size() > kScriptOutputLimit) {
+        result.output.resize(kScriptOutputLimit);
+        result.output += "\n[output truncated at 65536 characters]";
+    }
+    if (!result.succeeded) {
+        auto* value = refusal(out, McpUiRefusal::Failed, "The script failed; see output.");
+        out.set(value, "output", out.text(result.output));
+        return value;
+    }
+    auto* value = out.object();
+    out.set(value, "succeeded", out.boolean(true));
+    out.set(value, "output", out.text(result.output));
+    return value;
+}
+
 } // namespace
 
 yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool tool,
@@ -658,6 +760,17 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
         return simpleCall(core, out, control, summary, tool, live, ui.deleteCompositionPreset,
                           [&] { return ui.deleteCompositionPreset(name); });
     }
+    case McpTool::DialogAnswer: {
+        members(arguments, {"button"}, {"button"});
+        const auto button = string(member(arguments, "button"), 256);
+        if (button.empty())
+            throw InvalidInput("button is the text of one of the dialog's buttons; the busy "
+                               "refusal of any other call lists them");
+        return simpleCall(core, out, control, summary, tool, live, ui.answerDialog,
+                          [&] { return ui.answerDialog(button); });
+    }
+    case McpTool::ScriptRun:
+        return scriptTool(core, out, arguments, control, summary);
     case McpTool::PreferencesSet: {
         members(arguments, {"preferences"}, {"preferences"});
         auto* entries = member(arguments, "preferences");

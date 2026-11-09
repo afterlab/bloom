@@ -65,7 +65,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                                scripting::LiveSessionHost* const liveSession,
                                McpServerAdapter* const mcpServer,
                                ProfilerFeed* const profilerFeed,
-                               ViewerPreviewPool* const viewerPreviews) {
+                               ViewerPreviewPool* const viewerPreviews,
+                               std::shared_ptr<ScriptPanelRuntime>* const scriptRuntime) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost) {
@@ -87,6 +88,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
     (void)gpuExportProvider;
     (void)liveSession;
 #endif
+    if (scriptRuntime != nullptr)
+        *scriptRuntime = script;
     const auto addEditor = [&registry](std::string id, QString name, EditorFactory factory) {
         return registry.registerEditor(
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});

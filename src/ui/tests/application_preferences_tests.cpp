@@ -86,10 +86,15 @@ void testFullRoundTrip(Expectations& check) {
     prefs.eventSoundsEnabled = false;
     prefs.interactionSoundsEnabled = true;
     prefs.renderNotificationsEnabled = false;
+    prefs.agentsAnswerDialogs = true;
+    prefs.agentsRunScripts = true;
 
     ui::saveApplicationPreferences(settings, prefs);
     const auto reloaded = ui::loadApplicationPreferences(settings);
     check.expect(reloaded == prefs, "every global preference round-trips through QSettings");
+    check.expect(!ui::defaultApplicationPreferences().agentsAnswerDialogs &&
+                     !ui::defaultApplicationPreferences().agentsRunScripts,
+                 "the agent routes are off by default");
 }
 
 // Issue #581: the export worker limits are opt-in. Nothing is stored for the defaults, and a stored

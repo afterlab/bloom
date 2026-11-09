@@ -29,6 +29,7 @@ class ExportQueueAdapter;
 class McpServerAdapter;
 class ProfilerFeed;
 class RamPreviewController;
+class ScriptPanelRuntime;
 class CompositionSession;
 class ProjectHost;
 class ViewerPreviewPool;
@@ -86,6 +87,9 @@ class EditorRegistry final {
 // `viewerPreviews` (#536) makes a Viewer's own preview controller: a pinned Viewer's, and a
 // secondary window's Viewer with its own display transform. Null leaves every Viewer following
 // the active composition through `previewController`. It must outlive every editor.
+//
+// `scriptRuntime` receives the Script editor's runtime (null in a build without embedded Python),
+// so the in-app MCP server's script.run (#603) runs through the same interpreter and queue.
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
@@ -93,6 +97,7 @@ class EditorRegistry final {
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {},
     ExportQueueAdapter* exportQueue = nullptr, scripting::LiveSessionHost* liveSession = nullptr,
     McpServerAdapter* mcpServer = nullptr, ProfilerFeed* profilerFeed = nullptr,
-    ViewerPreviewPool* viewerPreviews = nullptr);
+    ViewerPreviewPool* viewerPreviews = nullptr,
+    std::shared_ptr<ScriptPanelRuntime>* scriptRuntime = nullptr);
 
 } // namespace bloom::ui

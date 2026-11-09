@@ -10,6 +10,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
@@ -18,11 +19,16 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCoreApplication>
+#include <QPointer>
+#include <QSettings>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <algorithm>
 #include <chrono>
+#include <ranges>
 #include <set>
 #include <system_error>
 
@@ -141,6 +147,13 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
             },
         .deleteCompositionPreset =
             [this](const std::string& name) { return deleteCompositionPreset(name); },
+        .answerDialog = [this](const std::string& button) { return answerDialog(button); },
+        .runScript =
+            [this](mcp::McpScriptRequest request,
+                   std::function<void(mcp::McpScriptResult)> done) {
+                runScript(std::move(request), std::move(done));
+            },
+        .cancelScript = [this] { cancelScript(); },
     };
 }
 
@@ -462,6 +475,47 @@ McpLiveUiBinding::refuseUnsettled(const mcp::McpProjectRequest& request) const {
     return std::nullopt;
 }
 
+namespace {
+
+// A dialog's visible, enabled buttons as their accelerator-free labels, and whether pressing one
+// discards or overwrites data (named in the busy refusal and by dialog.answer).
+struct DialogButton final {
+    QPointer<QAbstractButton> button;
+    QString label;
+    bool discards = false;
+};
+
+std::vector<DialogButton> dialogButtons(QWidget* const dialog, const bool enabledOnly) {
+    std::vector<DialogButton> buttons;
+    for (auto* button : dialog->findChildren<QAbstractButton*>()) {
+        if (!button->isVisible() || button->text().isEmpty() ||
+            (enabledOnly && !button->isEnabled()))
+            continue;
+        auto label = button->text();
+        label.remove(QLatin1Char('&'));
+        const auto lower = label.toLower();
+        const bool discards = lower.contains(QStringLiteral("discard")) ||
+                              lower.contains(QStringLiteral("don't save")) ||
+                              lower.contains(QStringLiteral("overwrite")) ||
+                              lower.contains(QStringLiteral("replace"));
+        buttons.push_back({button, label, discards});
+    }
+    return buttons;
+}
+
+QString describeButtons(const std::vector<DialogButton>& buttons) {
+    QStringList described;
+    for (const auto& entry : buttons)
+        described.push_back(entry.discards ? entry.label +
+                                                 QCoreApplication::translate(
+                                                     "bloom::ui::McpLiveUiBinding",
+                                                     " (discards or overwrites data)")
+                                           : entry.label);
+    return described.join(QStringLiteral(", "));
+}
+
+} // namespace
+
 QString McpLiveUiBinding::openDialogMessage() {
     auto* dialog = QApplication::activeModalWidget();
     if (dialog == nullptr)
@@ -476,21 +530,45 @@ QString McpLiveUiBinding::openDialogMessage() {
         text += tr(". It says: %1").arg(message);
     if (!detail.isEmpty())
         text += tr(" %1").arg(detail);
-    QStringList buttons;
-    for (const auto* button : dialog->findChildren<QAbstractButton*>()) {
-        if (!button->isVisible() || button->text().isEmpty())
-            continue;
-        auto label = button->text();
-        label.remove(QLatin1Char('&'));
-        const auto lower = label.toLower();
-        if (lower.contains(QStringLiteral("discard")) || lower.contains(QStringLiteral("don't save")) ||
-            lower.contains(QStringLiteral("overwrite")) || lower.contains(QStringLiteral("replace")))
-            label += tr(" (discards or overwrites data)");
-        buttons.push_back(label);
-    }
+    const auto buttons = describeButtons(dialogButtons(dialog, false));
     if (!buttons.isEmpty())
-        text += tr(". Its buttons: %1").arg(buttons.join(QStringLiteral(", ")));
-    return text + tr(". Close it, then try again.");
+        text += tr(". Its buttons: %1").arg(buttons);
+    return text + tr(". Close it, then try again, or press one of its buttons with dialog.answer "
+                     "when the artist has allowed agents to answer dialogs.");
+}
+
+// ---- dialog.answer (#579) ----------------------------------------------------------------------
+
+mcp::McpUiResult McpLiveUiBinding::answerDialog(const std::string& requested) {
+    // The artist's switch, read from the saved settings each time: it is only ever turned on in
+    // Preferences, never over MCP.
+    if (!loadApplicationPreferences(QSettings{}).agentsAnswerDialogs)
+        return uiResult(McpUiRefusal::NotAllowed,
+                        tr("Agents are not allowed to answer dialogs. The artist can allow it in "
+                           "Edit > Preferences > General > Agents; until then the dialog has to "
+                           "be answered in Bloom."));
+    auto* dialog = QApplication::activeModalWidget();
+    if (dialog == nullptr)
+        return uiResult(McpUiRefusal::InvalidArgument, tr("No dialog is open in Bloom."));
+    const auto buttons = dialogButtons(dialog, true);
+    auto wanted = QString::fromStdString(requested).trimmed();
+    wanted.remove(QLatin1Char('&'));
+    const auto found = std::ranges::find_if(buttons, [&](const DialogButton& entry) {
+        return entry.label.compare(wanted, Qt::CaseInsensitive) == 0;
+    });
+    if (found == buttons.end())
+        return uiResult(McpUiRefusal::InvalidArgument,
+                        tr("The open dialog has no button \u201c%1\u201d. Its buttons: %2.")
+                            .arg(wanted, describeButtons(buttons)));
+    // Pressed from the event loop, after this call has answered, as a click would be.
+    QTimer::singleShot(0, found->button, [button = found->button] {
+        if (button != nullptr && button->isEnabled())
+            button->click();
+    });
+    QString message = tr("Pressed \u201c%1\u201d.").arg(found->label);
+    if (found->discards)
+        message += tr(" That button discards or overwrites data.");
+    return uiOk(message);
 }
 
 void McpLiveUiBinding::projectLifecycle(mcp::McpProjectRequest request,

@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <functional>
 #include <memory>
 #include <thread>
 
@@ -26,6 +27,10 @@ class ScriptPanelRuntime final : public QObject {
                        std::shared_ptr<host::GpuExportProvider> provider);
     ~ScriptPanelRuntime() override;
     [[nodiscard]] bool submit(const QString& source);
+    // As submit, and `done` is called once on the UI thread (from the runtime's poll) with the
+    // script's output and whether it succeeded: the agent route's completion (script.run).
+    [[nodiscard]] bool submit(const QString& source,
+                              std::function<void(const QString& output, bool succeeded)> done);
     void cancel();
     void shutdown();
     [[nodiscard]] bool busy() const;

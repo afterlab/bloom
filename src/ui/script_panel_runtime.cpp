@@ -6,6 +6,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -20,10 +21,12 @@ struct ScriptPanelRuntime::State {
     struct Work {
         std::string source;
         std::uint64_t cancellation = 0;
+        std::function<void(const QString&, bool)> done;
     };
     struct Output {
         std::string source;
         py::ExecutionResult result;
+        std::function<void(const QString&, bool)> done;
     };
     scripting::LiveSessionHost& live;
     mutable std::mutex mutex;
@@ -60,14 +63,17 @@ ScriptPanelRuntime::~ScriptPanelRuntime() {
     if (worker_.joinable())
         worker_.join();
 }
-bool ScriptPanelRuntime::submit(const QString& source) {
+bool ScriptPanelRuntime::submit(const QString& source) { return submit(source, {}); }
+bool ScriptPanelRuntime::submit(const QString& source,
+                                std::function<void(const QString&, bool)> done) {
     if (source.isEmpty() || source.size() > 65536 || !state_->alive)
         return false;
     {
         const std::lock_guard lock(state_->mutex);
         if (state_->scripts.size() == 16)
             return false;
-        state_->scripts.push_back({source.toStdString(), state_->cancellation.load()});
+        state_->scripts.push_back(
+            {source.toStdString(), state_->cancellation.load(), std::move(done)});
     }
     if (!worker_.joinable())
         worker_ = std::jthread([state = state_] { work(state); });
@@ -100,9 +106,12 @@ void ScriptPanelRuntime::poll() {
         if (state_->python)
             tasks = state_->python->tasks();
     }
-    for (auto& output : outputs)
+    for (auto& output : outputs) {
         emit outputReady(QString::fromStdString(output.source),
                          QString::fromStdString(output.result.output), output.result.succeeded);
+        if (output.done)
+            output.done(QString::fromStdString(output.result.output), output.result.succeeded);
+    }
     QString message = busy() ? QStringLiteral("Running") : QStringLiteral("Ready");
     bool active = busy();
     for (const auto& task : tasks) {
@@ -197,9 +206,15 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
             }
             {
                 const std::lock_guard lock(state->mutex);
-                if (state->outputs.size() == 32)
-                    state->outputs.pop_front();
-                state->outputs.push_back({std::move(work.source), std::move(result)});
+                // The console keeps the newest 32 outputs; one an agent waits on is never dropped.
+                if (state->outputs.size() == 32) {
+                    const auto stale = std::ranges::find_if(
+                        state->outputs, [](const State::Output& entry) { return !entry.done; });
+                    if (stale != state->outputs.end())
+                        state->outputs.erase(stale);
+                }
+                state->outputs.push_back(
+                    {std::move(work.source), std::move(result), std::move(work.done)});
             }
             state->executing = false;
         }
@@ -213,7 +228,7 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
         python.reset();
     } catch (const std::exception& error) {
         const std::lock_guard lock(state->mutex);
-        state->outputs.push_back({{}, {.output = error.what()}});
+        state->outputs.push_back({{}, {.output = error.what()}, {}});
         state->alive = false;
         state->python.reset();
         state->executing = false;

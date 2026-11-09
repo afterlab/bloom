@@ -103,9 +103,14 @@ enum class McpTool : std::uint8_t {
     CompositionDeletePreset = 45,
     // The reference: every tool, query kind, operation and command, described.
     Help = 46,
+    // Opt-in agent routes (each behind its own Preferences switch, off by default): answer the
+    // modal dialog that blocks the window (#579), and run Python in the live session through the
+    // Script editor's runtime (#603).
+    DialogAnswer = 47,
+    ScriptRun = 48,
 };
 
-inline constexpr std::size_t kMcpToolCount = 47;
+inline constexpr std::size_t kMcpToolCount = 49;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -159,6 +164,8 @@ inline constexpr std::size_t kMcpToolCount = 47;
         "composition.rename-preset",
         "composition.delete-preset",
         "help",
+        "dialog.answer",
+        "script.run",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];
@@ -195,7 +202,8 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
     return (index >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
             index <= static_cast<std::uint8_t>(McpTool::ExportReveal)) ||
            (index >= static_cast<std::uint8_t>(McpTool::ProjectSaveCopy) &&
-            index <= static_cast<std::uint8_t>(McpTool::CompositionDeletePreset));
+            index <= static_cast<std::uint8_t>(McpTool::CompositionDeletePreset)) ||
+           tool == McpTool::DialogAnswer || tool == McpTool::ScriptRun;
 }
 
 // ---------------------------------------------------------------------------------------------

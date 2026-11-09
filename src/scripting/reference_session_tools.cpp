@@ -470,8 +470,67 @@ void parityTools(std::vector<ReferenceEntry>& out) {
            windowResult,
            R"({"name":"preferences.set","arguments":{"preferences":{"playback.loop":true}}})",
            withRefusals({refusal("bloom.mcp.busy", "a modal dialog is open",
-                                 "retry when the artist closes it")}),
+                                 "retry when the artist closes it, or press one of its buttons "
+                                 "with dialog.answer when the artist has allowed that")}),
            {"preferences.get"});
+
+    simple("dialog.answer", "window",
+           "Press one button of the modal dialog that blocks the Bloom window (opt-in).",
+           "Off unless the artist switches on Preferences > General > Agents > Answer open "
+           "dialogs; until then it is refused with bloom.mcp.not-allowed. A call refused with "
+           "bloom.mcp.busy because a dialog is open describes it: title, text and buttons, with "
+           "the buttons that discard or overwrite data marked. The dialog's own action happens "
+           "(it is not a project edit and Undo cannot restore it), so read the marks before "
+           "choosing.",
+           live,
+           {{.name = "button",
+             .type = "string",
+             .required = true,
+             .summary = "The text of the button to press.",
+             .unit = "a visible, enabled button of the open dialog, case-insensitive, "
+                     "accelerator marks ignored",
+             .range = "1..256 bytes"}},
+           windowResult, R"({"name":"dialog.answer","arguments":{"button":"Cancel"}})",
+           withRefusals({refusal("bloom.mcp.not-allowed", "the Preferences switch is off",
+                                 "ask the artist to switch it on, or ask them to answer the "
+                                 "dialog"),
+                         refusal("bloom.mcp.invalid-argument",
+                                 "no dialog is open, or no button has that text",
+                                 "the message lists the buttons")}),
+           {"preferences.get"});
+
+    simple("script.run", "application",
+           "Run Python in the live session through the Script editor (opt-in).",
+           "Off unless the artist switches on Preferences > General > Agents > Run Python "
+           "scripts; until then it is refused with bloom.mcp.not-allowed. The script uses the "
+           "bloom module against the open project: its edits are the same commands, one undo "
+           "entry per transaction group, as the Script editor's, and its output appears in the "
+           "editor. Python can reach anything the user account can, so the switch is access to "
+           "the machine. Bounded: 65536 characters of source, timeoutSeconds (default 60, at "
+           "most 600) before it is canceled, 65536 characters of output; the request's own "
+           "cancellation also cancels it. One script runs at a time, the rest queue.",
+           live,
+           {{.name = "source",
+             .type = "string",
+             .required = true,
+             .summary = "The Python source to run.",
+             .range = "1..65536 characters"},
+            {.name = "timeoutSeconds",
+             .type = "integer",
+             .summary = "Seconds before the script is canceled.",
+             .unit = "seconds",
+             .range = "1..600",
+             .defaultValue = "60"}},
+           "{succeeded, output} or, when the script failed, a bloom.mcp.failed diagnostic with "
+           "output",
+           R"json({"name":"script.run","arguments":{"source":"print(bloom.context.composition)"}})json",
+           withRefusals({refusal("bloom.mcp.not-allowed", "the Preferences switch is off",
+                                 "ask the artist to switch it on"),
+                         refusal("bloom.mcp.busy", "the Script editor's queue is full",
+                                 "retry shortly"),
+                         refusal("bloom.mcp.failed", "the script raised an error or was canceled",
+                                 "read output; fix the script and run it again")}),
+           {"transact", "history"});
 
     simple("cache.purge", "application", "Clear derived caches (Edit > Purge).",
            "Derived state only: the project, its revision and undo history are untouched. Source "

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -224,7 +225,9 @@ void unboundSeams() {
              {"composition.presets", "{}"},
              {"composition.save-preset", R"({"composition":1,"name":"Card"})"},
              {"composition.rename-preset", R"({"name":"Card","newName":"Plate"})"},
-             {"composition.delete-preset", R"({"name":"Card"})"}}) {
+             {"composition.delete-preset", R"({"name":"Card"})"},
+             {"dialog.answer", R"({"button":"Cancel"})"},
+             {"script.run", R"({"source":"x = 1"})"}}) {
         const auto result = server.call(tool, arguments);
         expect(contains(result, "bloom.mcp.ui-unbound"), tool + " unbound is typed: " + result);
     }
@@ -244,7 +247,8 @@ void parityTools() {
         for (const auto* name :
              {"project.save-copy", "project.cancel-open", "preferences.get", "preferences.set",
               "cache.purge", "jobs.list", "jobs.cancel", "asset.reveal", "composition.presets",
-              "composition.save-preset", "composition.rename-preset", "composition.delete-preset"})
+              "composition.save-preset", "composition.rename-preset", "composition.delete-preset",
+              "dialog.answer", "script.run"})
             expect(contains(listed, std::string(R"("name":")") + name + "\""),
                    std::string("tools/list lists ") + name);
         expect(contains(listed, R"("regionOfInterest")") && contains(listed, R"("gamma")"),
@@ -261,6 +265,8 @@ void parityTools() {
                  {"composition.save-preset", R"({"composition":1,"name":"Card"})"},
                  {"composition.rename-preset", R"({"name":"Card","newName":"Plate"})"},
                  {"composition.delete-preset", R"({"name":"Card"})"},
+                 {"dialog.answer", R"({"button":"Cancel"})"},
+                 {"script.run", R"({"source":"x = 1"})"},
                  {"viewer.set", R"({"gamma":2.2,"regionOfInterest":null})"}}) {
             const auto result = server.call(tool, arguments);
             expect(contains(result, "bloom.mcp.not-live") && contains(result, R"("isError":true)"),
@@ -484,6 +490,8 @@ void liveSeams() {
     std::optional<document::CompositionId> activated;
     std::vector<mcp::McpProjectRequest> lifecycle;
     std::optional<document::ColorSettings> colour;
+    std::string answered;
+    std::string ranScript;
     std::jthread later;
     mcp::McpLiveUiPort port{
         .revealComposition =
@@ -548,8 +556,47 @@ void liveSeams() {
         .compositionPresets = {},
         .saveCompositionPreset = {},
         .renameCompositionPreset = {},
-        .deleteCompositionPreset = {}};
+        .deleteCompositionPreset = {},
+        .answerDialog =
+            [&](const std::string& button) {
+                answered = button;
+                return button == "Cancel"
+                           ? mcp::McpUiResult{}
+                           : mcp::McpUiResult{.refusal = mcp::McpUiRefusal::NotAllowed,
+                                              .message = "Agents are not allowed."};
+            },
+        .runScript =
+            [&](mcp::McpScriptRequest request, std::function<void(mcp::McpScriptResult)> done) {
+                ranScript = request.source;
+                mcp::McpScriptResult result;
+                if (request.source == "off") {
+                    result.refusal = mcp::McpUiRefusal::NotAllowed;
+                    result.message = "Agents are not allowed to run scripts.";
+                } else {
+                    result.succeeded = request.source != "raise";
+                    result.output = request.source == "raise" ? "ValueError: no" : "hello";
+                }
+                done(std::move(result));
+            },
+        .cancelScript = {}};
     Live server(std::move(port));
+    expect(contains(server.call("dialog.answer", R"({"button":"Cancel"})"), R"("succeeded":true)") &&
+               answered == "Cancel",
+           "dialog.answer reaches the port with the button text");
+    auto gated = server.call("dialog.answer", R"({"button":"Discard"})");
+    expect(contains(gated, "bloom.mcp.not-allowed"), "a gated dialog.answer is typed: " + gated);
+    gated = server.call("script.run", R"({"source":"off"})");
+    expect(contains(gated, "bloom.mcp.not-allowed"), "a gated script.run is typed: " + gated);
+    auto ran = server.call("script.run", R"json({"source":"print('hello')","timeoutSeconds":5})json");
+    expect(contains(ran, R"("succeeded":true)") && contains(ran, "hello") &&
+               ranScript == "print('hello')",
+           "script.run answers the console output: " + ran);
+    ran = server.call("script.run", R"({"source":"raise"})");
+    expect(contains(ran, "bloom.mcp.failed") && contains(ran, "ValueError: no"),
+           "a failed script answers its error as output: " + ran);
+    expect(contains(server.call("script.run", R"({"source":"x","timeoutSeconds":0})"),
+                    "timeoutSeconds is 1 to 600"),
+           "the timeout is bounded");
 
     // One time contract: an integer is a whole frame at the composition's rate (24 fps), and
     // [numerator, denominator] is exact seconds.
@@ -1534,6 +1581,64 @@ void mcpFold() {
                           R"("parameter":{"layer":"Wash","role":"opacity"},)"
                           R"("keys":[[0,0.0],[12,1.0,"hold"]]}})");
         expect(contains(result, R"("isError":false)"), "set-keys by role applies: " + result);
+
+        // #604: columns instead of rows, a column read from a file, and a summary answer.
+        result = transact(R"({"op":"bloom.animation.set-key-columns","args":{"composition":1,)"
+                          R"("parameter":{"layer":"Wash","role":"opacity"},"replace":true,)"
+                          R"("times":[0,6,12],"values":[0.0,0.5,1.0],)"
+                          R"("interpolations":["hold"]}})");
+        expect(contains(result, R"("isError":false)") && contains(result, R"(\"keyframe\")"),
+               "columnar set-keys applies and lists the keys it made: " + result);
+        const auto dataFolder = captures / "data";
+        std::filesystem::create_directories(dataFolder);
+        {
+            std::ofstream(dataFolder / "times.json") << "[0,4,8,12]";
+            std::ofstream(dataFolder / "values.json") << "[1.0,0.25,0.75,0.0]";
+            std::ofstream(dataFolder / "notes.txt") << "[1]";
+        }
+        const auto fromFile = [&](const std::string& name) {
+            return R"({"fromFile":")" + (dataFolder / name).generic_string() + R"("})";
+        };
+        const auto bulk = [&](const std::string& times, const std::string& tail) {
+            return R"({"op":"bloom.animation.set-key-columns","args":{"composition":1,)"
+                   R"("parameter":{"layer":"Wash","role":"opacity"},"replace":true,"times":)" +
+                   times + R"(,"values":)" + fromFile("values.json") + "}}" + tail;
+        };
+        result = server.call("transact",
+                             R"({"expectedRevision":)" + revisionOf(server) +
+                                 R"(,"response":"summary","operations":[)" +
+                                 bulk(fromFile("times.json"), "") + "]}");
+        expect(contains(result, R"("isError":false)") && contains(result, "outputSummary") &&
+                   contains(result, "sha256:") && contains(result, R"("byName":{)") &&
+                   !contains(result, R"("outputs":)"),
+               "keys read from files answer with a summary and no id list: " + result);
+        const auto washNodes = server.call("query", R"({"kind":"nodes","composition":1})");
+        const auto washOpacity = firstMatch(washNodes, R"re("opacity":(\d+))re");
+        const auto keysBack = server.call(
+            "query", R"({"kind":"keyframes","composition":1,"parameter":)" + washOpacity + "}");
+        expect(contains(keysBack, "0.25") && contains(keysBack, "0.75"),
+               "the file's values are the keys: " + keysBack);
+        // Back to the fixture's keys for the checks that follow.
+        result = transact(R"({"op":"bloom.animation.set-keys","args":{"composition":1,)"
+                          R"("parameter":{"layer":"Wash","role":"opacity"},"replace":true,)"
+                          R"("keys":[[0,0.0],[12,1.0,"hold"]]}})");
+        expect(contains(result, R"("isError":false)"), "the fixture keys are restored: " + result);
+        result = server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                             R"(,"operations":[)" +
+                                             bulk(fromFile("notes.txt"), "") + "]}");
+        expect(contains(result, ".json"), "a data file must be .json: " + result);
+        result = server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                             R"(,"operations":[)" +
+                                             bulk(R"({"fromFile":"relative.json"})", "") + "]}");
+        expect(contains(result, "absolute path"), "a data file path must be absolute: " + result);
+        result = transact(R"({"op":"bloom.animation.set-key-columns","args":{"composition":1,)"
+                          R"("parameter":{"layer":"Wash","role":"opacity"},)"
+                          R"("times":[0,6],"values":[0.0]}})");
+        expect(contains(result, "has 1 entries but times has 2"),
+               "columns of different lengths are refused by name: " + result);
+        result = server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                             R"(,"response":"brief","operations":[]})");
+        expect(contains(result, "response is"), "an unknown response is refused: " + result);
 
         // Filters and projection.
         const auto operations = server.call("query", R"({"kind":"operations","idPrefix":"bloom.layer."})");

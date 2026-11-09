@@ -19,6 +19,10 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 
+#ifdef BLOOM_BUILD_PYTHON
+#include "script_panel_runtime.hpp"
+#endif
+
 #include <QApplication>
 #include <QSettings>
 #include <QString>
@@ -134,6 +138,16 @@ std::optional<std::pair<std::int64_t, std::int64_t>> ratioOf(const std::string& 
     if (!numerator || !denominator)
         return std::nullopt;
     return std::pair{*numerator, *denominator};
+}
+
+// A switch an agent can read but only the Preferences window can turn on (agent routes that act on
+// the machine): preferences.set refuses it, so an agent cannot open its own route.
+PreferenceKey artistOnlyFlagKey(const std::string_view key, bool ApplicationPreferences::* field) {
+    return {key, [field](const ApplicationPreferences& p) { return Value(p.*field); },
+            [](ApplicationPreferences&, const Value&) {
+                return std::optional(QObject::tr(
+                    "can only be changed by the artist in Edit > Preferences > General > Agents"));
+            }};
 }
 
 const std::vector<PreferenceKey>& preferenceKeys() {
@@ -279,6 +293,10 @@ const std::vector<PreferenceKey>& preferenceKeys() {
             flagKey("interactionSounds", &ApplicationPreferences::interactionSoundsEnabled));
         list.push_back(
             flagKey("renderNotifications", &ApplicationPreferences::renderNotificationsEnabled));
+        list.push_back(artistOnlyFlagKey("agentsAnswerDialogs",
+                                         &ApplicationPreferences::agentsAnswerDialogs));
+        list.push_back(
+            artistOnlyFlagKey("agentsRunScripts", &ApplicationPreferences::agentsRunScripts));
         return list;
     }();
     return keys;
@@ -313,6 +331,58 @@ mcp::McpUiResult McpLiveUiBinding::setPreferences(const std::vector<mcp::McpPref
     }
     window_->commitPreferences(next);
     return uiOk(tr("The preferences were saved and applied."));
+}
+
+// ---- script.run (#603) -------------------------------------------------------------------------
+
+void McpLiveUiBinding::setScriptRuntime(const std::shared_ptr<ScriptPanelRuntime>& runtime) {
+    script_ = runtime;
+}
+
+void McpLiveUiBinding::runScript(mcp::McpScriptRequest request,
+                                 std::function<void(mcp::McpScriptResult)> done) {
+    const auto refuse = [&done](const McpUiRefusal refusal, const QString& message) {
+        mcp::McpScriptResult result;
+        result.refusal = refusal;
+        result.message = message.toStdString();
+        done(std::move(result));
+    };
+    // The artist's switch, read from the saved settings each time; only Preferences turns it on.
+    if (!loadApplicationPreferences(QSettings{}).agentsRunScripts)
+        return refuse(McpUiRefusal::NotAllowed,
+                      tr("Agents are not allowed to run Python scripts. The artist can allow it "
+                         "in Edit > Preferences > General > Agents."));
+#ifdef BLOOM_BUILD_PYTHON
+    const auto runtime = script_.lock();
+    if (!runtime)
+        return refuse(McpUiRefusal::Unbound,
+                      tr("This Bloom build has no Python scripting, so there is nothing to run "
+                         "the script."));
+    if (request.source.empty())
+        return refuse(McpUiRefusal::InvalidArgument, tr("The script is empty."));
+    const bool accepted = runtime->submit(
+        QString::fromStdString(request.source), [done](const QString& output, const bool ok) {
+            mcp::McpScriptResult result;
+            result.output = output.toStdString();
+            result.succeeded = ok;
+            done(std::move(result));
+        });
+    if (!accepted)
+        refuse(McpUiRefusal::Busy,
+               tr("The Script editor's queue is full (or the script is longer than 65536 "
+                  "characters). Try again in a moment."));
+#else
+    static_cast<void>(request);
+    refuse(McpUiRefusal::Unbound,
+           tr("This Bloom build has no Python scripting, so there is nothing to run the script."));
+#endif
+}
+
+void McpLiveUiBinding::cancelScript() {
+#ifdef BLOOM_BUILD_PYTHON
+    if (const auto runtime = script_.lock())
+        runtime->cancel();
+#endif
 }
 
 // ---- cache.purge -------------------------------------------------------------------------------

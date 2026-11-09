@@ -738,10 +738,15 @@ int main(int argc, char* argv[]) try {
     mcpAdapter.startWaiter();
     QObject::connect(&projectHost, &bloom::ui::ProjectHost::exportQueueReplaced, &mcpAdapter,
                      [&mcpService] { mcpService.exportQueueReplaced(); });
+    std::shared_ptr<bloom::ui::ScriptPanelRuntime> scriptRuntime;
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
         &viewerGpuDependencies, gpuExportProvider, &exportQueueAdapter, &liveSessionHost,
-        &mcpAdapter, profilerFeed.get(), &viewerPreviews);
+        &mcpAdapter, profilerFeed.get(), &viewerPreviews, &scriptRuntime);
+    // script.run (#603) runs through the Script editor's runtime; null without embedded Python.
+    // The binding holds it weakly; the Script editors' factory keeps it alive.
+    mcpLiveUi.setScriptRuntime(scriptRuntime);
+    scriptRuntime.reset();
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,

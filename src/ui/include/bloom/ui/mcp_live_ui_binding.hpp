@@ -37,6 +37,7 @@ class CompositionSession;
 class ExportQueueAdapter;
 class MainWindow;
 class RamPreviewController;
+class ScriptPanelRuntime;
 class TaskMonitorModel;
 class PlaybackController;
 class ProjectHost;
@@ -62,6 +63,9 @@ class McpLiveUiBinding final : public QObject {
     void setExportQueue(ExportQueueAdapter* exportQueue);
     // The Jobs panel's model, for jobs.list and jobs.cancel. Weak; without one they answer Unbound.
     void setTaskMonitor(TaskMonitorModel* tasks);
+    // The Script editor's runtime, for script.run. Weak; without one (a build without embedded
+    // Python) script.run answers Unbound.
+    void setScriptRuntime(const std::shared_ptr<ScriptPanelRuntime>& runtime);
 
     // The members, bound to this object (which must outlive the service).
     [[nodiscard]] mcp::McpLiveUiPort port();
@@ -92,6 +96,12 @@ class McpLiveUiBinding final : public QObject {
     [[nodiscard]] mcp::McpUiResult renameCompositionPreset(const std::string& name,
                                                            const std::string& newName);
     [[nodiscard]] mcp::McpUiResult deleteCompositionPreset(const std::string& name);
+    // The opt-in agent routes (#579, #603). Each is refused with NotAllowed unless the artist has
+    // switched it on in Preferences (read from the saved settings on every call).
+    [[nodiscard]] mcp::McpUiResult answerDialog(const std::string& button);
+    void runScript(mcp::McpScriptRequest request,
+                   std::function<void(mcp::McpScriptResult)> done);
+    void cancelScript();
 
   private:
     struct Pending;
@@ -121,6 +131,7 @@ class McpLiveUiBinding final : public QObject {
     QPointer<RamPreviewController> ramPreview_;
     QPointer<ExportQueueAdapter> exportQueue_;
     QPointer<TaskMonitorModel> tasks_;
+    std::weak_ptr<ScriptPanelRuntime> script_;
     std::unique_ptr<Pending> pending_;
     QTimer* jobsTimer_ = nullptr;
 };

@@ -60,6 +60,8 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::CompositionRenamePreset,
     McpTool::CompositionDeletePreset,
     McpTool::Help,
+    McpTool::DialogAnswer,
+    McpTool::ScriptRun,
 };
 // clang-format on
 

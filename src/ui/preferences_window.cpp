@@ -557,6 +557,42 @@ QWidget* PreferencesWindow::buildGeneralPage() {
         recovery->setChecked(draft_.crashRecoveryEnabled);
     });
 
+    // Agent routes that act on the machine (#579, #603): off by default, switched on only here.
+    auto* agentsSection = properties::makeSection(
+        layout, content, QStringLiteral("preferencesAgentsSection"), tr("Agents"),
+        QStringLiteral("preferences/sections/agents/collapsed"));
+    agentsSection->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*agentsSection,
+                 [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+                     draft.agentsAnswerDialogs = base.agentsAnswerDialogs;
+                     draft.agentsRunScripts = base.agentsRunScripts;
+                 });
+    const auto addAgentSwitch = [&](const QString& objectName, const QString& label,
+                                    bool ApplicationPreferences::*member, const QString& tip) {
+        auto* control = addSwitchRow(agentsSection->bodyLayout(), content, objectName, label, false);
+        control->setToolTip(tip);
+        control->setChecked(draft_.*member);
+        connect(control, &QAbstractButton::toggled, this, [this, member](const bool enabled) {
+            draft_.*member = enabled;
+            updateApplyEnabled();
+        });
+        refreshCallbacks_.push_back([this, control, member] {
+            const QSignalBlocker blocker(control);
+            control->setChecked(draft_.*member);
+        });
+    };
+    addAgentSwitch(QStringLiteral("preferencesAgentsAnswerDialogsSwitch"),
+                   tr("Let agents answer open dialogs"), &ApplicationPreferences::agentsAnswerDialogs,
+                   tr("While on, a connected agent may press a button of the dialog that blocks "
+                      "Bloom. Any button, including ones that discard or overwrite data, which the "
+                      "agent is told about first. Off by default."));
+    addAgentSwitch(QStringLiteral("preferencesAgentsRunScriptsSwitch"),
+                   tr("Let agents run Python scripts"), &ApplicationPreferences::agentsRunScripts,
+                   tr("While on, a connected agent may run Python in the open project through the "
+                      "Script editor. Python can reach anything your account can, so this is "
+                      "access to this computer for whoever holds the MCP token. Its edits use the "
+                      "normal undo history. Off by default."));
+
     // The MCP server's port and auto-start live in the MCP Server panel only; a link, not a copy.
     auto* mcpLink = new kit::KButton(tr("MCP server settings are in the MCP Server panel"), content);
     mcpLink->setObjectName(QStringLiteral("preferencesMcpLink"));

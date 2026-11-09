@@ -56,7 +56,10 @@ Up to 8 clients at once. When a ninth connects, the least recently used client t
 for 5 minutes with nothing in flight is disconnected; otherwise the new client is refused. A client
 idle for 60 minutes is ended and reconnects on its next request. At most 16 connections, 4 requests
 in progress per client, 4 executing at once and 16 waiting. Every request is at most 1 MiB and every
-response at most 4 MiB, as on stdio.
+response at most 4 MiB, as on stdio. A client that has 4 requests in progress and sends a fifth gets
+error `-32000` "Too many requests from this client" (HTTP 503) naming that limit; nothing was run, so
+send it again once one of the four has answered. The limit protects the main thread, so batch many
+edits into one `transact` instead of sending them in parallel.
 
 ### Edits, undo and project changes
 
@@ -101,6 +104,8 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `jobs.cancel` | `job` | The Jobs panel's **Cancel**. `bloom.mcp.unknown-target` for a job it does not list; `bloom.mcp.invalid-argument` for a job it cannot cancel (an export run: use `export.stop`). |
 | `preferences.get` | none | Every preference below with its current value, as `{key: value}`. |
 | `preferences.set` | `preferences`: `{key: value, ...}` (1 to 64) | Edit > Preferences' **OK**: every entry is checked first, then all are saved and applied together. An unknown key or a value out of range answers `bloom.mcp.invalid-argument` naming the key and changes nothing; `bloom.mcp.busy` while a dialog is open. |
+| `dialog.answer` | `button` | Presses one button of the modal dialog that blocks the window (see **Dialogs** below). Off unless the artist switches on Edit > Preferences > General > **Let agents answer open dialogs**: until then `bloom.mcp.not-allowed`. `bloom.mcp.invalid-argument` when no dialog is open or no visible, enabled button has that text, listing the buttons. |
+| `script.run` | `source`, optional `timeoutSeconds` (1 to 600, default 60) | Runs Python in the open project through the Script editor (see **Python in the running session** below). Off unless the artist switches on **Let agents run Python scripts**: until then `bloom.mcp.not-allowed`. |
 | `cache.purge` | `cache` (`preview` or `media`) | Edit > Purge: derived caches only; the project, its revision and undo are untouched. `bloom.mcp.busy` while a purge runs. |
 | `asset.reveal` | `asset` | Reveal in File Manager. `bloom.mcp.invalid-argument` for an asset without a file. |
 | `composition.presets` | none | The Composition Settings presets: the built-in sizes, then your saved presets with `frameRate`, `duration`, `startTimecode`, `dropFrame` and `background`. Apply one with `bloom.composition.set-settings`. |
@@ -390,6 +395,14 @@ in `entries`, with its `merge` and `slot`.
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"transact","arguments":{"expectedRevision":3,"operations":[{"op":"bloom.merge.add-adjustment-layer","args":{"merge":1}},{"op":"bloom.merge.set-entry-parameter","args":{"merge":1,"slot":2,"role":"opacity","value":0.5}}]}}}
 ```
 
+### Parents and track mattes
+
+A parented layer's `position`, `anchor` and `rotation` are measured in its parent's space: the origin
+is the top-left corner of the parent's content (the frame, for a nested composition), and the child
+moves, scales and rotates with the parent. A layer used as a track matte stops displaying in the
+composite and only shapes its target; that is intended, and clearing the matte brings the layer
+back. A matte layer may be a child of the layer it mattes.
+
 ## Edits and diagnostics
 
 **Omitted arguments.** An operation argument set to `null` is the same as leaving it out, in
@@ -509,6 +522,15 @@ everything upstream of it, with `links` and `groups` narrowed to them), and `fie
 that returns `records`: a list of the member names to keep. A name no record carries is refused,
 listing the members the records have.
 
+**Bulk keys.** For hundreds of keys, `bloom.animation.set-key-columns` takes columns instead of rows:
+`times`, `values` and optionally `interpolations` (one entry per time, missing ones linear), plus
+`replace`, with the same units and refusals as `set-keys`. A column, or any other operation
+argument, can be `{"fromFile": "/absolute/path/data.json"}`: the server reads that JSON file (a
+regular `.json` file of at most 16 MiB and 2 million values, at most 16 per call), so the numbers
+never pass through the conversation. Add `"response": "summary"` to `transact` and the answer
+carries `outputSummary` (`count`, `byName` and a SHA-256 `digest` of the full id list) instead of
+listing every created id. Python and `bloom-cli` have the same operation.
+
 **Keys.** `bloom.animation.set-keys` replaces or edits a parameter's keys in one undo step: `keys`
 is a list of `[time, value]` or `[time, value, interpolation]` entries in any order, and `replace`
 clears the existing keys first (an empty list with `replace` returns the parameter to a
@@ -554,7 +576,29 @@ or the scene could not run on it, `routeNote` says so.
 
 **Dialogs.** While a modal dialog is open in the application, the calls that need the window
 answer `bloom.mcp.busy` and name the dialog: its title, its text and its buttons, with the
-buttons that discard or overwrite data marked as such.
+buttons that discard or overwrite data marked as such. `dialog.answer` presses one of those buttons
+by its text (`{"button": "Cancel"}`, case-insensitive). It is off by default: the artist turns on
+**Let agents answer open dialogs** in Edit > Preferences > General > Agents, and `preferences.set`
+cannot do it for them (it refuses the key, which `preferences.get` lists as `agentsAnswerDialogs`).
+With the switch off nothing is pressed and the call answers `bloom.mcp.not-allowed`. The dialog's
+own action happens when the button is pressed, and Undo cannot restore what a discarding button
+throws away, so read the marks first; the answer repeats the warning when the button you pressed
+discards or overwrites data.
+
+**Python in the running session.** `script.run` runs Python source through the same interpreter,
+queue and live session as the Script editor, so the script's `bloom` edits are the same commands
+with the same undo history as every other edit, and the source and output also appear in the
+Script editor. It is a separate, opt-in capability, off by default, because Python can do
+anything the user account can: turning it on is giving whoever holds the MCP token access to the
+computer. The artist switches **Let agents run Python scripts** on in Edit > Preferences > General >
+Agents (`preferences.set` cannot; `preferences.get` shows `agentsRunScripts`); with it off the call
+answers `bloom.mcp.not-allowed` and nothing runs. It is bounded: at most 65536 characters of source,
+`timeoutSeconds` (default 60, at most 600) after which the script is canceled as the editor's
+**Cancel** does, 65536 characters of output, and the request's own cancellation also cancels the
+script. While it runs the request reports progress when the client sent a progress token. One
+script runs at a time; others queue (up to 16). On stdio there is no application window and the
+call answers `bloom.mcp.not-live`. A script error answers `bloom.mcp.failed` with the error text in
+`output`.
 
 ## Output and cancellation
 

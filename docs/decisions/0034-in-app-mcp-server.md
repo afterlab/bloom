@@ -31,6 +31,16 @@ with the request (`OperationContext::stop`). Not exposed: panel arrangement and 
 layout, Quit, the MCP server's own controls, running Script editor Python, the Help links and the
 launch-time recovery prompt.
 
+Amendment (2026-11-09, issues #579 and #603): two opt-in agent routes act on the machine rather than
+the project. `dialog.answer` presses a button of the modal dialog that blocks the window, and
+`script.run` runs Python in the live session through the Script editor's runtime, so its edits use
+the same commands and undo history. Each is off by default behind its own Preferences switch
+(General > Agents), refuses with `bloom.mcp.not-allowed` while off, and cannot be turned on by an
+agent: `preferences.get` shows the switch but `preferences.set` refuses to write it. `script.run`
+is remote code execution behind the MCP token, so it is bounded (source, output and a timeout) and
+cancellable, and its source and output also appear in the Script editor. This supersedes "running
+Script editor Python" in the list above.
+
 ## Context
 
 `apps/bloom-mcp` is a Qt-free MCP 2025-11-25 server on stdio. It opens its own headless session

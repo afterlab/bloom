@@ -350,6 +350,33 @@ void testRestartBadgesAndRail(Expectations& check) {
                  "rail rows are at the list pitch");
 }
 
+// #579 and #603: the two agent switches are off by default, edit the draft, and reset with their
+// section.
+void testAgentSwitches(Expectations& check) {
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    auto* dialogs = window.findChild<QAbstractButton*>(
+        QStringLiteral("preferencesAgentsAnswerDialogsSwitch"));
+    auto* scripts =
+        window.findChild<QAbstractButton*>(QStringLiteral("preferencesAgentsRunScriptsSwitch"));
+    check.expect(dialogs != nullptr && scripts != nullptr,
+                 "the General page has both agent switches");
+    if (dialogs == nullptr || scripts == nullptr)
+        return;
+    check.expect(!dialogs->isChecked() && !scripts->isChecked() &&
+                     !window.preferences().agentsAnswerDialogs &&
+                     !window.preferences().agentsRunScripts,
+                 "both agent switches are off by default");
+    check.expect(!dialogs->toolTip().isEmpty() && !scripts->toolTip().isEmpty(),
+                 "each switch explains what it allows");
+    dialogs->click();
+    scripts->click();
+    check.expect(window.preferences().agentsAnswerDialogs && window.preferences().agentsRunScripts,
+                 "the switches edit the draft");
+    window.setPreferences(ui::ApplicationPreferences{});
+    check.expect(!dialogs->isChecked() && !scripts->isChecked(),
+                 "setting preferences refreshes the switches");
+}
+
 void testSoundsPage(Expectations& check) {
     ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
     const auto find = [&](const char* name) {
@@ -807,6 +834,7 @@ int main(int argc, char** argv) {
     testTimelineKeyframesAndGraphAreMutuallyExclusive(check);
     testRestartBadgesAndRail(check);
     testSoundsPage(check);
+    testAgentSwitches(check);
     testHeadroomFields(check);
     testExportWorkerFields(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);

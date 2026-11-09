@@ -254,7 +254,10 @@ int serve(scripting::Session& session) {
                     .compositionPresets = {},
                     .saveCompositionPreset = {},
                     .renameCompositionPreset = {},
-                    .deleteCompositionPreset = {}},
+                    .deleteCompositionPreset = {},
+                    .answerDialog = {},
+                    .runScript = {},
+                    .cancelScript = {}},
              .profilerSnapshot =
                  [&profiler](runtime::ProfilerSnapshot& out) {
                      static_cast<void>(profiler.sampleNow());

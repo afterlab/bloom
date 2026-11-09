@@ -63,9 +63,11 @@ enum class McpUiRefusal : std::uint8_t {
     // The operation ran and failed (an I/O error, a document that would not open); the message
     // says why.
     Failed = 12,
+    // The artist has not allowed this: an opt-in agent capability whose Preferences switch is off.
+    NotAllowed = 13,
 };
 
-inline constexpr std::size_t kMcpUiRefusalCount = 13;
+inline constexpr std::size_t kMcpUiRefusalCount = 14;
 
 [[nodiscard]] constexpr std::string_view uiRefusalCode(const McpUiRefusal refusal) {
     constexpr std::array<std::string_view, kMcpUiRefusalCount> codes{
@@ -82,6 +84,7 @@ inline constexpr std::size_t kMcpUiRefusalCount = 13;
         "bloom.mcp.no-path",
         "bloom.mcp.read-only",
         "bloom.mcp.failed",
+        "bloom.mcp.not-allowed",
     };
     return codes[static_cast<std::size_t>(refusal)];
 }
@@ -257,6 +260,25 @@ struct McpPreference final {
     McpPreferenceValue value;
 };
 
+// ---- Python in the live session (script.run), behind its own Preferences switch
+
+struct McpScriptRequest final {
+    // Python source, run by the Script editor's interpreter against the live session: the same
+    // transactions, undo history and cancellation as the Script editor. At most 65536 characters.
+    std::string source;
+};
+
+struct McpScriptResult final {
+    McpUiRefusal refusal = McpUiRefusal::None;
+    // A refusal's reason; otherwise empty.
+    std::string message;
+    // The script's console output (an error's text when it failed).
+    std::string output;
+    bool succeeded = false;
+
+    [[nodiscard]] bool ok() const noexcept { return refusal == McpUiRefusal::None; }
+};
+
 // ---- Jobs (jobs.list, jobs.cancel): the Jobs panel's rows
 
 struct McpJob final {
@@ -338,6 +360,16 @@ struct McpLiveUiPort final {
     std::function<McpUiResult(const std::string& name, const std::string& newName)>
         renameCompositionPreset;
     std::function<McpUiResult(const std::string& name)> deleteCompositionPreset;
+    // dialog.answer: press the named button of the modal dialog that blocks the window. NotAllowed
+    // while the Preferences switch is off; InvalidArgument when no dialog is open or no visible,
+    // enabled button has that text (the message lists the buttons).
+    std::function<McpUiResult(const std::string& button)> answerDialog;
+    // script.run: asynchronous like projectLifecycle; `done` is called exactly once on the owner
+    // thread. NotAllowed while the Preferences switch is off; Busy when the Script editor's queue
+    // is full; Unbound when this build has no embedded Python. cancelScript is the Script editor's
+    // Cancel: it stops the running script and the commits it queued.
+    std::function<void(McpScriptRequest, std::function<void(McpScriptResult)> done)> runScript;
+    std::function<void()> cancelScript;
 };
 
 } // namespace bloom::mcp

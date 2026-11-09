@@ -46,6 +46,8 @@ constexpr auto kSoundVolumeKey = "sound/volume-percent";
 constexpr auto kEventSoundsKey = "sound/events";
 constexpr auto kInteractionSoundsKey = "sound/interaction";
 constexpr auto kRenderNotificationsKey = "sound/render-notifications";
+constexpr auto kAgentAnswerDialogsKey = "agents/answer-dialogs";
+constexpr auto kAgentRunScriptsKey = "agents/run-scripts";
 constexpr auto kImportSequenceFrameRateKey = "import/sequence-frame-rate";
 constexpr auto kImportStillDurationKey = "import/still-duration";
 // "composition", or an exact "n/d" (a rate in frames per second, a duration in seconds).
@@ -251,6 +253,9 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
         settings.value(QLatin1String(kInteractionSoundsKey), false).toBool();
     preferences.renderNotificationsEnabled =
         settings.value(QLatin1String(kRenderNotificationsKey), true).toBool();
+    preferences.agentsAnswerDialogs =
+        settings.value(QLatin1String(kAgentAnswerDialogsKey), false).toBool();
+    preferences.agentsRunScripts = settings.value(QLatin1String(kAgentRunScriptsKey), false).toBool();
     // A missing or unreadable value reads as the default; "composition" as the composition's own.
     if (settings.value(QLatin1String(kImportSequenceFrameRateKey)).toString() ==
         QLatin1StringView(kCompositionSpelling)) {
@@ -341,6 +346,8 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kInteractionSoundsKey), preferences.interactionSoundsEnabled);
     settings.setValue(QLatin1String(kRenderNotificationsKey),
                       preferences.renderNotificationsEnabled);
+    settings.setValue(QLatin1String(kAgentAnswerDialogsKey), preferences.agentsAnswerDialogs);
+    settings.setValue(QLatin1String(kAgentRunScriptsKey), preferences.agentsRunScripts);
     const auto& rate = preferences.importSequenceFrameRate;
     settings.setValue(QLatin1String(kImportSequenceFrameRateKey),
                       rate ? QStringLiteral("%1/%2").arg(rate->numerator()).arg(rate->denominator())

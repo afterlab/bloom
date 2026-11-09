@@ -17,7 +17,12 @@
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <QAbstractButton>
 #include <QAction>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QSettings>
+#include <QTest>
 
 #include <algorithm>
 #include <cstdio>
@@ -162,6 +167,96 @@ void preferences(const mcp::McpLiveUiPort& port) {
     expect(result.refusal == McpUiRefusal::InvalidArgument, "a relative cache folder is refused");
 }
 
+// #579 and #603: the two opt-in agent routes are off by default, preferences.set cannot turn them
+// on, and only the saved Preferences switches (written here as the Preferences window writes them)
+// open them. A real modal dialog is answered by its button.
+void agentRoutes(const mcp::McpLiveUiPort& port) {
+    const auto save = [](const ui::ApplicationPreferences& preferences) {
+        QSettings settings;
+        ui::saveApplicationPreferences(settings, preferences);
+    };
+    auto values = port.preferences();
+    expect(preference(values, "agentsAnswerDialogs") == mcp::McpPreferenceValue(false) &&
+               preference(values, "agentsRunScripts") == mcp::McpPreferenceValue(false),
+           "both agent routes are listed and off by default");
+    auto result = port.setPreferences({{.key = "agentsAnswerDialogs", .value = true}});
+    expect(result.refusal == McpUiRefusal::InvalidArgument &&
+               result.message.find("only be changed by the artist") != std::string::npos &&
+               !ui::loadApplicationPreferences(QSettings{}).agentsAnswerDialogs,
+           "preferences.set cannot switch the dialog route on");
+    result = port.setPreferences({{.key = "agentsRunScripts", .value = true}});
+    expect(result.refusal == McpUiRefusal::InvalidArgument &&
+               !ui::loadApplicationPreferences(QSettings{}).agentsRunScripts,
+           "preferences.set cannot switch the script route on");
+
+    QMessageBox box;
+    box.setWindowTitle(QStringLiteral("Unsaved changes"));
+    box.setText(QStringLiteral("Save the changes before closing?"));
+    auto* discard = box.addButton(QStringLiteral("&Discard"), QMessageBox::DestructiveRole);
+    auto* cancel = box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+    bool discarded = false;
+    bool cancelled = false;
+    QObject::connect(discard, &QAbstractButton::clicked, [&] { discarded = true; });
+    QObject::connect(cancel, &QAbstractButton::clicked, [&] { cancelled = true; });
+    box.setWindowModality(Qt::ApplicationModal);
+    box.show();
+    QTest::qWait(50);
+
+    // Off: the dialog is untouched and the refusal says who can allow it.
+    result = port.answerDialog("Cancel");
+    QTest::qWait(30);
+    expect(result.refusal == McpUiRefusal::NotAllowed && !cancelled && box.isVisible(),
+           "dialog.answer with the switch off presses nothing");
+    expect(port.setPreferences({{.key = "loopPlayback", .value = true}}).refusal ==
+               McpUiRefusal::Busy,
+           "the busy refusal still describes the dialog");
+
+    auto preferences = ui::loadApplicationPreferences(QSettings{});
+    preferences.agentsAnswerDialogs = true;
+    save(preferences);
+    result = port.answerDialog("No such button");
+    expect(result.refusal == McpUiRefusal::InvalidArgument &&
+               result.message.find("Discard (discards or overwrites data)") != std::string::npos,
+           "an unknown button lists the buttons and marks the discarding one");
+    result = port.answerDialog("cancel");
+    QTest::qWait(50);
+    expect(result.ok() && cancelled && !discarded && !box.isVisible(),
+           "dialog.answer presses the named button, case-insensitively, and the dialog closes");
+    result = port.answerDialog("Cancel");
+    expect(result.refusal == McpUiRefusal::InvalidArgument,
+           "with no dialog open there is nothing to answer");
+
+    // A discarding button is pressed on request and the answer says what it did.
+    QMessageBox again;
+    again.setText(QStringLiteral("Discard?"));
+    auto* second = again.addButton(QStringLiteral("&Discard"), QMessageBox::DestructiveRole);
+    bool pressed = false;
+    QObject::connect(second, &QAbstractButton::clicked, [&] { pressed = true; });
+    again.setWindowModality(Qt::ApplicationModal);
+    again.show();
+    QTest::qWait(50);
+    result = port.answerDialog("Discard");
+    QTest::qWait(50);
+    expect(result.ok() && pressed && result.message.find("discards or overwrites") != std::string::npos,
+           "a discarding button is pressed only on request and named as discarding");
+
+    // Scripts: off by default, then the switch alone admits the request.
+    preferences.agentsAnswerDialogs = false;
+    save(preferences);
+    std::optional<mcp::McpScriptResult> script;
+    port.runScript({.source = "print(1)"}, [&](mcp::McpScriptResult answer) { script = answer; });
+    expect(script && script->refusal == McpUiRefusal::NotAllowed,
+           "script.run with the switch off is refused, not run");
+    script.reset();
+    preferences.agentsRunScripts = true;
+    save(preferences);
+    port.runScript({.source = "print(1)"}, [&](mcp::McpScriptResult answer) { script = answer; });
+    expect(script && script->refusal == McpUiRefusal::Unbound,
+           "with the switch on but no Script runtime bound, script.run answers Unbound");
+    preferences.agentsRunScripts = false;
+    save(preferences);
+}
+
 void compositionPresets(ui::test::WindowFixture& fixture, const mcp::McpLiveUiPort& port) {
     const auto composition = fixture.session.compositionId();
     auto presets = port.compositionPresets();
@@ -211,6 +306,7 @@ void testApplication() {
 
     viewerSettings(fixture, port);
     preferences(port);
+    agentRoutes(port);
     compositionPresets(fixture, port);
 
     auto result = port.purgeCache(false);
