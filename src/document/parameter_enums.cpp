@@ -19,6 +19,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_operations.hpp>
@@ -228,6 +229,14 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         for (std::size_t index = 0; index < shutter->choices.size(); ++index)
             options.push_back({std::string(shutter->choices[index]),
                                static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #348 Corner Pin, ST Map and Displace.
+    if (const auto* warp = warpParameterSpec(schemaKey);
+        warp != nullptr && warp->kind == WarpParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < warp->choices.size(); ++index)
+            options.push_back({std::string(warp->choices[index]), static_cast<std::int64_t>(index)});
         return options;
     }
     // #587 Test Card.

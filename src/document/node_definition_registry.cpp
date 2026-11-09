@@ -12,6 +12,7 @@
 #include <bloom/document/audio_effect_definition.hpp>
 #include <bloom/document/lens_distortion_definition.hpp>
 #include <bloom/document/rolling_shutter_definition.hpp>
+#include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
@@ -591,6 +592,13 @@ template <typename Definition>
         // #568 Rolling Shutter: the exact generated shape.
         if (definition.key.typeId == kRollingShutterNodeType)
             return definition == rollingShutterDefinition();
+        // #348 Corner Pin, ST Map and Displace: the exact generated shapes.
+        if (definition.key.typeId == kCornerPinNodeType)
+            return definition == cornerPinDefinition();
+        if (definition.key.typeId == kStMapNodeType)
+            return definition == stMapDefinition();
+        if (definition.key.typeId == kDisplaceNodeType)
+            return definition == displaceDefinition();
         // #486 Chromatic Aberration: the exact generated shape.
         if (definition.key.typeId == kChromaticAberrationNodeType)
             return definition == chromaticAberrationDefinition();
@@ -1725,6 +1733,9 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         lensDistortionDefinition(),
         chromaticAberrationDefinition(),
         rollingShutterDefinition(),
+        cornerPinDefinition(),
+        stMapDefinition(),
+        displaceDefinition(),
         testCardDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),

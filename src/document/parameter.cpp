@@ -12,6 +12,7 @@
 #include <bloom/document/rolling_shutter_definition.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
+#include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
@@ -446,6 +447,9 @@ constantMatchesSchema(const std::string_view schemaKey,
         schemaKey == kRollingShutterCameraOffsetSchemaKey ||
         schemaKey == kRollingShutterCameraRollSchemaKey)
         return isRollingShutterParameterValueValid(schemaKey, constant.value);
+    // #348 Corner Pin, ST Map and Displace: every parameter and corner within its document domain.
+    if (warpParameterSpec(schemaKey) != nullptr || isCornerPinCornerSchemaKey(schemaKey))
+        return isWarpParameterValueValid(schemaKey, constant.value);
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeParameterValueValid(schemaKey, constant.value);
@@ -648,6 +652,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isAudioEffectConstantSchemaKey(schemaKey) ||
          bloom::document::isLensDistortionConstantSchemaKey(schemaKey) ||
          bloom::document::isRollingShutterConstantSchemaKey(schemaKey) ||
+         bloom::document::isWarpConstantSchemaKey(schemaKey) ||
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
@@ -700,6 +705,7 @@ bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kChromaticAberrationCenterSchemaKey ||
            schemaKey == kLightRaysCenterSchemaKey ||
            schemaKey == kRollingShutterCameraOffsetSchemaKey ||
+           isCornerPinCornerSchemaKey(schemaKey) ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }
@@ -735,7 +741,8 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isLensDistortionScalarSchemaKey(schemaKey) ||
            isChromaticAberrationScalarSchemaKey(schemaKey) ||
            isLightRaysScalarSchemaKey(schemaKey) ||
-           isRollingShutterScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
+           isRollingShutterScalarSchemaKey(schemaKey) || isWarpScalarSchemaKey(schemaKey) ||
+           sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) || isImagePixelScalarSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
@@ -812,6 +819,9 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
     if (rollingShutterParameterSpec(schemaKey) != nullptr ||
         schemaKey == kRollingShutterCameraRollSchemaKey)
         return isRollingShutterScalarWithinDomain(schemaKey, value);
+    // #348 Corner Pin, ST Map and Displace (warp_nodes.hpp).
+    if (warpParameterSpec(schemaKey) != nullptr)
+        return isWarpScalarWithinDomain(schemaKey, value);
     // #563 Codec Degrade (codec_degrade_nodes.hpp).
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
         return isCodecDegradeScalarWithinDomain(schemaKey, value);

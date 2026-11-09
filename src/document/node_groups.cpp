@@ -35,10 +35,13 @@ constexpr std::array<std::string_view, 8> kKeyingMattes{
 constexpr std::array<std::string_view, 8> kTransform{
     "bloom.transform-2d", "bloom.camera-shake", "bloom.crop", "bloom.pad",
     "bloom.fit",          "bloom.resize",       "bloom.flip", "bloom.rotate-90"};
-// Planned: Corner Pin, ST Map, Displace, Procedural Warp.
-constexpr std::array<std::string_view, 3> kDistort{"bloom.lens-distortion",
+// Planned: Procedural Warp.
+constexpr std::array<std::string_view, 6> kDistort{"bloom.lens-distortion",
                                                    "bloom.chromatic-aberration",
-                                                   "bloom.rolling-shutter"};
+                                                   "bloom.rolling-shutter",
+                                                   "bloom.corner-pin",
+                                                   "bloom.st-map",
+                                                   "bloom.displace"};
 // Planned: Denoise.
 constexpr std::array<std::string_view, 11> kBlurSharpen{"bloom.gaussian-blur",
                                                         "bloom.box-blur",

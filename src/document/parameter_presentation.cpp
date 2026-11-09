@@ -10,6 +10,7 @@
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
@@ -580,6 +581,20 @@ std::optional<ParameterPresentation> rollingShutterPresentation(const std::strin
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #348 Corner Pin, ST Map and Displace: one presentation per parameter, from its table; a corner a
+// pixel offset.
+std::optional<ParameterPresentation> warpPresentation(const std::string_view schemaKey) {
+    if (isCornerPinCornerSchemaKey(schemaKey))
+        return pixels(-kMaximumCornerPinOffset, kMaximumCornerPinOffset, 4096.0);
+    const auto* spec = warpParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    if (spec->kind == WarpParameterKind::Choice)
+        return choice();
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit);
+}
+
 // #486 Chromatic Aberration: the amount a percentage of half the diagonal; the centre a pixel offset.
 std::optional<ParameterPresentation> chromaticAberrationPresentation(const std::string_view schemaKey) {
     if (schemaKey == kChromaticAberrationCenterSchemaKey)
@@ -691,6 +706,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *aberration;
     if (auto shutter = rollingShutterPresentation(schemaKey))
         return *shutter;
+    if (auto warp = warpPresentation(schemaKey))
+        return *warp;
     if (auto card = testCardPresentation(schemaKey))
         return *card;
     if (auto rays = lightRaysPresentation(schemaKey))

@@ -282,7 +282,8 @@ int main() {
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
           "bloom.film-grain", "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure",
-          "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter", "bloom.test-card",
+          "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter", "bloom.test-card", "bloom.corner-pin", "bloom.st-map",
+          "bloom.displace",
           "bloom.video-source",
           "bloom.image-preview"})
         expect(completeRegistry.find(type, std::string_view(type) == "bloom.curves" ||
