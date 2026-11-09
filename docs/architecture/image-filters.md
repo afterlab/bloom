@@ -1659,7 +1659,9 @@ them.
 Which parameters a node reads is one rule, `document::isParameterInactive`
 (`parameter_activity.hpp`): `frames` only in Temporal, `radius` in every mode but Temporal, `strength`
 only while Auto strength is off, and the sample region only while it is on (the same rule hides Gaussian
-Blur's vertical radius until Separate axes is on and its channel radii until Per-channel radius is on).
+Blur's vertical radius until Separate axes is on and its channel radii until Per-channel radius is on;
+Vignette's Amount or Exposure by its mode, Film Grain's Sensor Noise values or its response values by
+its mode, and each Colorize mode's own colours, ramp, repetitions, phase and weights).
 Properties, the Timeline and the node card hide an inactive row through it (the card's sample region pad
 shows only while the region is active), and the snapshot compiler compiles no animation curve for an inactive parameter, so a
 key left on a value the node does not read is neither lowered nor refused by the evaluator as a curve

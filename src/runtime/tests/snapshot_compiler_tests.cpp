@@ -2143,6 +2143,7 @@ int main() {
         testCanvasLowering(expectations);
         testBlurLowering(expectations);
         testBlurExtensionLowering(expectations);
+        testUnreadAnimatedValuesRender(expectations);
         testDenoiseLowering(expectations);
         testDenoiseAutoStrength(expectations);
         testHueSaturationExtensionLowering(expectations);

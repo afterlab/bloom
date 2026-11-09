@@ -465,6 +465,9 @@ void KPointPad::paintEvent(QPaintEvent*) {
         }
     }
     painter.setFont(kit::font(TypeRole::UiSmall));
+    const QFontMetricsF metrics(painter.font());
+    // The text rectangles already drawn: a label that would land on one moves a line up or down.
+    std::vector<QRectF> drawnLabels;
     for (std::size_t index = 0; index < points_.size(); ++index) {
         const auto at = placed(index);
         const auto exact = screenPoint(points_[index].value);
@@ -489,10 +492,30 @@ void KPointPad::paintEvent(QPaintEvent*) {
                                px(Size::IconMedium));
             // Labels near the right edge sit on the point's left instead.
             const bool flip = label.right() > pad.right();
-            painter.drawText(flip ? label.translated(-label.width() - 2.0 * kPointRadius -
-                                                         2.0 * px(Spacing::XXS),
-                                                     0.0)
-                                  : label,
+            QRectF where = flip ? label.translated(-label.width() - 2.0 * kPointRadius -
+                                                       2.0 * px(Spacing::XXS),
+                                                   0.0)
+                                : label;
+            // The text's own extent, to tell whether two labels would overprint.
+            const auto textWidth = metrics.horizontalAdvance(points_[index].label);
+            const auto extent = [&](const QRectF& rect) {
+                return flip ? QRectF(rect.right() - textWidth, rect.top(), textWidth,
+                                     rect.height())
+                            : QRectF(rect.left(), rect.top(), textWidth, rect.height());
+            };
+            const auto overprints = [&](const QRectF& rect) {
+                return std::ranges::any_of(drawnLabels, [&](const QRectF& other) {
+                    return other.intersects(extent(rect));
+                });
+            };
+            for (const double step : {1.0, -1.0, 2.0, -2.0}) {
+                if (!overprints(where))
+                    break;
+                where = label.translated(where.left() - label.left(), 0.0);
+                where.translate(0.0, step * where.height());
+            }
+            drawnLabels.push_back(extent(where));
+            painter.drawText(where,
                              static_cast<int>(Qt::AlignVCenter |
                                               (flip ? Qt::AlignRight : Qt::AlignLeft)),
                              points_[index].label);

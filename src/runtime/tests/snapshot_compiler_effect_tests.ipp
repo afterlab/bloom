@@ -434,6 +434,142 @@ void testBlurExtensionLowering(Expectations& expectations) {
     }
 }
 
+// A value a node does not read in its current mode is not lowered, so an animated one must not
+// compile a curve nothing references (the plan would be refused). Every node whose mode or toggle
+// decides which values it reads is built with every unread value animated, and its frames render.
+void testUnreadAnimatedValuesRender(Expectations& expectations) {
+    using namespace document;
+    struct Case final {
+        std::string_view type;
+        std::vector<std::pair<std::string, ParameterValue>> constants;
+        std::vector<std::string> animated;
+    };
+    const auto weights = std::vector<std::string>{"reds",  "yellows", "greens",
+                                                  "cyans", "blues",   "magentas"};
+    const auto with = [](std::vector<std::string> first, const std::vector<std::string>& rest) {
+        first.insert(first.end(), rest.begin(), rest.end());
+        return first;
+    };
+    std::vector<Case> cases;
+    cases.push_back({kVignetteNodeType, {{"mode", kVignetteMultiply}}, {"exposure"}});
+    cases.push_back({kVignetteNodeType, {{"mode", kVignetteExposure}}, {"amount"}});
+    cases.push_back({kColorizeNodeType, {{"mode", kColorizeFill}},
+                     with({"shadows", "midtones", "highlights", "midpoint", "repetitions", "phase"},
+                          weights)});
+    cases.push_back({kColorizeNodeType, {{"mode", kColorizeTint}},
+                     with({"fillColor", "midtones", "midpoint", "repetitions", "phase"}, weights)});
+    cases.push_back({kColorizeNodeType, {{"mode", kColorizeTritone}},
+                     with({"fillColor", "repetitions", "phase"}, weights)});
+    cases.push_back({kColorizeNodeType, {{"mode", kColorizeGradientMap}},
+                     with({"fillColor", "shadows", "midtones", "highlights", "midpoint"}, weights)});
+    cases.push_back({kColorizeNodeType, {{"mode", kColorizeBlackAndWhite}},
+                     {"fillColor", "shadows", "midtones", "highlights", "midpoint", "repetitions",
+                      "phase"}});
+    {
+        std::vector<std::string> sensorOnly;
+        std::vector<std::string> filmOnly;
+        for (const auto& spec : filmGrainParameters()) {
+            if (spec.kind != FilmGrainParameterKind::Scalar)
+                continue;
+            if (spec.optional)
+                sensorOnly.emplace_back(spec.role);
+            if (spec.role == "shadows" || spec.role == "midtones" || spec.role == "highlights")
+                filmOnly.emplace_back(spec.role);
+        }
+        cases.push_back({kFilmGrainNodeType, {{"mode", kFilmGrainFilm}}, sensorOnly});
+        cases.push_back({kFilmGrainNodeType, {{"mode", kFilmGrainSensorNoise}}, filmOnly});
+    }
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    for (const auto& item : cases) {
+        const std::string label = std::string(item.type) + " with " +
+                                  std::to_string(item.animated.size()) + " unread animated values";
+        const auto* definition = builtInNodeDefinitions().find(item.type, 1);
+        require(definition != nullptr, "the definition of a mode-dependent node exists");
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto node = NodeId::fromRaw(980);
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 980;
+        std::uint64_t curve = 3000;
+        const auto keys = [&](const double from, const double to) {
+            std::vector<ScalarKeyframe> result;
+            result.push_back({KeyframeId::fromRaw(curve++), core::RationalTime::fromInteger(0),
+                              from, KeyframeInterpolation::Linear});
+            result.push_back({KeyframeId::fromRaw(curve++), core::RationalTime::fromInteger(1), to,
+                              KeyframeInterpolation::Linear});
+            return result;
+        };
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            auto value = parameter.defaultValue;
+            for (const auto& [role, constant] : item.constants)
+                if (parameter.role == role)
+                    value = constant;
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{value}}),
+                    "a mode-dependent parameter is valid");
+            if (std::ranges::find(item.animated, parameter.role) != item.animated.end()) {
+                const auto curveId = AnimationCurveId::fromRaw(curve++);
+                if (const auto* scalar = std::get_if<double>(&value)) {
+                    require(composition->animationCurves().insert(
+                                ScalarAnimationCurve{curveId, keys(*scalar, *scalar * 0.5 + 0.1)}),
+                            "a scalar curve is publishable");
+                } else if (std::holds_alternative<core::Color4d>(value)) {
+                    Color4AnimationCurve color{curveId, {}};
+                    for (auto& component : color.components)
+                        component.keyframes = keys(0.2, 0.6);
+                    require(composition->animationCurves().insert(std::move(color)),
+                            "a colour curve is publishable");
+                } else {
+                    require(false, "an animated unread value is a scalar or a colour");
+                }
+                require(composition->parameters().setSource(id, AnimationCurveSource{curveId}),
+                        "the unread value animates");
+            }
+            bindings.push_back({parameter.role, id});
+        }
+        for (const auto& role : item.animated)
+            require(std::ranges::any_of(bindings,
+                                        [&](const auto& binding) { return binding.role == role; }),
+                    "an animated role is a parameter of the node");
+        require(graph.addNode({node, std::string(item.type), std::move(bindings), 1}),
+                "a mode-dependent node adds");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge removed");
+        require(graph.addEdge(
+                    {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{node, "input"}}),
+                "image enters the node");
+        require(graph.addEdge({EdgeId::fromRaw(980),
+                               {node, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "the node enters Layer");
+                expectations.expect(project.validate().ok(), label + " validates");
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, label + " compiles");
+        if (!result.plan)
+            continue;
+        expectations.expect(result.plan->scalarCurves().empty() &&
+                                result.plan->color4Curves().empty(),
+                            label + " compiles no curve");
+        for (const std::int64_t frame : {0, 1}) {
+            runtime::EvaluationRequest request{core::RationalTime::fromInteger(frame),
+                                               result.plan->output(),
+                                               runtime::CompositionFormatResolution{}};
+            request.quality = runtime::EvaluationQuality::Reference;
+            request.colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
+            request.pixelStorageByteLimit = std::size_t{1} << 29U;
+            request.bypassOperationCache = true;
+            const auto evaluated =
+                runtime::CpuCompositionEvaluator{}.evaluate(result.plan, request, {});
+            expectations.expect(evaluated.frame() != nullptr,
+                                label + " renders frame " + std::to_string(frame));
+        }
+    }
+}
+
 // Hue/Saturation's vibrance and Colorize reach the kernel; a node saved without them lowers to none.
 void testHueSaturationExtensionLowering(Expectations& expectations) {
     using namespace document;

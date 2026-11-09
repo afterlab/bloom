@@ -257,10 +257,7 @@ NODE_COST_BUDGETS = {
     "denoise-spatial-1": {"reference": 12.0, "comparable": 8.0},
     "denoise-spatial-3": {"reference": 70.0, "comparable": 40.0},
     "denoise-spatial-6": {"reference": 250.0, "comparable": 120.0},
-    # Temporal: four weighted steps over five frames, each reading two 3 x 3 patches and two more
-    # texels per pixel (20 reads, against the 6 of a radius-1 blur's two passes), plus the window's
-    # Time Samples: about 13 blurs of radius 1, with a quarter of headroom.
-    "denoise-temporal-5": {"reference": 20.0, "comparable": 16.0},
+    "denoise-temporal-5": {"reference": 8.0, "comparable": 6.0},
     "sharpen-radius-1": {"reference": 1.9, "comparable": 1.9},
     "sharpen-radius-3": {"reference": 2.15, "comparable": 1.6},
     "sharpen-radius-8": {"reference": 2.15, "comparable": 1.55},

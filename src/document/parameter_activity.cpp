@@ -1,7 +1,11 @@
 #include <bloom/document/parameter_activity.hpp>
 
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/denoise_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -35,6 +39,50 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
     if (schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
         schemaKey == "bloom.blur.blue-scale" || schemaKey == "bloom.blur.alpha-scale")
         return constantOf(composition, node, "perChannel").value_or(0) == 0;
+    // A mode that reads only some of a node's values: the others are not lowered (the compiler's
+    // lowering of each node is the other half of these rules).
+    if (node.typeId == kVignetteNodeType) {
+        const bool exposure = constantOf(composition, node, "mode").value_or(kVignetteMultiply) ==
+                              kVignetteExposure;
+        if (schemaKey == kVignetteAmountSchemaKey)
+            return exposure;
+        if (schemaKey == kVignetteExposureSchemaKey)
+            return !exposure;
+        return false;
+    }
+    if (node.typeId == kFilmGrainNodeType) {
+        const auto* spec = filmGrainParameterSpec(schemaKey);
+        if (spec == nullptr || spec->kind != FilmGrainParameterKind::Scalar)
+            return false;
+        const bool sensor = constantOf(composition, node, "mode").value_or(kFilmGrainFilm) ==
+                            kFilmGrainSensorNoise;
+        const bool filmOnly =
+            spec->role == "shadows" || spec->role == "midtones" || spec->role == "highlights";
+        return spec->optional ? !sensor : (filmOnly && sensor);
+    }
+    if (node.typeId == kColorizeNodeType) {
+        const auto mode = constantOf(composition, node, "mode").value_or(kColorizeFill);
+        const bool map = mode == kColorizeGradientMap;
+        const bool stops = map && std::ranges::any_of(node.parameters, [](const auto& binding) {
+                               return binding.role == "gradient";
+                           });
+        const bool ramp = mode == kColorizeTritone || (map && !stops);
+        if (schemaKey == kColorizeColorSchemaKey)
+            return mode != kColorizeFill;
+        if (schemaKey == kColorizeShadowsSchemaKey || schemaKey == kColorizeHighlightsSchemaKey)
+            return mode != kColorizeTint && !ramp;
+        if (schemaKey == kColorizeMidtonesSchemaKey || schemaKey == kColorizeMidpointSchemaKey)
+            return !ramp;
+        if (schemaKey == kColorizeRepetitionsSchemaKey || schemaKey == kColorizePhaseSchemaKey ||
+            schemaKey == kColorizeGradientSchemaKey)
+            return !map;
+        for (const auto weight :
+             {kColorizeRedsSchemaKey, kColorizeYellowsSchemaKey, kColorizeGreensSchemaKey,
+              kColorizeCyansSchemaKey, kColorizeBluesSchemaKey, kColorizeMagentasSchemaKey})
+            if (schemaKey == weight)
+                return mode != kColorizeBlackAndWhite;
+        return false;
+    }
     if (node.typeId != kDenoiseNodeType)
         return false;
     constexpr auto temporal = static_cast<std::int64_t>(DenoiseNodeMode::Temporal);
