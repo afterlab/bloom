@@ -1298,8 +1298,13 @@ void edgeExtendRows() {
 // words, labels and values shown whole and nothing wider than the panel, at the widths of a wide, a
 // normal and a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width
 // (suffixed with the device pixel ratio).
+// `hidden` are rows the node's current values leave without a row (a value that would do nothing);
+// `values` are set first and `state` names the capture; `height` is the panel's.
 void extensionRows(const char* type, const char* captureName,
-                   const std::vector<std::pair<std::string, QString>>& rows) {
+                   const std::vector<std::pair<std::string, QString>>& rows,
+                   const std::vector<std::string>& hidden = {},
+                   const std::vector<std::pair<std::string, document::ParameterValue>>& values = {},
+                   const char* state = "", const int height = 900) {
     auto project = document::makeNewProject("Ext", "Main", core::RationalTime::fromInteger(10));
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);
@@ -1307,14 +1312,23 @@ void extensionRows(const char* type, const char* captureName,
     ui::PropertiesEditor properties(session);
     const auto node = addNode(session, type);
     session.selectNode(node);
+    for (const auto& [role, value] : values)
+        expect(session.setNodeParameterValue(node, role, value, QStringLiteral("Set")),
+               (std::string(type) + " takes " + role).c_str());
     const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
     const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
                                ? QStringLiteral("dpr1")
                                : QStringLiteral("dpr15");
     for (const int width : {2000, 900, 420}) {
-        properties.resize(width, 900);
+        properties.resize(width, height);
         properties.show();
         QCoreApplication::processEvents();
+        for (const auto& role : hidden) {
+            auto* found = row(properties, role.c_str());
+            expect(found == nullptr || !found->isVisibleTo(&properties),
+                   (std::string(type) + " shows no row for " + role + " while it does nothing")
+                       .c_str());
+        }
         for (const auto& [role, text] : rows) {
             auto* found = row(properties, role.c_str());
             expect(found != nullptr && found->isVisibleTo(&properties),
@@ -1336,6 +1350,7 @@ void extensionRows(const char* type, const char* captureName,
             QDir().mkpath(directory);
             if (!properties.grab().save(directory + QStringLiteral("/") +
                                         QString::fromLatin1(captureName) +
+                                        QString::fromLatin1(state) +
                                         QStringLiteral("-properties-") + QString::number(width) +
                                         QLatin1Char('-') + suffix + QStringLiteral(".png")))
                 std::cerr << "could not write the " << captureName << " Properties capture\n";
@@ -1343,23 +1358,93 @@ void extensionRows(const char* type, const char* captureName,
     }
 }
 
+// #524: a new Four-Color Gradient anchors its points at the corners of its composition, whatever
+// the size: 640 by 360 here, with its Properties (the points read as the corners, each label shown).
+void fourColorDefaultsFollowTheComposition() {
+    const auto format = document::CompositionFormat::create(640, 360);
+    expect(format.has_value(), "a 640 by 360 format");
+    if (!format)
+        return;
+    auto project = document::makeNewProject("Small", "Main", core::RationalTime::fromInteger(10),
+                                            *format);
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    const auto node = addNode(session, "bloom.four-color-gradient");
+    session.selectNode(node);
+    const std::array<std::pair<const char*, document::Vec2d>, 4> corners{
+        {{"point1", {-320.0, 180.0}}, {"point2", {320.0, 180.0}},
+         {"point3", {-320.0, -180.0}}, {"point4", {320.0, -180.0}}}};
+    for (const auto& [role, corner] : corners) {
+        const auto id = ui::nodeRoleParameter(session, node, role);
+        const auto value = id ? session.effectiveVec2Value(*id) : std::nullopt;
+        expect(value && value->x == corner.x && value->y == corner.y,
+               (std::string("a new Four-Color Gradient puts ") + role +
+                " at its 640 by 360 corner")
+                   .c_str());
+    }
+    properties.resize(900, 1300);
+    properties.show();
+    QCoreApplication::processEvents();
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    if (!directory.isEmpty()) {
+        QDir().mkpath(directory);
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        if (!properties.grab().save(directory + QStringLiteral("/four-color-gradient-640x360-"
+                                                               "properties-900-") +
+                                    suffix + QStringLiteral(".png")))
+            std::cerr << "could not write the 640 by 360 Four-Color Gradient capture\n";
+    }
+}
+
 void extensionPropertiesRows() {
+    fourColorDefaultsFollowTheComposition();
+    // Denoise: the radius while the mode is not Temporal, the frame count only in Temporal.
+    const std::vector<std::pair<std::string, QString>> spatial{
+        {"mode", QStringLiteral("Mode")},
+        {"radius", QStringLiteral("Radius (pixels)")},
+        {"strength", QStringLiteral("Strength (noise tolerance)")}};
+    extensionRows("bloom.denoise", "denoise", spatial, {"frames"});
+    // Temporal: the frame count; neither the radius nor the strength is read by the temporal mean.
     extensionRows("bloom.denoise", "denoise",
-                  {{"mode", QStringLiteral("Mode")},
-                   {"radius", QStringLiteral("Radius (pixels, not Temporal)")},
-                   {"strength", QStringLiteral("Strength (noise tolerance)")},
-                   {"frames", QStringLiteral("Frames (Temporal only)")}});
+                  {{"mode", QStringLiteral("Mode")}, {"frames", QStringLiteral("Frames")}},
+                  {"radius", "strength"}, {{"mode", std::int64_t{3}}}, "-temporal");
     extensionRows("bloom.four-color-gradient", "four-color-gradient",
-                  {{"point1", QStringLiteral("Point 1")}, {"point4", QStringLiteral("Point 4")},
-                   {"color1", QStringLiteral("Color 1")}, {"color4", QStringLiteral("Color 4")},
-                   {"blend", QStringLiteral("Blend (sharpness)")}});
-    extensionRows("bloom.gaussian-blur", "gaussian-blur",
-                  {{"radius", QStringLiteral("Radius (pixels)")},
-                   {"separate", QStringLiteral("Separate axes")},
-                   {"radiusY", QStringLiteral("Vertical radius (pixels)")},
-                   {"perChannel", QStringLiteral("Per-channel radius")}});
+                  {{"point1", QStringLiteral("Point 1")}, {"point2", QStringLiteral("Point 2")},
+                   {"point3", QStringLiteral("Point 3")}, {"point4", QStringLiteral("Point 4")},
+                   {"color1", QStringLiteral("Color 1")}, {"color2", QStringLiteral("Color 2")},
+                   {"color3", QStringLiteral("Color 3")}, {"color4", QStringLiteral("Color 4")},
+                   {"blend", QStringLiteral("Blend (sharpness)")}},
+                  {}, {}, "", 1300);
+    // Gaussian Blur: the vertical radius only with Separate axes, the channel radii only with
+    // Per-channel radius.
+    const std::vector<std::pair<std::string, QString>> blurBase{
+        {"radius", QStringLiteral("Radius (pixels)")},
+        {"separate", QStringLiteral("Separate axes")},
+        {"perChannel", QStringLiteral("Per-channel radius")}};
+    extensionRows("bloom.gaussian-blur", "gaussian-blur", blurBase,
+                  {"radiusY", "redScale", "greenScale", "blueScale", "alphaScale"});
+    auto separate = blurBase;
+    separate.emplace_back("radiusY", QStringLiteral("Vertical radius (pixels)"));
+    extensionRows("bloom.gaussian-blur", "gaussian-blur", separate,
+                  {"redScale", "greenScale", "blueScale", "alphaScale"},
+                  {{"separate", true}}, "-separate");
+    auto perChannel = blurBase;
+    for (const auto& [role, label] :
+         {std::pair{"redScale", "Red radius"}, std::pair{"greenScale", "Green radius"},
+          std::pair{"blueScale", "Blue radius"}, std::pair{"alphaScale", "Alpha radius"}})
+        perChannel.emplace_back(role, QString::fromLatin1(label));
+    extensionRows("bloom.gaussian-blur", "gaussian-blur", perChannel, {"radiusY"},
+                  {{"perChannel", true}}, "-per-channel");
+    // Transform 2D, tall enough to show Skew, Skew axis and Opacity under its motion blur rows.
     extensionRows("bloom.transform-2d", "transform-2d",
                   {{"skew", QStringLiteral("Skew")}, {"opacity", QStringLiteral("Opacity")}});
+    extensionRows("bloom.transform-2d", "transform-2d",
+                  {{"skew", QStringLiteral("Skew")}, {"opacity", QStringLiteral("Opacity")}}, {},
+                  {{"skew", 20.0}, {"opacity", 0.7}}, "-tall", 1500);
 }
 
 // #348 Corner Pin, ST Map and Displace in Properties: a row for every corner, choice and value, in

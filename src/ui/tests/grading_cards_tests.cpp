@@ -1811,7 +1811,8 @@ void colorizeGradientMap() {
 // #541: an angle turns on a dial, a range drags both its ends on one track and a gradient's start
 // and end drag over a picture of its frame -- each one command, the numbers beside them.
 void nodeControlCards() {
-    const std::array<std::pair<std::string_view, const char*>, 16> cards{{
+    const std::array<std::pair<std::string_view, const char*>, 17> cards{{
+        {"bloom.four-color-gradient", "four-color-gradient"},
         {"bloom.drop-shadow", "drop-shadow"},
         {"bloom.glow", "glow"},
         {"bloom.transform-2d", "transform-2d"},

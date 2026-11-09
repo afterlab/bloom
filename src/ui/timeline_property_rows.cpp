@@ -333,6 +333,8 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
                 if (node->typeId == document::kShapeSourceNodeType &&
                     !document::shapeRoleVisible(nodeShapeKind(*composition, *node), declared.role))
                     continue;
+                if (propertiesRowInactive(*composition, *node, declared.schemaKey))
+                    continue;
                 const auto found = std::ranges::find(node->parameters, declared.role,
                                                      &document::ParameterBinding::role);
                 if (found == node->parameters.end())
