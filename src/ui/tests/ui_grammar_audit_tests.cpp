@@ -87,12 +87,15 @@ int run(int argc, char** argv) {
                 qobject_cast<kit::KValueField*>(widget) || qobject_cast<kit::KSwitch*>(widget) ||
                 qobject_cast<kit::KSlider*>(widget) || qobject_cast<kit::KSearchField*>(widget) ||
                 qobject_cast<kit::KLabel*>(widget) || qobject_cast<kit::KColorChip*>(widget)) {
+                // A Properties label that wraps is a whole number of control tokens tall, as many as
+                // it declares in labelTokens (#582).
+                const int tokens = std::max(1, widget->property("labelTokens").toInt());
                 expect(widget->height() ==
-                           kit::px((qobject_cast<kit::KIconToggle*>(widget) ||
-                                    widget->property("rowCell").toString() == "toggle" ||
-                                    widget->width() == kit::px(kit::Size::ToggleCell))
-                                       ? kit::Size::ToggleCell
-                                       : kit::Size::Control),
+                           tokens * kit::px((qobject_cast<kit::KIconToggle*>(widget) ||
+                                             widget->property("rowCell").toString() == "toggle" ||
+                                             widget->width() == kit::px(kit::Size::ToggleCell))
+                                                ? kit::Size::ToggleCell
+                                                : kit::Size::Control),
                        widget, "kit control token");
                 ++controls;
             }

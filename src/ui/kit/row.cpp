@@ -134,6 +134,12 @@ void KPropertyRow::setLabelWidth(const int width) {
     // An explicit column keeps the label on one line, elided to that width.
     label_->setWordWrap(labelWidth_ <= 0 && !leadingIndicator_);
     label_->setFixedWidth(labelWidth_ > 0 ? labelWidth_ : px(Size::PropertiesLabelWidth));
+    if (labelWidth_ > 0) {
+        // An explicit column is the row's own pitch: a label that was grown for wrapping goes back.
+        label_->setFixedHeight(px(Size::Control));
+        label_->setProperty("labelTokens", 1);
+        setFixedHeight(px(Size::PropertyRow) * lineCount_);
+    }
     updateGeometry();
 }
 int KPropertyRow::naturalLabelWidth() const {
@@ -175,11 +181,17 @@ void KPropertyRow::applyLabelColumn() {
             QRect(0, 0, column, QWIDGETSIZE_MAX), Qt::TextWordWrap | Qt::TextWrapAnywhere, text);
         lines = std::max(1, (bounds.height() + metrics.lineSpacing() - 1) / metrics.lineSpacing());
     }
-    const int extra = (lines - 1) * metrics.lineSpacing();
     if (label_->width() != column || label_->maximumWidth() != column)
         label_->setFixedWidth(column);
-    label_->setFixedHeight(px(Size::Control) + extra);
-    const int height = std::max(rowHeight, px(Size::PropertyRow) + extra);
+    // Up to as many lines as fit the control height wrap inside the usual row; more grow the label
+    // and the row by whole tokens, so every label and row height stays a multiple of its token.
+    const int textHeight = lines * metrics.lineSpacing();
+    const int labelTokens = std::max(1, (textHeight + px(Size::Control) - 1) / px(Size::Control));
+    label_->setFixedHeight(labelTokens * px(Size::Control));
+    label_->setProperty("labelTokens", labelTokens);
+    const int rowTokens = std::max(lineCount_, labelTokens);
+    setProperty("rowLines", rowTokens);
+    const int height = rowTokens * px(Size::PropertyRow);
     if (this->height() != height || minimumHeight() != height)
         setFixedHeight(height);
 }
