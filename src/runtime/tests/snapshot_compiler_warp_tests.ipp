@@ -973,3 +973,91 @@ void testStabilize(Expectations& expectations) {
                             "a muted Stabilize passes its input through");
     }
 }
+
+// #513 the tracking job over a real plan: a checker moved by a keyed Transform 2D, then Stabilize.
+// The job evaluates the picture at the Stabilize node's input and follows a feature through it; the
+// track is the Transform 2D's own move, frame by frame. A muted node has nothing to track, and a
+// cancelled job reports it.
+void testTrackJob(Expectations& expectations) {
+    using namespace document;
+    constexpr auto transformId = NodeId::fromRaw(1710);
+    auto fixture = warpFixture(kStabilizeNodeType);
+    auto* composition = fixture.recipe.project.findComposition(kCompositionId);
+    auto& graph = composition->graph();
+    warpAddNode(fixture.recipe.project, kTransform2DNodeType, transformId, 1720);
+    require(graph.eraseEdge(kFirstSourceEdge), "the checker's edge is removed");
+    require(graph.addEdge({kFirstSourceEdge, {fixture.checker, "image"},
+                           NodeInputRef{transformId, "input"}}),
+            "the checker feeds the Transform 2D");
+    require(graph.addEdge({EdgeId::fromRaw(1711), {transformId, "image"},
+                           NodeInputRef{fixture.recipe.node, "input"}}),
+            "the Transform 2D feeds Stabilize");
+    // The move: 8 pixels right and 4 down each frame at 24 frames a second.
+    constexpr auto curveId = AnimationCurveId::fromRaw(1730);
+    Vec2AnimationCurve curve{curveId};
+    curve.components[0].keyframes = {
+        {KeyframeId::fromRaw(1731), core::RationalTime::fromInteger(0), 0.0, KeyframeInterpolation::Linear},
+        {KeyframeId::fromRaw(1732), core::RationalTime::fromInteger(1), 192.0, KeyframeInterpolation::Linear}};
+    curve.components[1].keyframes = {
+        {KeyframeId::fromRaw(1733), core::RationalTime::fromInteger(0), 0.0, KeyframeInterpolation::Linear},
+        {KeyframeId::fromRaw(1734), core::RationalTime::fromInteger(1), 96.0, KeyframeInterpolation::Linear}};
+    require(composition->animationCurves().insert(std::move(curve)), "the move is publishable");
+    const auto bindings = composition->graph().findNode(transformId)->parameters;
+    ParameterId translate;
+    for (const auto& binding : bindings)
+        if (binding.role == "translate")
+            translate = binding.parameterId;
+    require(composition->parameters().setSource(translate, AnimationCurveSource{curveId}),
+            "the Transform 2D translate animates");
+    const auto frameRate = composition->format().frameRate();
+    const auto node = fixture.recipe.node;
+    const auto tap = runtime::trackTapFor(*composition, node);
+    require(tap.has_value() && tap->node == transformId && tap->channels.empty(),
+            "the node's input is fed by the Transform 2D");
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    document::Document tracked(std::move(fixture.recipe.project));
+    runtime::SnapshotCompiler compiler(registry);
+    const auto result = compiler.compile(
+        {.snapshot = tracked.snapshot(), .compositionId = kCompositionId, .channelInspection = tap},
+        runtime::CancellationToken{});
+    require(result.plan != nullptr, "the tracked plan compiles");
+
+    runtime::NodeTrackRequest request;
+    request.plan = result.plan;
+    request.extentWidth = 240;
+    request.extentHeight = 135;
+    request.compositionWidth = 1920.0;
+    request.compositionHeight = 1080.0;
+    request.frameRateNumerator = frameRate.numerator();
+    request.frameRateDenominator = frameRate.denominator();
+    request.firstFrame = 0;
+    request.lastFrame = 8;
+    request.startX = 0.0;
+    request.startY = 0.0;
+    request.patternRadius = 14;
+    request.searchRadius = 4;
+    std::uint64_t reportedDone = 0;
+    const auto track = runtime::trackNodeInput(request, {}, [&](const std::uint64_t done, std::uint64_t) {
+        reportedDone = done;
+    });
+    expectations.expect(track.end == runtime::PointTrackEnd::Finished && track.samples.size() == 9,
+                        "the job follows the checker through every frame");
+    expectations.expect(reportedDone == 9, "the job reports its progress");
+    if (track.samples.size() == 9) {
+        // 24 frames a second: the move is 8 pixels right and 4 pixels down each frame, up to the
+        // direction of the Transform 2D's vertical axis.
+        const double perFrame = 192.0 / static_cast<double>(frameRate.numerator()) *
+                                static_cast<double>(frameRate.denominator());
+        double worstX = 0.0;
+        double worstY = 0.0;
+        for (const auto& sample : track.samples) {
+            const double moved = static_cast<double>(sample.frame) * perFrame;
+            worstX = std::max(worstX, std::abs((sample.x - track.samples.front().x) - moved));
+            worstY = std::max(worstY, std::abs(std::abs(sample.y - track.samples.front().y) - 0.5 * moved));
+        }
+        expectations.expect(worstX < 2.0, "the tracked x is the Transform 2D's move to two pixels");
+        expectations.expect(worstY < 2.0, "the tracked y is the Transform 2D's move to two pixels");
+    }
+}

@@ -43,6 +43,7 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include "field_test_programs.hpp"
+#include "point_tracker_job.hpp"
 #include "snapshot_compiler_support.hpp"
 
 #include <algorithm>
@@ -2069,6 +2070,7 @@ int main() {
         testDisplaceLowering(expectations);
         testDisplacePixels(expectations);
         testStabilize(expectations);
+        testTrackJob(expectations);
         testLightRaysLowering(expectations);
         testLightRaysPixels(expectations);
         testRollingShutterLowering(expectations);

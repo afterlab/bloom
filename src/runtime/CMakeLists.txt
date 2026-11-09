@@ -210,6 +210,7 @@ target_sources(
         sharpen_image_effect.cpp
         field_raster.cpp
         point_tracker.cpp
+        point_tracker_job.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp
         image_effect.hpp
