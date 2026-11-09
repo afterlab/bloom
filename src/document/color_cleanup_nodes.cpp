@@ -74,6 +74,11 @@ NodeDefinition colorCleanupDefinition(const std::string_view typeId) {
                               std::nullopt,
                               NodeCardinality::Many,
                               NodeCategory::Grade};
+    // #523: a qualifier gives a Mask and, like Luma Key, takes no effect mask of its own.
+    if (typeId == kHslQualifierNodeType) {
+        definition.outputs = {{std::string(kColorCleanupMaskOutputPort), SocketValueKind::Mask}};
+        definition.category = NodeCategory::Compositing;
+    }
     for (const auto& parameter : colorCleanupParameters(typeId)) {
         definition.parameters.push_back({std::string(parameter.role),
                                          colorCleanupSchemaKey(typeId, parameter.role),

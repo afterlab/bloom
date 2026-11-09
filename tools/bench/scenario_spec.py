@@ -35,6 +35,9 @@ Cryptomatte node per name reading the layer's channel set (the matte list in the
 "trackMatte": name a node track matte read from one (any earlier layer's). An effect may take a
 third element {"mask": name, "maskChannel": value} connecting that Mask to its mask input.
 
+A footage layer may also carry "qualifiers": {name: {"values": {...}, "keys": {...}}}, an HSL
+Qualifier (#523) reading the layer's image, whose Mask is named like the mattes above.
+
 A footage layer may also carry depth passes (#483): "passes": {name: {"media": format,
 "colorSpace": label}} adds a source node per name reading that footage (a derived pass such as
 "png16_mist" included; "Raw" reads a depth pass as data), and every footage layer's own channel set
@@ -433,6 +436,21 @@ SCENARIOS["color-matrix-2k"] = {
         {"name": "Plate", "media": "png16",
          "effects": [["bloom.color-matrix", {"outputModel": "Lab"},
                       {"keys": {"rg": [[0, 0.0], [23, 0.5]]}}]]},
+    ],
+}
+
+# #523: HSL Qualifier over a plate: a keyed hue window limits a Grade through its mask input, so
+# every frame is new and the cost is the qualifier's pass and the masked grade. Written, not run: it
+# has no recorded numbers and no budget.
+SCENARIOS["hsl-qualifier-2k"] = {
+    "description": "A PNG16 plate with a keyed HSL Qualifier hue window limiting a Grade.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "qualifiers": {"Selection": {"values": {"hueWidth": 60.0, "satLow": 0.2},
+                                      "keys": {"hueCenter": [[0, 0.0], [23, 120.0]]}}},
+         "effects": [[GRADE_WARM[0], GRADE_WARM[1], {"mask": "Selection"}]]},
     ],
 }
 

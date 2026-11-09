@@ -607,7 +607,7 @@ void testSearchKeyboardAndMenus() {
                   "Shuffle"},
                  "Channels holds the channel nodes");
         hasGroup("Keying & Mattes",
-                 {"Cryptomatte", "Image to Mask", "Luma Key", "Mask", "Mask Combine", "Matte Blur",
+                 {"Cryptomatte", "HSL Qualifier", "Image to Mask", "Luma Key", "Mask", "Mask Combine", "Matte Blur",
                   "Matte Dilate", "Matte Erode"},
                  "Keying & Mattes holds the keys and mattes");
         hasGroup("Transform",
@@ -624,8 +624,8 @@ void testSearchKeyboardAndMenus() {
                  "Light & Shadow holds the light effects");
         hasGroup("Stylize", {"Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
         hasGroup("Color Correction",
-                 {"Auto Exposure", "Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation", "Invert", "Levels",
-                  "Multiply", "Offset"},
+                 {"Auto Exposure", "Color Matrix", "Colorize", "Curves", "Exposure", "Grade",
+                  "Hue/Saturation", "Invert", "Levels", "Multiply", "Offset", "Tone Map"},
                  "Color Correction offers the image grades");
         hasGroup("Color Management", {"OCIO Color Space Transform", "OCIO File Transform"},
                  "Color Management offers only the OCIO transforms");

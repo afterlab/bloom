@@ -14,6 +14,13 @@
 //     the result as one (RGB, HSL, HSV, YCbCr or Lab). A `preset` other than Custom replaces the
 //     matrix' elements with its own.
 //
+//   HSL Qualifier (`bloom.hsl-qualifier`) gives a Mask on `mask`: where the straight color's hue
+//     (degrees: the `hueCenter` and the full `hueWidth` around it, wrapping the turn), HSV saturation
+//     and Rec. 709 luma each lie in their range. Every range has a softness: the selection ramps
+//     linearly from 0 to 1 over that distance outside the range. The three selections multiply, are
+//     inverted by `invert` and weighted by the pixel's alpha. A pixel with no saturation has no hue and
+//     is selected by the hue range only if hue 0 is.
+//
 //   Tone Map (`bloom.tone-map`) works on the straight scene-linear color and leaves alpha alone.
 //     In order: gamut compression (off by default), shadow recovery, highlight roll-off.
 //     method           Each channel (every channel rolls off on its own) or Brightest channel (the
@@ -44,6 +51,8 @@ namespace bloom::document {
 
 inline constexpr std::string_view kToneMapNodeType = "bloom.tone-map";
 inline constexpr std::string_view kColorMatrixNodeType = "bloom.color-matrix";
+inline constexpr std::string_view kHslQualifierNodeType = "bloom.hsl-qualifier";
+inline constexpr std::string_view kColorCleanupMaskOutputPort = "mask";
 inline constexpr std::uint32_t kColorCleanupNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kColorCleanupInputPort = "input";
@@ -85,6 +94,7 @@ inline constexpr std::array<std::string_view, 2> kMatrixSizes{"3 x 3 (color)",
 inline constexpr std::array<std::string_view, 5> kColorModels{"RGB", "HSL", "HSV", "YCbCr", "Lab"};
 
 inline constexpr double kV = kMaximumToneMapValue;
+inline constexpr double kL = 1.0e4;
 inline constexpr double kM = kMaximumColorMatrixElement;
 
 inline constexpr std::array kToneMapParameters{
@@ -121,10 +131,24 @@ inline constexpr std::array kColorMatrixParameters{
     scalar("aa", 1.0, -kM, kM, "Alpha from alpha", -2.0, 2.0, 0.01, 3),
 };
 
+inline constexpr std::array kHslQualifierParameters{
+    scalar("hueCenter", 0.0, 0.0, 360.0, "Hue", 0.0, 360.0, 1.0, 1, "\xC2\xB0"),
+    scalar("hueWidth", 360.0, 0.0, 360.0, "Hue width", 0.0, 360.0, 1.0, 1, "\xC2\xB0"),
+    scalar("hueSoftness", 20.0, 0.0, 180.0, "Hue softness", 0.0, 180.0, 1.0, 1, "\xC2\xB0"),
+    scalar("satLow", 0.0, 0.0, 1.0, "Saturation from", 0.0, 1.0, 0.01, 3),
+    scalar("satHigh", 1.0, 0.0, 1.0, "Saturation to", 0.0, 1.0, 0.01, 3),
+    scalar("satSoftness", 0.1, 0.0, 1.0, "Saturation softness", 0.0, 1.0, 0.01, 3),
+    scalar("lumaLow", 0.0, 0.0, kL, "Luma from", 0.0, 4.0, 0.01, 3),
+    scalar("lumaHigh", 1.0, 0.0, kL, "Luma to", 0.0, 4.0, 0.01, 3),
+    scalar("lumaSoftness", 0.1, 0.0, kL, "Luma softness", 0.0, 1.0, 0.01, 3),
+    boolean("invert", "Invert selection"),
+};
+
 } // namespace color_cleanup_parameters
 
 [[nodiscard]] constexpr bool isColorCleanupNodeType(const std::string_view typeId) noexcept {
-    return typeId == kToneMapNodeType || typeId == kColorMatrixNodeType;
+    return typeId == kToneMapNodeType || typeId == kColorMatrixNodeType ||
+           typeId == kHslQualifierNodeType;
 }
 
 // The parameters of a color cleanup node in definition order, or an empty span.
@@ -134,13 +158,15 @@ colorCleanupParameters(const std::string_view typeId) noexcept {
         return color_cleanup_parameters::kToneMapParameters;
     if (typeId == kColorMatrixNodeType)
         return color_cleanup_parameters::kColorMatrixParameters;
+    if (typeId == kHslQualifierNodeType)
+        return color_cleanup_parameters::kHslQualifierParameters;
     return {};
 }
 
 // The spec of a "<type id>.<role>" schema key, or null.
 [[nodiscard]] constexpr const DepthParameterSpec*
 colorCleanupParameterSpec(const std::string_view schemaKey) noexcept {
-    for (const auto type : {kToneMapNodeType, kColorMatrixNodeType}) {
+    for (const auto type : {kToneMapNodeType, kColorMatrixNodeType, kHslQualifierNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

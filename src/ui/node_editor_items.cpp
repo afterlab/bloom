@@ -96,6 +96,8 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Matte Dilate");
     if (typeId == "bloom.luma-key")
         return QCoreApplication::translate("node_editor", "Luma Key");
+    if (typeId == "bloom.hsl-qualifier")
+        return QCoreApplication::translate("node_editor", "HSL Qualifier");
     if (typeId == "bloom.hue-saturation")
         return QCoreApplication::translate("node_editor", "Hue/Saturation");
     // #493 Curves hue curves.

@@ -1166,7 +1166,8 @@ void autoExposureRows() {
 // a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed
 // with the device pixel ratio).
 void colorCleanupRows() {
-    for (const auto type : {document::kToneMapNodeType, document::kColorMatrixNodeType}) {
+    for (const auto type : {document::kToneMapNodeType, document::kColorMatrixNodeType,
+                            document::kHslQualifierNodeType}) {
         auto project =
             document::makeNewProject("Cleanup", "Main", core::RationalTime::fromInteger(10));
         document::Document document(std::move(project.project));

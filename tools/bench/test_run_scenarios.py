@@ -610,6 +610,14 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.color-matrix")
         self.assertIn("rg", effect[2]["keys"], "every frame is new")
 
+    def test_hsl_qualifier_scenario_keys_a_hue_window_limiting_a_grade(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["hsl-qualifier-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        layer = scenario["layers"][0]
+        self.assertIn("hueCenter", layer["qualifiers"]["Selection"]["keys"], "every frame is new")
+        self.assertEqual(layer["effects"][0][2]["mask"], "Selection")
+
     def test_histogram_compare_scenario_wires_its_second_plate_and_keys_both(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["histogram-compare-2k"]

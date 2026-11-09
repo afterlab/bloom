@@ -158,6 +158,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kToneMapNodeType)
         return QStringLiteral("soft clip highlight compression roll off shoulder knee hdr limiter "
                               "shadows highlights recovery gamut compress");
+    // #523.
+    if (typeId == document::kHslQualifierNodeType)
+        return QStringLiteral("hue saturation luminance qualifier secondary color select key "
+                              "isolate range matte mask");
     // #517.
     if (typeId == document::kColorMatrixNodeType)
         return QStringLiteral("channel mixer channel combiner matrix swap channels gray grey "

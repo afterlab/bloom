@@ -2147,6 +2147,7 @@ int main() {
         testAlphaAssociationLowering(expectations);
         testColorToolLowering(expectations);
         testColorMatrixLowering(expectations);
+        testHslQualifierLowering(expectations);
         testColorizeLowering(expectations);
         testVignetteLowering(expectations);
         testPixelMathLowering(expectations);

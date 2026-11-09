@@ -1497,6 +1497,100 @@ void testColorMatrixLowering(Expectations& expectations) {
         "Color Matrix lowers its choices and sixteen elements with their identities");
 }
 
+// #523: an Image qualified by HSL Qualifier feeds Image Mix's mask. It lowers to a ColorTool kernel
+// with the qualifier's choices and nine operands with their identities; muted it is an empty Mask.
+void testHslQualifierLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto keyId = NodeId::fromRaw(996);
+    const auto mixId = NodeId::fromRaw(997);
+    for (int scenario = 0; scenario != 2; ++scenario) {
+        auto project = makeProject();
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::uint64_t next = 3000;
+        std::map<std::string, ParameterId> ids;
+        const auto add = [&](const NodeId id, const std::string_view nodeType) {
+            const auto* definition = builtInNodeDefinitions().find(nodeType, 1);
+            require(definition != nullptr, "definition exists");
+            std::vector<ParameterBinding> bindings;
+            for (const auto& parameter : definition->parameters) {
+                const auto parameterId = ParameterId::fromRaw(next++);
+                auto value = parameter.defaultValue;
+                if (parameter.role == "hueCenter")
+                    value = 350.0;
+                if (parameter.role == "satHigh")
+                    value = 0.75;
+                if (parameter.role == "invert")
+                    value = true;
+                require(composition->parameters().insert(
+                            {parameterId, parameter.schemaKey, ConstantValueSource{value}}),
+                        "parameter is valid");
+                ids[parameter.role] = parameterId;
+                bindings.push_back({parameter.role, parameterId});
+            }
+            require(graph.addNode({id, std::string(nodeType), std::move(bindings), 1}),
+                    "node is accepted");
+        };
+        add(keyId, std::string(kHslQualifierNodeType));
+        add(mixId, "bloom.image-mix");
+        require(graph.eraseEdge(kFirstSourceEdge), "base source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{mixId, "input"}}),
+                "base feeds Image Mix");
+        require(graph.addEdge({EdgeId::fromRaw(996), {kSecondSolidNode, "image"},
+                               NodeInputRef{mixId, "second"}}),
+                "second feeds Image Mix");
+        require(graph.addEdge({EdgeId::fromRaw(997), {kSecondSolidNode, "image"},
+                               NodeInputRef{keyId, "input"}}),
+                "an Image feeds HSL Qualifier");
+        require(graph.addEdge({EdgeId::fromRaw(998), {keyId, "mask"}, NodeInputRef{mixId, "mask"}}),
+                "HSL Qualifier feeds Image Mix's mask");
+        require(graph.addEdge({EdgeId::fromRaw(999), {mixId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "Image Mix feeds Layer");
+        if (scenario == 1)
+            composition->nodeLayout()[keyId].muted = true;
+        expectations.expect(project.validate().ok(), "HSL Qualifier graph is valid document truth");
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "HSL Qualifier graph compiles");
+        if (!result.plan)
+            continue;
+        const auto& operations = result.plan->operations();
+        const auto mix = std::ranges::find_if(operations, [&](const auto& item) {
+            const auto* effect = std::get_if<runtime::CompiledImageEffect>(&item);
+            return effect && effect->sourceNodeId == mixId;
+        });
+        require(mix != operations.end(), "Image Mix lowers");
+        const auto& mixEffect = std::get<runtime::CompiledImageEffect>(*mix);
+        require(mixEffect.maskInput.has_value(), "Image Mix keeps its connected mask");
+        const auto& maskSource = operations[mixEffect.maskInput->value()];
+        if (scenario == 1) {
+            const auto* empty = std::get_if<runtime::CompiledMerge>(&maskSource);
+            expectations.expect(empty && empty->entries.empty(),
+                                "a muted HSL Qualifier is an empty Mask, never its Image");
+            continue;
+        }
+        const auto* keyEffect = std::get_if<runtime::CompiledImageEffect>(&maskSource);
+        const auto* kernel =
+            keyEffect ? std::get_if<runtime::ColorToolKernel>(&keyEffect->kernel) : nullptr;
+        const auto value = [&](const std::size_t slot, const char* role, const double expected) {
+            const auto* source =
+                kernel ? std::get_if<double>(&kernel->values[slot].source) : nullptr;
+            return source != nullptr && *source == expected && kernel->values[slot].id == ids[role];
+        };
+        expectations.expect(keyEffect && keyEffect->sourceNodeId == keyId && kernel &&
+                                kernel->operation == runtime::ColorToolOperation::HslQualifier &&
+                                kernel->choices[0] == 1 && value(0, "hueCenter", 350.0) &&
+                                value(1, "hueWidth", 360.0) && value(4, "satHigh", 0.75) &&
+                                value(8, "lumaSoftness", 0.1),
+                            "HSL Qualifier lowers its choice and nine operands with identities");
+    }
+}
+
 // #504 Colorize lowers to one colorize kernel with its constant mode. Each mode keeps the
 // identities of only the operands it reads (Gradient Map also its source and cycle); every other
 // operand stays the kernel's constant default without an identity, so animating it neither claims

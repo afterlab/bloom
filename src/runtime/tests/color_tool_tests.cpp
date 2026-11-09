@@ -471,6 +471,77 @@ bloom::render::Rgba32fImage image(const std::uint32_t width, const std::uint32_t
     return std::move(*frozen.value());
 }
 
+Pixel runQualifier(const color_tool_test::HslQualifierSettings& settings, Pixel pixel) {
+    const auto grade = prepare(color_tool_test::hslQualifier(1, settings));
+    if (!grade)
+        throw std::logic_error("the qualifier kernel prepares");
+    expect(detail::colorToolPixel(grade->data, pixel), "a finite pixel always succeeds");
+    return pixel;
+}
+
+void testQualifier() {
+    using color_tool_test::HslQualifierSettings;
+    const auto coverage = [](const float c) { return Pixel{c, c, c, c}; };
+    HslQualifierSettings hue;
+    hue.hueWidth = 60.0;
+    hue.hueSoftness = 0.0;
+    expect(same(runQualifier(hue, {1.0F, 0.0F, 0.0F, 1.0F}), coverage(1.0F)),
+           "red is inside a hue window centered on red");
+    expect(same(runQualifier(hue, {0.0F, 1.0F, 0.0F, 1.0F}), coverage(0.0F)),
+           "green is outside a hard window centered on red");
+    hue.hueCenter = 120.0;
+    expect(same(runQualifier(hue, {0.0F, 1.0F, 0.0F, 1.0F}), coverage(1.0F)),
+           "green is inside a window centered on 120 degrees");
+    hue.hueCenter = 350.0;
+    expect(same(runQualifier(hue, {1.0F, 0.0F, 0.0F, 1.0F}), coverage(1.0F)),
+           "a hue window wraps past 360 degrees: red is 10 degrees from 350");
+    HslQualifierSettings soft;
+    soft.hueWidth = 40.0;
+    soft.hueSoftness = 20.0;
+    // Yellow is 60 degrees from red, 40 past the window's half width of 20: out; orange at 30
+    // degrees is 10 past, half way up the 20 degree ramp.
+    expect(same(runQualifier(soft, {1.0F, 0.5F, 0.0F, 1.0F}), coverage(0.5F)),
+           "orange, 30 degrees from red, is half selected by a 40 wide window with 20 softness");
+    expect(same(runQualifier(soft, {1.0F, 1.0F, 0.0F, 1.0F}), coverage(0.0F)),
+           "yellow, beyond the softness, is not selected");
+    HslQualifierSettings sat;
+    sat.satLow = 0.5;
+    sat.satSoftness = 1.0;
+    expect(same(runQualifier(sat, {0.5F, 0.5F, 0.5F, 1.0F}), coverage(0.5F)),
+           "gray is half selected by a saturation range from 0.5 with softness 1");
+    sat.satSoftness = 0.0;
+    expect(same(runQualifier(sat, {0.5F, 0.5F, 0.5F, 1.0F}), coverage(0.0F)),
+           "a hard saturation range excludes gray");
+    expect(same(runQualifier(sat, {1.0F, 0.0F, 0.0F, 1.0F}), coverage(1.0F)),
+           "a saturated color is inside the range");
+    HslQualifierSettings luma;
+    luma.lumaHigh = 0.5;
+    luma.lumaSoftness = 1.0;
+    expect(same(runQualifier(luma, {1.0F, 1.0F, 1.0F, 1.0F}), coverage(0.5F)),
+           "white is half selected by a luma range to 0.5 with softness 1");
+    luma.lumaHigh = 4.0;
+    expect(same(runQualifier(luma, {3.0F, 3.0F, 3.0F, 1.0F}), coverage(1.0F)),
+           "an HDR value is inside a luma range that reaches it");
+    HslQualifierSettings invert = hue;
+    invert.invert = true;
+    expect(same(runQualifier(invert, {1.0F, 0.0F, 0.0F, 1.0F}), coverage(0.0F)),
+           "invert swaps the selection");
+    expect(same(runQualifier(invert, {0.0F, 1.0F, 0.0F, 1.0F}), coverage(1.0F)),
+           "invert selects what was outside");
+    expect(same(runQualifier(HslQualifierSettings{}, premultiplied(0.3F, 0.6F, 0.2F, 0.5F)),
+                coverage(0.5F)),
+           "the default selects every color, weighted by the pixel's alpha");
+    expect(same(runQualifier(HslQualifierSettings{}, {2.0F, 3.0F, 1.0F, 0.0F}), coverage(0.0F)),
+           "a pixel with alpha 0 has no coverage");
+    // Preparation refuses a value outside the document domain.
+    auto bad = color_tool_test::hslQualifier(1, HslQualifierSettings{});
+    bad.values[0].source = 400.0;
+    expect(!prepare(bad), "a hue center beyond 360 degrees is refused");
+    auto good = color_tool_test::hslQualifier(1, HslQualifierSettings{});
+    expect(prepare(good) && !prepare(good)->identity,
+           "the qualifier is never an identity: it changes the pixel into coverage");
+}
+
 void testImageBudgetAndCancellation() {
     const auto grade = prepare(color_tool_test::toneMap(1, {}));
     const auto input = image(8, 4, {2.0F, 1.0F, 0.5F, 1.0F});
@@ -613,6 +684,7 @@ int main() {
         testMatrixKnownAnswers();
         testMatrixModels();
         testMatrixDomainAndIdentity();
+        testQualifier();
         testImageBudgetAndCancellation();
         writeCapture();
     } catch (const std::exception& error) {

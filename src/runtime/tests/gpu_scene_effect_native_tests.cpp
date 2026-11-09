@@ -1333,6 +1333,30 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         }
         return bloom::runtime::ImageEffectKernel{bloom::color_tool_test::colorMatrix(id, settings)};
     };
+    // #523 HSL Qualifier: 0 a soft hue window across the wrap, 1 inverted saturation and luma
+    // windows, 2 hard edges.
+    const auto hslQualifier = [](const std::uint64_t id, const int variant) {
+        bloom::color_tool_test::HslQualifierSettings settings;
+        if (variant == 0) {
+            settings.hueCenter = 350.0;
+            settings.hueWidth = 60.0;
+            settings.hueSoftness = 40.0;
+        } else if (variant == 1) {
+            settings.satLow = 0.2;
+            settings.satHigh = 0.9;
+            settings.lumaLow = 0.1;
+            settings.lumaHigh = 2.0;
+            settings.lumaSoftness = 0.5;
+            settings.invert = true;
+        } else {
+            settings.hueCenter = 120.0;
+            settings.hueWidth = 90.0;
+            settings.hueSoftness = 0.0;
+            settings.satSoftness = 0.0;
+            settings.lumaSoftness = 0.0;
+        }
+        return bloom::runtime::ImageEffectKernel{bloom::color_tool_test::hslQualifier(id, settings)};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1354,7 +1378,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             v->center.source = bloom::document::Vec2d{-3.0, 2.0};
         // #518: a moved ceiling changes the program's data in every variant.
         if (auto* t = std::get_if<bloom::runtime::ColorToolKernel>(&kernel)) {
-            if (t->operation == bloom::runtime::ColorToolOperation::ColorMatrix) {
+            if (t->operation == bloom::runtime::ColorToolOperation::HslQualifier) {
+                t->values[1].source = 120.0;
+            } else if (t->operation == bloom::runtime::ColorToolOperation::ColorMatrix) {
                 t->choices[0] = 0;
                 t->values[1].source = 0.75;
             } else {
@@ -1393,7 +1419,8 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
               toneMap(id + 50, 3),     colorMatrix(id + 50, 0),   colorMatrix(id + 50, 1),
               colorMatrix(id + 50, 2), colorMatrix(id + 50, 3),   colorMatrix(id + 50, 4),
               colorMatrix(id + 50, 5), colorMatrix(id + 50, 6),   colorMatrix(id + 50, 7),
-              colorMatrix(id + 50, 8), colorMatrix(id + 50, 9)}) {
+              colorMatrix(id + 50, 8), colorMatrix(id + 50, 9), hslQualifier(id + 50, 0),
+              hslQualifier(id + 50, 1), hslQualifier(id + 50, 2)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

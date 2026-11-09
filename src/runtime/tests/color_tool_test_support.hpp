@@ -65,4 +65,30 @@ struct ColorMatrixSettings final {
     return kernel;
 }
 
+struct HslQualifierSettings final {
+    bool invert = false;
+    double hueCenter = 0.0;
+    double hueWidth = 360.0;
+    double hueSoftness = 20.0;
+    double satLow = 0.0;
+    double satHigh = 1.0;
+    double satSoftness = 0.1;
+    double lumaLow = 0.0;
+    double lumaHigh = 1.0;
+    double lumaSoftness = 0.1;
+};
+
+[[nodiscard]] inline ColorToolKernel hslQualifier(const std::uint64_t idBase,
+                                                  const HslQualifierSettings& settings) {
+    ColorToolKernel kernel;
+    kernel.operation = ColorToolOperation::HslQualifier;
+    kernel.choices[0] = settings.invert ? 1 : 0;
+    const std::array<double, 9> values{settings.hueCenter, settings.hueWidth,  settings.hueSoftness,
+                                       settings.satLow,    settings.satHigh,   settings.satSoftness,
+                                       settings.lumaLow,   settings.lumaHigh,  settings.lumaSoftness};
+    for (std::size_t index = 0; index < values.size(); ++index)
+        kernel.values[index] = scalar(idBase + 60 + index, values[index]);
+    return kernel;
+}
+
 } // namespace bloom::color_tool_test

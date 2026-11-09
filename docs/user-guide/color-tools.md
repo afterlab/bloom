@@ -28,6 +28,21 @@ on the straight color of scene-linear values and never changes alpha.
 Every value can be keyed or driven through its socket. Connect a Mask to **Mask** to limit the node
 to part of the image.
 
+## HSL Qualifier
+
+**HSL Qualifier** turns an image into a Mask of the pixels in a range of hue, saturation and
+brightness, to correct only those colors. Find it under **Keying & Mattes** in the Add menu. Connect
+its Mask to another node's **Mask** input. The formulas are in
+[Image filters](../architecture/image-filters.md#hsl-qualifier).
+
+- **Hue** is the middle of the colors to select, in degrees round the color wheel (0 red, 120 green,
+  240 blue), and **Hue width** how wide the window is; the window wraps past 360. **Hue softness**
+  feathers its edge.
+- **Saturation from** and **to**, and **Luma from** and **to**, limit the selection to a range of
+  colorfulness and brightness. Luma can go above 1 to reach bright HDR values. Each has a softness.
+- **Invert selection** selects everything else. The Mask is as strong as the pixel is opaque.
+- To shift or scale hues without selecting, use the hue curves in Curves; the qualifier only selects.
+
 ## Color Matrix
 
 **Color Matrix** mixes the red, green and blue of an image with a matrix, and converts between color

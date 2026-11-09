@@ -993,9 +993,11 @@ struct PixelMathKernel final {
 // forEachColorGradeOperand order (colorToolScalarCount of them).
 //   ToneMap  choices: method, gamut compression on; values: knee, ceiling, shadow recovery, shadow
 //            range, gamut threshold, gamut limit.
+//   HslQualifier  choices: invert; values: hue center, hue width, hue softness (degrees), saturation
+//            from, to and softness, luma from, to and softness. Gives mask coverage in all four channels.
 //   ColorMatrix  choices: preset, size, input model, output model; values: the matrix row by row
 //            (output red, green, blue, alpha; each from red, green, blue, alpha).
-enum class ColorToolOperation : std::uint8_t { ToneMap, ColorMatrix };
+enum class ColorToolOperation : std::uint8_t { ToneMap, ColorMatrix, HslQualifier };
 inline constexpr std::size_t kColorToolMaxScalars = 24;
 [[nodiscard]] constexpr std::size_t colorToolScalarCount(const ColorToolOperation operation) noexcept {
     switch (operation) {
@@ -1003,6 +1005,8 @@ inline constexpr std::size_t kColorToolMaxScalars = 24;
         return 6;
     case ColorToolOperation::ColorMatrix:
         return 16;
+    case ColorToolOperation::HslQualifier:
+        return 9;
     }
     return 0;
 }

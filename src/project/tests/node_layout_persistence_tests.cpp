@@ -183,7 +183,7 @@ void blurNodeReopen() {
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure", "bloom.tone-map", "bloom.color-matrix",
+          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure", "bloom.tone-map", "bloom.color-matrix", "bloom.hsl-qualifier",
           "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
           "bloom.test-card", "bloom.corner-pin", "bloom.st-map", "bloom.displace"}) {
         const auto node = draft.ids().allocateNode();

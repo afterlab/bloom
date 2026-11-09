@@ -1612,6 +1612,40 @@ displayProofRunner(const bool customView) {
                              "every color model read and written, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #523 HSL Qualifier: a soft hue window across the wrap, a saturation and a luma window, and an
+    // inverted selection, as mask coverage through the production builder.
+    add(
+        "node.bloom.hsl-qualifier", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color tool tests",
+        [runGrades] {
+            bloom::color_tool_test::HslQualifierSettings hue;
+            hue.hueCenter = 350.0;
+            hue.hueWidth = 60.0;
+            hue.hueSoftness = 40.0;
+            bloom::color_tool_test::HslQualifierSettings ranges;
+            ranges.satLow = 0.2;
+            ranges.satHigh = 0.9;
+            ranges.lumaLow = 0.1;
+            ranges.lumaHigh = 2.0;
+            ranges.lumaSoftness = 0.5;
+            ranges.invert = true;
+            bloom::color_tool_test::HslQualifierSettings hard;
+            hard.hueCenter = 120.0;
+            hard.hueWidth = 90.0;
+            hard.hueSoftness = 0.0;
+            hard.satSoftness = 0.0;
+            hard.lumaSoftness = 0.0;
+            const auto make = [](const bloom::color_tool_test::HslQualifierSettings settings) {
+                return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+                    return bloom::color_tool_test::hslQualifier(idBase, settings);
+                };
+            };
+            return runGrades({make(hue), make(ranges), make(hard)}, 523000,
+                             "production HSL Qualifier node: a soft hue window across the wrap, "
+                             "inverted saturation and luma windows and hard edges over HDR and "
+                             "signed values, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from
     // a channel and luma, and a custom Black & White mix; #541 a repeating Gradient Map through a
     // bound multi-stop gradient (unsorted stops, a hard edge, HDR and signed colours).

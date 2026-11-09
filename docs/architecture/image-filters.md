@@ -1843,6 +1843,48 @@ model (red, white, gray, HDR) and the round trip of every model, the domains and
 the native harness holds ten variants (each model out and back, a 4 x 4 mix and a preset) to the CPU
 oracle. [Benchmarks](../development/benchmarks.md) lists `color-matrix-2k`, written and not yet run.
 
+## HSL Qualifier
+
+`bloom.hsl-qualifier`, schema 1, under Keying & Mattes (issue #523), selects the pixels of an image
+whose hue, saturation and luma lie in chosen ranges, as a soft Mask. It has one Image in, `input`,
+and one Mask out, `mask`, and like Luma Key (the other Image to Mask node) takes no effect mask. It
+lowers to the same `ColorToolKernel` image effect (grade kind `ColorTool`) as Tone Map and Color
+Matrix, with the operation `HslQualifier`; the Mask is carried as coverage in all four channels.
+
+| Role | Default | Domain |
+|---|---|---|
+| `hueCenter`, `hueWidth`, `hueSoftness` | 0, 360, 20 degrees | 0 to 360, 0 to 360, 0 to 180 |
+| `satLow`, `satHigh`, `satSoftness` | 0, 1, 0.1 | 0 to 1 |
+| `lumaLow`, `lumaHigh`, `lumaSoftness` | 0, 1, 0.1 | 0 to 10000 (luma above 1 is HDR) |
+| `invert` | off | constant |
+
+The default selects every color. Every value can be keyed or driven through its socket.
+
+**The pixel**, in binary32, on the straight color (stored color divided by alpha). A pixel with alpha
+0 has no coverage.
+
+1. Hue and saturation are HSV's (as in Color Matrix); luma is the Rec. 709 weighting
+   `((0.2126 r + 0.7152 g) + 0.0722 b)`. A pixel with no saturation has hue 0.
+2. Each range gives a selection. For hue, the distance is the shorter way round the turn from
+   `hueCenter` minus half the `hueWidth`; for saturation and luma it is how far the value lies below
+   the low end or above the high end. A distance of 0 or less is selected (1); past it the selection
+   falls linearly to 0 over the softness; with no softness it is 0 at once.
+3. The three selections multiply. `invert` makes it `1 - selection`. The coverage is the selection
+   times the pixel's alpha.
+
+**Identity and cache.** The qualifier is never an identity. The packed table (32 floats) is the cache
+identity, and every operation is exact in binary32 with correctly rounded division, so the CPU
+reference and the GPU program (the fixed `bloom.render.color-tool.v1`) agree bit for bit. A muted
+HSL Qualifier is an empty Mask, never its Image.
+
+**Not duplicated.** The hue curves of Curves (Hue vs Hue, Hue vs Sat, Hue vs Luma, ...) already change
+a color by its hue; the qualifier only selects, and a Mask from it limits any other node.
+
+**Evidence.** `color_tool_tests.cpp` reads known windows (red, green, wrap past 360 degrees, soft and
+hard edges, gray, HDR white, invert, alpha) and the domain. `node.bloom.hsl-qualifier` prepares
+through the production builder, and the native harness holds three variants to the CPU oracle.
+[Benchmarks](../development/benchmarks.md) lists `hsl-qualifier-2k`, written and not yet run.
+
 ## Histogram
 
 `bloom.histogram`, schema 1, under Tracking & Analysis (issue #349), has one Image in, `input`, and one

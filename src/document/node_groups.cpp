@@ -27,10 +27,11 @@ constexpr std::array<std::string_view, 10> kChannels{
     "bloom.channel-shuffle",     "bloom.separate-channels", "bloom.combine-channels",
     "bloom.image-to-channel-set", "bloom.image-math", "bloom.image-map-range",
     "bloom.image-clamp"};
-// Planned: Channel Key, Chroma Key, Despill, Matte Refine, HSL Qualifier, Transition/Wipe Matte.
-constexpr std::array<std::string_view, 8> kKeyingMattes{
+// Planned: Channel Key, Chroma Key, Despill, Matte Refine, Transition/Wipe Matte.
+constexpr std::array<std::string_view, 9> kKeyingMattes{
     "bloom.luma-key",      "bloom.cryptomatte", "bloom.mask",         "bloom.mask-combine",
-    "bloom.image-to-mask", "bloom.matte-blur",  "bloom.matte-dilate", "bloom.matte-erode"};
+    "bloom.image-to-mask", "bloom.matte-blur",  "bloom.matte-dilate", "bloom.matte-erode",
+    "bloom.hsl-qualifier"};
 // Planned: Tile & Mirror.
 constexpr std::array<std::string_view, 9> kTransform{
     "bloom.transform-2d", "bloom.camera-shake", "bloom.stabilize", "bloom.crop", "bloom.pad",

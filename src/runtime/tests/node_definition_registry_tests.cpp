@@ -158,8 +158,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix.
-    expectations.expect(registry.definitions().size() == 235,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier.
+    expectations.expect(registry.definitions().size() == 236,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -313,6 +313,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                     "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure"},
                    document::NodeCategory::Filters);
     expectCategory({"bloom.tone-map", "bloom.color-matrix"}, document::NodeCategory::Grade);
+    expectCategory({"bloom.hsl-qualifier"}, document::NodeCategory::Compositing);
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
     // Vector 2 offset from the frame's centre.

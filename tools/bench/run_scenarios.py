@@ -499,6 +499,15 @@ class Builder:
                           sourcePort="channels", targetNode=node, port="channels")
             self.set_values(node, "bloom.cryptomatte", {"mattes": mattes})
             self.mattes[name] = node
+        for name, spec in (layer.get("qualifiers") or {}).items():
+            # #523: an HSL Qualifier reading the layer's image, by name among the Masks.
+            node = self.transact("bloom.node.add", composition=self.composition,
+                                 nodeType="bloom.hsl-qualifier")["node"]
+            self.transact("bloom.node.connect", composition=self.composition, sourceNode=source,
+                          sourcePort="image", targetNode=node, port="input")
+            self.set_values(node, "bloom.hsl-qualifier", spec.get("values") or {})
+            self.set_keys(node, spec.get("keys") or {})
+            self.mattes[name] = node
         for name, (mode, first, second) in (layer.get("maskCombine") or {}).items():
             node = self.transact("bloom.node.add", composition=self.composition,
                                  nodeType="bloom.mask-combine")["node"]

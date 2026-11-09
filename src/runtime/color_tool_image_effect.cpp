@@ -508,6 +508,91 @@ constexpr float kLabDeltaSquared3 = 0.12841855F;
     return grade;
 }
 
+// --- HSL Qualifier -------------------------------------------------------------------------------
+
+constexpr float kQualifierOperation = 2.0F;
+
+// 1 within the range, 0 beyond `soft` past it, a straight ramp between. `dist` is how far past the
+// range's edge a value lies (<= 0 inside).
+[[nodiscard]] float qualifierRamp(const float dist, const float soft) noexcept {
+    if (dist <= 0.0F)
+        return 1.0F;
+    if (soft <= 0.0F)
+        return 0.0F;
+    const float q = dist / soft;
+    if (q >= 1.0F)
+        return 0.0F;
+    return 1.0F - q;
+}
+
+// A range [low, high] of a value: the distance past the nearer edge.
+[[nodiscard]] float qualifierRange(const float v, const float low, const float high,
+                                   const float soft) noexcept {
+    const float below = low - v;
+    const float above = v - high;
+    return qualifierRamp(std::max(below, above), soft);
+}
+
+[[nodiscard]] std::optional<PreparedColorGrade> prepareHslQualifier(const ColorToolKernel& kernel,
+                                                                    const std::span<const double> v) {
+    if (v.size() != colorToolScalarCount(ColorToolOperation::HslQualifier) ||
+        kernel.choices[0] < 0 || kernel.choices[0] > 1)
+        return std::nullopt;
+    constexpr double kL = 1.0e4;
+    if (!within(v[0], 0.0, 360.0) || !within(v[1], 0.0, 360.0) || !within(v[2], 0.0, 180.0) ||
+        !within(v[3], 0.0, 1.0) || !within(v[4], 0.0, 1.0) || !within(v[5], 0.0, 1.0) ||
+        !within(v[6], 0.0, kL) || !within(v[7], 0.0, kL) || !within(v[8], 0.0, kL))
+        return std::nullopt;
+    PreparedColorGrade grade{ColorGradeKind::ColorTool, std::vector<float>(kColorToolFloats, 0.0F),
+                             false};
+    auto& d = grade.data;
+    d[0] = kQualifierOperation;
+    d[1] = static_cast<float>(kernel.choices[0]);
+    d[4] = static_cast<float>(v[0]);
+    d[5] = static_cast<float>(v[1]) * 0.5F;
+    d[6] = static_cast<float>(v[2]);
+    d[8] = static_cast<float>(v[3]);
+    d[9] = static_cast<float>(v[4]);
+    d[10] = static_cast<float>(v[5]);
+    d[12] = static_cast<float>(v[6]);
+    d[13] = static_cast<float>(v[7]);
+    d[14] = static_cast<float>(v[8]);
+    return grade;
+}
+
+[[nodiscard]] bool hslQualifierPixel(const std::vector<float>& d,
+                                     std::array<float, 4>& pixel) noexcept {
+    const float a = pixel[3];
+    if (a == 0.0F) {
+        pixel = {0.0F, 0.0F, 0.0F, 0.0F};
+        return true;
+    }
+    const Triple c{pixel[0] / a, pixel[1] / a, pixel[2] / a};
+    if (!std::isfinite(c[0]) || !std::isfinite(c[1]) || !std::isfinite(c[2]))
+        return false;
+    const Triple hsv = rgbToHsv(c);
+    const float hue = hsv[0] * 360.0F;
+    const float diff = hue - d[4];
+    const float away = std::abs(diff);
+    const float other = 360.0F - away;
+    const float hueDist = std::min(away, other) - d[5];
+    const float hueSel = qualifierRamp(hueDist, d[6]);
+    const float satSel = qualifierRange(hsv[1], d[8], d[9], d[10]);
+    const float ya = kLumaR * c[0];
+    const float yb = kLumaG * c[1];
+    const float yc = kLumaB * c[2];
+    const float yab = ya + yb;
+    const float luma = yab + yc;
+    const float lumaSel = qualifierRange(luma, d[12], d[13], d[14]);
+    const float hs = hueSel * satSel;
+    float m = hs * lumaSel;
+    if (d[1] != 0.0F)
+        m = 1.0F - m;
+    const float covered = m * a;
+    pixel = {covered, covered, covered, covered};
+    return true;
+}
+
 } // namespace
 
 std::optional<PreparedColorGrade> prepareColorToolGrade(const ColorToolKernel& kernel,
@@ -517,6 +602,8 @@ std::optional<PreparedColorGrade> prepareColorToolGrade(const ColorToolKernel& k
         return prepareToneMap(kernel, values);
     case ColorToolOperation::ColorMatrix:
         return prepareColorMatrix(kernel, values);
+    case ColorToolOperation::HslQualifier:
+        return prepareHslQualifier(kernel, values);
     }
     return std::nullopt;
 }
@@ -529,6 +616,8 @@ bool colorToolPixel(const std::vector<float>& table, std::array<float, 4>& pixel
         return toneMapPixel(table, pixel);
     case 1:
         return colorMatrixPixel(table, pixel);
+    case 2:
+        return hslQualifierPixel(table, pixel);
     default:
         return false;
     }
@@ -540,8 +629,10 @@ bool validColorToolProgramData(const std::vector<float>& data) noexcept {
     const auto whole = [](const float value, const float high) {
         return value >= 0.0F && value <= high && value == std::floor(value);
     };
-    if (!whole(data[0], 1.0F))
+    if (!whole(data[0], 2.0F))
         return false;
+    if (data[0] == 2.0F)
+        return whole(data[1], 1.0F);
     if (data[0] == 1.0F)
         return whole(data[1], 1.0F) && whole(data[2], 4.0F) && whole(data[3], 4.0F);
     return whole(data[1], 1.0F) && whole(data[2], 1.0F);
@@ -865,9 +956,49 @@ vec4 bct_color_matrix(vec4 p) {
  if (!bct_finite(stored.r) || !bct_finite(stored.g) || !bct_finite(stored.b)) { return vec4(0.0, 0.0, 0.0, 2.0); }
  return vec4(stored, alpha);
 }
+float bct_ramp(float dist, float soft) {
+ if (dist <= 0.0) { return 1.0; }
+ if (soft <= 0.0) { return 0.0; }
+ float q = bloom_ocio_cpu_div(dist, soft);
+ if (q >= 1.0) { return 0.0; }
+ precise float r = 1.0 - q;
+ return r;
+}
+float bct_range(float v, float low, float high, float soft) {
+ precise float below = low - v;
+ precise float above = v - high;
+ return bct_ramp(max(below, above), soft);
+}
+vec4 bct_hsl_qualifier(vec4 p) {
+ float a = p.a;
+ if (a == 0.0) { return vec4(0.0); }
+ vec3 c = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a));
+ if (!bct_finite(c.r) || !bct_finite(c.g) || !bct_finite(c.b)) { return vec4(0.0, 0.0, 0.0, 2.0); }
+ vec3 hsv = bcm_rgb_to_hsv(c);
+ precise float hue = hsv.x * 360.0;
+ precise float diff = hue - bct(4);
+ float away = abs(diff);
+ precise float other = 360.0 - away;
+ precise float hueDist = min(away, other) - bct(5);
+ float hueSel = bct_ramp(hueDist, bct(6));
+ float satSel = bct_range(hsv.y, bct(8), bct(9), bct(10));
+ precise float ya = 0.2126 * c.r;
+ precise float yb = 0.7152 * c.g;
+ precise float yc = 0.0722 * c.b;
+ precise float yab = ya + yb;
+ precise float luma = yab + yc;
+ float lumaSel = bct_range(luma, bct(12), bct(13), bct(14));
+ precise float hs = hueSel * satSel;
+ precise float m0 = hs * lumaSel;
+ float m = m0;
+ if (bct(1) != 0.0) { precise float inv = 1.0 - m0; m = inv; }
+ precise float covered = m * a;
+ return vec4(covered);
+}
 vec4 bloom_color_tool(ivec2 c) {
  vec4 p = imageLoad(bloom_ocio_input, c);
  int op = int(bct(0));
+ if (op == 2) { return bct_hsl_qualifier(p); }
  if (op == 1) { return bct_color_matrix(p); }
  return bct_tone_map(p);
 }

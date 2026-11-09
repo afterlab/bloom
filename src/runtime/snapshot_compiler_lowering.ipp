@@ -2312,6 +2312,12 @@ lowerImageEffect(const document::NodeRecord& node,
             choice("outputModel", 3, document::kColorModelCount - 1);
             scalars({"rr", "rg", "rb", "ra", "gr", "gg", "gb", "ga", "br", "bg", "bb", "ba", "ar",
                      "ag", "ab", "aa"});
+        } else if (node.typeId == document::kHslQualifierNodeType) {
+            // #523 HSL Qualifier: an Image to a Mask.
+            kernel.operation = runtime::ColorToolOperation::HslQualifier;
+            flag("invert", 0);
+            scalars({"hueCenter", "hueWidth", "hueSoftness", "satLow", "satHigh", "satSoftness",
+                     "lumaLow", "lumaHigh", "lumaSoftness"});
         }
         if (!lowered) {
             addTopologyFailure(node.id, "Color tool parameters could not be lowered.");
