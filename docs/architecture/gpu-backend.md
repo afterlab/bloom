@@ -1914,8 +1914,12 @@ slots. Each is now counted as what it is; no budget was raised.
   every prepared window and the phase raises its claim to that live set when it is more
   (`GpuProcessingPhaseLease::raiseExecutorNeed`): a gradient node drawn in its own window larger
   than the frame is counted at its size. The device admits, waits for or refuses the larger need;
-  an executor ceiling below it refuses the scene. Images are counted at their requested extent, not
-  the allocator's rounding of it.
+  an executor ceiling below it refuses the scene. Images are counted at what the device allocates,
+  not at their requested extent: the device reports `render::GpuAllocationSizes` (carried in
+  `GpuAllocationBudget::allocation_sizes`, probed with `vkGetImageMemoryRequirements` on the image
+  formats and memoised per size), `GpuProcessingPhasePolicy` rounds each claimed image with it, and
+  the per-operation metadata buffers (axis tables, staging, status words) join the claim. A device
+  that reports no sizes is claimed at the requested extent, as before.
 - **The CPU reference folds Merges too.** When plan order would hold more than eight images and
   folding holds less, the CPU reference composites each Merge entry as it is ready and releases it
   (`detail::mergeFoldSteps`), so a CPU-only export of a few hundred layers holds a few frames.

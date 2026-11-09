@@ -205,7 +205,10 @@ struct Lcg final {
         << "<defs><radialGradient id=\"glow\" cx=\"0.5\" cy=\"0.5\" r=\"0.5\">"
         << "<stop offset=\"0\" stop-color=\"#ffd040\"/><stop offset=\"1\" stop-color=\"#c02060\"/>"
         << "</radialGradient><clipPath id=\"disc\"><circle cx=\"250\" cy=\"60\" r=\"40\"/>"
-        << "</clipPath></defs>\n"
+        << "</clipPath><linearGradient id=\"sweep\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\">"
+        << "<stop offset=\"0\" stop-color=\"#f0f020\"/><stop offset=\"1\" stop-color=\"#2020f0\"/>"
+        << "</linearGradient><clipPath id=\"window\"><rect x=\"110\" y=\"100\" width=\"130\" "
+           "height=\"70\"/></clipPath></defs>\n"
         << "<path id=\"mover\" fill=\"#2060c0\" d=\"M20 20 L60 20 L60 60 L20 60 Z\"/>\n"
         << "<ellipse id=\"wash\" cx=\"160\" cy=\"90\" rx=\"300\" ry=\"200\" fill=\"url(#glow)\" "
            "opacity=\"0.4\"/>\n"
@@ -231,9 +234,21 @@ struct Lcg final {
         }
         svg << "</g>\n";
     }
+    // On top of everything: one compound shape (an outer square with a square counter, even-odd)
+    // filled with a gradient, matted by a clip, inside two nested opacity groups. Its counter's
+    // corner is keyed, so the compound value is edited, not just drawn.
+    svg << "<g id=\"ringOuter\" opacity=\"0.9\"><g id=\"ringInner\" opacity=\"0.8\">"
+        << "<path id=\"ring\" fill=\"url(#sweep)\" fill-rule=\"evenodd\" clip-path=\"url(#window)\" "
+           "d=\"M130 105 H230 V165 H130 Z M160 120 H200 V150 H160 Z\"/>"
+        << "</g></g>\n";
     svg << "</svg>\n";
     return svg.str();
 }
+
+// The CPU route's Viewer frames, kept so the GPU route's can be held against them: the same
+// document through the CPU reference and the device must show the same picture.
+std::array<std::vector<std::uint8_t>, 3> gCpuViewer;
+std::array<std::uint32_t, 3> gCpuViewerWidth{};
 
 struct Route final {
     const char* name;
@@ -339,6 +354,46 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
                       authored, authored.composition, *mover, core::RationalTime{}, *start)
                       .succeeded(),
                   "the mover takes its first-frame key");
+    // The compound ring: drag one corner of its counter and one corner of its outline.
+    std::optional<document::ParameterId> ring;
+    std::optional<document::PathValue> ringStart;
+    for (const auto& node : main->graph().nodes()) {
+        if (node.typeId != document::kPathValueNodeType)
+            continue;
+        for (const auto& binding : node.parameters) {
+            if (binding.role != document::kValueParameterRole)
+                continue;
+            const auto* record = main->parameters().find(binding.parameterId);
+            const auto* constant =
+                record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+            const auto* value =
+                constant ? std::get_if<document::PathValue>(&constant->value) : nullptr;
+            if (value != nullptr && value->contours.size() == 2 && !ring) {
+                ring = binding.parameterId;
+                ringStart = *value;
+            }
+        }
+    }
+    checks.expect(ring.has_value(), "the compound ring imports as one Path node of two contours");
+    if (!ring.has_value()) {
+        return std::nullopt;
+    }
+    auto ringMoved = *ringStart;
+    ringMoved.contours[0].anchors[0].point.x -= 15.0;
+    ringMoved.contours[0].anchors[0].point.y -= 10.0;
+    ringMoved.contours[1].anchors[0].point.x += 12.0;
+    ringMoved.contours[1].anchors[0].point.y += 8.0;
+    checks.expect(edit<commands::SetKeyframeAtTimeForParameter>(
+                      authored, authored.composition, *ring,
+                      *core::RationalTime::create(static_cast<std::int64_t>(kFrames - 1),
+                                                  static_cast<std::int64_t>(kFps)),
+                      ringMoved)
+                      .succeeded(),
+                  "the ring takes its last-frame key (a corner and a counter point moved)");
+    checks.expect(edit<commands::SetKeyframeAtTimeForParameter>(
+                      authored, authored.composition, *ring, core::RationalTime{}, *ringStart)
+                      .succeeded(),
+                  "the ring takes its first-frame key");
     return authored;
 }
 
@@ -463,6 +518,37 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                   prefix + "every Viewer frame came from the expected route, none from a fallback");
     checks.expect(shown[0].rgba != shown[2].rgba && shown[1].rgba != shown[0].rgba,
                   prefix + "the keyed path moves the picture in the Viewer");
+    // The compound ring (gradient, clip matte, nested opacity, keyed corner and counter point)
+    // differs between the first and last frame inside its window, where nothing else is keyed.
+    {
+        const auto inWindow = [&](const Pixels& pixels) {
+            std::vector<std::uint8_t> region;
+            for (std::uint32_t y = 100; y < 170; ++y)
+                for (std::uint32_t x = 110; x < 240; ++x)
+                    for (std::size_t c = 0; c < 4; ++c)
+                        region.push_back(pixels.rgba[(static_cast<std::size_t>(y) * pixels.width + x) * 4 + c]);
+            return region;
+        };
+        checks.expect(inWindow(shown[0]) != inWindow(shown[2]),
+                      prefix + "dragging the ring's corner and counter point changes the matted compound shape");
+    }
+    // CPU against GPU: the CPU route runs first and keeps its frames.
+    for (std::size_t index = 0; index < kShownFrames.size(); ++index) {
+        if (!route.gpu) {
+            gCpuViewer.at(index) = shown.at(index).rgba;
+            gCpuViewerWidth.at(index) = shown.at(index).width;
+        } else if (!gCpuViewer.at(index).empty()) {
+            Pixels cpu;
+            cpu.ok = true;
+            cpu.width = gCpuViewerWidth.at(index);
+            cpu.height = shown.at(index).height;
+            cpu.rgba = gCpuViewer.at(index);
+            checks.expect(framesMatch(cpu, shown.at(index)),
+                          prefix + "Viewer frame " + std::to_string(kShownFrames.at(index)) +
+                              " matches the CPU route (paths, gradient, matte, opacity, nesting; "
+                              "RGB within one code, exact alpha)");
+        }
+    }
 
     // RAM preview at Half: cold fills every frame, warm prepares nothing and dispatches nothing.
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);

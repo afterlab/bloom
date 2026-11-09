@@ -390,7 +390,9 @@ constexpr std::array kNotes{
         "nodes, track mattes and Path Stroke. Transforms and the view box are baked into the points. "
         "The file is read here (nothing is fetched, no script runs); what could not be imported is "
         "listed by name in the operation's warnings. One undo step. `fit` (default true) scales the "
-        "artwork to fit the composition and centres it.",
+        "artwork to fit the composition and centres it. `projectDirectory` (optional) is the project "
+        "folder the source file's recorded locator is made relative to; the file's path and "
+        "SHA-256 are kept in the project's assets.",
         "layer, slot, merge", "query:layers bloom.node.set-parameter-value", ""},
     OperationNotes{"bloom.layer.move-before",
         "Reorders the layer stack: moves a slot to sit above another slot, or to the bottom. "

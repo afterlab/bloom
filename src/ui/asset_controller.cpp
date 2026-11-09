@@ -1029,6 +1029,23 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                                         .subphase = std::string(name.begin(), name.end()),
                                         .completed = 0,
                                         .total = std::nullopt});
+                {
+                    // The same progress report as a media batch of one, so the dialog, the
+                    // artist's stop and the test seam see this route as they see that one.
+                    commands::ImportProgress state;
+                    state.phase = commands::ImportProgress::Phase::Reading;
+                    state.completed = 0;
+                    state.total = 1;
+                    state.workDone = 0;
+                    state.workTotal = 1;
+                    state.current = files.front();
+                    {
+                        const std::lock_guard lock(shared->mutex);
+                        shared->progress = state;
+                    }
+                    if (hook)
+                        hook(state);
+                }
                 auto read = media::readSvgSceneFile(files.front(), stop);
                 if (read.error == media::SvgError::Cancelled || context.isCancellationRequested())
                     return runtime::TaskResult<OperationHandle>::cancelled();
@@ -1051,10 +1068,47 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                                         .summary = skipped.name + ": " + skipped.reason,
                                         .detail = skipped.reason,
                                         .suggestedAction = {}});
+                // What the file asks for that the artwork approximates (a filter that is not applied,
+                // a dash pattern) is named on the job too, by the element's id, label or position.
+                const auto collect = [&](const auto& self, const media::SvgElement& element) -> void {
+                    for (const auto& text : element.approximations)
+                        warnings.push_back({.code = "bloom.svg.approximated",
+                                            .severity = runtime::DiagnosticSeverity::Warning,
+                                            .summary = (element.where.empty() ? element.name : element.where) +
+                                                       ": " + text,
+                                            .detail = text,
+                                            .suggestedAction = {}});
+                    for (const auto& child : element.children)
+                        self(self, child);
+                };
+                collect(collect, read.scene->root);
+                // The installed fonts are read here, on the worker, only for a file with text.
+                std::shared_ptr<const platform::FontCatalogue> fonts;
+                const auto hasText = [](const auto& self, const media::SvgElement& element) -> bool {
+                    if (element.kind == media::SvgElement::Kind::Text)
+                        return true;
+                    return std::ranges::any_of(element.children, [&](const auto& child) {
+                        return self(self, child);
+                    });
+                };
+                if (hasText(hasText, read.scene->root)) {
+                    context.reportProgress({.phase = "Finding fonts",
+                                            .subphase = std::string(name.begin(), name.end()),
+                                            .completed = 0,
+                                            .total = std::nullopt});
+                    fonts = std::make_shared<const platform::FontCatalogue>(
+                        platform::FontCatalogueProvider{}.enumerate(stop, false));
+                    if (stop())
+                        return runtime::TaskResult<OperationHandle>::cancelled();
+                }
                 const auto stem = files.front().stem().u8string();
-                *result = std::make_unique<commands::AddSvgArtwork>(
+                auto artwork = std::make_unique<commands::AddSvgArtwork>(
                     compositionId, read.scene, files.front(),
                     std::string(stem.begin(), stem.end()), true);
+                artwork->withProjectDirectory(directory);
+                if (fonts)
+                    artwork->withFonts(std::move(fonts));
+                *result = std::move(artwork);
             } else {
                 {
                     const std::lock_guard lock(shared->mutex);
@@ -1970,6 +2024,16 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                         if (const auto* asset = session_.snapshot().project().findAsset(*id))
                             added.push_back(asset->locator.path);
                 report.imported = svgArtwork && executed.succeeded() ? 1 : added.size();
+                // What the importer could not carry over (a font that is not installed, a filter it
+                // does not apply) stays listed by name, not only the reader's skipped items.
+                if (svgArtwork) {
+                    constexpr std::size_t kListed = 12;
+                    for (std::size_t index = 0; index < executed.warnings.size() && index < kListed; ++index)
+                        emit diagnostic(QString::fromStdString(executed.warnings[index].issue.message));
+                    if (executed.warnings.size() > kListed)
+                        emit diagnostic(tr("%1 more notes about this SVG are in the operation's warnings")
+                                            .arg(executed.warnings.size() - kListed));
+                }
                 // A file the project already holds (same file, same bytes) is not added twice.
                 for (std::size_t index = 0; index < preparedPaths.size(); ++index)
                     if (std::ranges::find(added, preparedPaths[index]) == added.end())

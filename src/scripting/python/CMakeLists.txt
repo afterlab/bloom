@@ -105,4 +105,8 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.scripting.python-first-five-minutes
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/examples/scripting/first_five_minutes.py"
         LABELS scripting python integration device)
+    # #343: import an SVG, move and key one point of a compound shape, read it back, undo.
+    bloom_add_test(NAME bloom.scripting.python-svg-import
+        COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_svg_import.py"
+        LABELS scripting python integration)
 endif()

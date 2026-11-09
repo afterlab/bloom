@@ -18,6 +18,7 @@
 
 #include "document_render_parity_support.hpp"
 #include "gpu_scene_effect_emission.hpp"
+#include "gpu_coverage_ocio_support.hpp"
 #include "gpu_scene_preparation_builders.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
@@ -41,9 +42,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <tuple>
 
 namespace {
 
@@ -325,7 +328,8 @@ referenceAt(Expectations& expectations, const Fixture& fixture, const core::Rati
 constexpr std::uint64_t kGib = 1ULL << 30;
 
 std::shared_ptr<runtime::GpuProcessingPhasePolicy>
-policyWithHost(const std::uint64_t limitBytes, const std::uint64_t currentBytes) {
+policyWithHost(const std::uint64_t limitBytes, const std::uint64_t currentBytes,
+               std::shared_ptr<const render::GpuAllocationSizes> allocationSizes = nullptr) {
     using namespace runtime;
     auto policy = std::make_shared<GpuProcessingPhasePolicy>(4);
     const auto now = GpuProcessingPhasePolicy::Clock::now();
@@ -344,7 +348,8 @@ policyWithHost(const std::uint64_t limitBytes, const std::uint64_t currentBytes)
     static_cast<void>(
         policy->reportDevice(343, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
                                    .device_local_bytes = 8 * kGib,
-                                   .available_bytes = 8 * kGib}));
+                                   .available_bytes = 8 * kGib,
+                                   .allocation_sizes = std::move(allocationSizes)}));
     return policy;
 }
 
@@ -865,6 +870,73 @@ void gradientWindowsAndAdmission(Expectations& expectations, const Rendered& gra
     expectations.expect(policy->snapshot().reservations.admittedPhases == 0 &&
                             policy->snapshot().reservations.totalHostClaimBytes == 0,
                         "retirement: the raised claim returns with the phase");
+    // The allocator takes more than width * height * 16 for an image: rows and tiles are padded
+    // (on one GPU a 1920-wide float image takes the room of a 2048-wide one). The device reports
+    // that to the root with its budget and the claim counts it. Here a stand-in device pads every
+    // image's width to a multiple of 64 pixels and its height to a multiple of 8.
+    {
+        auto paddedSizes = std::make_shared<render::GpuAllocationSizes>();
+        paddedSizes->image = [](const std::uint32_t width, const std::uint32_t height) -> std::uint64_t {
+            return std::uint64_t{(width + 63) / 64 * 64} * ((height + 7) / 8 * 8) *
+                   sizeof(render::Rgba32f);
+        };
+        paddedSizes->buffer = [](const std::uint64_t bytes) -> std::uint64_t {
+            return (bytes + 4095) / 4096 * 4096;
+        };
+        const std::shared_ptr<const render::GpuAllocationSizes> padded = paddedSizes;
+        const auto roundedFrame = padded->image(kGradientWidth, kGradientHeight);
+        const auto roundedPeak = runtime::detail::gpuExecutorLivePeakBytes(
+            *gradients.plan, output, roundedFrame, &windows, padded.get(),
+            {kGradientWidth, kGradientHeight});
+        expectations.expect(roundedPeak > realPeak,
+                            "allocation: padded images need more than their requested extents (" +
+                                std::to_string(roundedPeak) + " against " +
+                                std::to_string(realPeak) + " bytes)");
+        auto paddedPolicy = policyWithHost(8 * kGib, 6 * kGib, padded);
+        auto paddedPhase = phaseFor(paddedPolicy, true);
+        paddedPhase.envelope.minimumExecutorBytes = kGradientFrameBytes;
+        {
+            const runtime::CpuGpuSceneBuilder builder(nullptr, {}, {}, paddedPhase);
+            const auto admitted = builder.build(gradients.plan, gradients.request);
+            expectations.expect(admitted.hasValue() && admitted.phaseLease != nullptr,
+                                "allocation: the padded scene is admitted: " +
+                                    admitted.diagnostic.message);
+            if (admitted.phaseLease) {
+                expectations.expect(admitted.phaseLease->imageAllocationBytes(
+                                        kGradientWidth, kGradientHeight) == roundedFrame,
+                                    "allocation: the lease answers with the device's sizes");
+                expectations.expect(admitted.phaseLease->executorByteLimit() >= roundedPeak,
+                                    "allocation: the claim counts what the allocator takes (" +
+                                        std::to_string(admitted.phaseLease->executorByteLimit()) +
+                                        " against " + std::to_string(roundedPeak) + " bytes)");
+            }
+        }
+        // A ceiling that held the requested extents but not the allocations is refused now, where
+        // the executor would have been charged past it; a ceiling at the rounded need renders.
+        auto tight = paddedPhase;
+        tight.envelope.requestedExecutorBytes = realPeak;
+        {
+            const runtime::CpuGpuSceneBuilder builder(nullptr, {}, {}, tight);
+            const auto refused = builder.build(gradients.plan, gradients.request);
+            expectations.expect(!refused.hasValue() &&
+                                    refused.diagnostic.code ==
+                                        runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                                "allocation: a ceiling at the requested extents is refused: " +
+                                    refused.diagnostic.message);
+        }
+        auto exact = paddedPhase;
+        exact.envelope.requestedExecutorBytes = roundedPeak;
+        {
+            const runtime::CpuGpuSceneBuilder builder(nullptr, {}, {}, exact);
+            const auto admitted = builder.build(gradients.plan, gradients.request);
+            expectations.expect(admitted.hasValue() && admitted.phaseLease != nullptr &&
+                                    admitted.phaseLease->executorByteLimit() == roundedPeak,
+                                "allocation: a ceiling at the rounded need admits the scene: " +
+                                    admitted.diagnostic.message);
+        }
+        expectations.expect(paddedPolicy->snapshot().reservations.admittedPhases == 0,
+                            "retirement: the padded claims return with their phases");
+    }
     // An executor ceiling between the floor and the real need refuses the scene rather than
     // drawing past it.
     auto ceiling = phase;
@@ -880,6 +952,75 @@ void gradientWindowsAndAdmission(Expectations& expectations, const Rendered& gra
         expectations.expect(policy->snapshot().reservations.admittedPhases == 0,
                             "retirement: a refused scene holds nothing");
     }
+}
+
+
+// The claim counts what the allocator takes. The device probes the driver for each image's real
+// allocation size and reports it with its budget; the executor is charged those sizes. A request
+// whose byte budget is exactly the rounded claim renders the scene, with the live set inside it.
+void allocationClaim(Expectations& expectations, const Device& device, const Rendered& rendered,
+                     const std::shared_ptr<const runtime::PreparedGpuScene>& scene,
+                     const std::vector<std::optional<render::ImageWindow>>& windows) {
+    const auto budget = device.device->availableAllocationBudget();
+    expectations.expect(budget.allocation_sizes && budget.allocation_sizes->image &&
+                            budget.allocation_sizes->buffer,
+                        "allocation: the device reports its allocation sizes");
+    if (!budget.allocation_sizes || !budget.allocation_sizes->image || !budget.allocation_sizes->buffer)
+        return;
+    const auto& sizes = *budget.allocation_sizes;
+    const auto& sizer = sizes.image;
+    const auto output = rendered.request.output.value();
+    const auto& descriptor = *rendered.frame->processImage().descriptor();
+    const auto extent = descriptor.dataWindow().extent();
+    const auto frame = sizer(extent.width(), extent.height());
+    expectations.expect(frame >= std::uint64_t{extent.width()} * extent.height() *
+                                     sizeof(render::Rgba32f),
+                        "allocation: an image is never counted below its extent");
+    const auto requested = runtime::detail::gpuExecutorLivePeakBytes(
+        *rendered.plan, output, std::uint64_t{extent.width()} * extent.height() * sizeof(render::Rgba32f), &windows);
+    const auto rounded = runtime::detail::gpuExecutorLivePeakBytes(*rendered.plan, output, frame,
+                                                                   &windows, &sizes, {extent.width(), extent.height()});
+    expectations.expect(rounded >= requested, "allocation: rounding never lowers the claim");
+
+    runtime::GpuSceneExecutorBudgets serialBudgets;
+    serialBudgets.enableNativeBatches = false;
+    auto cache = device.cache();
+    auto executor = cache ? executorFor(*device.device, *cache, serialBudgets) : nullptr;
+    if (!executor)
+        return;
+    const auto run = [&](const std::uint64_t byteBudget) {
+        std::vector<render::Rgba32f> pixels;
+        if (executor->begin(scene, byteBudget).code != runtime::GpuSceneExecutorDiagnosticCode::None)
+            return pixels;
+        auto poll = executor->poll();
+        while (poll == runtime::GpuSceneExecutorPollResult::Pending)
+            poll = executor->poll();
+        if (poll == runtime::GpuSceneExecutorPollResult::Ready && executor->image() != nullptr) {
+            // The output image's real allocation is what the probe said for its extent.
+            expectations.expect(executor->image()->allocationBytes() ==
+                                    sizer(extent.width(), extent.height()),
+                                "allocation: the probe equals the allocator's size for the output "
+                                "image (" +
+                                    std::to_string(executor->image()->allocationBytes()) + " against " +
+                                    std::to_string(sizer(extent.width(), extent.height())) + ")");
+            if (const auto readback = render::readbackResidentImage(*executor->image(), kSceneBudget))
+                pixels = readback.pixels;
+        }
+        static_cast<void>(executor->takeImage());
+        return pixels;
+    };
+    const auto pixels = run(rounded);
+    expectations.expect(!pixels.empty() &&
+                            parity(pixels, rendered.frame->processImage().pixels()),
+                        "allocation: a request whose byte budget is exactly the rounded claim "
+                        "renders and matches the CPU reference: " +
+                            executor->diagnostic().message);
+    const auto peak = executor->counters().peakLiveImageBytes;
+    std::cout << "allocation " << extent.width() << "x" << extent.height() << ": requested claim " << requested << " bytes, rounded claim "
+              << rounded << " bytes, serial live peak " << peak << " bytes\n";
+    expectations.expect(peak <= rounded,
+                        "allocation: the serial live set is inside the rounded claim (" +
+                            std::to_string(peak) + " against " + std::to_string(rounded) + ")");
 }
 
 // The same picture on the device: cold and warm parity over keyed frames (a frame-pivot group
@@ -945,6 +1086,7 @@ void gradientsOnTheDevice(Expectations& expectations, const Device& device, Fixt
                           << static_cast<double>(claimed) / kGradientFrameBytes << " frames\n";
                 expectations.expect(peak <= claimed + kGradientFrameBytes,
                                     "memory: the serial live set is within what the phase claims");
+                allocationClaim(expectations, device, *frame, scene, windows);
             }
             const auto halfExtent =
                 render::ImageExtent::create(kGradientWidth / 2, kGradientHeight / 2);
@@ -955,6 +1097,437 @@ void gradientsOnTheDevice(Expectations& expectations, const Device& device, Fixt
                 parityOf(expectations, device, *half, "gradients at half resolution");
         }
     }
+}
+
+
+// ---- Pivot and blur ----
+//
+// An imported element and group turn about the centre of their own bounds, with nothing moved on
+// screen at import, and a file's Gaussian blur filter becomes the native blur.
+std::string pivotSvg() {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 144" width="256" height="144">
+<defs><filter id="soft"><feGaussianBlur stdDeviation="4"/></filter></defs>
+<rect id="square" x="30" y="30" width="40" height="40" fill="#ffffff"/>
+<g id="pair"><rect id="left" x="140" y="20" width="30" height="20" fill="#ff0000"/>
+<rect id="right" x="200" y="20" width="30" height="20" fill="#00ff00"/></g>
+<rect id="soft" x="100" y="90" width="40" height="30" fill="#ffffff" filter="url(#soft)"/>
+</svg>
+)svg";
+}
+
+[[nodiscard]] render::Rgba32f pixelOf(const Rendered& rendered, const std::int64_t x,
+                                      const std::int64_t y) {
+    const auto& image = rendered.frame->processImage();
+    const auto window = image.descriptor()->dataWindow();
+    if (x < window.originX() || y < window.originY() || x >= window.maxXExclusive() ||
+        y >= window.maxYExclusive())
+        return render::Rgba32f::transparent();
+    const auto width = static_cast<std::int64_t>(window.extent().width());
+    return image
+        .pixels()[static_cast<std::size_t>((y - window.originY()) * width + (x - window.originX()))];
+}
+
+// The scene for a reference frame, prepared with the packaged shader tools an image effect (the
+// blur) needs.
+[[nodiscard]] std::shared_ptr<const runtime::PreparedGpuScene>
+prepareWithTools(Expectations& expectations, const Rendered& rendered, const std::string& label) {
+    const auto ocio = gpu_coverage_ocio::sharedContext();
+    if (ocio == nullptr || ocio->preparer == nullptr) {
+        expectations.expect(false, label + ": the packaged shader tools are unavailable: " +
+                                       std::string(gpu_coverage_ocio::unavailableReason()));
+        return nullptr;
+    }
+    runtime::CpuCompositionEvaluator evaluator;
+    auto context = runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
+    const runtime::CpuGpuSceneBuilder builder(nullptr, context, *ocio);
+    const auto built = builder.build(rendered.plan, rendered.request);
+    expectations.expect(built.hasValue(), label + ": prepares: " + built.diagnostic.message);
+    return built.scene;
+}
+
+// Cold and warm parity of a reference frame whose scene needs the shader tools.
+void parityWithTools(Expectations& expectations, const Device& device, const Rendered& rendered,
+                     const std::string& label) {
+    const auto scene = prepareWithTools(expectations, rendered, label);
+    auto cache = device.cache();
+    auto executor = cache ? executorFor(*device.device, *cache) : nullptr;
+    expectations.expect(executor != nullptr, label + ": the executor creates");
+    if (!scene || !executor)
+        return;
+    const auto expected = rendered.frame->processImage().pixels();
+    const auto cold = runScene(*executor, scene);
+    expectations.expect(!cold.empty() && parity(cold, expected),
+                        label + ": GPU pixels match the CPU oracle (2e-6): " +
+                            executor->diagnostic().message);
+    const auto before = executor->counters().dispatches;
+    const auto warm = runScene(*executor, scene);
+    expectations.expect(parity(warm, expected) && executor->counters().dispatches == before,
+                        label + ": a warm rerun matches and dispatches nothing new");
+}
+
+// The frames the device half compares against the GPU.
+using KeyedFrames = std::vector<std::pair<std::string, Rendered>>;
+
+KeyedFrames pivotAndBlur(Expectations& expectations, Fixture& fixture) {
+    KeyedFrames frames;
+    const auto& graph = composition(fixture.document, fixture.main).graph();
+    const auto rest = referenceAt(expectations, fixture, {}, "pivot at import");
+    if (!rest)
+        return frames;
+    frames.emplace_back("pivot at import", *rest);
+    const auto role = [&](const std::string& name, const std::string_view which) {
+        const auto& layer = layerNamed(fixture, name);
+        const auto* binding = document::layerParameterBinding(graph, layer, which);
+        if (binding == nullptr)
+            throw std::runtime_error(name + " has no " + std::string(which));
+        return binding->parameterId;
+    };
+    const auto vec2Of = [&](const document::ParameterId id) {
+        const auto* record = composition(fixture.document, fixture.main).parameters().find(id);
+        const auto* constant =
+            record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+        const auto* value = constant ? std::get_if<document::Vec2d>(&constant->value) : nullptr;
+        return value ? *value : document::Vec2d{-1, -1};
+    };
+    const document::Vec2d frameCentre{kWidth / 2.0, kHeight / 2.0};
+    // The pivots sit at the centres of the bounds: Position names where the pivot lands and Anchor
+    // is its offset from the frame's centre.
+    const auto squarePosition = vec2Of(role("square", document::kPositionParameterRole));
+    const auto squareAnchor = vec2Of(role("square", document::kAnchorParameterRole));
+    const auto pairPosition = vec2Of(role("pair", document::kPositionParameterRole));
+    const auto pairAnchor = vec2Of(role("pair", document::kAnchorParameterRole));
+    const auto softPosition = vec2Of(role("soft", document::kPositionParameterRole));
+    const auto softAnchor = vec2Of(role("soft", document::kAnchorParameterRole));
+    expectations.expect(squarePosition.x == 50.0 && squarePosition.y == 50.0 &&
+                            squareAnchor.x == 50.0 - frameCentre.x &&
+                            squareAnchor.y == 50.0 - frameCentre.y,
+                        "pivot: the square's pivot is the centre of its bounds");
+    expectations.expect(pairPosition.x == 185.0 && pairPosition.y == 30.0 &&
+                            pairAnchor.x == 185.0 - frameCentre.x &&
+                            pairAnchor.y == 30.0 - frameCentre.y,
+                        "pivot: the group's pivot is the centre of its children's bounds");
+    // Nothing moved on screen: the same frame as a frame-pivot layer at the frame's centre.
+    for (const char* name : {"square", "pair", "soft"}) {
+        apply<commands::SetParameterSource>(
+            std::string("frame pivot ") + name, fixture.document, fixture.commands, fixture.main,
+            role(name, document::kAnchorParameterRole), document::ConstantValueSource{document::Vec2d{}});
+        apply<commands::SetParameterSource>(
+            std::string("frame position ") + name, fixture.document, fixture.commands, fixture.main,
+            role(name, document::kPositionParameterRole), document::ConstantValueSource{frameCentre});
+    }
+    const auto framePivot = referenceAt(expectations, fixture, {}, "pivot at the frame");
+    expectations.expect(framePivot && samePixels(*framePivot, *rest),
+                        "pivot: importing at the bounds' centres moves nothing on screen");
+    // Back to the pivots at the bounds' centres.
+    for (const auto& [name, centre, anchor] :
+         {std::tuple{"square", squarePosition, squareAnchor}, std::tuple{"pair", pairPosition, pairAnchor},
+          std::tuple{"soft", softPosition, softAnchor}}) {
+        apply<commands::SetParameterSource>(std::string("restore anchor ") + name, fixture.document,
+                                            fixture.commands, fixture.main,
+                                            role(name, document::kAnchorParameterRole),
+                                            document::ConstantValueSource{anchor});
+        apply<commands::SetParameterSource>(std::string("restore position ") + name, fixture.document,
+                                            fixture.commands, fixture.main,
+                                            role(name, document::kPositionParameterRole),
+                                            document::ConstantValueSource{centre});
+    }
+    const auto restored = referenceAt(expectations, fixture, {}, "pivot restored");
+    expectations.expect(restored && samePixels(*restored, *rest), "pivot: the pivots restore");
+
+    // The square turns a quarter about its own centre; the pair turns half a turn about theirs.
+    for (const char* name : {"square", "pair"}) {
+        const auto rotation = role(name, document::kRotationParameterRole);
+        apply<commands::SetKeyframeAtTimeForParameter>(
+            std::string("key ") + name + " turn", fixture.document, fixture.commands, fixture.main, rotation,
+            core::RationalTime::fromInteger(1), std::string_view(name) == "square" ? 90.0 : 180.0);
+        apply<commands::SetKeyframeAtTimeForParameter>(std::string("key ") + name + " start",
+                                                       fixture.document, fixture.commands, fixture.main,
+                                                       rotation, core::RationalTime{}, 0.0);
+    }
+    const auto turned = referenceAt(expectations, fixture, core::RationalTime::fromInteger(1), "pivot turned");
+    if (turned) {
+        frames.emplace_back("pivot turned", *turned);
+        // A square turned a quarter about its centre covers the same pixels. Swung about the
+        // frame's centre it would be elsewhere.
+        bool same = true;
+        for (std::int64_t y = 26; y < 75 && same; ++y)
+            for (std::int64_t x = 26; x < 75; ++x)
+                same = same && std::abs(pixelOf(*turned, x, y).alpha() - pixelOf(*rest, x, y).alpha()) < 1e-4F;
+        expectations.expect(same, "pivot: a keyed quarter turn leaves the square where it is");
+        expectations.expect(pixelOf(*turned, 50, 50).alpha() > 0.99F, "pivot: the square still covers its centre");
+        // The pair swaps sides about the centre of the group.
+        const auto leftNow = pixelOf(*turned, 215, 30);
+        const auto rightNow = pixelOf(*turned, 155, 30);
+        expectations.expect(leftNow.red() > 0.5F && leftNow.green() < 0.05F,
+                            "pivot: after half a turn the red rectangle is where the green one was");
+        expectations.expect(rightNow.green() > 0.5F && rightNow.red() < 0.05F,
+                            "pivot: after half a turn the green rectangle is where the red one was");
+        expectations.expect(pixelOf(*turned, 185, 30).alpha() < 0.001F,
+                            "pivot: the gap between the pair stays empty");
+    }
+
+    // The blur filter: one Gaussian Blur node, radius three times the file's deviation.
+    const auto& nodes = graph.nodes();
+    const auto blur = std::ranges::find_if(nodes, [](const auto& node) {
+        return node.typeId == "bloom.gaussian-blur";
+    });
+    expectations.expect(blur != nodes.end(), "blur: the filter became a Gaussian Blur node");
+    if (blur != nodes.end()) {
+        const auto* record = composition(fixture.document, fixture.main)
+                                 .parameters()
+                                 .find(parameter(fixture.document, fixture.main, blur->id, "radius"));
+        const auto* constant =
+            record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+        const auto* radius = constant ? std::get_if<double>(&constant->value) : nullptr;
+        expectations.expect(radius != nullptr && std::abs(*radius - 12.0) < 1e-9,
+                            "blur: the radius is three times the deviation of 4");
+    }
+    // The rectangle's edge is soft: half covered at the edge, a little beyond it, none far away.
+    expectations.expect(std::abs(pixelOf(*rest, 120, 105).alpha() - 1.0F) < 0.02F,
+                        "blur: the middle of the rectangle stays solid");
+    expectations.expect(pixelOf(*rest, 98, 105).alpha() > 0.02F && pixelOf(*rest, 98, 105).alpha() < 0.45F,
+                        "blur: the edge spreads beyond the rectangle");
+    expectations.expect(pixelOf(*rest, 80, 105).alpha() < 0.001F, "blur: nothing far from the rectangle");
+    return frames;
+}
+
+
+// ---- Path nodes over imported shapes ----
+//
+// Offset Path, Round Corners, Boolean Paths, Merge Paths and Path Stroke each wired to an imported
+// compound shape (a ring with a counter) whose Path node is keyed: a corner and a counter point move
+// between 0 and 1 s. Each is rendered at both times and read at points chosen well inside or
+// outside the edges.
+std::string ringSvg() {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 144" width="256" height="144">
+<path id="ring" fill="#ffffff" fill-rule="evenodd" d="M30 20H110V100H30Z M50 40H90V80H50Z"/>
+<rect id="block" x="80" y="60" width="70" height="60" fill="#ffffff"/>
+</svg>
+)svg";
+}
+
+[[nodiscard]] document::NodeId addNodeOf(Fixture& fixture, const std::string_view type) {
+    commands::Transaction transaction("add " + std::string(type), fixture.document.snapshot().revision());
+    transaction.emplace<commands::AddNode>(fixture.main, std::string(type), document::Vec2d{});
+    const auto result = fixture.commands.execute(std::move(transaction));
+    const auto id = result.succeeded() ? result.outputId<document::NodeId>(commands::kAddNodeOutput)
+                                       : std::nullopt;
+    if (!id)
+        throw std::runtime_error("adding " + std::string(type) + " was refused");
+    return *id;
+}
+
+template <typename Value>
+void setConstant(Fixture& fixture, const document::NodeId node, const std::string_view role, Value value) {
+    apply<commands::SetParameterSource>("set " + std::string(role), fixture.document, fixture.commands,
+                                        fixture.main, parameter(fixture.document, fixture.main, node, role),
+                                        document::ConstantValueSource{std::move(value)});
+}
+void setDriver(Fixture& fixture, const document::NodeId node, const std::string_view role,
+               const document::NodeId source, const std::string_view port) {
+    apply<commands::SetParameterSource>(
+        "wire " + std::string(role), fixture.document, fixture.commands, fixture.main,
+        parameter(fixture.document, fixture.main, node, role),
+        document::DriverBindingSource{source, std::string(port)});
+}
+
+struct PathProbe final {
+    std::int64_t x, y;
+    bool at0, at1; // covered at 0 s, covered at 1 s
+};
+
+KeyedFrames pathNodesOnImportedShapes(Expectations& expectations, Fixture& fixture) {
+    KeyedFrames frames;
+    document::NodeId ringPath, blockPath;
+    for (const auto node : fixture.pathNodes())
+        (fixture.pathOf(node).contours.size() == 2 ? ringPath : blockPath) = node;
+    expectations.expect(ringPath.isValid() && blockPath.isValid(),
+                        "path nodes: the ring is one compound Path node and the block another");
+    if (!ringPath.isValid() || !blockPath.isValid())
+        return frames;
+    const auto ringShape = fixture.shapeDrivenBy(ringPath);
+
+    // Key the compound shape: a corner of the outer contour and a point of the counter move.
+    const auto base = fixture.pathOf(ringPath);
+    auto moved = base;
+    moved.contours[0].anchors[1].point = {130.0, 10.0};
+    moved.contours[1].anchors[1].point = {80.0, 50.0};
+    const auto valueParameter = parameter(fixture.document, fixture.main, ringPath, document::kValueParameterRole);
+    apply<commands::SetKeyframeAtTimeForParameter>("key the moved ring", fixture.document, fixture.commands,
+                                                   fixture.main, valueParameter,
+                                                   core::RationalTime::fromInteger(1), moved);
+    apply<commands::SetKeyframeAtTimeForParameter>("key the ring at rest", fixture.document, fixture.commands,
+                                                   fixture.main, valueParameter, core::RationalTime{}, base);
+
+    const auto render = [&](const core::RationalTime time, const std::string& label) {
+        const auto frame = referenceAt(expectations, fixture, time, label);
+        if (frame)
+            frames.emplace_back(label, *frame);
+        return frame;
+    };
+    const auto check = [&](const std::string& name, const std::vector<PathProbe>& probes) {
+        for (const auto time : {0, 1}) {
+            const auto frame = render(core::RationalTime::fromInteger(time), name + " at " + std::to_string(time) + " s");
+            if (!frame)
+                continue;
+            for (const auto& probe : probes) {
+                const auto alpha = alphaOf(*frame, probe.x, probe.y);
+                const bool wanted = time == 0 ? probe.at0 : probe.at1;
+                expectations.expect(wanted ? alpha > 0.9F : alpha < 0.05F,
+                                    name + " at " + std::to_string(time) + " s: (" + std::to_string(probe.x) +
+                                        ", " + std::to_string(probe.y) + ") is " + (wanted ? "covered" : "empty") +
+                                        " (alpha " + std::to_string(alpha) + ")");
+            }
+        }
+    };
+    // The ring itself, before any node: the probes the cases are read against.
+    check("ring", {{40, 60, true, true}, {70, 60, false, false}, {118, 30, false, true}, {86, 45, false, true},
+                   {27, 60, false, false}});
+
+    const auto wireRing = [&](const document::NodeId processed, const std::string_view port) {
+        setDriver(fixture, ringShape, "path", processed, port);
+    };
+    // Offset Path: the outer edge grows and the counter shrinks.
+    {
+        const auto node = addNodeOf(fixture, document::kOffsetPathNodeType);
+        setDriver(fixture, node, "path", ringPath, document::kValuePortName);
+        setConstant(fixture, node, "amount", 6.0);
+        // Miter is the node's own join.
+        wireRing(node, "path");
+        check("offset path", {{27, 60, true, true}, {53, 60, true, true}, {70, 60, false, false},
+                              {118, 30, false, true}, {20, 60, false, false}});
+    }
+    // Round Corners: the outer corner is cut away by its arc.
+    {
+        const auto node = addNodeOf(fixture, document::kRoundCornersNodeType);
+        setDriver(fixture, node, "path", ringPath, document::kValuePortName);
+        setConstant(fixture, node, "radius", 8.0);
+        wireRing(node, "path");
+        check("round corners", {{31, 21, false, false}, {40, 60, true, true}, {118, 30, false, true}});
+    }
+    // Boolean Paths: the ring less the block.
+    {
+        const auto node = addNodeOf(fixture, document::kBooleanPathsNodeType);
+        setDriver(fixture, node, "first", ringPath, document::kValuePortName);
+        setDriver(fixture, node, "second", blockPath, document::kValuePortName);
+        setConstant(fixture, node, "operation", document::selectorStoredValue(document::PathCombine::Subtract));
+        wireRing(node, "path");
+        // The block's own shape still draws it; the cutter is not meant to show.
+        setConstant(fixture, fixture.shapeDrivenBy(blockPath), "fillEnabled", false);
+        check("boolean paths", {{100, 90, false, false}, {40, 60, true, true}, {118, 30, false, true},
+                                {86, 45, false, true}});
+    }
+    // Merge Paths: the union of the ring's two contours fills the counter.
+    {
+        const auto node = addNodeOf(fixture, document::kMergePathsNodeType);
+        setDriver(fixture, node, "path", ringPath, document::kValuePortName);
+        // Union is the node's own operation.
+        wireRing(node, "path");
+        check("merge paths", {{70, 60, true, true}, {40, 60, true, true}, {118, 30, false, true}});
+    }
+    // Path Stroke: only the outline of each edge remains.
+    {
+        const auto node = addNodeOf(fixture, document::kPathStrokeNodeType);
+        setDriver(fixture, node, "path", ringPath, document::kValuePortName);
+        setConstant(fixture, node, "width", 6.0);
+        wireRing(node, "path");
+        check("path stroke", {{40, 60, false, false}, {31, 60, true, true}, {51, 60, true, true}, {70, 41, true, false},
+                              {125, 30, false, true}});
+    }
+    return frames;
+}
+
+
+// Letters, drawn in the file's own units of the 256x144 frame: a B with two counters and an O
+// with one, each a single compound path.
+std::string lettersSvg() {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 144" width="256" height="144">
+<path id="letter-B" d="M20 20 H70 C100 20 100 65 70 65 C105 65 105 120 70 120 H20 Z M40 38 V52 H66 C78 52 78 38 66 38 Z M40 80 V104 H68 C84 104 84 80 68 80 Z" fill="#22aa66" fill-rule="evenodd"/>
+<path id="letter-O" d="M170 20 A45 50 0 1 0 170.01 20 Z M170 40 A25 30 0 1 1 169.99 40 Z" fill="#dd5522" fill-rule="evenodd"/>
+</svg>
+)svg";
+}
+
+// The anchor of a contour nearest to a point: an artist grabs a corner by where it is.
+[[nodiscard]] std::size_t anchorNear(const document::PathContour& contour, const double x, const double y) {
+    std::size_t best = 0;
+    double bestDistance = std::numeric_limits<double>::max();
+    for (std::size_t index = 0; index < contour.anchors.size(); ++index) {
+        const auto& point = contour.anchors[index].point;
+        const double distance = (point.x - x) * (point.x - x) + (point.y - y) * (point.y - y);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = index;
+        }
+    }
+    return best;
+}
+
+// Drags a corner of the B's outline and a corner of its upper counter, as an artist would (the
+// other points stay), keyed from frame 0. Frame 0 is the file as imported; one second later the
+// corner and the counter have moved and every other contour, the lower counter and the whole O are
+// unchanged. Both counters survive the drag.
+KeyedFrames lettersCornerAndCounter(Expectations& expectations, Fixture& fixture) {
+    KeyedFrames frames;
+    document::NodeId bPath;
+    for (const auto node : fixture.pathNodes())
+        if (fixture.pathOf(node).contours.size() == 3)
+            bPath = node;
+    expectations.expect(bPath.isValid(), "letters: the B imports as one compound Path node of three contours");
+    if (!bPath.isValid())
+        return frames;
+    const auto atRest = referenceAt(expectations, fixture, core::RationalTime{}, "letters before the edit");
+    const auto base = fixture.pathOf(bPath);
+    auto moved = base;
+    const auto corner = anchorNear(moved.contours[0], 20.0, 20.0);
+    const auto counter = anchorNear(moved.contours[1], 40.0, 38.0);
+    // A corner has no handles of its own here, so the point moves with them.
+    const auto drag = [](document::PathAnchor& anchor, const double dx, const double dy) {
+        anchor.point.x += dx;
+        anchor.point.y += dy;
+    };
+    drag(moved.contours[0].anchors[corner], 10.0, -12.0);
+    drag(moved.contours[1].anchors[counter], 6.0, 4.0);
+    expectations.expect(moved.contours.size() == 3 &&
+                            moved.contours[2].anchors.size() == base.contours[2].anchors.size(),
+                        "letters: the drag keeps every contour");
+    const auto value = parameter(fixture.document, fixture.main, bPath, document::kValueParameterRole);
+    apply<commands::SetKeyframeAtTimeForParameter>("key the dragged B", fixture.document, fixture.commands,
+                                                   fixture.main, value, core::RationalTime::fromInteger(1), moved);
+    apply<commands::SetKeyframeAtTimeForParameter>("key the B at rest", fixture.document, fixture.commands,
+                                                   fixture.main, value, core::RationalTime{}, base);
+    const auto first = referenceAt(expectations, fixture, core::RationalTime{}, "letters at 0 s");
+    const auto second = referenceAt(expectations, fixture, core::RationalTime::fromInteger(1), "letters at 1 s");
+    if (!first || !second || !atRest)
+        return frames;
+    expectations.expect(samePixels(*atRest, *first), "letters: frame 0 is unchanged by keying the drag");
+    frames.emplace_back("letters at 0 s", *first);
+    frames.emplace_back("letters at 1 s", *second);
+    struct Probe {
+        std::int64_t x, y;
+        bool at0, at1;
+        const char* what;
+    };
+    const Probe probes[] = {
+        {22, 22, true, false, "the old top-left corner is vacated"},
+        {40, 12, false, true, "the dragged corner covers new ground"},
+        {42, 40, false, true, "the dragged counter corner uncovers the old counter's corner"},
+        {55, 45, false, false, "the upper counter is still open"},
+        {50, 92, false, false, "the lower counter is untouched and open"},
+        {28, 60, true, true, "the stem is untouched"},
+        {135, 70, true, true, "the O's ring is untouched"},
+        {170, 70, false, false, "the O's counter is untouched and open"},
+    };
+    for (const auto& probe : probes)
+        for (const auto time : {0, 1}) {
+            const auto& frame = time == 0 ? *first : *second;
+            const auto alpha = alphaOf(frame, probe.x, probe.y);
+            const bool wanted = time == 0 ? probe.at0 : probe.at1;
+            expectations.expect(wanted ? alpha > 0.9F : alpha < 0.05F,
+                                std::string("letters at ") + std::to_string(time) + " s: " + probe.what +
+                                    " (alpha " + std::to_string(alpha) + ")");
+        }
+    return frames;
 }
 
 // ---- Corpus mode: a real file at a real size ----
@@ -1305,6 +1878,12 @@ int main(int argc, char** argv) {
             return 1;
         }
         admissionAndRetirement(expectations, *denseFrame);
+        Fixture pivots("pivots", pivotSvg());
+        const auto pivotFrames = pivotAndBlur(expectations, pivots);
+        Fixture rings("rings", ringSvg());
+        const auto ringFrames = pathNodesOnImportedShapes(expectations, rings);
+        Fixture letters("letters", lettersSvg());
+        const auto letterFrames = lettersCornerAndCounter(expectations, letters);
         if (gradientFrame)
             gradientWindowsAndAdmission(expectations, *gradientFrame);
         if (expectations.failures() != 0) {
@@ -1331,6 +1910,17 @@ int main(int argc, char** argv) {
         denseOnTheDevice(expectations, device, dense, *denseFrame);
         editsOnTheDevice(expectations, device, edges);
         gradientsOnTheDevice(expectations, device, gradients);
+        for (const auto& [label, frame] : ringFrames)
+            parityOf(expectations, device, frame, label);
+        for (const auto& [label, frame] : letterFrames)
+            parityOf(expectations, device, frame, label);
+        for (const auto& [label, frame] : pivotFrames)
+            parityWithTools(expectations, device, frame, label);
+        for (const auto& [label, frame] : pivotFrames)
+            if (const auto scene = prepareWithTools(expectations, frame, label))
+                allocationClaim(expectations, device, frame, scene, preparedWindows(*scene));
+        if (const auto scene = prepare(expectations, *edgeFrame, "edges"))
+            allocationClaim(expectations, device, *edgeFrame, scene, preparedWindows(*scene));
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " SVG artwork expectation(s) failed\n";

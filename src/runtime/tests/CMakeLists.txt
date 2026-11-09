@@ -934,9 +934,16 @@ set_tests_properties(bloom.runtime.gpu_path_value_native
 add_executable(bloom_runtime_gpu_svg_artwork_native_test
     ${PROJECT_SOURCE_DIR}/tests/integration/gpu_svg_artwork_native_tests.cpp)
 target_include_directories(bloom_runtime_gpu_svg_artwork_native_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime"
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/tests/support")
 target_link_libraries(bloom_runtime_gpu_svg_artwork_native_test
     PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+# An imported SVG's Gaussian blur is an image effect, which the production builder prepares through
+# the packaged shader tools.
+target_compile_definitions(bloom_runtime_gpu_svg_artwork_native_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_svg_artwork_native_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_svg_artwork_native_test)
 bloom_enable_warnings(bloom_runtime_gpu_svg_artwork_native_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_svg_artwork_native_test)
 bloom_add_test(

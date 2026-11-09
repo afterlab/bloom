@@ -26,8 +26,16 @@ and so one undo step. It builds, inside the target composition:
 | gradient fill | a Linear or Radial Gradient layer matted by the outline filled opaque (Alpha track matte) |
 | gradient stroke, dashes | a Path Stroke node (dash length, gap, offset, cap, join) matted or drawn as a stroke outline |
 | `clip-path`, `mask` | the clip or mask's content as a sibling entry used as a track matte (Alpha for clips, Luma for masks) |
-| `<text>` | a native Text layer (position, size, colour, alignment, rotation), set in Bloom's font |
+| `<text>` | a native Text layer (position, size, colour, alignment, rotation). The file's `font-family`, weight and style go through the platform font catalogue (installed faces, System source); a family that is not installed, a generic family, or a weight or slope the family lacks is substituted and listed by name |
 | `opacity` | the entry layer's opacity |
+| `feGaussianBlur` (a filter of that one primitive on SourceGraphic) and CSS `filter: blur()` | a native Blur node (`bloom.gaussian-blur`) after the element, radius 3 sigma in composition pixels, clamped to 256; an uneven sigma is applied evenly and noted. Any other filter primitive is not applied and is listed |
+| the file itself | an Assets record (kind Image) holding the file's project-relative locator and SHA-256, recorded once per path and digest; a missing or moved file is not an error |
+
+Every shape and group is pivoted at the centre of its own bounds (Frame pivot with an explicit
+Anchor and Position at that centre, snapped to 1/16 px so the matrix stays exactly the identity), so
+rotating or scaling one turns it about itself with nothing moved on screen. Skipped and approximated
+items are named by `id` or label, otherwise by position (`path 2 in 'art'`, `circle 1 in g 2 in the
+file's root`).
 
 Every element is therefore ordinary document data: its Path node can be keyed as a whole value
 (see below), Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners and Path Stroke take
@@ -80,7 +88,7 @@ dashes, caps, joins and text with `tspan` positions and `text-anchor`.
 
 Reported, never silently dropped (each item is named in the operation's warnings, in
 the Jobs panel for the desktop import, and in the script result): a radial gradient's focal point
-(drawn centred), patterns, filters, markers, embedded or linked images, `foreignObject`, scripts,
+(drawn centred), patterns, filters other than a single Gaussian blur, markers, embedded or linked images, `foreignObject`, scripts,
 animation, text-on-path, text stroke and gradient fills of text, per-span colours inside one text
 run, multi-length dash patterns beyond the first dash and gap, anisotropic stroke widths, CSS the
 reader does not apply, and anything hidden by `display: none`.
@@ -137,9 +145,12 @@ origin at zero, so it is not sub-windowed. It is the import's elliptical reach o
 longer a square of the larger), and admission counts it at that size. Once the scene is prepared
 the phase raises its claim to the executor's live set with every image at its prepared size
 (`GpuProcessingPhaseLease::raiseExecutorNeed`); a ceiling below that refuses the scene instead of
-drawing past it. Images are counted at their requested extent: the allocator rounds each one up (on
-this workstation's GPU a 1920-wide float image allocates 2048 wide, 7 to 10 percent), and that
-rounding is drawn against live device capacity like any allocation past a phase's need.
+drawing past it. Images are counted at what the device allocates, not at the requested extent: the allocator
+rounds each one up (a 1920-wide float image allocates 2048 wide). The device reports its allocation
+sizes (`GpuAllocationSizes`, probed with `vkGetImageMemoryRequirements` and memoised per size), the
+phase budget rounds each claimed image with them, and the per-operation metadata buffers (axis
+tables, staging, status words) are added to the claim. A test renders a scene with the executor's
+request budget equal to that claim.
 
 ### Results
 
