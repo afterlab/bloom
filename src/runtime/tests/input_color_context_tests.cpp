@@ -79,7 +79,7 @@ void testDpxRules(Expectations& expectations) {
         bool warns;
     };
     // Space ids per config; "" means refused.
-    const std::array<Case, 10> cases{{
+    const std::array<Case, 9> cases{{
         {2, 6, 16, "lin_rec709_scene", "Linear Rec.709 (sRGB)", false},
         {2, 4, 16, "lin_rec709_scene", "ACEScg", true},
         {2, 0, 10, "lin_rec709_scene", "ACEScg", true},
