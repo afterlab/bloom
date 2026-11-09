@@ -6,7 +6,8 @@
 // a GPU program (no instruction of its own), over a transparent canvas the size of the composition.
 // With q_i the squared distance from the field position to point i in units of the frame's squared
 // diagonal, plus a quarter pixel squared so a point's own pixel is finite, the weight of color i is
-// w_i = q_i^(-blend / 2), the inverse distance power weight with no square root (a device may round a
+// w_i = (q_i / q_min)^(-blend / 2), the inverse distance power weight (normalized by the nearest
+// point's, so it cannot underflow) with no square root (a device may round a
 // square root differently from the CPU; the dot product is exact). The
 // straight color is sum(w_i c_i) / sum(w_i) over red, green, blue and alpha, and the raster
 // premultiplies it once, as the gradient sources do. Each color is a field Constant whose four
@@ -68,6 +69,7 @@ lowerFourColorGradient(const document::NodeRecord& node,
     constexpr std::int64_t kAdd = 0;
     constexpr std::int64_t kMultiply = 2;
     constexpr std::int64_t kDivide = 3;
+    constexpr std::int64_t kMin = 4;
     constexpr std::int64_t kPower = 6;
     constexpr std::int64_t kDot = 13;
     const auto constant = [&](const double value) {
@@ -85,16 +87,26 @@ lowerFourColorGradient(const document::NodeRecord& node,
         fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
                   {*blend, fieldConstant(0.0), fieldConstant(0.0), fieldConstant(0.0)});
     const auto negativeBlend = fieldSwizzle(build, blendOnce, {0, 0, 0, 0}, {-0.5, -0.5, -0.5, -0.5});
-    int weightSum = -1;
-    int colorSum = -1;
+    // Each weight is (q_i / q_min)^(-blend / 2): the nearest point weighs 1 and every other at most
+    // 1, so the sum never falls below 1 whatever the distances. The unnormalized q_i^(-blend / 2)
+    // underflows binary32 when every point is far from the pixel (a small frame, points near the
+    // domain's limit, a high blend), which leaves 0 / 0.
+    std::array<int, kFourColorGradientPoints> padded{};
+    int nearest = -1;
     for (std::size_t i = 0; i < kFourColorGradientPoints; ++i) {
         const auto offset =
             fieldEmit(build, FieldOp::Transform, {build.coordinate, -1, -1, -1}, {0, 6},
                       {fieldConstant(0.0), fieldConstant(0.0)}, {points[i]});
         const auto distance = math(kDot, offset, offset);
         const auto scaled = math(kMultiply, distance, inverseDiagonal);
-        const auto padded = math(kAdd, scaled, halfPixel);
-        const auto weight = math(kPower, padded, negativeBlend);
+        padded[i] = math(kAdd, scaled, halfPixel);
+        nearest = nearest < 0 ? padded[i] : math(kMin, nearest, padded[i]);
+    }
+    int weightSum = -1;
+    int colorSum = -1;
+    for (std::size_t i = 0; i < kFourColorGradientPoints; ++i) {
+        const auto relative = math(kDivide, padded[i], nearest);
+        const auto weight = math(kPower, relative, negativeBlend);
         const auto weightLanes = fieldSwizzle(build, weight, {0, 0, 0, 0});
         const auto components = emitter.components(colors[i]);
         const auto color =

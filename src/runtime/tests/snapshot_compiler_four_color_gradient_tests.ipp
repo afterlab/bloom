@@ -156,6 +156,35 @@ void testFourColorGradientPixels(Expectations& expectations) {
         expectations.expect(worst < 2.0e-4,
                             "the gradient is the inverse distance weighting at every pixel");
     }
+    // Every point far from the frame at the sharpest blend: q^(-blend / 2) alone is below the smallest
+    // binary32 number there, so the weights are normalized by the nearest point's. The picture stays
+    // finite and is the double precision reading, not 0 / 0.
+    {
+        const std::array<Vec2d, 4> far{Vec2d{-1.0e6, 1.0e6}, Vec2d{1.0e6, 1.0e6},
+                                       Vec2d{-1.0e6, -1.0e6}, Vec2d{9.0e5, -1.0e6}};
+        auto layout = values(8.0, 1.0);
+        for (std::size_t i = 0; i < 4; ++i)
+            layout["point" + std::to_string(i + 1)] = far[i];
+        const auto evaluated = evaluateTestCard(compileFourColor(layout));
+        expectations.expect(evaluated.frame() != nullptr, "far points evaluate");
+        if (evaluated.frame()) {
+            const auto& image = evaluated.frame()->processImage();
+            double worst = 0.0;
+            bool finite = true;
+            for (std::int64_t y = 0; y < 12; ++y)
+                for (std::int64_t x = 0; x < 16; ++x) {
+                    const auto expected = fourColorReference(far, colors, 8.0, fourColorField(x, y));
+                    const auto p = cardPixel(image, x, y);
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        finite = finite && std::isfinite(p[c]);
+                        worst = std::max(worst, std::abs(static_cast<double>(p[c]) - expected[c]));
+                    }
+                    finite = finite && std::abs(static_cast<double>(p[3]) - 1.0) < 1.0e-4;
+                }
+            expectations.expect(finite, "far points give a finite, opaque picture");
+            expectations.expect(worst < 2.0e-4, "far points give the inverse distance weighting");
+        }
+    }
     // A symmetric layout gives a picture symmetric about the vertical axis for matching colors.
     {
         auto layout = values(2.0, 1.0);

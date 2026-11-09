@@ -8,6 +8,7 @@
 #include "render_footprint.hpp"
 
 #include <bloom/core/value_primitives.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/merge_entries.hpp>
@@ -166,7 +167,15 @@ OperationResult AddNode::apply(document::Draft& draft) const {
             value = static_cast<std::int64_t>(
                 core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
                 1'000'000ULL);
-        else if (parameter.schemaKey == document::kPositionParameterSchemaKey)
+        // #524: a new Four-Color Gradient anchors its points at the composition's corners, in the
+        // node's field units (pixels from the centre, y up), whatever the composition's size.
+        else if (document::isFourColorGradientPointSchemaKey(parameter.schemaKey)) {
+            const auto halfWidth = static_cast<double>(composition->format().width()) / 2.0;
+            const auto halfHeight = static_cast<double>(composition->format().height()) / 2.0;
+            const bool right = parameter.role == "point2" || parameter.role == "point4";
+            const bool top = parameter.role == "point1" || parameter.role == "point2";
+            value = document::Vec2d{right ? halfWidth : -halfWidth, top ? halfHeight : -halfHeight};
+        } else if (parameter.schemaKey == document::kPositionParameterSchemaKey)
             value = document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                                     static_cast<double>(composition->format().height()) / 2.0};
         if (!composition->parameters().insert({*parameterId, parameter.schemaKey,

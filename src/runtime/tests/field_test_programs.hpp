@@ -119,7 +119,7 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
 
 // #524 Four-Color Gradient: the program its lowering builds over the 16 x 12 test composition,
 // mirroring snapshot_compiler_four_color_gradient.ipp (the snapshot compiler test holds the two to
-// the same instruction sequence). Four colors at four points, weights d^-blend.
+// the same instruction sequence). Four colors at four points, weights (d / nearest d)^-blend.
 [[nodiscard]] inline FieldProgram fourColorGradientProgram(const std::uint64_t idBase,
                                                            const double blend,
                                                            const std::array<Vec2d, 4>& points,
@@ -134,14 +134,20 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const auto half = b.add(FieldOp::Constant, {}, {}, {0.25 / squared, 0.25 / squared, 0.25 / squared, 0.25 / squared});
     const auto once = b.add(FieldOp::Constant, {}, {}, {blend, 0.0, 0.0, 0.0});
     const auto negative = b.add(FieldOp::Swizzle, {once}, {0, 0, 0, 0}, {-0.5, -0.5, -0.5, -0.5});
-    int weightSum = -1;
-    int colorSum = -1;
+    std::array<int, 4> padded{};
+    int nearest = -1;
     for (std::size_t i = 0; i < 4; ++i) {
         const auto offset = b.add(FieldOp::Transform, {c}, {0, 6}, {0.0, 0.0}, {points[i]});
         const auto distance = math(13, offset, offset);
         const auto scaled = math(2, distance, inverse);
-        const auto padded = math(0, scaled, half);
-        const auto weight = math(6, padded, negative);
+        padded[i] = math(0, scaled, half);
+        nearest = nearest < 0 ? padded[i] : math(4, nearest, padded[i]);
+    }
+    int weightSum = -1;
+    int colorSum = -1;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto relative = math(3, padded[i], nearest);
+        const auto weight = math(6, relative, negative);
         const auto lanes = b.add(FieldOp::Swizzle, {weight}, {0, 0, 0, 0}, {1.0, 1.0, 1.0, 1.0});
         const auto color = b.add(FieldOp::Constant, {}, {}, {colors[i][0], colors[i][1], colors[i][2], colors[i][3]});
         const auto weighted = math(2, color, lanes);

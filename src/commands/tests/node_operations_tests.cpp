@@ -3,6 +3,7 @@
 #include <bloom/commands/track_operations.hpp>
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 
@@ -1332,6 +1333,16 @@ void testAddAndLayout(TestContext& test) {
             if (parameter.schemaKey == document::kPositionParameterSchemaKey)
                 expected = document::Vec2d{static_cast<double>(comp.format().width()) / 2.0,
                                            static_cast<double>(comp.format().height()) / 2.0};
+            // #524: a new Four-Color Gradient anchors its points at the composition's corners (field
+            // units: pixels from the centre, y up), whatever the composition's size.
+            if (document::isFourColorGradientPointSchemaKey(parameter.schemaKey)) {
+                const double halfWidth = static_cast<double>(comp.format().width()) / 2.0;
+                const double halfHeight = static_cast<double>(comp.format().height()) / 2.0;
+                const bool right = parameter.role == "point2" || parameter.role == "point4";
+                const bool top = parameter.role == "point1" || parameter.role == "point2";
+                expected = document::Vec2d{right ? halfWidth : -halfWidth,
+                                           top ? halfHeight : -halfHeight};
+            }
             // #512: a new Camera Shake (and #564 Frame Rate Hold) gets a seed of its own, an ordinary stored
             // constant.
             if ((parameter.schemaKey == "bloom.camera-shake.seed" ||
