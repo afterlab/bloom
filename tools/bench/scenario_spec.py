@@ -66,19 +66,19 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 # side by side. The GPU-busy check moved to #386, whose batched submissions and fence waits made
 # the light 2K shot pass it (64% busy on 2026-11-06); what is left of it is listed here (the
 # Cryptomatte shot's under #549, which tripled its fill and then read each frame's EXR once).
-MATTE_FILL_BUSY = ("#549: the Cryptomatte shot fills at 12 to 13 fps with the GPU 24 to 40% busy "
+MATTE_FILL_BUSY = ("#405: the Cryptomatte shot fills at 12 to 13 fps with the GPU 24 to 40% busy "
                    "(2026-11-06, 7 to 8 fps and 25 to 46% when it decoded the EXR twice): its "
                    "24 frames fill in about 2 s, ten GPU utilisation samples, and each frame's "
                    "host work is still the one ZIP decode of the multilayer EXR (beauty and "
                    "Cryptomatte ranks together) and the PNG plate")
-NOISE_FILL_BUSY = ("#386: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
+NOISE_FILL_BUSY = ("#405: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
                    "2026-11-06), two or three GPU utilisation samples: too short to judge the "
                    "average busy fairly (31%, peak 50%)")
-LENS_FLARE_FILL_BUSY = ("#386: the Lens Flare shot fills its 24 frames in 0.35 s (69 fps on "
+LENS_FLARE_FILL_BUSY = ("#405: the Lens Flare shot fills its 24 frames in 0.35 s (69 fps on "
                         "2026-11-06), too few GPU utilisation samples to judge (13 to 15%); over 240 "
                         "frames it filled at 88 fps with the GPU 48% busy: one pass a frame, the rest "
                         "host decode")
-FILM_GRAIN_FILL_BUSY = ("#386: the Film Grain shot fills its 24 frames in 0.2 to 0.3 s (83 to 116 fps on "
+FILM_GRAIN_FILL_BUSY = ("#405: the Film Grain shot fills its 24 frames in 0.2 to 0.3 s (83 to 116 fps on "
                         "2026-11-06), too few GPU utilisation samples to judge (0 to 4%); over 240 "
                         "frames it filled at 106 fps with the GPU 28% busy: one pass a frame, the "
                         "rest host decode")
@@ -86,7 +86,7 @@ SHARPEN_FILL_BUSY = ("#405: the Sharpen shot fills its 24 frames in 0.3 s (80 fp
                      "few GPU utilisation samples to judge (1 to 6%); over 240 frames it filled at "
                      "79 fps with the GPU 21% busy (peak 100%) and 11 CPU cores busy: a blur and one "
                      "pass a frame, the rest host decode")
-DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 16 to 20 fps with the GPU 31 to 58% busy "
+DEPTH_FILL_BUSY = ("#405: the depth effects shot fills at 16 to 20 fps with the GPU 31 to 58% busy "
                    "(2026-11-06, after #549): its 24 frames fill in a little over a second, a few "
                    "GPU utilisation samples, and every frame first decodes three sequences (the "
                    "plate, its mist pass and the multilayer EXR) on the host")
@@ -593,7 +593,7 @@ SCENARIOS["depth-effects-2k"] = {
     "knownFailures": {"gpu-busy-during-fill": DEPTH_FILL_BUSY},
 }
 
-MOTION_FILL_BUSY = ("#386: the motion blur shot fills its 24 frames in 1.3 s with the GPU 35% busy "
+MOTION_FILL_BUSY = ("#405: the motion blur shot fills its 24 frames in 1.3 s with the GPU 35% busy "
                     "(2026-11-06), a few samples, and decodes three sequences on the host a frame.")
 # #484: every motion-blur route but the solver at work on a shot: a moving plate through Transform
 # 2D's shutter and a Directional Blur; a Motion Blur over a moving Transform 2D (sub-frames re-render
