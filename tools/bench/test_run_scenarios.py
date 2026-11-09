@@ -596,6 +596,19 @@ class DepthScenario(unittest.TestCase):
         self.assertIn("splitPosition", effects[0][2]["keys"], "every frame is new")
         self.assertIn("rangeMax", effects[1][2]["keys"], "the graph is new every frame too")
 
+    def test_image_statistics_scenario_drives_a_map_range_from_the_plate_it_reads(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["image-statistics-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.image-map-range")
+        drives = effect[2]["drives"]
+        self.assertEqual({role: spec_[0] for role, spec_ in drives.items()},
+                         {"inputMin": "bloom.image-statistics", "inputMax": "bloom.image-statistics"})
+        self.assertEqual([spec_[2] for spec_ in drives.values()], ["minimum", "maximum"])
+        for driver in drives.values():
+            self.assertIn("@picture", driver[3:], "each statistic measures the plate the effect reads")
+
     def test_audio_effects_scenario_chains_every_effect_and_exports_wav(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["audio-effects-wav"]

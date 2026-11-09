@@ -43,6 +43,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md),
    [`architecture/motion-blur.md`](architecture/motion-blur.md),
+   [`architecture/image-statistics.md`](architecture/image-statistics.md),
    [`architecture/platform-support.md`](architecture/platform-support.md),
    [`architecture/ui-feedback.md`](architecture/ui-feedback.md), and
    [`architecture/profiler-feed.md`](architecture/profiler-feed.md) — execution and platform
