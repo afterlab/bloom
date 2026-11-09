@@ -16,6 +16,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -213,8 +214,13 @@ void testCommitAfterPreview() {
 }
 
 // Review tool, not a test: font_picker_test --capture <dir> <dpr>. Writes the Properties font row,
-// the text node's card and the open picker at 2000, 900 and 560 pixels wide.
+// the text node's card and the open picker at 2000, 900 and 560 pixels wide. It reaches Google Fonts
+// like the application does (a real network), into the per-user cache.
 void capture(const QString& directory, const QString& dprText) {
+    // The desktop application installs this transport at start-up; with it the picker's Google rows
+    // fetch their name-only subsets (set BLOOM_FONT_CAPTURE_OFFLINE to leave them out).
+    if (qEnvironmentVariableIsEmpty("BLOOM_FONT_CAPTURE_OFFLINE"))
+        runtime::fonts::processFontResolver().setTransport(std::make_shared<ui::QtFontTransport>());
     auto project = document::makeNewProject("Fonts", "Main", core::RationalTime::fromInteger(10));
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);
@@ -245,6 +251,26 @@ void capture(const QString& directory, const QString& dprText) {
                 QThread::msleep(50);
             }
             popup->grab().save(QStringLiteral("%1/picker-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+            // The Google Fonts section: each row in its own typeface once its name-only subset
+            // has arrived.
+            for (int row = 0; row < popup->rowCount(); ++row)
+                if (popup->rowIsGoogle(row)) {
+                    popup->list()->setCurrentRow(row + 5);
+                    break;
+                }
+            for (int i = 0; i < 80; ++i) {
+                QCoreApplication::processEvents();
+                QThread::msleep(50);
+            }
+            popup->grab().save(QStringLiteral("%1/picker-google-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
+            // A search: families for many scripts, whose subsets may hold none of the letters of
+            // their own Latin name.
+            popup->list()->filterField()->setText(QStringLiteral("Noto Sans"));
+            for (int i = 0; i < 80; ++i) {
+                QCoreApplication::processEvents();
+                QThread::msleep(50);
+            }
+            popup->grab().save(QStringLiteral("%1/picker-search-w%2-dpr%3.png").arg(directory).arg(width).arg(suffix));
             popup->close();
         }
         ui::NodeGraphEditor editor(session);
