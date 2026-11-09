@@ -12,6 +12,11 @@
 // exported frame to come from the device with no CPU fallback; otherwise it prints NotRun, and
 // --require-device turns that into a failure. A movie needs the media worker: where it is absent
 // the test says NotRun for that route.
+//
+// `--svg <file> --size <W>x<H>` (with --loader) instead shows a real file's first frame in the
+// Viewer at that size, through the GPU-prepared packed product wired as the application wires it,
+// and requires the frame from the device with no CPU fallback. Not part of the ctest run (it needs
+// the file); docs/architecture/vector-artwork.md records the results.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -40,9 +45,14 @@
 
 #if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
 #include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
+#include <bloom/ui/memory_budget_controller.hpp>
 #endif
 
 #include <QApplication>
@@ -63,6 +73,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -586,10 +597,190 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 #endif
 }
 
+#if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
+// A real file in the interactive Viewer at a real size, on the application's own memory wiring
+// (the shared composition-root wiring the soak harness also runs): a scheduler with the delivered
+// budget view, the processing policy sampled from this machine through the application's sampler,
+// the GPU scene stage with the application's processing phase, the service with the application's
+// resident budget plan and default request allowance.
+int viewerAtSize(const std::filesystem::path& svg, const std::uint32_t width,
+                 const std::uint32_t height, const std::filesystem::path& loader) {
+    Expectations checks;
+    const std::string prefix =
+        svg.filename().string() + ' ' + std::to_string(width) + 'x' + std::to_string(height) + ": ";
+    const auto rate = document::FrameRate::create(static_cast<std::int64_t>(kFps), 1);
+    const auto format =
+        document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(), *rate);
+    if (!format.has_value()) {
+        std::cerr << "FAIL: " << prefix << "the composition format is invalid\n";
+        return 1;
+    }
+    auto created = scripting::Session::createNew(
+        "SVG artwork Viewer", "Main",
+        *core::RationalTime::create(2, static_cast<std::int64_t>(kFps)), *format);
+    if (!created) {
+        std::cerr << "FAIL: " << prefix << "the authoring session is not created\n";
+        return 1;
+    }
+    Authored authored;
+    authored.scripting = std::move(created).takeSession();
+    authored.composition = authored.scripting->snapshot().project().compositions().front().id();
+    authored.session = std::make_unique<ui::CompositionSession>(
+        *authored.scripting->document(), *authored.scripting->commandStack(), authored.composition);
+    const auto imported = edit<commands::AddSvgArtwork>(authored, authored.composition, nullptr,
+                                                        svg, "artwork", true);
+    if (!imported.succeeded()) {
+        std::cerr << "FAIL: " << prefix << "the file does not import\n";
+        return 1;
+    }
+
+    runtime::processMemoryBudgetLedger().beginProcessSampling();
+    const auto taskBudgetView = std::make_shared<runtime::TaskBudgetView>();
+    auto taskConfig = runtime::TaskSchedulerConfig::defaults();
+    taskConfig.budgetView = taskBudgetView;
+    runtime::TaskScheduler scheduler(taskConfig);
+    runtime::NodeDefinitionRegistry definitions;
+    checks.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                  prefix + "node definitions register");
+    definitions.freeze();
+    const runtime::SnapshotCompiler compiler(definitions);
+    runtime::CpuCompositionEvaluator evaluator;
+    runtime::CpuReferenceDisplayPreparer displayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualified;
+    qualified.publish(runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    const auto retirementOwner = render::PackedHostRetirementOwner::create();
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    const auto policy =
+        std::make_shared<runtime::GpuProcessingPhasePolicy>(32, retirementOwner, taskBudgetView);
+    ui::MemoryBudgetController memoryController(scheduler, bridge,
+                                                runtime::processMemoryBudgetLedger(),
+                                                ui::applicationMemorySampler(policy));
+    static_cast<void>(ui::connectApplicationMemoryBudget(
+        memoryController, policy, runtime::processMemoryBudgetLedger(), &bridge));
+    auto planCache = std::make_shared<ui::CompiledPlanCache>();
+    auto pipeline = ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
+                                                       qualified, planCache);
+
+    runtime::GpuPreviewDisplayServiceOptions options;
+    options.enabled = true;
+    options.loaderPath = loader;
+    options.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
+    options.presentation = runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
+    ui::applyGpuResidentBudgetPlan(
+        options, ui::gpuResidentBudgetPlanFor(std::numeric_limits<std::size_t>::max()));
+    options.previewByteAllowance.reset();
+    evaluator.operationCache()->bindHostRetirement(retirementOwner);
+    std::shared_ptr<runtime::GpuOcioContextResolver> resolver =
+        host::makePackagedGpuOcioResolver(QCoreApplication::applicationFilePath().toStdString());
+    if (resolver == nullptr)
+        resolver = std::make_shared<runtime::GpuOcioContextResolver>();
+    auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
+        compiler, evaluator, qualified, std::make_shared<runtime::GpuSceneCoverageCache>(),
+        planCache, resolver,
+        {.policy = policy,
+         .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
+                      .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                      .growsRetainedSceneStorage = true,
+                      .requestedExecutorBytes = std::nullopt,
+                      .deviceWorkingBytes =
+                          512ULL * 1024 * 1024 + options.packedTransferByteAllowance}});
+    options.processingPhasePolicy = policy;
+    options.cpuStoragePlanner =
+        ui::makeCompositionPreviewCpuStoragePlanner(compiler, evaluator, planCache);
+    auto service = std::make_unique<runtime::GpuPreviewDisplayService>(
+        scheduler, std::move(gpuStage),
+        ui::makeCompositionPreviewCpuStage(compiler, evaluator, qualified, planCache),
+        ui::makeCompositionPreviewCpuDisplayFallback(displayPreparer), options);
+    const auto shutDown = [&] {
+        memoryController.beginShutdown();
+        bridge.beginShutdown();
+        (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
+        service->beginShutdown();
+        (void)waitUntil([&] {
+            return service->status().state == runtime::GpuPreviewDisplayServiceState::Stopped;
+        });
+        evaluator.operationCache()->close();
+        retirementOwner->beginShutdown();
+        const bool retired = waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 15s);
+        while (retired && !retirementOwner->collect())
+            QCoreApplication::processEvents();
+        checks.expect(retired, prefix + "the packed host retirement shuts down");
+    };
+    waitUntil(
+        [&] {
+            return service->status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
+        },
+        90s);
+    if (service->status().state != runtime::GpuPreviewDisplayServiceState::Ready) {
+        std::cout << "NotRun: " << prefix << "no qualified device ("
+                  << service->status().residentDetail << ")" << std::endl;
+        shutDown();
+        return gRequireDevice ? 1 : 77;
+    }
+    const ui::PreviewPreparationSubmitter submitter =
+        [svc = service.get()](runtime::TaskRequest request, const document::Snapshot& snapshot,
+                              const runtime::PreviewRequestIdentity& identity,
+                              const std::size_t bytes,
+                              const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            return svc->submit(std::move(request), snapshot, identity, bytes, overrides);
+        };
+    ui::CompositionPreviewSettings settings;
+    settings.resolutionPolicy = runtime::PreviewResolutionPolicy::Full;
+    {
+        ui::CompositionPreviewController controller(*authored.session, scheduler, bridge, pipeline,
+                                                    settings, nullptr, nullptr, submitter);
+        ui::ViewerEditor viewer(*authored.session, controller);
+        viewer.resize(960, 540);
+        viewer.show();
+        const auto before = service->status().counters;
+        controller.requestRefresh();
+        const bool ready = waitUntil(
+            [&] {
+                const auto displayed = viewer.displayedFrameForTest();
+                return controller.state().activity == ui::PreviewActivity::Ready &&
+                       displayed != nullptr &&
+                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+            },
+            120s);
+        const auto displayed = viewer.displayedFrameForTest();
+        const auto after = service->status().counters;
+        const auto shown = pixelsOf(displayed);
+        const bool onDevice =
+            displayed != nullptr &&
+            displayed->provenance().provider == runtime::PreviewDisplayProvider::GpuPreparedPacked;
+        checks.expect(ready && onDevice,
+                      prefix + "the Viewer shows a current frame prepared on the device: " +
+                          service->status().residentDetail);
+        checks.expect(shown.ok && shown.width == width && shown.height == height,
+                      prefix + "the Viewer frame is the composition size");
+        checks.expect(after.cpuFallbacks == before.cpuFallbacks &&
+                          after.nativeDispatches > before.nativeDispatches,
+                      prefix + "the device ran it with no CPU fallback");
+        std::cout << prefix << "Viewer frame from "
+                  << (onDevice ? "GpuPreparedPacked" : "another route") << ", "
+                  << (after.nativeDispatches - before.nativeDispatches) << " native dispatches, "
+                  << (after.cpuFallbacks - before.cpuFallbacks) << " CPU fallbacks" << std::endl;
+        controller.beginShutdown();
+        viewer.releasePackedFramesForShutdown();
+        controller.releasePublishedFramesForShutdown();
+    }
+    shutDown();
+    if (checks.failures() != 0) {
+        std::cerr << "viewer SVG artwork: " << checks.failures() << " failure(s)\n";
+        return 1;
+    }
+    std::cout << "PASS: " << prefix << "the Viewer prepares it on the GPU\n";
+    return 0;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::filesystem::path loader;
+    std::filesystem::path svg;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
     std::vector<char*> forwarded{argv[0]};
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
@@ -597,6 +788,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             loader = argv[++index];
         } else if (argument == "--require-device") {
             gRequireDevice = true;
+        } else if (argument == "--svg" && index + 1 < argc) {
+            svg = argv[++index];
+        } else if (argument == "--size" && index + 1 < argc) {
+            const std::string size = argv[++index];
+            const auto x = size.find('x');
+            if (x != std::string::npos) {
+                width = static_cast<std::uint32_t>(std::stoul(size.substr(0, x)));
+                height = static_cast<std::uint32_t>(std::stoul(size.substr(x + 1)));
+            }
         } else {
             forwarded.push_back(argv[index]);
         }
@@ -609,6 +809,19 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setOrganizationName("BloomSvgArtworkRoutes");
     QCoreApplication::setApplicationName("ViewerExportSvgArtwork");
     QSettings().setValue("viewer/resolution", "Full");
+
+    if (!svg.empty()) {
+#if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
+        if (loader.empty() || width == 0 || height == 0) {
+            std::cerr << "FAIL: --svg needs --loader and --size <W>x<H>\n";
+            return 1;
+        }
+        return viewerAtSize(svg, width, height, loader);
+#else
+        std::cout << "NotRun: --svg: this build has no Vulkan support\n";
+        return gRequireDevice ? 1 : 77;
+#endif
+    }
 
     Expectations checks;
     const std::filesystem::path workDir = temporary.path().toStdString();
