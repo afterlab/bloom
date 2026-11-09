@@ -1065,6 +1065,93 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
 }
 } // namespace anchor_test
 
+
+// #343: the points of an imported shape are editable and keyable, compound shapes included.
+void testImportedCompoundPointEditing(Expectations& expectations) {
+    using namespace bloom;
+    const auto file = std::filesystem::temp_directory_path() / "bloom-compound-points.svg";
+    {
+        std::ofstream out(file);
+        out << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+<path id="ring" fill="#c00" fill-rule="evenodd" d="M60 60H200V200H60Z M100 100H160V160H100Z"/></svg>)svg";
+    }
+    ViewerFixture fixture(toolProject());
+    fixture.viewer.resize(800, 650);
+    fixture.viewer.show();
+    toolReady(fixture, expectations);
+    commands::Transaction transaction("Import SVG", fixture.session.snapshot().revision());
+    transaction.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), nullptr, file, "art", false);
+    expectations.expect(fixture.session.executeTransaction(std::move(transaction)).succeeded(),
+                        "the SVG imports");
+    std::filesystem::remove(file);
+    const auto& graph = fixture.session.composition()->graph();
+    document::ParameterId valueParameter;
+    for (const auto& node : graph.nodes())
+        if (node.typeId == document::kPathValueNodeType)
+            for (const auto& binding : node.parameters)
+                if (binding.role == document::kValueParameterRole)
+                    valueParameter = binding.parameterId;
+    const auto layerOf = [&](const char* name) {
+        for (const auto& layer : graph.layerOutputs())
+            if (layer.name == name)
+                return layer.layerId;
+        return document::LayerId{};
+    };
+    fixture.session.selectLayer(layerOf("ring"));
+    toolReady(fixture, expectations);
+    const auto pathValue = [&] {
+        const auto* record = fixture.session.composition()->parameters().find(valueParameter);
+        const auto* constant =
+            record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+        return constant ? std::get<document::PathValue>(constant->value) : document::PathValue{};
+    };
+    auto target = anchor_test::target(fixture);
+    expectations.expect(target && target->path.firstContour().anchors.size() == 4 &&
+                            pathValue().contours.size() == 2,
+                        "a compound imported shape offers its first contour for editing");
+    if (!target)
+        return toolShutdown(fixture, expectations);
+    const auto before = pathValue();
+    const auto first = anchor_test::anchorAt(*target, 0);
+    toolDrag(fixture, first, first + QPointF(12, 9));
+    auto after = pathValue();
+    expectations.expect(after.contours.size() == 2 && after.contours[1] == before.contours[1] &&
+                            after.contours[0].anchors[0].point != before.contours[0].anchors[0].point &&
+                            after.fillRule == before.fillRule,
+                        "moving a point of the first contour leaves the other contour and the fill rule");
+    // A point of the inner contour: the click makes it the contour under edit.
+    const auto inner = anchor_test::at(*target, before.contours[1].anchors[2].point);
+    toolReady(fixture, expectations);
+    toolDrag(fixture, inner, inner + QPointF(-7, 5));
+    const auto moved = pathValue();
+    expectations.expect(moved.contours[0] == after.contours[0] &&
+                            moved.contours[1].anchors[2].point != before.contours[1].anchors[2].point,
+                        "a point of the second contour moves without touching the first");
+    expectations.expect(fixture.session.undo() && pathValue() == after,
+                        "one undo reverts one point move");
+    // Keyed: animate the value, move to a later time and edit.
+    expectations.expect(fixture.session.toggleKeyframeForParameter(valueParameter), "key the path");
+    expectations.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(1)),
+                        "move the playhead");
+    toolReady(fixture, expectations);
+    target = anchor_test::target(fixture);
+    if (target) {
+        const auto point = anchor_test::anchorAt(*target, 1);
+        toolDrag(fixture, point, point + QPointF(10, 10));
+    }
+    const auto keyCount = [&] {
+        const auto* record = fixture.session.composition()->parameters().find(valueParameter);
+        const auto* source =
+            record ? std::get_if<document::AnimationCurveSource>(&record->source) : nullptr;
+        const auto* curve =
+            source ? fixture.session.composition()->animationCurves().find(source->curveId) : nullptr;
+        const auto* path = curve ? std::get_if<document::PathAnimationCurve>(curve) : nullptr;
+        return path ? path->keyframes.size() : std::size_t{0};
+    };
+    expectations.expect(keyCount() == 2, "a point edit at a later time keys the shape's points there");
+    toolShutdown(fixture, expectations);
+}
+
 void testAnchorEditing(Expectations& expectations) {
     using namespace bloom;
     using anchor_test::target;

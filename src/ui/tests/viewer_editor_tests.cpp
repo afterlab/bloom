@@ -19,6 +19,7 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
@@ -86,6 +87,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -2339,6 +2342,7 @@ int main(int argc, char** argv) {
         testPenTools(expectations);
         testMaskTools(expectations);
         testAnchorEditing(expectations);
+        testImportedCompoundPointEditing(expectations);
         testTextTool(expectations);
     } catch (const std::exception& error) {
         expectations.expect(false, error.what());

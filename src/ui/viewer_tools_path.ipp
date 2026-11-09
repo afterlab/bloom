@@ -14,14 +14,28 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     if (!parameter || !kindValue || !std::holds_alternative<std::int64_t>(*kindValue) ||
         std::get<std::int64_t>(*kindValue) != static_cast<std::int64_t>(document::ShapeKind::Path))
         return {};
-    const auto value = session_.liveValue(parameter->id);
+    // #343: an imported shape's path is driven by a Path node; its points are that node's value.
+    document::ParameterId target = parameter->id;
+    if (const auto* driver = std::get_if<document::DriverBindingSource>(&parameter->source)) {
+        const auto* current = session_.composition();
+        const auto* node = current ? current->graph().findNode(driver->sourceNodeId) : nullptr;
+        if (!node || node->typeId != document::kPathValueNodeType ||
+            driver->outputPort != document::kValuePortName)
+            return {};
+        const auto found = std::ranges::find(node->parameters, document::kValueParameterRole,
+                                             &document::ParameterBinding::role);
+        if (found == node->parameters.end())
+            return {};
+        target = found->parameterId;
+    }
+    const auto value = session_.liveValue(target);
     if (!value || !std::holds_alternative<document::PathValue>(*value))
         return {};
-    // #589: the Viewer edits one contour; a compound value is shown, not edited, so no edit here
-    // can drop another contour, a fill rule or a group.
     const auto& held = std::get<document::PathValue>(*value);
-    if (!held.isSimple())
+    if (held.contours.empty())
         return {};
+    const std::size_t contour =
+        activeContourParameter_ == target && activeContour_ < held.contours.size() ? activeContour_ : 0;
     const auto selected = previewController_->selectedLayerBounds();
     const auto layer = session_.selection().contextualLayer;
     const auto bounds = std::ranges::find(selected, layer.value_or(document::LayerId{}),
@@ -37,7 +51,11 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     const QTransform world(x.x(), x.y(), y.x(), y.y(), origin.x(), origin.y());
     if (!world.isInvertible())
         return {};
-    return PathSelection{parameter->id, held.firstContour(), world};
+    bool compensate = true;
+    if (const auto* current = session_.composition(); current && layer)
+        if (const auto* boundary = current->graph().findLayer(*layer))
+            compensate = boundary->pivot != document::LayerPivot::Frame;
+    return PathSelection{target, held.contours[contour], world, held, contour, compensate};
 }
 
 document::Vec2d ViewerEditor::penPoint(const ViewerMapping& mapping, const QPointF screen) const {
@@ -54,7 +72,7 @@ QTransform ViewerEditor::penScreenTransform(const ViewerMapping& mapping) const 
 
 bool ViewerEditor::beginPenContinuation(const EditablePath& target, const std::size_t endpoint,
                                         const ViewerMapping& mapping, const QPointF screen) {
-    if (target.owner != EditablePath::Owner::Shape || target.path.closed ||
+    if (target.owner != EditablePath::Owner::Shape || target.whole.contours.size() > 1 || target.path.closed ||
         target.path.anchors.size() < 2 ||
         (endpoint != 0 && endpoint + 1 != target.path.anchors.size()))
         return false;

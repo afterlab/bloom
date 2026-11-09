@@ -11,6 +11,7 @@
 #include <QUrl>
 #include <QUuid>
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -37,6 +38,8 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/application_preferences.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/media/svg_scene.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/file_chooser.hpp>
@@ -55,9 +58,15 @@ namespace {
 // The media formats Import and Relink offer.
 [[nodiscard]] QString mediaFileFilter() {
     return QObject::tr(
-        "Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.dpx *.wav "
+        "Media (*.cube *.clf *.spi1d *.spi3d *.svg *.SVG *.png *.jpg *.jpeg *.exr *.tif *.tiff *.dpx *.wav "
         "*.mp3 *.mp4 *.mov *.mkv *.webm *.mxf *.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR "
         "*.TIF *.TIFF *.DPX *.WAV *.MP3 *.MP4 *.MOV *.MKV *.WEBM *.MXF)");
+}
+[[nodiscard]] bool isSvgFile(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(),
+                           [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".svg";
 }
 // CACHEFIX-1 proxy/audio caps. The proxy cache keeps its historic 512-entry bound and adds the
 // byte bound that bound only ever implied; the audio cache gets the aggregate bound it never had.
@@ -895,10 +904,30 @@ void AssetController::importFiles(const QStringList& paths,
     options.sequenceFrameRate = preferences.importSequenceFrameRate;
     options.stillDuration = preferences.importStillDuration;
     const auto running = importShared_;
-    prepare(paths, {}, folder, std::move(options));
+    QStringList media;
+    for (const auto& path : paths) {
+        if (path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive))
+            pendingSvg_.push_back(nativePath(path));
+        else
+            media.push_back(path);
+    }
+    if (media.isEmpty()) {
+        startNextSvg();
+        if (importShared_ != nullptr && importShared_ != running)
+            importFollowUp_ = std::move(followUp);
+        return;
+    }
+    prepare(media, {}, folder, std::move(options));
     // Kept only for the batch import this call started, never one already running.
     if (importShared_ != nullptr && importShared_ != running)
         importFollowUp_ = std::move(followUp);
+}
+void AssetController::startNextSvg() {
+    if (pendingSvg_.empty() || busy_)
+        return;
+    const auto path = pendingSvg_.front();
+    pendingSvg_.erase(pendingSvg_.begin());
+    prepare({QString::fromStdU16String(path.u16string())}, {}, {}, {});
 }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())
@@ -979,14 +1008,54 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
         [files = std::move(files), directory, relinkId, folder, shared, options,
-         hook = importProgressHook_](runtime::TaskContext& context) {
+         compositionId = session_.compositionId(), hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
             if (relinkId.isValid())
                 *result = std::make_unique<commands::RelinkAsset>(relinkId, files.front(),
                                                                   directory, cancel, options);
-            else {
+            else if (files.size() == 1 && isSvgFile(files.front())) {
+                {
+                    const std::lock_guard lock(shared->mutex);
+                    shared->workerThread = std::this_thread::get_id();
+                }
+                const auto stop = [&] {
+                    return context.isCancellationRequested() ||
+                           shared->stop.load(std::memory_order_acquire);
+                };
+                const auto name = files.front().filename().u8string();
+                context.reportProgress({.phase = "Reading SVG",
+                                        .subphase = std::string(name.begin(), name.end()),
+                                        .completed = 0,
+                                        .total = std::nullopt});
+                auto read = media::readSvgSceneFile(files.front(), stop);
+                if (read.error == media::SvgError::Cancelled || context.isCancellationRequested())
+                    return runtime::TaskResult<OperationHandle>::cancelled();
+                if (read.error != media::SvgError::None || !read.scene) {
+                    {
+                        const std::lock_guard lock(shared->mutex);
+                        shared->failures.push_back({files.front(), read.diagnostic, std::nullopt});
+                    }
+                    return runtime::TaskResult<OperationHandle>::failed(
+                        {{.code = "bloom.svg.import-failed",
+                          .severity = runtime::DiagnosticSeverity::Error,
+                          .summary = "The SVG could not be imported: " + read.diagnostic,
+                          .detail = read.diagnostic,
+                          .suggestedAction = "Check the file; nothing was added."}});
+                }
+                // What the artwork keeps as it is, and what it cannot hold, stays listed by name.
+                for (const auto& skipped : read.scene->skipped)
+                    warnings.push_back({.code = "bloom.svg.not-imported",
+                                        .severity = runtime::DiagnosticSeverity::Warning,
+                                        .summary = skipped.name + ": " + skipped.reason,
+                                        .detail = skipped.reason,
+                                        .suggestedAction = {}});
+                const auto stem = files.front().stem().u8string();
+                *result = std::make_unique<commands::AddSvgArtwork>(
+                    compositionId, read.scene, files.front(),
+                    std::string(stem.begin(), stem.end()), true);
+            } else {
                 {
                     const std::lock_guard lock(shared->mutex);
                     shared->workerThread = std::this_thread::get_id();
@@ -1884,7 +1953,10 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
             }
             // Successful files commit as one undoable transaction; every skipped file is
             // reported with its own diagnostic.
-            commands::Transaction transaction("Import Assets", base_->revision());
+            const bool svgArtwork =
+                dynamic_cast<const commands::AddSvgArtwork*>((*result.value())->get()) != nullptr;
+            commands::Transaction transaction(svgArtwork ? "Import SVG" : "Import Assets",
+                                              base_->revision());
             if (transaction.add(std::move(**result.value()))) {
                 // The import names an asset it found already held as well as one it added, so
                 // "added" is an output asset the project did not hold before this transaction.
@@ -1897,7 +1969,7 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                         before.project().findAsset(*id) == nullptr)
                         if (const auto* asset = session_.snapshot().project().findAsset(*id))
                             added.push_back(asset->locator.path);
-                report.imported = added.size();
+                report.imported = svgArtwork && executed.succeeded() ? 1 : added.size();
                 // A file the project already holds (same file, same bytes) is not added twice.
                 for (std::size_t index = 0; index < preparedPaths.size(); ++index)
                     if (std::ranges::find(added, preparedPaths[index]) == added.end())
@@ -1932,6 +2004,7 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
         report.followUp = followUp(report.assets);
     if (shared)
         emit importFinished(report);
+
 }
 struct AssetController::FootageVerificationResult final {
     FootageVerificationReport report;
@@ -2055,7 +2128,10 @@ void AssetController::poll() {
             emit activityChanged();
             finishImport(*result);
             base_.reset();
-            if (!pendingReloads_.empty()) {
+            // The next SVG of a batch starts once this one has committed or failed.
+            startNextSvg();
+            if (busy_) {
+            } else if (!pendingReloads_.empty()) {
                 const auto next = pendingReloads_.front();
                 pendingReloads_.pop_front();
                 reload(next);

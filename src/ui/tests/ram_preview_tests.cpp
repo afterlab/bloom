@@ -7,12 +7,14 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/render/image_types.hpp>
@@ -34,6 +36,8 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
+#include <filesystem>
+#include <fstream>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -1702,6 +1706,71 @@ void testLargeIndexedCoverageMetadata(Expectations& expectations) {
     }
 }
 
+// #343: an imported SVG previews at reduced resolution through the same cache as any layer: a cold
+// RAM preview prepares every frame, a warm one nothing, and an edit of one path invalidates it.
+void testImportedSvgPreviewAtHalfScale(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Imported SVG preview", time(3, 25)));
+    const auto file = std::filesystem::temp_directory_path() / "bloom-ram-preview-art.svg";
+    {
+        std::ofstream out(file);
+        out << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><g id="A">
+<path id="Ring" fill="#c00" fill-rule="evenodd" d="M4 4H40V40H4Z M12 12H32V32H12Z"/>
+<circle id="Dot" cx="50" cy="24" r="8" fill="#06c"/></g></svg>)svg";
+    }
+    commands::Transaction import("Import SVG", fixture.session.snapshot().revision());
+    import.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), nullptr, file, "art", true);
+    expectations.expect(fixture.session.executeTransaction(std::move(import)).succeeded(),
+                        "the SVG imports into the session");
+    std::filesystem::remove(file);
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the imported artwork previews at Half");
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    const auto cold = fixture.preparationCount.load();
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                            ramPreview.cachedFrameCount() == 3 && fixture.preparationCount.load() > cold,
+                        "a cold RAM preview prepares the imported frames at Half");
+    const auto warm = fixture.preparationCount.load();
+    ramPreview.start();
+    expectations.expect(!ramPreview.isCaching() && fixture.preparationCount.load() == warm,
+                        "a warm RAM preview prepares nothing");
+    // Move a point of the compound ring: only a pixel-affecting edit, so the cache must not serve
+    // the old frames.
+    const auto& graph = fixture.session.composition()->graph();
+    document::ParameterId ringValue;
+    for (const auto& node : graph.nodes())
+        if (node.typeId == document::kPathValueNodeType)
+            for (const auto& binding : node.parameters)
+                if (binding.role == document::kValueParameterRole) {
+                    const auto* record = fixture.session.composition()->parameters().find(binding.parameterId);
+                    const auto* constant =
+                        record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+                    const auto* value =
+                        constant ? std::get_if<document::PathValue>(&constant->value) : nullptr;
+                    if (value && value->contours.size() == 2)
+                        ringValue = binding.parameterId;
+                }
+    const auto* record = fixture.session.composition()->parameters().find(ringValue);
+    expectations.expect(record != nullptr, "the compound ring has its Path node");
+    if (record != nullptr) {
+        auto edited = std::get<document::PathValue>(
+            std::get<document::ConstantValueSource>(record->source).value);
+        edited.contours[1].anchors[0].point.x += 6.0;
+        expectations.expect(fixture.session.setParameterValue(ringValue, std::move(edited),
+                                                              QStringLiteral("Move Point")),
+                            "a point of the inner contour is edited");
+        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                            "the edited frame is ready");
+        ramPreview.start();
+        expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                                fixture.preparationCount.load() > warm,
+                            "an edit to one path invalidates the cached frames");
+    }
+    finishFixture(fixture, expectations);
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -1717,6 +1786,7 @@ int main(int argc, char** argv) {
         testOperationCacheUnderRamPreview(expectations);
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
         testResolutionChangeCancelsAnActiveRamPreview(expectations);
+        testImportedSvgPreviewAtHalfScale(expectations);
         testRamPreviewRetriesATransientFrameFailure(expectations);
         testRamPreviewLandsFramesInOrder(expectations);
         testRamPreviewIgnoresSessionOnlyActivity(expectations);

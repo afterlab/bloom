@@ -230,9 +230,18 @@ bool CompositionSession::beginTextEdit(const document::ParameterId parameter) {
     return true;
 }
 
-bool CompositionSession::beginPathEdit(const document::ParameterId parameter) {
+bool CompositionSession::beginPathEdit(const document::ParameterId parameter,
+                                       const bool compensateAnchor) {
     if (!beginValueEdit(parameter) || !valueEdit_)
         return false;
+    // A layer that pivots on the frame has no content-centre anchor to keep still.
+    if (!compensateAnchor) {
+        if (!std::holds_alternative<document::PathValue>(valueEdit_->base)) {
+            cancelValueEdit();
+            return false;
+        }
+        return true;
+    }
     const auto* anchor = parameterForSelection(document::kAnchorParameterRole);
     const auto base = anchor ? liveValue(anchor->id) : std::nullopt;
     if (!anchor || !base || !std::holds_alternative<document::Vec2d>(*base) ||
@@ -267,6 +276,8 @@ bool CompositionSession::beginMaskPathEdit(const document::ParameterId parameter
 
 bool CompositionSession::updatePathEdit(document::PathValue path,
                                         const document::Vec2d centreDelta) {
+    if (valueEdit_ && !valueEdit_->anchor)
+        return path.isValid() && updateValueEdit(std::move(path));
     if (!valueEdit_ || !valueEdit_->anchor || !std::isfinite(centreDelta.x) ||
         !std::isfinite(centreDelta.y))
         return false;

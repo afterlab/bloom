@@ -873,7 +873,8 @@ target_link_libraries(
         Qt6::Network
 )
 target_link_libraries(bloom_ui PUBLIC bloom_mcp)
-target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
+target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache
+                                        bloom_media_vector)
 # ADR 0034: the live session adapter feeds scripting::LiveSessionHost.
 target_link_libraries(bloom_ui PUBLIC bloom_scripting)
 bloom_enable_warnings(bloom_ui)

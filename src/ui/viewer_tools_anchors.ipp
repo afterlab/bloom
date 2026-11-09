@@ -44,6 +44,9 @@ std::optional<ViewerEditor::EditablePath> ViewerEditor::editablePath() const {
         target.parameter = shape->parameter;
         target.path = shape->path;
         target.toWorld = shape->toWorld;
+        target.whole = shape->whole;
+        target.contour = shape->contour;
+        target.compensateAnchor = shape->compensateAnchor;
         return target;
     }
     return {};
@@ -98,12 +101,35 @@ std::optional<ViewerEditor::AnchorHit> ViewerEditor::hitAnchor(const EditablePat
     return std::nullopt;
 }
 
+std::optional<std::size_t> ViewerEditor::hitOtherContour(const EditablePath& target,
+                                                         const QTransform& screen,
+                                                         const QPointF position) const {
+    const double radius = kit::px(kit::Size::GizmoHandle);
+    for (std::size_t index = 0; index < target.whole.contours.size(); ++index) {
+        if (index == target.contour)
+            continue;
+        for (const auto& anchor : target.whole.contours[index].anchors)
+            if (QLineF(screen.map(toolPoint(anchor.point)), position).length() <= radius)
+                return index;
+    }
+    return std::nullopt;
+}
+
+document::PathValue ViewerEditor::wholeWith(const EditablePath& target,
+                                            const document::PathContour& contour) {
+    if (target.whole.contours.empty() || target.contour >= target.whole.contours.size())
+        return document::PathValue::fromContour(contour);
+    auto whole = target.whole;
+    whole.contours[target.contour] = contour;
+    return whole;
+}
+
 void ViewerEditor::previewPathEdit(AnchorGesture& gesture, const document::PathContour& next) {
     auto& target = gesture.target;
     if (!gesture.previewing) {
         const bool started =
             target.owner == EditablePath::Owner::Shape
-                ? session_.beginPathEdit(target.parameter)
+                ? session_.beginPathEdit(target.parameter, target.compensateAnchor)
                 : session_.beginMaskPathEdit(target.parameter,
                                              document::PathValue::fromContour(gesture.base));
         if (!started)
@@ -112,7 +138,7 @@ void ViewerEditor::previewPathEdit(AnchorGesture& gesture, const document::PathC
         previewController_->beginInteractiveScrub();
     }
     if (target.owner == EditablePath::Owner::Shape)
-        (void)session_.updatePathEdit(document::PathValue::fromContour(next),
+        (void)session_.updatePathEdit(wholeWith(target, next),
                                       toolValue(pathCentre(next) - pathCentre(gesture.base)));
     else
         (void)session_.updateValueEdit(document::PathValue::fromContour(next));
@@ -128,13 +154,13 @@ void ViewerEditor::endPathPreview(AnchorGesture& gesture) {
 }
 
 bool ViewerEditor::commitPathEdit(const EditablePath& target, document::PathContour next) {
-    const auto whole = document::PathValue::fromContour(next);
+    const auto whole = wholeWith(target, next);
     if (next == target.path || !whole.isValid())
         return false;
     if (target.owner == EditablePath::Owner::Mask)
         return target.layer && target.mask &&
                session_.commitMaskPath(*target.layer, *target.mask, whole);
-    if (!session_.beginPathEdit(target.parameter))
+    if (!session_.beginPathEdit(target.parameter, target.compensateAnchor))
         return false;
     const auto delta = toolValue(pathCentre(next) - pathCentre(target.path));
     if (!session_.updatePathEdit(whole, delta)) {
@@ -223,7 +249,18 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
     const auto mapping = currentMapping();
     if (!mapping || !contentRect().contains(event->position()))
         return false;
-    const auto target = editablePath();
+    auto target = editablePath();
+    if (target && target->whole.contours.size() > 1) {
+        // A point of another contour of a compound path makes that contour the one under edit.
+        const auto screen = target->toWorld * toolScreenTransform(*mapping);
+        if (!hitAnchor(*target, screen, event->position()))
+            if (const auto other = hitOtherContour(*target, screen, event->position())) {
+                activeContourParameter_ = target->parameter;
+                activeContour_ = *other;
+                selectedAnchors_.clear();
+                target = editablePath();
+            }
+    }
     const auto start = [&](const AnchorGesture::Kind kind, const std::size_t index,
                            const path_editing::HandleSide side) {
         playback_->pause();
@@ -533,6 +570,16 @@ void ViewerEditor::paintAnchorEditing(QPainter& painter) const {
         painter.setPen(pen);
     }
     const auto half = kit::px(kit::Size::GizmoHandle) / 2.0;
+    // The other contours of a compound path: their points, small, so a click can pick one.
+    for (std::size_t other = 0; other < target->whole.contours.size(); ++other) {
+        if (other == target->contour)
+            continue;
+        painter.setBrush(kit::color(kit::Color::Surface));
+        for (const auto& anchor : target->whole.contours[other].anchors) {
+            const auto point = transform.map(toolPoint(anchor.point));
+            painter.drawRect(QRectF(point.x() - half / 2.0, point.y() - half / 2.0, half, half));
+        }
+    }
     for (std::size_t index = 0; index < target->path.anchors.size(); ++index) {
         const auto& anchor = target->path.anchors[index];
         const auto point = transform.map(toolPoint(anchor.point));

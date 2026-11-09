@@ -20,7 +20,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <filesystem>
 #include <optional>
+#include <vector>
 #include <thread>
 
 class QWidget;
@@ -297,6 +299,9 @@ class AssetController final : public QObject {
     std::deque<document::AssetId> pendingReloads_;
     std::shared_ptr<ImportShared> importShared_;
     ImportFollowUp importFollowUp_;
+    // #343: SVG files of a batch wait their turn; each imports as its own native-layer artwork.
+    std::vector<std::filesystem::path> pendingSvg_;
+    void startNextSvg();
     std::function<void(const commands::ImportProgress&)> importProgressHook_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;

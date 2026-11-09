@@ -725,7 +725,7 @@ class CompositionSession final : public QObject {
         const QString& commandLabel);
     [[nodiscard]] bool valueEditActive() const noexcept;
     [[nodiscard]] bool beginTextEdit(document::ParameterId parameter);
-    [[nodiscard]] bool beginPathEdit(document::ParameterId parameter);
+    [[nodiscard]] bool beginPathEdit(document::ParameterId parameter, bool compensateAnchor = true);
     // ADR 0028: a live, session-only edit of a mask path starting from `base` (the path the Viewer
     // shows at the playhead, keyed or constant). updateValueEdit previews each drag step through
     // the parameter override; the caller cancels it and commits one SetLayerMaskPath on release.

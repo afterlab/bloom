@@ -858,6 +858,12 @@ class ViewerEditor final : public QWidget,
         document::ParameterId parameter;
         document::PathContour path;
         QTransform toWorld;
+        // #343: the whole value and the contour being edited, so a compound value (an imported
+        // SVG shape's Path node) is edited one contour at a time without dropping another.
+        document::PathValue whole;
+        std::size_t contour = 0;
+        // False when the layer pivots on the frame: moving points then moves nothing else.
+        bool compensateAnchor = true;
     };
     [[nodiscard]] std::optional<PathSelection> selectedPath() const;
     // A confirmed path the Viewer edits: a Pen shape layer's path or a layer mask, in its own
@@ -868,6 +874,9 @@ class ViewerEditor final : public QWidget,
         document::ParameterId parameter;
         document::PathContour path;
         QTransform toWorld;
+        document::PathValue whole;
+        std::size_t contour = 0;
+        bool compensateAnchor = true;
         std::optional<document::LayerId> layer;    // Mask only
         std::optional<document::LayerMaskId> mask; // Mask only
         double feather = 0.0;
@@ -896,12 +905,22 @@ class ViewerEditor final : public QWidget,
     std::optional<AnchorGesture> anchorGesture_;
     path_editing::AnchorSet selectedAnchors_;
     document::ParameterId selectedAnchorsParameter_;
+    // The contour of a compound path under edit, and the parameter it belongs to.
+    document::ParameterId activeContourParameter_;
+    std::size_t activeContour_ = 0;
     // Session-only: the curved mode an Alt-click returns a Corner to.
     std::map<std::pair<std::uint64_t, std::size_t>, document::PathAnchorMode> curvedModeMemory_;
     [[nodiscard]] path_editing::AnchorSet anchorSelectionFor(const EditablePath& target) const;
     void setAnchorSelection(const EditablePath& target, path_editing::AnchorSet anchors);
     [[nodiscard]] std::optional<AnchorHit>
     hitAnchor(const EditablePath& target, const QTransform& screen, QPointF position) const;
+    // A point of another contour of a compound path, under `position`.
+    [[nodiscard]] std::optional<std::size_t> hitOtherContour(const EditablePath& target,
+                                                             const QTransform& screen,
+                                                             QPointF position) const;
+    // The contour's replacement inside the whole value.
+    [[nodiscard]] static document::PathValue wholeWith(const EditablePath& target,
+                                                       const document::PathContour& contour);
     void previewPathEdit(AnchorGesture& gesture, const document::PathContour& next);
     void endPathPreview(AnchorGesture& gesture);
     // One command: a path value edit for a shape layer, SetLayerMaskPath for a mask (keyed at the
