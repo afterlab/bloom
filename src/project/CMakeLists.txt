@@ -381,6 +381,14 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_layer_mask_test)
     bloom_add_test(NAME bloom.project.layer-masks COMMAND bloom_project_layer_mask_test LABELS unit persistence)
 
+    # #343: imported SVG artwork saves and reopens, with its source file recorded; built from
+    # commands, so it lives under tests/integration.
+    add_executable(bloom_project_svg_artwork_test
+        ${PROJECT_SOURCE_DIR}/tests/integration/svg_artwork_persistence_tests.cpp)
+    target_link_libraries(bloom_project_svg_artwork_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_svg_artwork_test)
+    bloom_add_test(NAME bloom.project.svg-artwork COMMAND bloom_project_svg_artwork_test LABELS unit persistence)
+
     # #502: built from commands, so it lives under tests/integration.
     add_executable(bloom_project_entry_layer_test
         ${PROJECT_SOURCE_DIR}/tests/integration/entry_layer_persistence_tests.cpp)

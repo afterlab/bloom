@@ -411,9 +411,65 @@ void hostileFiles() {
     CHECK(parse(big2).error == SvgError::TooLarge);
 }
 
+// #343: a filter that is one Gaussian blur becomes the element's blur, in final coordinates; every
+// other primitive is listed and nothing is half-applied. Elements without an id or label are named
+// by where they sit, so an artist can find them.
+void filtersFontsAndNames() {
+    const auto blurred = parse(wrap(R"svg(<defs><filter id="soft"><feGaussianBlur stdDeviation="2 3"/></filter>
+<filter id="shadow"><feOffset dx="2" dy="2"/><feGaussianBlur stdDeviation="2"/><feMerge><feMergeNode/></feMerge></filter></defs>
+<g transform="scale(2)"><rect id="a" width="10" height="10" filter="url(#soft)"/></g>
+<rect id="b" width="10" height="10" style="filter: blur(5px)"/>
+<rect id="c" width="10" height="10" filter="url(#shadow)"/>
+<rect id="d" width="10" height="10" filter="url(#missing)"/>)svg"));
+    CHECK(blurred.error == SvgError::None && blurred.scene);
+    if (!blurred.scene)
+        return;
+    const auto* a = find(blurred.scene->root, "a");
+    CHECK(a != nullptr && near(a->blurX, 4.0) && near(a->blurY, 6.0));
+    const auto* b = find(blurred.scene->root, "b");
+    CHECK(b != nullptr && near(b->blurX, 5.0) && near(b->blurY, 5.0));
+    const auto* c = find(blurred.scene->root, "c");
+    CHECK(c != nullptr && c->blurX == 0.0 && c->blurY == 0.0);
+    CHECK(c != nullptr && std::ranges::any_of(c->approximations, [](const std::string& s) {
+        return s.find("feOffset") != std::string::npos && s.find("feMerge") != std::string::npos;
+    }));
+    const auto* d = find(blurred.scene->root, "d");
+    CHECK(d != nullptr && d->blurX == 0.0 &&
+          std::ranges::any_of(d->approximations, [](const std::string& s) { return s.find("#missing") != std::string::npos; }));
+    // A blur wider than the filter region's margin is listed as clipped by it.
+    const auto clipped = parse(wrap(R"svg(<defs><filter id="wide" x="-0.01" y="-0.01" width="1.02" height="1.02"><feGaussianBlur stdDeviation="5"/></filter></defs>
+<rect id="r" width="20" height="20" filter="url(#wide)"/>)svg"));
+    CHECK(clipped.scene && approximates(*clipped.scene, "filter region"));
+
+    // The file's font: family, weight and slope.
+    const auto text = parse(wrap(R"svg(<text id="t" x="1" y="10" font-family="'Liberation Sans', sans-serif" font-weight="700" font-style="italic" font-size="12">Hi</text>)svg"));
+    CHECK(text.scene != nullptr);
+    if (text.scene) {
+        const auto* t = find(text.scene->root, "t");
+        CHECK(t != nullptr && t->fontFamily == "Liberation Sans" && t->fontWeight == 700 && t->fontItalic);
+    }
+
+    // Names: an id or label is used as is, and the rest are found by position.
+    const auto named = parse(wrap(R"svg(<g id="art"><rect width="1" height="1"/><path/><rect id="kept" width="2" height="2"/></g>
+<g><circle r="0"/><rect width="3" height="3"/></g>)svg"));
+    CHECK(named.scene != nullptr);
+    if (named.scene) {
+        bool positional = false, inGroup = false;
+        for (const auto& skipped : named.scene->skipped) {
+            positional = positional || skipped.name.find("path 2 in 'art'") != std::string::npos;
+            inGroup = inGroup || skipped.name.find("circle 1 in g 2") != std::string::npos;
+        }
+        CHECK(positional);
+        CHECK(inGroup);
+        const auto* kept = find(named.scene->root, "kept");
+        CHECK(kept != nullptr && kept->where == "kept");
+    }
+}
+
 } // namespace
 
 int main() {
+    filtersFontsAndNames();
     shapesNamesAndGroups();
     transformsAndViewBox();
     everyPathCommand();

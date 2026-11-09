@@ -7,6 +7,7 @@
 // `skipped` by element name, never dropped silently.
 
 #include <bloom/core/color.hpp>
+#include <bloom/core/sha256.hpp>
 
 #include <array>
 #include <cstddef>
@@ -112,6 +113,13 @@ struct SvgElement final {
     // The file's own name for it: id, else an editor label, else the element's tag.
     std::string name;
     std::string tag;
+    // Where to find it in the file: the same as `name` when the element has an id or an editor
+    // label, otherwise its place ("path 3 in g 2 in 'layer1'"). Used to name it in warnings.
+    std::string where;
+    // A filter that is one Gaussian blur (feGaussianBlur or the CSS blur()) of this element, as the
+    // standard deviation in final coordinates on x and y. Zero when there is none.
+    double blurX = 0.0;
+    double blurY = 0.0;
     // Element opacity (the `opacity` property), applied after its fill and stroke are composited.
     double opacity = 1.0;
     // A group's children in painting order (bottom first).
@@ -140,6 +148,9 @@ struct SvgElement final {
     int textAnchor = 0;
     std::string fontFamily;
     bool fontBold = false;
+    // The CSS weight (1 to 1000) and slope the file asks for.
+    int fontWeight = 400;
+    bool fontItalic = false;
     // Everything this element needed but could not take exactly, in plain sentences.
     std::vector<std::string> approximations;
 };
@@ -174,6 +185,11 @@ struct SvgScene final {
     std::size_t textCount = 0;
     std::size_t groupCount = 0;
     std::size_t anchorCount = 0;
+    // The file this scene was read from and the SHA-256 of its bytes (readSvgSceneFile only; a scene
+    // parsed from memory has neither). An import records them so the artwork names its source.
+    std::filesystem::path sourcePath;
+    core::Sha256Digest sourceDigest;
+    bool hasSourceDigest = false;
 };
 
 struct SvgReadResult final {

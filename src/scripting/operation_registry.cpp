@@ -2776,7 +2776,11 @@ OperationRegistry OperationRegistry::builtIn() {
                "The name of the group layer that holds the artwork. Defaults to the file's name."),
          maybe("fit", ValueKind::Boolean, true,
                "Scale the artwork to fit inside the composition and center it (the default); false keeps "
-               "its own pixel size, centered.")},
+               "its own pixel size, centered."),
+         maybe("projectDirectory", ValueKind::String, ".",
+               "The project directory the source file's record is made relative to, and a relative path "
+               "is read under. Omit it when the path is absolute: the saved project's folder is used, and "
+               "an unsaved project records the file as external.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2786,12 +2790,37 @@ OperationRegistry OperationRegistry::builtIn() {
             if (!composition || !path || error) {
                 return error;
             }
-            return OperationCreateResult(
-                std::make_unique<commands::AddSvgArtwork>(document::CompositionId::fromRaw(*composition), nullptr,
-                                                          std::filesystem::path(*path), name.value_or(std::string{}),
-                                                          fit.value_or(true)),
-                std::nullopt);
+            const auto directory = text(args, op, "projectDirectory", error, false);
+            if (error) {
+                return error;
+            }
+            std::filesystem::path file(*path);
+            const std::filesystem::path base = directory ? std::filesystem::path(*directory) : std::filesystem::path{};
+            if (file.is_relative() && !base.empty())
+                file = base / file;
+            auto artwork = std::make_unique<commands::AddSvgArtwork>(
+                document::CompositionId::fromRaw(*composition), nullptr, std::move(file),
+                name.value_or(std::string{}), fit.value_or(true));
+            artwork->withProjectDirectory(base);
+            return OperationCreateResult(std::move(artwork), std::nullopt);
         });
+    // Without projectDirectory, the record is made relative to the saved project's folder.
+    all.back().contextualFactory = [factory = all.back().factory](
+                                       const std::string& op, const Arguments& args,
+                                       const OperationContext& context) {
+        if (!args.contains("projectDirectory") && context.source) {
+            if (const auto source = context.source();
+                source && !source->assetBaseDirectory.empty()) {
+                auto resolved = args;
+                const auto bytes = source->assetBaseDirectory.generic_u8string();
+                resolved.insert_or_assign(
+                    "projectDirectory",
+                    Value(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size())));
+                return factory(op, resolved);
+            }
+        }
+        return factory(op, args);
+    };
 
     add("bloom.layer.add-solid",
         {compositionArgument(), need("name", ValueKind::String, "Red", "The layer name."),

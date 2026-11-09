@@ -594,6 +594,10 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                                                   ": " + failures_.front().diagnostic;
     }
 }
+document::AssetLocator assetLocatorFor(const std::filesystem::path& path,
+                                       const std::filesystem::path& base) {
+    return locator(path, base);
+}
 OperationResult ImportAssets::apply(document::Draft& draft) const {
     if (!diagnostic_.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue, diagnostic_);

@@ -3,20 +3,29 @@
 
 #include "node_operation_support.hpp"
 
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/document/asset.hpp>
+#include <bloom/document/font_id.hpp>
+#include <bloom/platform/font_catalog.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <map>
 #include <set>
 #include <array>
+#include <fstream>
 #include <numbers>
 #include <unordered_map>
 
@@ -70,9 +79,11 @@ struct Slot final {
 class Importer final {
   public:
     Importer(document::Draft& draft, document::Composition& composition,
-             const document::CompositionId compositionId, const media::SvgScene& scene, const bool fit)
+             const document::CompositionId compositionId, const media::SvgScene& scene, const bool fit,
+             std::filesystem::path projectDirectory, std::shared_ptr<const platform::FontCatalogue> fonts)
         : draft_(draft), composition_(composition), compositionId_(compositionId), graph_(composition.graph()),
-          parameters_(composition.parameters()), registry_(document::builtInNodeDefinitions()), scene_(scene) {
+          parameters_(composition.parameters()), registry_(document::builtInNodeDefinitions()), scene_(scene),
+          projectDirectory_(std::move(projectDirectory)), fonts_(std::move(fonts)) {
         const double compositionWidth = composition.format().width(), compositionHeight = composition.format().height();
         frameCenter_ = {compositionWidth / 2.0, compositionHeight / 2.0};
         compositionWidth_ = compositionWidth;
@@ -97,6 +108,7 @@ class Importer final {
             const auto rootMerge = addNode(std::string(document::kLayerStackNodeType), {}, {layoutOriginX_, 0});
             const auto rootSlot = addSlot(top, rootMerge);
             Slot ensured = ensureEntry(top, rootSlot, cleanName(name, "SVG"));
+            recordSource();
             // What the file holds and this import does not take, each named once.
             for (const auto& skipped : scene_.skipped)
                 note(skipped.name + ": not imported (" + skipped.reason + ")");
@@ -112,6 +124,8 @@ class Importer final {
             std::vector<OperationOutput> outputs{{"layer", ensured.layer},
                                                   {"slot", rootSlot},
                                                   {"merge", rootMerge}};
+            if (sourceAsset_)
+                outputs.push_back({"asset", *sourceAsset_});
             auto result = OperationResult::applied(std::move(outputs));
             for (auto& note : notes_) {
                 if (result.issues.size() >= 400)
@@ -138,6 +152,9 @@ class Importer final {
     document::ParameterStore& parameters_;
     const document::NodeDefinitionRegistry& registry_;
     const media::SvgScene& scene_;
+    std::filesystem::path projectDirectory_;
+    std::shared_ptr<const platform::FontCatalogue> fonts_;
+    std::optional<document::AssetId> sourceAsset_;
     SvgAffine fit_;
     document::Vec2d frameCenter_;
     double compositionWidth_ = 0, compositionHeight_ = 0;
@@ -152,6 +169,56 @@ class Importer final {
             notes_.push_back(std::move(text));
         else
             ++omitted_[text.find(": ") == std::string::npos ? text : text.substr(text.find(": ") + 2)];
+    }
+
+    static const std::string& describe(const SvgElement& element) {
+        return element.where.empty() ? element.name : element.where;
+    }
+
+    // ---- the source file ----
+
+    // The file the artwork came from, as an Assets record: its path (project-relative when the
+    // project folder is known) and the SHA-256 of its bytes. Nothing reads the file again, so a
+    // moved or missing file is not an error here or when the project opens; the record stays and
+    // the Assets panel shows the file as missing like any other moved footage. A file already
+    // recorded with the same path and digest is reused.
+    void recordSource() {
+        if (scene_.sourcePath.empty() || !scene_.hasSourceDigest)
+            return;
+        document::AssetRecord asset;
+        asset.kind = document::AssetKind::Image;
+        try {
+            asset.locator = assetLocatorFor(scene_.sourcePath, projectDirectory_);
+        } catch (const std::exception&) {
+            note("The source file's path cannot be recorded in the project");
+            return;
+        }
+        asset.contentDigest = scene_.sourceDigest;
+        asset.width = static_cast<std::uint32_t>(std::clamp(std::ceil(scene_.width), 1.0, 65535.0));
+        asset.height = static_cast<std::uint32_t>(std::clamp(std::ceil(scene_.height), 1.0, 65535.0));
+        auto& project = draft_.project();
+        if (const auto found = std::ranges::find_if(project.assets(), [&](const auto& candidate) {
+                return candidate.locator.path == asset.locator.path && candidate.contentDigest == asset.contentDigest;
+            });
+            found != project.assets().end()) {
+            sourceAsset_ = found->id;
+            return;
+        }
+        const auto id = draft_.ids().allocateAsset();
+        if (!id)
+            throw Failure{"Asset ID space is exhausted"};
+        asset.id = *id;
+        asset.name = cleanName(scene_.sourcePath.filename().string(), "SVG");
+        for (const auto& existing : project.assets())
+            if (!existing.folder)
+                asset.order = std::max(asset.order, existing.order == std::numeric_limits<std::uint64_t>::max()
+                                                        ? existing.order
+                                                        : existing.order + 1);
+        if (!project.addAsset(std::move(asset))) {
+            note("The source file could not be recorded in the project");
+            return;
+        }
+        sourceAsset_ = *id;
     }
 
     // ---- nodes ----
@@ -384,6 +451,94 @@ class Importer final {
         }
     }
 
+    // ---- pivot ----
+
+    // The bounds of an element's geometry in the composition (control points; a group's children
+    // together; text by its anchor point).
+    void accumulateBounds(const SvgElement& element, std::array<double, 4>& box, const int depth = 0) const {
+        if (depth > 200)
+            return;
+        const auto add = [&](const double x, const double y) {
+            const auto q = fit_.apply(x, y);
+            box[0] = std::min(box[0], q[0]);
+            box[1] = std::min(box[1], q[1]);
+            box[2] = std::max(box[2], q[0]);
+            box[3] = std::max(box[3], q[1]);
+        };
+        if (element.kind == SvgElement::Kind::Text)
+            add(element.textX, element.textY);
+        for (const auto& contour : element.contours)
+            for (const auto& anchor : contour.anchors) {
+                add(anchor.point.x, anchor.point.y);
+                if (anchor.hasIn)
+                    add(anchor.in.x, anchor.in.y);
+                if (anchor.hasOut)
+                    add(anchor.out.x, anchor.out.y);
+            }
+        for (const auto& child : element.children)
+            accumulateBounds(child, box, depth + 1);
+    }
+
+    // An imported element rotates and scales about the centre of its own bounds, not about the
+    // frame: a Merge entry's layer pivots on the frame's centre plus its Anchor, and the entry's
+    // Position is where that pivot lands, so Anchor = centre - frame centre and Position = centre
+    // leaves the picture exactly where it was. The centre is a multiple of 1/16 of a pixel, so the
+    // sums are exact and the layer's matrix stays the identity until the artist turns it. The pivot
+    // is a fixed point, as in an After Effects anchor: moving the element's points later does not
+    // move it, and the Viewer's point editing needs no compensation (a frame-pivot layer is never
+    // compensated).
+    void pivotAtBounds(const Slot entry, const SvgElement& element) {
+        std::array<double, 4> box{1e300, 1e300, -1e300, -1e300};
+        accumulateBounds(element, box);
+        if (!(box[2] >= box[0]) || !(box[3] >= box[1]) || !std::isfinite(box[0]) || !std::isfinite(box[2]) ||
+            !std::isfinite(box[1]) || !std::isfinite(box[3]))
+            return;
+        const auto snap = [](const double value) { return std::round(value * 16.0) / 16.0; };
+        const document::Vec2d centre{snap((box[0] + box[2]) / 2.0), snap((box[1] + box[3]) / 2.0)};
+        setLayerParameter(entry, document::kAnchorParameterRole,
+                          document::Vec2d{centre.x - frameCenter_.x, centre.y - frameCenter_.y});
+        setLayerParameter(entry, document::kPositionParameterRole, centre);
+    }
+
+    // ---- blur ----
+
+    // An element's filter that is one Gaussian blur becomes a Gaussian Blur node between its
+    // content and its slot. Bloom's blur has one radius (sigma = radius / 3, transparent beyond the
+    // edge), so an uneven blur is applied evenly and listed, and a radius past the node's 256 pixel
+    // limit is held at the limit and listed.
+    document::NodeId withBlur(const SvgElement& element, const document::NodeId source) {
+        if (!(element.blurX > 0.0) && !(element.blurY > 0.0))
+            return source;
+        const double larger = std::max(element.blurX, element.blurY);
+        const double smaller = std::min(element.blurX, element.blurY);
+        // The reader's deviations are in the file's units; the artwork is fitted into the frame.
+        const double fit = fitScale();
+        double sigma = (element.blurX + element.blurY) / 2.0 * fit;
+        if (smaller < larger * 0.9) {
+            sigma = (larger > 0 && smaller > 0 ? std::sqrt(larger * smaller) : larger / 2.0) * fit;
+            note(describe(element) + ": a blur of " + std::to_string(element.blurX * fit) + " by " +
+                 std::to_string(element.blurY * fit) + " pixels is applied evenly (Bloom's blur has one radius)");
+        }
+        double radius = 3.0 * sigma;
+        if (radius > document::kMaximumBlurRadiusPixels) {
+            note(describe(element) + ": the blur is held at the node's largest radius of 256 pixels");
+            radius = document::kMaximumBlurRadiusPixels;
+        }
+        Overrides overrides;
+        overrides["radius"] = constant(radius);
+        overrides["edge"] = constant(std::int64_t{0});
+        const auto blur = addNode("bloom.gaussian-blur", overrides, cell());
+        claim(blur);
+        const auto edgeId = draft_.ids().allocateEdge();
+        if (!edgeId)
+            throw Failure{"The edge ID space is exhausted"};
+        if (!graph_.addEdge({*edgeId, {source, std::string(document::kLayerStackOutputPort)},
+                             document::NodeInputRef{blur, "input"}},
+                            registry_))
+            throw Failure{"The blur could not be connected"};
+        return blur;
+    }
+
     // ---- emission ----
 
     static constexpr std::size_t kChunkSize = 256;
@@ -435,7 +590,7 @@ class Importer final {
     // directly below it.
     void emitElement(const SvgElement& element, const document::NodeId merge) {
         for (const auto& approximation : element.approximations)
-            note(element.name + ": " + approximation);
+            note(describe(element) + ": " + approximation);
         if (isAnonymous(element)) {
             for (const auto& child : element.children)
                 emitElement(child, merge);
@@ -447,6 +602,8 @@ class Importer final {
         const Slot target = element.kind == SvgElement::Kind::Group  ? emitGroup(element, merge)
                             : element.kind == SvgElement::Kind::Text ? emitText(element, merge)
                                                                       : emitShape(element, merge);
+        if (element.kind != SvgElement::Kind::Text)
+            pivotAtBounds(target, element);
         if (matte)
             layerOf(target).trackMatte = document::TrackMatte{
                 matte->layer, element.mask ? document::TrackMatteChannel::Luma : document::TrackMatteChannel::Alpha,
@@ -457,7 +614,7 @@ class Importer final {
         const bool isMask = static_cast<bool>(element.mask);
         const auto& source = isMask ? *element.mask : *element.clip;
         for (const auto& approximation : source.approximations)
-            note(element.name + ": " + approximation);
+            note(describe(element) + ": " + approximation);
         const auto sourceMerge = addNode(std::string(document::kLayerStackNodeType), {}, cell());
         claim(sourceMerge);
         const auto slot = addSlot(merge, sourceMerge);
@@ -469,7 +626,7 @@ class Importer final {
     Slot emitGroup(const SvgElement& element, const document::NodeId merge) {
         const auto groupMerge = addNode(std::string(document::kLayerStackNodeType), {}, cell());
         claim(groupMerge);
-        const auto slot = addSlot(merge, groupMerge);
+        const auto slot = addSlot(merge, withBlur(element, groupMerge));
         auto entry = ensureEntry(merge, slot, element.name);
         if (element.opacity < 1.0)
             setLayerParameter(entry, document::kOpacityParameterRole, element.opacity);
@@ -477,10 +634,123 @@ class Importer final {
         return entry;
     }
 
-    // Text stays text: a native Text layer the artist can retype, restyle and animate, set in
-    // Bloom's font (the file's fonts are not read).
+    // The em ascent of a face (hhea ascender over units per em), read from the font file: where the
+    // baseline sits below the top of a text line. The built-in face's 0.928 when it cannot be read.
+    static double faceAscentEm(const platform::FontFace& face) {
+        constexpr double kFallback = 0.928;
+        std::ifstream file(face.path, std::ios::binary);
+        if (!file)
+            return kFallback;
+        const auto be16 = [](const unsigned char* at) { return static_cast<unsigned>(at[0]) << 8 | at[1]; };
+        const auto be32 = [](const unsigned char* at) {
+            return static_cast<std::uint32_t>(at[0]) << 24 | static_cast<std::uint32_t>(at[1]) << 16 |
+                   static_cast<std::uint32_t>(at[2]) << 8 | at[3];
+        };
+        const auto read = [&file](const std::uint64_t offset, unsigned char* out, const std::size_t size) {
+            file.clear();
+            file.seekg(static_cast<std::streamoff>(offset));
+            file.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(size));
+            return static_cast<std::size_t>(file.gcount()) == size;
+        };
+        unsigned char header[16]{};
+        if (!read(0, header, 12))
+            return kFallback;
+        std::uint64_t base = 0;
+        if (header[0] == 't' && header[1] == 't' && header[2] == 'c' && header[3] == 'f') {
+            unsigned char entry[4]{};
+            if (!read(12 + 4ULL * face.faceIndex, entry, 4))
+                return kFallback;
+            base = be32(entry);
+            if (!read(base, header, 12))
+                return kFallback;
+        }
+        const unsigned tables = be16(header + 4);
+        std::uint64_t headOffset = 0, hheaOffset = 0;
+        for (unsigned i = 0; i < tables && i < 128; ++i) {
+            unsigned char record[16]{};
+            if (!read(base + 12 + 16ULL * i, record, 16))
+                return kFallback;
+            const std::string tag(reinterpret_cast<const char*>(record), 4);
+            if (tag == "head")
+                headOffset = be32(record + 8);
+            else if (tag == "hhea")
+                hheaOffset = be32(record + 8);
+        }
+        unsigned char upm[2]{}, ascender[2]{};
+        if (headOffset == 0 || hheaOffset == 0 || !read(headOffset + 18, upm, 2) || !read(hheaOffset + 4, ascender, 2))
+            return kFallback;
+        const double units = be16(upm);
+        const double ascent = static_cast<std::int16_t>(be16(ascender));
+        return units > 0 && ascent > 0 ? ascent / units : kFallback;
+    }
+
+    struct ResolvedFont final {
+        std::optional<document::FontId> id;
+        double ascentEm = 0.928;
+    };
+
+    // The file's font through Bloom's font selection: an installed face of the family at the
+    // closest weight and slope. Only when the family is not installed (or is a generic name) does
+    // the text keep Bloom's default font, and that is listed.
+    ResolvedFont resolveFont(const SvgElement& element) {
+        ResolvedFont resolved;
+        if (element.fontFamily.empty())
+            return resolved;
+        const auto lowered = [](std::string text) {
+            for (auto& c : text)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return text;
+        };
+        const auto family = lowered(element.fontFamily);
+        if (family == "serif" || family == "sans-serif" || family == "monospace" || family == "cursive" ||
+            family == "fantasy" || family == "system-ui") {
+            note(describe(element) + ": the generic font family '" + element.fontFamily +
+                 "' names no particular font, so Bloom's default font is used");
+            return resolved;
+        }
+        if (!fonts_)
+            fonts_ = std::make_shared<const platform::FontCatalogue>(
+                platform::FontCatalogueProvider{}.enumerate({}, false));
+        const platform::FontFace* best = nullptr;
+        int bestScore = 0;
+        for (const auto& face : fonts_->faces) {
+            if (lowered(face.family) != family)
+                continue;
+            const int score = std::abs(face.weight - element.fontWeight) + (face.italic == element.fontItalic ? 0 : 1000);
+            if (best == nullptr || score < bestScore) {
+                best = &face;
+                bestScore = score;
+            }
+        }
+        if (best == nullptr) {
+            note(describe(element) + ": the font '" + element.fontFamily +
+                 "' is not installed, so Bloom's default font is used");
+            return resolved;
+        }
+        if (best->italic != element.fontItalic || std::abs(best->weight - element.fontWeight) >= 100)
+            note(describe(element) + ": '" + best->family + "' has no " + (element.fontItalic ? "italic " : "") +
+                 "weight " + std::to_string(element.fontWeight) + "; its " + best->style + " face is used");
+        document::FontId id;
+        id.source = document::FontSource::System;
+        id.family = best->family;
+        id.style = best->style;
+        id.weight = best->weight;
+        id.italic = best->italic;
+        id.postscriptName = best->postscriptName;
+        if (!document::isValidFontId(id))
+            return resolved;
+        resolved.id = std::move(id);
+        resolved.ascentEm = faceAscentEm(*best);
+        return resolved;
+    }
+
+    // Text stays text: a native Text layer the artist can retype, restyle and animate, set in the
+    // file's font when it is installed.
     Slot emitText(const SvgElement& element, const document::NodeId merge) {
+        const auto font = resolveFont(element);
         Overrides overrides;
+        if (font.id)
+            overrides[std::string(document::kTextFontParameterRole)] = constant(document::encodeFontId(*font.id));
         overrides[std::string(document::kTextParameterRole)] = constant(element.text);
         overrides[std::string(document::kTextSizeParameterRole)] = constant(std::max(1.0, element.fontSize * fitScale()));
         overrides[std::string(document::kTextColorParameterRole)] = constant(linearColor(element.fill.color));
@@ -489,10 +759,10 @@ class Importer final {
         const auto position = cell();
         const auto node = addNode(std::string(document::kTextSourceNodeType), overrides, position);
         claim(node);
-        const auto slot = addSlot(merge, node);
+        const auto slot = addSlot(merge, withBlur(element, node));
         auto entry = ensureEntry(merge, slot, element.name);
         const auto at = fit_.apply(element.textX, element.textY);
-        setLayerParameter(entry, document::kPositionParameterRole, document::Vec2d{frameCenter_.x + at[0], frameCenter_.y + at[1] - kTextBaselineLift * element.fontSize * fitScale()});
+        setLayerParameter(entry, document::kPositionParameterRole, document::Vec2d{frameCenter_.x + at[0], frameCenter_.y + at[1] - font.ascentEm * element.fontSize * fitScale()});
         if (element.textRotation != 0.0)
             setLayerParameter(entry, document::kRotationParameterRole, element.textRotation);
         if (element.opacity < 1.0)
@@ -500,7 +770,7 @@ class Importer final {
         return entry;
     }
 
-    static constexpr double kTextBaselineLift = 0.928; // the ascent of the built-in face, in ems; an untranslated text layer has its line's top at the frame's top and its anchor at the frame's left edge
+    // An untranslated text layer has its line's top at the frame's top and its anchor at the frame's left edge, so the baseline is the face's ascent below it.
 
     Slot emitShape(const SvgElement& shape, const document::NodeId merge) {
         const auto position = cell();
@@ -515,7 +785,7 @@ class Importer final {
         // One Shape holds the fill and the stroke when both are plain.
         if (!gradientFill && (!hasStroke || nativeStroke)) {
             const auto node = addShapeNode(pathNode, shape, solidFill, nativeStroke, {position.x + 180.0, position.y});
-            const auto slot = addSlot(merge, node);
+            const auto slot = addSlot(merge, withBlur(shape, node));
             auto entry = ensureEntry(merge, slot, shape.name);
             if (shape.opacity < 1.0)
                 setLayerParameter(entry, document::kOpacityParameterRole, shape.opacity);
@@ -524,7 +794,7 @@ class Importer final {
         // Otherwise a small group, the fill and then the stroke over it.
         const auto groupMerge = addNode(std::string(document::kLayerStackNodeType), {}, cell());
         claim(groupMerge);
-        const auto slot = addSlot(merge, groupMerge);
+        const auto slot = addSlot(merge, withBlur(shape, groupMerge));
         auto entry = ensureEntry(merge, slot, shape.name);
         if (shape.opacity < 1.0)
             setLayerParameter(entry, document::kOpacityParameterRole, shape.opacity);
@@ -605,7 +875,7 @@ class Importer final {
             overrides["dashGap"] = constant(std::max(0.0, (shape.dashes.size() > 1 ? shape.dashes[1] : shape.dashes[0]) * fitScale()));
             overrides["dashOffset"] = constant(shape.dashOffset * fitScale());
             if (shape.dashes.size() > 2)
-                note(shape.name + ": a dash pattern of " + std::to_string(shape.dashes.size()) +
+                note(describe(shape) + ": a dash pattern of " + std::to_string(shape.dashes.size()) +
                      " lengths keeps its first dash and gap");
         }
         overrides["cap"] = constant(static_cast<std::int64_t>(shape.cap == media::SvgCap::Round ? 1 : shape.cap == media::SvgCap::Square ? 2 : 0));
@@ -695,7 +965,7 @@ class Importer final {
             reachX += 2.0;
             reachY += 2.0;
             if (reachX * 2.0 > 8192.0 || reachY * 2.0 > 8192.0) {
-                note(shape.name + ": an extreme elliptical gradient is drawn within an 8192 pixel window");
+                note(describe(shape) + ": an extreme elliptical gradient is drawn within an 8192 pixel window");
                 reachX = std::min(reachX, 4096.0);
                 reachY = std::min(reachY, 4096.0);
             }
@@ -739,7 +1009,7 @@ OperationResult AddSvgArtwork::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::InvalidValue, "SVG import failed: " + read.diagnostic);
         scene = std::move(read.scene);
     }
-    Importer importer(draft, *composition, composition_, *scene, fit_);
+    Importer importer(draft, *composition, composition_, *scene, fit_, projectDirectory_, fonts_);
     auto result = importer.run(name_.empty() ? path_.stem().string() : name_);
     if (result.status == OperationStatus::Applied) {
         // The placement is by construction; one validation of the whole composition at the end.

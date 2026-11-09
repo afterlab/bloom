@@ -1,4 +1,5 @@
 #include <bloom/media/svg_scene.hpp>
+#include <bloom/core/sha256.hpp>
 
 #include "svg_internal.hpp"
 
@@ -43,6 +44,8 @@ struct Style final {
     int textAnchor = 0; // 0 start, 1 middle, 2 end
     std::string fontFamily;
     bool fontBold = false;
+    int fontWeight = 400;
+    bool fontItalic = false;
     bool markers = false;
     // Not inherited.
     bool displayNone = false;
@@ -50,6 +53,7 @@ struct Style final {
     std::string clipPath;
     std::string mask;
     bool filter = false;
+    std::string filterValue;
     core::Color4d stopColor{0, 0, 0, 1};
     double stopOpacity = 1.0;
     bool overflowVisible = false;
@@ -199,6 +203,42 @@ class Builder final {
     std::optional<std::size_t> lookup(const std::string& id) const {
         const auto found = byId_.find(id);
         return found == byId_.end() ? std::nullopt : std::optional(found->second);
+    }
+    // The name an artist can search the file for: the element's id or label when it has one, and
+    // otherwise where it sits, as "path 3 in g 2 in 'layer1'" (its number among its parent's
+    // children, then the same for the parent, up to the nearest named ancestor or the root).
+    std::string located(const XmlNode& node) const {
+        if (const auto name = label(node, std::string{}); !name.empty())
+            return name;
+        const auto index = static_cast<std::size_t>(&node - doc_.nodes.data());
+        const auto step = [&](const std::size_t at) {
+            std::size_t ordinal = 1;
+            if (at != 0) {
+                const auto& siblings = doc_.nodes[doc_.nodes[at].parent].children;
+                const auto found = std::ranges::find(siblings, at);
+                ordinal = found == siblings.end() ? 1 : static_cast<std::size_t>(found - siblings.begin()) + 1;
+            }
+            return doc_.nodes[at].tag + " " + std::to_string(ordinal);
+        };
+        std::string text = step(index);
+        auto at = index;
+        for (int levels = 0; at != 0 && levels < 6; ++levels) {
+            const auto parent = doc_.nodes[at].parent;
+            if (const auto name = label(doc_.nodes[parent], std::string{}); !name.empty()) {
+                text += " in '" + name + "'";
+                return text;
+            }
+            if (parent == 0) {
+                text += " in the file's root";
+                return text;
+            }
+            text += " in " + step(parent);
+            at = parent;
+        }
+        return text;
+    }
+    static const std::string& describe(const SvgElement& element) {
+        return element.where.empty() ? element.name : element.where;
     }
     std::string label(const XmlNode& node, const std::string& fallback) const {
         for (const char* key : {"inkscape:label", "data-name", "id"})
@@ -373,6 +413,7 @@ class Builder final {
             s.mask = lower(value) == "none" ? std::string{} : value;
         } else if (name == "filter") {
             s.filter = lower(value) != "none" && !value.empty();
+            s.filterValue = s.filter ? value : std::string{};
         } else if (name == "stop-color") {
             if (lower(value) == "currentcolor")
                 s.stopColor = s.currentColor;
@@ -394,6 +435,17 @@ class Builder final {
         } else if (name == "font-weight") {
             const auto v = lower(value);
             s.fontBold = v == "bold" || v == "bolder" || (!v.empty() && std::isdigit(static_cast<unsigned char>(v[0])) && std::atoi(v.c_str()) >= 600);
+            if (v == "normal")
+                s.fontWeight = 400;
+            else if (v == "bold" || v == "bolder")
+                s.fontWeight = 700;
+            else if (v == "lighter")
+                s.fontWeight = 300;
+            else if (!v.empty() && std::isdigit(static_cast<unsigned char>(v[0])))
+                s.fontWeight = std::clamp(std::atoi(v.c_str()), 1, 1000);
+        } else if (name == "font-style") {
+            const auto v = lower(value);
+            s.fontItalic = v == "italic" || v.rfind("oblique", 0) == 0;
         } else if (name == "font-size") {
             s.fontSize = std::max(0.0, lengthPx(value, parent.fontSize, parent.fontSize, s.fontSize));
         } else if (name == "overflow") {
@@ -413,7 +465,7 @@ class Builder final {
             "fill", "stroke", "fill-opacity", "stroke-opacity", "opacity", "fill-rule", "clip-rule",
             "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray",
             "stroke-dashoffset", "color", "display", "visibility", "clip-path", "mask", "filter",
-            "stop-color", "stop-opacity", "font-size", "text-anchor", "font-family", "font-weight", "overflow", "marker-start", "marker-mid",
+            "stop-color", "stop-opacity", "font-size", "text-anchor", "font-family", "font-weight", "font-style", "overflow", "marker-start", "marker-mid",
             "marker-end", "marker"};
         return names.contains(name);
     }
@@ -425,6 +477,7 @@ class Builder final {
         s.clipPath.clear();
         s.mask.clear();
         s.filter = false;
+        s.filterValue.clear();
         s.stopColor = {0, 0, 0, 1};
         s.stopOpacity = 1.0;
         s.overflowVisible = false;
@@ -877,10 +930,11 @@ class Builder final {
         shape.kind = SvgElement::Kind::Shape;
         shape.tag = n.tag;
         shape.name = label(n, n.tag);
+        shape.where = located(n);
         auto contours = shapeContours(n, style, shape.approximations);
         if (contours.empty()) {
             if (!forClip)
-                skip(shape.name, "no geometry (" + n.tag + ")");
+                skip(describe(shape), "no geometry (" + n.tag + ")");
             return false;
         }
         std::vector<std::string> notes;
@@ -894,7 +948,7 @@ class Builder final {
         for (const auto& contour : contours) {
             anchors += contour.anchors.size();
             if (contour.anchors.size() > kMaxSvgContourAnchors) {
-                skip(shape.name, "a contour has " + std::to_string(contour.anchors.size()) +
+                skip(describe(shape), "a contour has " + std::to_string(contour.anchors.size()) +
                                      " points, beyond Bloom's limit of 4096 per contour");
                 return false;
             }
@@ -929,7 +983,7 @@ class Builder final {
                 return paint;
             }
             case PaintKind::Url:
-                return resolveGradient(spec, opacity, world, box, style, shape.approximations, shape.name, isStroke)
+                return resolveGradient(spec, opacity, world, box, style, shape.approximations, describe(shape), isStroke)
                     .value_or(SvgPaint{});
             }
             return paint;
@@ -954,14 +1008,14 @@ class Builder final {
                 shape.approximations.push_back("a gradient stroke is drawn through a stroke-shaped matte");
         }
         if (style.filter)
-            shape.approximations.push_back("a filter on this element is not applied");
+            applyFilter(style, world, shape);
         if (style.markers)
             shape.approximations.push_back("markers on this element are not drawn");
         if (!style.visible || (shape.fill.kind == SvgPaint::Kind::None && shape.stroke.kind == SvgPaint::Kind::None)) {
             std::string reason = style.visible ? "no visible fill or stroke" : "hidden (visibility)";
             for (const auto& approximation : shape.approximations)
                 reason += "; " + approximation;
-            skip(shape.name, std::move(reason));
+            skip(describe(shape), std::move(reason));
             return false;
         }
         attachClipAndMask(index, style, world, box, shape);
@@ -971,6 +1025,171 @@ class Builder final {
             throw Refusal{SvgError::TooComplex,
                           "The SVG draws more than 20,000 elements, beyond what is imported."};
         return true;
+    }
+
+
+    // ---- filters ----
+
+    // The final-coordinate bounds of an element's control points (a group: its children's).
+    static void accumulateBounds(const SvgElement& element, std::array<double, 4>& box) {
+        for (const auto& contour : element.contours)
+            for (const auto& anchor : contour.anchors) {
+                const auto add = [&box](const SvgPoint p) {
+                    box[0] = std::min(box[0], p.x);
+                    box[1] = std::min(box[1], p.y);
+                    box[2] = std::max(box[2], p.x);
+                    box[3] = std::max(box[3], p.y);
+                };
+                add(anchor.point);
+                if (anchor.hasIn)
+                    add(anchor.in);
+                if (anchor.hasOut)
+                    add(anchor.out);
+            }
+        for (const auto& child : element.children)
+            accumulateBounds(child, box);
+    }
+
+    // `filter` on an element. A filter that is one Gaussian blur of the source graphic (the
+    // `feGaussianBlur` of a `<filter>`, or the CSS function `blur()`) becomes the native blur of the
+    // element: its standard deviation in final coordinates goes to blurX and blurY. Every other
+    // primitive is listed, and a filter of several primitives is not applied at all (a blur beside
+    // an offset and a merge is a shadow, not a blur).
+    void applyFilter(const Style& style, const SvgAffine& world, SvgElement& element) {
+        const auto text = std::string(trim(style.filterValue));
+        if (text.empty() || lower(text) == "none")
+            return;
+        const double sx = std::hypot(world.a, world.b), sy = std::hypot(world.c, world.d);
+        const auto unsupported = [&](const std::string& what) {
+            element.approximations.push_back("the filter " + what + " is not applied");
+        };
+        // Tokens: url(#id) and CSS functions.
+        std::vector<std::string> tokens;
+        for (std::size_t at = 0; at < text.size();) {
+            while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at])))
+                ++at;
+            if (at >= text.size())
+                break;
+            const auto close = text.find(')', at);
+            if (close == std::string::npos) {
+                tokens.push_back(text.substr(at));
+                break;
+            }
+            tokens.push_back(text.substr(at, close + 1 - at));
+            at = close + 1;
+        }
+        std::optional<std::pair<double, double>> blur; // final-coordinate sigma on x and y
+        std::vector<std::string> others;
+        for (const auto& token : tokens) {
+            const auto open = token.find('(');
+            const auto name = lower(std::string(trim(token.substr(0, open))));
+            const auto args = open == std::string::npos ? std::string{}
+                                                        : std::string(trim(token.substr(open + 1, token.size() - open - 2)));
+            if (name == "blur") {
+                const auto radius = args.empty() ? 0.0 : lengthPx(args, 0.0, style.fontSize, 0.0);
+                if (radius > 0 && !blur && tokens.size() == 1)
+                    blur = std::pair{radius * sx, radius * sy};
+                else if (radius > 0)
+                    others.push_back("blur() beside other filter functions");
+            } else if (name == "url") {
+                const auto id = parseUrlReference(token);
+                if (!id) {
+                    others.push_back(token);
+                    continue;
+                }
+                const auto target = lookup(*id);
+                if (!target || doc_.nodes[*target].foreign || doc_.nodes[*target].tag != "filter") {
+                    unsupported("#" + *id + " (it is not a filter in this file)");
+                    continue;
+                }
+                const auto& filter = doc_.nodes[*target];
+                std::vector<std::size_t> primitives;
+                for (const auto child : filter.children)
+                    if (!doc_.nodes[child].foreign && doc_.nodes[child].tag.rfind("fe", 0) == 0)
+                        primitives.push_back(child);
+                if (primitives.empty()) {
+                    unsupported("#" + *id + " (it has no primitives, so the element is drawn unfiltered)");
+                    continue;
+                }
+                const auto& first = doc_.nodes[primitives.front()];
+                const auto* input = first.find("in");
+                const bool singleBlur = primitives.size() == 1 && first.tag == "feGaussianBlur" && tokens.size() == 1 &&
+                                        (input == nullptr || trim(*input).empty() || trim(*input) == "SourceGraphic");
+                if (!singleBlur) {
+                    std::set<std::string> names;
+                    for (const auto primitive : primitives)
+                        names.insert(doc_.nodes[primitive].tag);
+                    std::string list;
+                    for (const auto& n : names)
+                        list += (list.empty() ? "" : ", ") + n;
+                    others.push_back("#" + *id + " (" + list + ")");
+                    continue;
+                }
+                double deviationX = 0, deviationY = 0;
+                if (const auto* value = first.find("stdDeviation")) {
+                    std::string_view rest = trim(*value);
+                    if (const auto a = parseNumber(rest, &rest)) {
+                        deviationX = deviationY = *a;
+                        rest = trim(rest);
+                        if (!rest.empty() && rest.front() == ',')
+                            rest = trim(rest.substr(1));
+                        if (const auto b = parseNumber(rest, &rest))
+                            deviationY = *b;
+                    }
+                }
+                if (!(deviationX > 0) && !(deviationY > 0))
+                    continue; // zero: the primitive passes its input through
+                double scaleX = sx, scaleY = sy;
+                std::array<double, 4> box{1e300, 1e300, -1e300, -1e300};
+                accumulateBounds(element, box);
+                const bool haveBox = box[2] > box[0] || box[3] > box[1];
+                if (const auto* units = filter.find("primitiveUnits");
+                    units != nullptr && lower(trim(*units)) == "objectboundingbox") {
+                    if (!haveBox) {
+                        unsupported("#" + *id + " (its blur is sized by the element's box, which is empty)");
+                        continue;
+                    }
+                    scaleX = box[2] - box[0];
+                    scaleY = box[3] - box[1];
+                }
+                blur = std::pair{deviationX * scaleX, deviationY * scaleY};
+                // The filter region clips the blur; Bloom's blur is not clipped to it.
+                if (haveBox) {
+                    const auto fraction = [&](const char* key, const double fallback) {
+                        const auto* value = filter.find(key);
+                        if (value == nullptr)
+                            return fallback;
+                        std::string_view rest;
+                        return parseNumber(trim(*value), &rest).value_or(fallback);
+                    };
+                    const auto* units = filter.find("filterUnits");
+                    if (units == nullptr || lower(trim(*units)) != "userspaceonuse") {
+                        const double w = box[2] - box[0], h = box[3] - box[1];
+                        const double fx = fraction("x", -0.1), fy = fraction("y", -0.1);
+                        const double fw = fraction("width", 1.2), fh = fraction("height", 1.2);
+                        const double left = -fx * w, right = (fx + fw - 1.0) * w;
+                        const double top = -fy * h, bottom = (fy + fh - 1.0) * h;
+                        const double reachX = 3.0 * blur->first, reachY = 3.0 * blur->second;
+                        if (reachX > std::min(left, right) + 0.5 || reachY > std::min(top, bottom) + 0.5)
+                            element.approximations.push_back(
+                                "the filter region of #" + *id + " would clip the blur at the element's box plus its margin; "
+                                "the native blur is not clipped to it");
+                    }
+                }
+            } else {
+                others.push_back(token);
+            }
+        }
+        if (!others.empty()) {
+            std::string list;
+            for (const auto& other : others)
+                list += (list.empty() ? "" : "; ") + other;
+            unsupported(list);
+        }
+        if (blur && others.empty()) {
+            element.blurX = blur->first;
+            element.blurY = blur->second;
+        }
     }
 
     // ---- clip paths and masks ----
@@ -1084,6 +1303,7 @@ class Builder final {
         group.kind = SvgElement::Kind::Group;
         group.tag = n.tag;
         group.name = label(n, fallbackName);
+        group.where = located(n);
         return group;
     }
 
@@ -1132,12 +1352,13 @@ class Builder final {
             Style style;
             std::string name;
             bool mixedStyle = false;
+            std::string where;
         };
         std::vector<Run> runs;
-        const auto begin = [&](const Style& st, const std::string& runName) {
-            runs.push_back({{}, penX, penY, st, runName});
+        const auto begin = [&](const Style& st, const std::string& runName, const std::string& where) {
+            runs.push_back({{}, penX, penY, st, runName, false, where});
         };
-        begin(style, name);
+        begin(style, name, located(n));
         std::size_t visited = 0;
         const auto walk = [&](auto&& self, const std::size_t node, const Style& st, const std::size_t level) -> void {
             if (++visited > 4096 || level > 32)
@@ -1156,7 +1377,7 @@ class Builder final {
                 if (x || y) {
                     penX = x.value_or(penX);
                     penY = y.value_or(penY);
-                    begin(cs, label(c, "tspan"));
+                    begin(cs, label(c, "tspan"), located(c));
                 } else if (cs.fontSize != runs.back().style.fontSize || cs.fill.kind != runs.back().style.fill.kind ||
                            cs.fill.color.red != runs.back().style.fill.color.red ||
                            cs.fill.color.green != runs.back().style.fill.color.green ||
@@ -1176,13 +1397,14 @@ class Builder final {
             if (run.text.empty())
                 continue;
             if (!run.style.visible || run.style.fill.kind == PaintKind::None) {
-                skip(run.name, "text without a visible fill");
+                skip(run.where, "text without a visible fill");
                 continue;
             }
             SvgElement text;
             text.kind = SvgElement::Kind::Text;
             text.tag = "text";
             text.name = run.name;
+            text.where = run.where;
             text.text = run.text;
             const auto at = world.apply(run.x, run.y);
             text.textX = at[0];
@@ -1192,6 +1414,8 @@ class Builder final {
             text.textRotation = turn;
             text.fontFamily = run.style.fontFamily;
             text.fontBold = run.style.fontBold;
+            text.fontWeight = run.style.fontBold ? std::max(run.style.fontWeight, 600) : run.style.fontWeight;
+            text.fontItalic = run.style.fontItalic;
             text.opacity = run.style.opacity;
             text.fill.kind = SvgPaint::Kind::Color;
             text.fill.color = run.style.fill.kind == PaintKind::CurrentColor ? run.style.currentColor : run.style.fill.color;
@@ -1204,8 +1428,8 @@ class Builder final {
                 text.approximations.push_back("the stroke of this text is not drawn");
             if (run.mixedStyle)
                 text.approximations.push_back("spans inside one run keep the first span's size and colour, and dx and dy are not applied");
-            if (!run.style.fontFamily.empty())
-                text.approximations.push_back("text is set in Bloom's font in place of '" + run.style.fontFamily + "'");
+            if (run.style.filter)
+                applyFilter(run.style, world, text);
             ++scene_.shapeCount;
             ++scene_.textCount;
             out.children.push_back(std::move(text));
@@ -1223,22 +1447,22 @@ class Builder final {
             return;
         const auto& tag = n.tag;
         if (tag == "script") {
-            skip(label(n, "script"), "scripts are never run");
+            skip(located(n), "scripts are never run");
             return;
         }
         if (tag == "image") {
-            skip(label(n, "image"), "embedded or linked images are not imported");
+            skip(located(n), "embedded or linked images are not imported");
             return;
         }
         if (tag == "foreignObject") {
-            skip(label(n, "foreignObject"), "foreign content is not imported");
+            skip(located(n), "foreign content is not imported");
             return;
         }
         if (isMetadataTag(tag))
             return;
         const auto style = computeStyle(index, parentStyle);
         if (style.displayNone) {
-            skip(label(n, tag), "hidden (display none)");
+            skip(located(n), "hidden (display none)");
             return;
         }
         if (tag == "text") {
@@ -1280,6 +1504,8 @@ class Builder final {
                 buildChildren(index, style, world, group, depth);
             }
             group.opacity = style.opacity;
+            if (style.filter)
+                applyFilter(style, world, group);
             attachClipAndMask(index, style, world, std::nullopt, group);
             if (!group.children.empty() || group.clip || group.mask)
                 out.children.push_back(std::move(group));
@@ -1289,29 +1515,27 @@ class Builder final {
         }
         if (tag == "symbol")
             return;
-        skip(label(n, tag), "element <" + tag + "> is not imported");
+        skip(located(n), "element <" + tag + "> is not imported");
     }
 
     void attachClipAndMask(const std::size_t index, const Style& style, const SvgAffine& world,
                            const std::optional<std::array<double, 4>>& box, SvgElement& element) {
         if (!style.clipPath.empty()) {
             if (const auto id = parseUrlReference(style.clipPath)) {
-                if (auto clip = buildClip(*id, world, box, element.name))
+                if (auto clip = buildClip(*id, world, box, describe(element)))
                     element.clip = std::move(clip);
             } else {
-                skip(element.name, "clip-path does not name a clip in this file");
+                skip(describe(element), "clip-path does not name a clip in this file");
             }
         }
         if (!style.mask.empty()) {
             if (const auto id = parseUrlReference(style.mask)) {
-                if (auto mask = buildMask(*id, world, element.name))
+                if (auto mask = buildMask(*id, world, describe(element)))
                     element.mask = std::move(mask);
             } else {
-                skip(element.name, "mask does not name a mask in this file");
+                skip(describe(element), "mask does not name a mask in this file");
             }
         }
-        if (style.filter)
-            element.approximations.push_back("a filter on this group is not applied");
         (void)index;
     }
 
@@ -1364,26 +1588,26 @@ class Builder final {
         const auto& n = doc_.nodes[index];
         const auto* href = n.find("href");
         if (href == nullptr || href->empty()) {
-            skip(group.name, "use element without a reference");
+            skip(describe(group), "use element without a reference");
             return;
         }
         if ((*href)[0] != '#') {
-            skip(group.name, "use of an external reference is never followed");
+            skip(describe(group), "use of an external reference is never followed");
             return;
         }
         const auto target = lookup(href->substr(1));
         if (!target) {
-            skip(group.name, "use references #" + href->substr(1) + ", which is not in the file");
+            skip(describe(group), "use references #" + href->substr(1) + ", which is not in the file");
             return;
         }
         if (useDepth_ >= kMaxSvgUseDepth || std::ranges::find(useStack_, *target) != useStack_.end()) {
-            skip(group.name, "use references itself or is nested too deeply");
+            skip(describe(group), "use references itself or is nested too deeply");
             return;
         }
         // An element that is its own ancestor makes a cycle too.
         for (auto at = index;; at = doc_.nodes[at].parent) {
             if (at == *target) {
-                skip(group.name, "use references one of its own ancestors");
+                skip(describe(group), "use references one of its own ancestors");
                 return;
             }
             if (at == 0)
@@ -1493,7 +1717,19 @@ SvgReadResult readSvgSceneFile(const std::filesystem::path& path, const SvgCance
         result.diagnostic = "The file could not be read.";
         return result;
     }
-    return parseSvgScene(bytes, cancel);
+    auto parsed = parseSvgScene(bytes, cancel);
+    if (parsed.scene) {
+        // The scene is ours alone until it is returned: record which file it came from and what
+        // that file held, so the imported artwork can name its source.
+        const auto scene = std::const_pointer_cast<SvgScene>(parsed.scene);
+        core::Sha256Hasher hasher;
+        if (hasher.update(bytes)) {
+            scene->sourcePath = path;
+            scene->sourceDigest = hasher.finalize();
+            scene->hasSourceDigest = true;
+        }
+    }
+    return parsed;
 }
 
 } // namespace bloom::media

@@ -213,6 +213,12 @@ struct ImportOptions final {
 // Cancellation (#377) stops at the next safe point: the item in progress is abandoned and every
 // item already prepared is kept, so a cancelled batch still applies what finished. Only a batch
 // with nothing prepared is refused.
+// The locator an asset record holds for a file: project-relative under `base`, or an external file
+// URI when `base` is empty or the file is not below it. Throws std::runtime_error when the path
+// cannot be represented.
+[[nodiscard]] document::AssetLocator assetLocatorFor(const std::filesystem::path& path,
+                                                     const std::filesystem::path& base);
+
 class ImportAssets final : public Operation {
   public:
     ImportAssets(const std::vector<std::filesystem::path>& paths,

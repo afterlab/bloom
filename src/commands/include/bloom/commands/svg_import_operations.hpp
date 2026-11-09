@@ -18,10 +18,14 @@
 namespace bloom::media {
 struct SvgScene;
 }
+namespace bloom::platform {
+struct FontCatalogue;
+}
 
 namespace bloom::commands {
 
-// Output names: the root group's layer ("layer"), its stack slot ("slot") and Merge node ("merge").
+// Output names: the root group's layer ("layer"), its stack slot ("slot") and Merge node ("merge"),
+// and "asset", the Assets record of the source file when the scene was read from one.
 class AddSvgArtwork final : public Operation {
   public:
     // `scene` is the parsed file (the desktop parses it on a worker). When it is null the file at
@@ -30,6 +34,18 @@ class AddSvgArtwork final : public Operation {
                   std::filesystem::path path, std::string name, bool fit = true)
         : composition_(composition), scene_(std::move(scene)), path_(std::move(path)),
           name_(std::move(name)), fit_(fit) {}
+    // The project folder the source file's locator is made relative to (empty: the file is external).
+    AddSvgArtwork& withProjectDirectory(std::filesystem::path directory) {
+        projectDirectory_ = std::move(directory);
+        return *this;
+    }
+    // The installed fonts the file's text is matched against. Without them a file with text
+    // enumerates the system's fonts when it applies (names only, no hashing), so the desktop passes
+    // the catalogue it read on its worker.
+    AddSvgArtwork& withFonts(std::shared_ptr<const platform::FontCatalogue> fonts) {
+        fonts_ = std::move(fonts);
+        return *this;
+    }
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.layer.add-svg"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
@@ -42,6 +58,8 @@ class AddSvgArtwork final : public Operation {
     std::filesystem::path path_;
     std::string name_;
     bool fit_;
+    std::filesystem::path projectDirectory_;
+    std::shared_ptr<const platform::FontCatalogue> fonts_;
 };
 
 } // namespace bloom::commands
