@@ -135,8 +135,8 @@ inline constexpr std::array<std::string_view, 4> kCornerLabels{"Top Left", "Top 
 
 // Stabilize's two points, in pixels from the frame's centre, y down: the feature as chosen, and
 // where the track found it in each frame.
-inline constexpr std::array<std::string_view, 2> kStabilizePointRoles{"trackPoint", "position"};
-inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Point", "Position"};
+inline constexpr std::array<std::string_view, 2> kStabilizePointRoles{"trackPoint", "tracked"};
+inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Point", "Tracked Position"};
 } // namespace warp_parameters
 
 [[nodiscard]] constexpr std::span<const WarpParameterSpec> stabilizeParameters() noexcept {

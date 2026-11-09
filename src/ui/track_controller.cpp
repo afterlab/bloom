@@ -128,7 +128,7 @@ bool TrackController::start(const document::NodeId node) {
         return refuse(tr("The tracking settings are not valid."));
     document::ParameterId position;
     for (const auto& binding : record->parameters)
-        if (binding.role == "position")
+        if (binding.role == "tracked")
             position = binding.parameterId;
     if (!position.isValid())
         return refuse(tr("The node has no position to key."));

@@ -39,15 +39,13 @@ StabilizeCardWidget::StabilizeCardWidget(CompositionSession& session, const docu
     setSizePolicy(policy);
 
     PointPadRow::Spec pad;
-    const auto roles = document::stabilizePointRoles();
-    const auto labels = document::stabilizePointLabels();
-    for (std::size_t index = 0; index < roles.size(); ++index)
-        pad.points.push_back({std::string(roles[index]),
-                              QCoreApplication::translate("Stabilize",
-                                                          std::string(labels[index]).c_str()),
-                              true, false});
+    // Only the Track Point is drawn: the tracked position starts on it, so the two would overlap.
+    pad.points.push_back({std::string(document::stabilizePointRoles()[0]),
+                          QCoreApplication::translate(
+                              "Stabilize", std::string(document::stabilizePointLabels()[0]).c_str()),
+                          true, false});
     pad.connected = false;
-    pad.commandLabel = tr("Move Tracked Point");
+    pad.commandLabel = tr("Move Track Point");
     pad.frame = [this] { return compositionFrame(session_); };
     pad_ = new PointPadRow(session_, node_, std::move(pad), this);
     pad_->pad()->setToolTip(tr("Drag the Track Point onto the feature to follow, on the frame to "
@@ -62,6 +60,11 @@ StabilizeCardWidget::StabilizeCardWidget(CompositionSession& session, const docu
     status_->setObjectName(QStringLiteral("stabilizeTrackStatus"));
     status_->setWordWrap(true);
     status_->setTextInteractionFlags(Qt::NoTextInteraction);
+    {
+        auto palette = status_->palette();
+        palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
+        status_->setPalette(palette);
+    }
     connect(button_, &QAbstractButton::clicked, this, &StabilizeCardWidget::onButton);
 
     for (const auto signal :
@@ -99,7 +102,14 @@ void StabilizeCardWidget::layoutControls() {
     const int top = pad_->heightAt(width());
     const int row = kit::px(kit::Size::Control);
     const int gap = kit::px(kit::Spacing::S);
-    const int buttonWidth = std::max(button_->sizeHint().width(), kit::px(kit::Size::Control) * 2);
+    // Wide enough for either word it shows, so the label never elides.
+    const auto text = button_->text();
+    int buttonWidth = button_->sizeHint().width();
+    for (const auto& word : {tr("Track"), tr("Cancel")}) {
+        button_->setText(word);
+        buttonWidth = std::max(buttonWidth, button_->sizeHint().width());
+    }
+    button_->setText(text);
     button_->setGeometry(0, top, buttonWidth, row);
     const int barHeight = progress_->sizeHint().height();
     progress_->setGeometry(buttonWidth + gap, top + (row - barHeight) / 2,

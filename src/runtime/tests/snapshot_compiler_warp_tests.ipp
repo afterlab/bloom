@@ -879,7 +879,7 @@ void testStabilize(Expectations& expectations) {
     for (const std::int64_t mode : {kStabilizeModeStabilize, kStabilizeModeMatchMove}) {
         const std::unordered_map<std::string, ParameterValue> values{
             {"mode", mode}, {"filter", std::int64_t{1}}, {"trackPoint", Vec2d{0.0, 0.0}},
-            {"position", Vec2d{32.0, -24.0}}};
+            {"tracked", Vec2d{32.0, -24.0}}};
         auto fixture = warpFixture(kStabilizeNodeType, values);
         const auto node = fixture.recipe.node;
         const auto result = compileRecipe(std::move(fixture.recipe.project));
@@ -895,6 +895,9 @@ void testStabilize(Expectations& expectations) {
                             "Stabilize is a coordinate, the homography and the image read");
         const auto moved = lensEvaluate(result.plan, 240, 135);
         require(moved.frame() != nullptr, "Stabilize evaluates");
+        warpDump("frame-stabilize-source", source, 240, 135);
+        warpDump(mode == kStabilizeModeStabilize ? "frame-stabilize-held" : "frame-stabilize-carried",
+                 moved.frame()->processImage(), 240, 135);
         // Stabilize holds the feature still: the picture moves by (held - position), here (-32, +24)
         // y down. Match Move carries it along: the reverse.
         const double sign = mode == kStabilizeModeStabilize ? 1.0 : -1.0;
@@ -919,7 +922,7 @@ void testStabilize(Expectations& expectations) {
     // The feature where it was chosen: the picture itself.
     {
         auto fixture = warpFixture(kStabilizeNodeType, {{"trackPoint", Vec2d{40.0, 16.0}},
-                                                        {"position", Vec2d{40.0, 16.0}}});
+                                                        {"tracked", Vec2d{40.0, 16.0}}});
         const auto result = compileRecipe(std::move(fixture.recipe.project));
         require(result.plan != nullptr, "the still Stabilize compiles");
         const auto same = lensEvaluate(result.plan, 240, 135);
@@ -947,7 +950,7 @@ void testStabilize(Expectations& expectations) {
             {KeyframeId::fromRaw(1702), core::RationalTime::fromInteger(1), 64.0,
              KeyframeInterpolation::Linear}};
         require(composition->animationCurves().insert(std::move(curve)), "the curve is publishable");
-        require(composition->parameters().setSource(fixture.recipe.parameters.at("position"),
+        require(composition->parameters().setSource(fixture.recipe.parameters.at("tracked"),
                                                     AnimationCurveSource{curveId}),
                 "the position animates");
         const auto node = fixture.recipe.node;
@@ -963,7 +966,7 @@ void testStabilize(Expectations& expectations) {
 
     // Muted: the input.
     {
-        auto fixture = warpFixture(kStabilizeNodeType, {{"position", Vec2d{80.0, 0.0}}});
+        auto fixture = warpFixture(kStabilizeNodeType, {{"tracked", Vec2d{80.0, 0.0}}});
         fixture.recipe.project.findComposition(kCompositionId)
             ->nodeLayout()[fixture.recipe.node]
             .muted = true;

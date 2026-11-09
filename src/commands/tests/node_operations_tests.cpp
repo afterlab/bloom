@@ -1126,7 +1126,7 @@ void testRecipeCommands(TestContext& test) {
     // a finished track is stored as one undo step: a Table block of the positions and the keys.
     const auto stabilize = addRecipe("bloom.stabilize");
     const auto stabilizeMode = stabilize.outputId<ParameterId>("parameter.mode");
-    const auto stabilizePosition = stabilize.outputId<ParameterId>("parameter.position");
+    const auto stabilizePosition = stabilize.outputId<ParameterId>("parameter.tracked");
     const auto stabilizeNode = stabilize.outputId<NodeId>(kAddNodeOutput);
     if (!stabilizeMode || !stabilizePosition || !stabilizeNode)
         throw std::logic_error("Stabilize exposes registered control identities");

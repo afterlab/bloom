@@ -1173,7 +1173,7 @@ void warpRows() {
           {"bottomLeft", "Bottom Left"}, {"filter", "Filter"}}},
         {document::kStabilizeNodeType,
          {{"mode", "Mode"}, {"pattern", "Pattern"}, {"search", "Search"}, {"trackPoint", "Track Point"},
-          {"position", "Position"}, {"filter", "Filter"}, {"edges", "Edges"}}},
+          {"tracked", "Tracked Position"}, {"filter", "Filter"}, {"edges", "Edges"}}},
         {document::kStMapNodeType,
          {{"uChannel", "U Channel"}, {"vChannel", "V Channel"}, {"filter", "Filter"},
           {"edges", "Edges"}}},

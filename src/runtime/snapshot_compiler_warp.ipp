@@ -274,7 +274,7 @@ lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOp
     const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
     const auto* edges = parameterConstant<std::int64_t>(findParameterBinding(node, "edges"));
     const auto held = compiledVec2Parameter(findParameterBinding(node, "trackPoint"));
-    const auto at = compiledVec2Parameter(findParameterBinding(node, "position"));
+    const auto at = compiledVec2Parameter(findParameterBinding(node, "tracked"));
     if (mode == nullptr || filter == nullptr || edges == nullptr || !held || !at ||
         *mode < kStabilizeModeStabilize || *mode > kStabilizeModeMatchMove ||
         *filter < kWarpFilterBilinear || *filter > kWarpFilterBicubic ||

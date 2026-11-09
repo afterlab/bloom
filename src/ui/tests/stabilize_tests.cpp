@@ -112,10 +112,9 @@ void testCard() {
     stabilizeCard->resize(360, stabilizeCard->heightAt(360));
     stabilizeCard->show();
     QApplication::processEvents();
-    expect(stabilizeCard->padRow() != nullptr && stabilizeCard->padRow()->pad()->points().size() == 2 &&
-               stabilizeCard->padRow()->pad()->points()[0].label == QStringLiteral("Track Point") &&
-               stabilizeCard->padRow()->pad()->points()[1].label == QStringLiteral("Position"),
-           "the pad has the track point and the position, named");
+    expect(stabilizeCard->padRow() != nullptr && stabilizeCard->padRow()->pad()->points().size() == 1 &&
+               stabilizeCard->padRow()->pad()->points()[0].label == QStringLiteral("Track Point"),
+           "the pad has the track point, named");
     expect(stabilizeCard->trackButton()->text() == QStringLiteral("Track") &&
                stabilizeCard->trackButton()->isEnabled(),
            "the button starts a track");
@@ -134,20 +133,38 @@ void testCard() {
 void testTrack() {
     Fixture fixture("bloom.checker-source");
     const auto before = fixture.session.snapshot();
+    auto* card = qobject_cast<ui::StabilizeCardWidget*>(ui::makeNodeCardWidget(
+        fixture.session, fixture.stabilize, document::kStabilizeNodeType, true, nullptr));
+    card->resize(360, card->heightAt(360));
+    card->show();
     expect(fixture.controller->start(fixture.stabilize) && fixture.controller->running(),
            "a connected node starts a track");
+    QApplication::processEvents();
+    expect(card->trackButton()->text() == QStringLiteral("Cancel"), "the button offers Cancel while tracking");
+    const auto grab = [&](const char* name) {
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        if (!directory.isEmpty())
+            card->grab().save(directory + QStringLiteral("/") + QString::fromLatin1(name));
+    };
+    grab("stabilize-card-tracking.png");
     expect(!fixture.controller->start(fixture.stabilize), "a second track does not start meanwhile");
     expect(fixture.wait(), "the track finishes");
     const auto status = fixture.controller->status();
     expect(status.state == ui::TrackController::State::Stored && status.done == status.total &&
                status.total > 1,
            "a still picture with detail is tracked through every frame");
+    QApplication::processEvents();
+    expect(card->statusLabel()->text().contains(QStringLiteral("Tracked")) &&
+               card->trackButton()->text() == QStringLiteral("Track"),
+           "the card says how many frames were tracked");
+    grab("stabilize-card-tracked.png");
+    delete card;
     expect(fixture.blocks() == 1, "the track is stored as a data block");
     const auto* composition = fixture.session.composition();
     const auto* node = composition->graph().findNode(fixture.stabilize);
     document::ParameterId position;
     for (const auto& binding : node->parameters)
-        if (binding.role == "position")
+        if (binding.role == "tracked")
             position = binding.parameterId;
     const auto* record = composition->parameters().find(position);
     expect(record != nullptr && std::holds_alternative<document::AnimationCurveSource>(record->source),

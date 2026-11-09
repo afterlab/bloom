@@ -487,7 +487,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         stabilize != nullptr && stabilize->inputs.size() == 3 && stabilize->inputs[0].name == "input" &&
             stabilize->parameters.size() == 7 && stabilize->parameters[0].role == "mode" &&
             !stabilize->parameters[0].supportsAnimation && stabilize->parameters[5].role == "trackPoint" &&
-            stabilize->parameters[5].supportsAnimation && stabilize->parameters[6].role == "position" &&
+            stabilize->parameters[5].supportsAnimation && stabilize->parameters[6].role == "tracked" &&
             stabilize->parameters[6].supportsAnimation && stabilize->outputs.size() == 1 &&
             stabilize->outputs[0].name == "image",
         "#513: Stabilize has constant choices and an animatable track point and position");
