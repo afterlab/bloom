@@ -1,3 +1,4 @@
+#include <bloom/document/image_math_parameters.hpp>
 #include "value_node_definitions.hpp"
 
 #include <bloom/document/field_parameters.hpp>
@@ -655,6 +656,10 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     if (definition.lowering == NodeLoweringKind::ValueFieldSample)
         return definition.key.typeId == kFieldSampleNodeType &&
                definition.category == NodeCategory::Fields;
+    // #347 Audio Amplitude: its shape is the audio analysis table's (image_math_nodes.cpp).
+    if (definition.lowering == NodeLoweringKind::ValueAudioAmplitude)
+        return definition.key.typeId == kAudioAmplitudeNodeType &&
+               definition.category == NodeCategory::Values;
     // Value nodes are never structural: no layer slot, never a singleton, and always offered under
     // one of the two sections the Add surface lists them in.
     if (definition.layerSlotInput.has_value() || definition.cardinality != NodeCardinality::Many ||
@@ -848,6 +853,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::NodeGroup:
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
+    case NodeLoweringKind::ValueAudioAmplitude:
         break;
     }
     return false;

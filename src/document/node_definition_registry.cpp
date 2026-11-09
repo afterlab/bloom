@@ -505,6 +505,10 @@ template <typename Definition>
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
+    case NodeLoweringKind::ValueAudioAmplitude:
+        // #347 Audio Amplitude: the exact generated shape.
+        return definition.key.typeId == kAudioAmplitudeNodeType &&
+               definition == imagePixelDefinition(kAudioAmplitudeNodeType);
     case NodeLoweringKind::Field:
     case NodeLoweringKind::ValueFieldSample: {
         // #525: the exact generated shape of every Fields node.
@@ -1733,6 +1737,9 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         imagePixelDefinition(kImageClampNodeType),
         imagePixelDefinition(kImageCompareNodeType),
         imagePixelDefinition(kHistogramNodeType),
+        imagePixelDefinition(kAudioAmplitudeNodeType),
+        imagePixelDefinition(kAudioWaveformNodeType),
+        imagePixelDefinition(kAudioSpectrumNodeType),
         audioEffectDefinition(kAudioEqualizerNodeType),
         audioEffectDefinition(kAudioCompressorNodeType),
         audioEffectDefinition(kAudioAutoLevelNodeType),

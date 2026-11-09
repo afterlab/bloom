@@ -386,6 +386,9 @@ enum class NodeLoweringKind {
     Field,
     // #525 Field Sample: a field read at one position, a value (runtime::CompiledValueFieldSample).
     ValueFieldSample,
+    // #347 Audio Amplitude: the level of a source's audio around the frame, a Scalar
+    // (runtime::CompiledValueAudioAmplitude).
+    ValueAudioAmplitude,
     // #587 Test Card: a source drawn procedurally by one field raster over a canvas the size of the
     // composition (or a custom size), then the node's signal color space into the working space.
     TestCard,
@@ -429,6 +432,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
+    case NodeLoweringKind::ValueAudioAmplitude:
         return true;
     case NodeLoweringKind::NodeGroup:
         return false;

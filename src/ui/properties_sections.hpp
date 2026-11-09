@@ -111,7 +111,8 @@ struct ValueCellSpec {
                                    QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip,
                                    QWidget* diamond, std::initializer_list<QWidget*> fields,
                                    const QString& expandName, const QString& groupName,
-                                   document::ParameterId parameter = {});
+                                   document::ParameterId parameter = {},
+                                   const QString& label = {});
 
 // A proportional/axis link toggle for a paired row. Checkable, Ghost, IconId::Link.
 [[nodiscard]] QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip,

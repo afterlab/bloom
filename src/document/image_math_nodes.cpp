@@ -15,6 +15,8 @@ using Kind = DepthParameterKind;
         return ParameterValueKind::Boolean;
     case Kind::Scalar:
         return ParameterValueKind::Float64;
+    case Kind::Color:
+        return ParameterValueKind::Color4d;
     default:
         return ParameterValueKind::Integer;
     }
@@ -26,6 +28,8 @@ using Kind = DepthParameterKind;
         return spec.value[0] != 0.0;
     case Kind::Scalar:
         return spec.value[0];
+    case Kind::Color:
+        return core::Color4d{spec.value[0], spec.value[1], spec.value[2], spec.value[3]};
     default:
         return static_cast<std::int64_t>(spec.value[0]);
     }
@@ -49,9 +53,15 @@ bool isImagePixelParameterValueValid(const std::string_view schemaKey,
         return std::isfinite(v) && v >= spec->minimum && v <= spec->maximum;
     };
     switch (spec->kind) {
-    case Kind::Choice: {
+    case Kind::Choice:
+    case Kind::Integer: {
         const auto* v = std::get_if<std::int64_t>(&value);
         return v != nullptr && within(static_cast<double>(*v));
+    }
+    case Kind::Color: {
+        const auto* v = std::get_if<core::Color4d>(&value);
+        return v != nullptr && v->isValid() && within(v->red) && within(v->green) &&
+               within(v->blue);
     }
     case Kind::Boolean:
         return std::holds_alternative<bool>(value);
@@ -65,16 +75,28 @@ bool isImagePixelParameterValueValid(const std::string_view schemaKey,
 }
 
 NodeDefinition imagePixelDefinition(const std::string_view typeId) {
-    NodeDefinition definition{{std::string(typeId), kImagePixelNodeSchemaVersion},
-                              NodeLoweringKind::ImageEffect,
-                              {{std::string(kImagePixelInputPort), SocketValueKind::Image}},
-                              {{std::string(kImagePixelOutputPort), SocketValueKind::Image}},
+    // #347: the audio analysis nodes read the sound of a source, not an image. Audio Amplitude gives
+    // one Scalar; Audio Waveform and Audio Spectrum draw an Image from the analysis.
+    const bool audioAnalysis = typeId == kAudioAmplitudeNodeType ||
+                               typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType;
+    NodeDefinition definition{
+        {std::string(typeId), kImagePixelNodeSchemaVersion},
+        typeId == kAudioAmplitudeNodeType ? NodeLoweringKind::ValueAudioAmplitude
+                                          : NodeLoweringKind::ImageEffect,
+        {{std::string(audioAnalysis ? kAudioAnalysisInputPort : kImagePixelInputPort),
+          audioAnalysis ? SocketValueKind::Audio : SocketValueKind::Image, false}},
+        {{std::string(typeId == kAudioAmplitudeNodeType ? kAudioAmplitudeOutputPort
+                                                        : kImagePixelOutputPort),
+          typeId == kAudioAmplitudeNodeType ? SocketValueKind::Scalar : SocketValueKind::Image}},
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
                               // Histogram and Image Compare publish an analysis image, not the input
                               // changed, so a mask over the input has nothing to select.
-                              typeId == kHistogramNodeType || typeId == kImageCompareNodeType
+                              typeId == kAudioAmplitudeNodeType ? NodeCategory::Values
+                              : typeId == kHistogramNodeType || typeId == kImageCompareNodeType ||
+                                      typeId == kAudioWaveformNodeType ||
+                                      typeId == kAudioSpectrumNodeType
                                   ? NodeCategory::Utilities
                                   : NodeCategory::Grade};
     if (typeId == kImageMathNodeType)

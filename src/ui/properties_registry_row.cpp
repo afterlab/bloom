@@ -540,7 +540,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         (void)properties::addColorRow(session_, definition_.role, outer, this, color_, diamond_,
                                       {fields_[0], fields_[1], fields_[2], fields_[3]},
                                       "propertiesRegistryColorExpand",
-                                      "propertiesRegistryColorFields", parameter_);
+                                      "propertiesRegistryColorFields", parameter_,
+                                      // #347: the audio plots have two colors; the row names which.
+                                      document::isImagePixelColorSchemaKey(definition_.schemaKey)
+                                          ? label
+                                          : QString());
         delete controls;
     } else {
         if (!text_ && !multiline_ && !checklist_) {

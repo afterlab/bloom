@@ -13,6 +13,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/node_groups.hpp>
@@ -1402,7 +1403,10 @@ class NodeItem final : public QGraphicsObject {
             valueRows_.push_back(
                 {label, row.color, animatable ? makeCardDiamond(role) : nullptr, role});
             if (animatable)
-                addColorComponentRows(role);
+                // #347: a node with two colors names which one each channel row belongs to.
+                addColorComponentRows(role, document::isImagePixelColorSchemaKey(declared->schemaKey)
+                                                ? label
+                                                : QString());
             break;
         }
         case document::ParameterValueKind::Integer: {
@@ -2037,12 +2041,13 @@ class NodeItem final : public QGraphicsObject {
     // Recomputes the card's own extent from what it actually carries -- the header text, the widest
     // row label, and the widest control -- rather than from a spelled card width, then positions
     // each proxy inside it.
-    void addColorComponentRows(const std::string_view role) {
+    void addColorComponentRows(const std::string_view role, const QString& owner = {}) {
         const std::array names{
             document::AnimationComponent::Red, document::AnimationComponent::Green,
             document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
         for (std::size_t index = 0; index < names.size(); ++index) {
-            const auto label = QStringLiteral("RGBA").mid(static_cast<qsizetype>(index), 1);
+            const auto channel = QStringLiteral("RGBA").mid(static_cast<qsizetype>(index), 1);
+            const auto label = owner.isEmpty() ? channel : owner + QLatin1Char(' ') + channel;
             auto* field = makeCardField(QStringLiteral("nodeColorComponentEditor"), label,
                                         // Every colour schema presents its channels alike.
                                         document::kSolidColorParameterSchemaKey,

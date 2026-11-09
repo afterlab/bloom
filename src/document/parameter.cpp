@@ -761,7 +761,7 @@ bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kTextColorParameterSchemaKey ||
            schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
            isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||
-           isLensFlareColorSchemaKey(schemaKey);
+           isLensFlareColorSchemaKey(schemaKey) || isImagePixelColorSchemaKey(schemaKey);
 }
 
 bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {

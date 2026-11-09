@@ -207,7 +207,8 @@ QWidget* makeComponentCell(CompositionSession& session, const std::string_view r
 QWidget* addColorRow(CompositionSession& session, const std::string_view role, QVBoxLayout* rows,
                      QWidget* parent, kit::KColorChip* chip, QWidget* diamond,
                      const std::initializer_list<QWidget*> fields, const QString& expandName,
-                     const QString& groupName, const document::ParameterId parameter) {
+                     const QString& groupName, const document::ParameterId parameter,
+                     const QString& label) {
     auto* expand = new kit::KButton(parent);
     expand->setObjectName(expandName);
     expand->setIconId(kit::IconId::CaretRight);
@@ -217,7 +218,8 @@ QWidget* addColorRow(CompositionSession& session, const std::string_view role, Q
     expand->setToolTip(QObject::tr("Show RGBA components"));
     expand->setAccessibleName(QObject::tr("Show RGBA components"));
     auto* row =
-        addRow(rows, parent, makeRowLabel(QObject::tr("Color"), parent), diamond, {chip, expand});
+        addRow(rows, parent, makeRowLabel(label.isEmpty() ? QObject::tr("Color") : label, parent),
+                 diamond, {chip, expand});
     auto* details = new QWidget(parent);
     details->setObjectName(groupName);
     auto* grid = new QGridLayout(details);

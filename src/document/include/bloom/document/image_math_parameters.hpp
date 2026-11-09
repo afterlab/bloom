@@ -34,6 +34,23 @@
 // finite is not counted. The graph does not depend on a region of interest: the whole data window
 // is counted.
 //
+// #347 Audio Amplitude, Audio Waveform and Audio Spectrum take the sound of an Audio or Video
+// source on their `audio` input (any audio effects between them are not applied: an analysis reads
+// the source's own sound) and read a window of it around the frame, so a time on the timeline is the
+// same sound in preview and in export.
+//   Audio Amplitude (`bloom.audio-amplitude`) gives the Scalar `amplitude`: the `measure` (the Peak
+//             or the RMS) of every channel's samples over `window` milliseconds centred on the frame
+//             plus `offset` seconds, as a linear level or in decibels (`unit`; silence is -120 dB).
+//   Audio Waveform (`bloom.audio-waveform`) gives the `width` by `height` Image `image`: the
+//             minimum and maximum of `window` seconds of audio centred on the frame in each pixel
+//             column, drawn in `plotColor` over `background`, scaled by `verticalScale`. `channels` mixes the
+//             channels into one trace or stacks a lane for each channel (up to 8).
+//   Audio Spectrum (`bloom.audio-spectrum`) gives the `width` by `height` Image `image`: the
+//             magnitude spectrum of `transformSize` frames centred on the frame, from `lowFrequency` to
+//             `highFrequency` on a logarithmic or linear `axis`, drawn as bars of `plotColor` over
+//             `background` between the `floor` and `ceiling` decibels.
+// docs/architecture/media-io.md, "Audio analysis", is the specification.
+//
 // Every node declares which channels it changes and how premultiplication is treated:
 //   channels  Color (red, green and blue; the default and alpha is passed through), Red, Green,
 //             Blue, Alpha, or Color and alpha. A channel that is not changed keeps its stored value.
@@ -63,7 +80,13 @@ inline constexpr std::string_view kImageMapRangeNodeType = "bloom.image-map-rang
 inline constexpr std::string_view kImageClampNodeType = "bloom.image-clamp";
 inline constexpr std::string_view kImageCompareNodeType = "bloom.image-compare";
 inline constexpr std::string_view kHistogramNodeType = "bloom.histogram";
+inline constexpr std::string_view kAudioAmplitudeNodeType = "bloom.audio-amplitude";
+inline constexpr std::string_view kAudioWaveformNodeType = "bloom.audio-waveform";
+inline constexpr std::string_view kAudioSpectrumNodeType = "bloom.audio-spectrum";
 inline constexpr std::uint32_t kImagePixelNodeSchemaVersion = 1;
+
+inline constexpr std::string_view kAudioAnalysisInputPort = "audio";
+inline constexpr std::string_view kAudioAmplitudeOutputPort = "amplitude";
 
 inline constexpr std::string_view kImagePixelInputPort = "input";
 inline constexpr std::string_view kImagePixelSecondPort = "second";
@@ -101,6 +124,21 @@ inline constexpr std::array<std::int64_t, 4> kHistogramHeights{64, 128, 256, 512
 inline constexpr std::int64_t kHistogramDefaultBins = 2;
 inline constexpr std::int64_t kHistogramDefaultHeight = 1;
 
+// Stored values of the audio analysis nodes' choices.
+inline constexpr std::int64_t kAudioMeasurePeak = 0;
+inline constexpr std::int64_t kAudioMeasureRms = 1;
+inline constexpr std::int64_t kAudioUnitLinear = 0;
+inline constexpr std::int64_t kAudioUnitDecibels = 1;
+inline constexpr std::int64_t kAudioWaveformMixed = 0;
+inline constexpr std::int64_t kAudioWaveformSeparate = 1;
+inline constexpr std::int64_t kAudioAxisLogarithmic = 0;
+inline constexpr std::int64_t kAudioAxisLinear = 1;
+// The transform lengths Audio Spectrum offers, in stored-value order.
+inline constexpr std::array<std::int64_t, 4> kAudioSpectrumSizes{1024, 2048, 4096, 8192};
+inline constexpr std::int64_t kAudioSpectrumDefaultSize = 1;
+inline constexpr std::int64_t kAudioPlotMinimumSide = 16;
+inline constexpr std::int64_t kAudioPlotMaximumSide = 4096;
+
 // Stored values of the channels each node changes.
 inline constexpr std::int64_t kImagePixelColor = 0;
 inline constexpr std::int64_t kImagePixelRed = 1;
@@ -135,6 +173,13 @@ inline constexpr std::array<std::string_view, 7> kHistogramChannels{
 inline constexpr std::array<std::string_view, 4> kHistogramBinLabels{"64", "128", "256", "512"};
 inline constexpr std::array<std::string_view, 4> kHistogramHeightLabels{"64", "128", "256", "512"};
 inline constexpr std::array<std::string_view, 2> kHistogramScales{"Linear", "Logarithmic"};
+
+inline constexpr std::array<std::string_view, 2> kAudioMeasures{"Peak", "RMS"};
+inline constexpr std::array<std::string_view, 2> kAudioUnits{"Linear", "Decibels"};
+inline constexpr std::array<std::string_view, 2> kAudioWaveformChannels{"Mixed", "Separate lanes"};
+inline constexpr std::array<std::string_view, 2> kAudioAxes{"Logarithmic", "Linear"};
+inline constexpr std::array<std::string_view, 4> kAudioSpectrumSizeLabels{"1024", "2048", "4096",
+                                                                          "8192"};
 
 inline constexpr double kV = kMaximumImagePixelValue;
 
@@ -185,12 +230,44 @@ inline constexpr std::array kHistogramParameters{
     choice("graphScale", kHistogramScales, kHistogramLinear, "Scale"),
 };
 
+inline constexpr std::array kAudioAmplitudeParameters{
+    choice("measure", kAudioMeasures, kAudioMeasureRms, "Measure"),
+    choice("unit", kAudioUnits, kAudioUnitLinear, "Unit"),
+    scalar("window", 50.0, 1.0, 60000.0, "Window", 1.0, 1000.0, 1.0, 0, "ms"),
+    scalar("offset", 0.0, -86400.0, 86400.0, "Time offset", -5.0, 5.0, 0.01, 3, "s"),
+};
+
+inline constexpr std::array kAudioWaveformParameters{
+    integer("width", 1024, kAudioPlotMinimumSide, kAudioPlotMaximumSide, "Width", "px"),
+    integer("height", 256, kAudioPlotMinimumSide, kAudioPlotMaximumSide, "Height", "px"),
+    scalar("window", 2.0, 0.01, 60.0, "Window", 0.05, 10.0, 0.05, 2, "s"),
+    choice("channels", kAudioWaveformChannels, kAudioWaveformMixed, "Channels"),
+    scalar("verticalScale", 1.0, 0.0, 64.0, "Vertical scale", 0.0, 4.0, 0.05, 2),
+    color("plotColor", {0.1, 0.8, 0.35, 1.0}, "Waveform color"),
+    color("background", {0.015, 0.015, 0.02, 1.0}, "Background"),
+};
+
+inline constexpr std::array kAudioSpectrumParameters{
+    integer("width", 1024, kAudioPlotMinimumSide, kAudioPlotMaximumSide, "Width", "px"),
+    integer("height", 256, kAudioPlotMinimumSide, kAudioPlotMaximumSide, "Height", "px"),
+    choice("transformSize", kAudioSpectrumSizeLabels, kAudioSpectrumDefaultSize, "Transform size"),
+    choice("axis", kAudioAxes, kAudioAxisLogarithmic, "Frequency axis"),
+    scalar("lowFrequency", 20.0, 1.0, 96000.0, "Lowest frequency", 20.0, 2000.0, 1.0, 0, "Hz"),
+    scalar("highFrequency", 20000.0, 20.0, 192000.0, "Highest frequency", 1000.0, 24000.0, 10.0, 0,
+           "Hz"),
+    scalar("floor", -90.0, -200.0, 0.0, "Floor", -120.0, 0.0, 1.0, 0, "dB"),
+    scalar("ceiling", 0.0, -100.0, 60.0, "Ceiling", -60.0, 12.0, 1.0, 0, "dB"),
+    color("plotColor", {0.25, 0.65, 1.0, 1.0}, "Bar color"),
+    color("background", {0.015, 0.015, 0.02, 1.0}, "Background"),
+};
+
 } // namespace image_pixel_parameters
 
 [[nodiscard]] constexpr bool isImagePixelNodeType(const std::string_view typeId) noexcept {
     return typeId == kImageMathNodeType || typeId == kImageMapRangeNodeType ||
            typeId == kImageClampNodeType || typeId == kImageCompareNodeType ||
-           typeId == kHistogramNodeType;
+           typeId == kHistogramNodeType || typeId == kAudioAmplitudeNodeType ||
+           typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType;
 }
 
 // The parameters of an image pixel node in definition order, or an empty span.
@@ -206,6 +283,12 @@ imagePixelParameters(const std::string_view typeId) noexcept {
         return image_pixel_parameters::kImageCompareParameters;
     if (typeId == kHistogramNodeType)
         return image_pixel_parameters::kHistogramParameters;
+    if (typeId == kAudioAmplitudeNodeType)
+        return image_pixel_parameters::kAudioAmplitudeParameters;
+    if (typeId == kAudioWaveformNodeType)
+        return image_pixel_parameters::kAudioWaveformParameters;
+    if (typeId == kAudioSpectrumNodeType)
+        return image_pixel_parameters::kAudioSpectrumParameters;
     return {};
 }
 
@@ -213,7 +296,8 @@ imagePixelParameters(const std::string_view typeId) noexcept {
 [[nodiscard]] constexpr const DepthParameterSpec*
 imagePixelParameterSpec(const std::string_view schemaKey) noexcept {
     for (const auto type : {kImageMathNodeType, kImageMapRangeNodeType, kImageClampNodeType,
-                            kImageCompareNodeType, kHistogramNodeType}) {
+                            kImageCompareNodeType, kHistogramNodeType, kAudioAmplitudeNodeType,
+                            kAudioWaveformNodeType, kAudioSpectrumNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;
@@ -229,10 +313,16 @@ imagePixelParameterSpec(const std::string_view schemaKey) noexcept {
     const auto* spec = imagePixelParameterSpec(key);
     return spec != nullptr && spec->kind == DepthParameterKind::Scalar;
 }
-// A constant (Choice, Boolean): no socket and no animation.
+// A constant (Choice, Integer, Boolean): no socket and no animation. A Scalar is animatable, drivable
+// and has a socket; a Color is animatable (keyframes) and has no socket, so its row reads as one swatch.
 [[nodiscard]] constexpr bool isImagePixelConstantSchemaKey(const std::string_view key) noexcept {
     const auto* spec = imagePixelParameterSpec(key);
-    return spec != nullptr && spec->kind != DepthParameterKind::Scalar;
+    return spec != nullptr && spec->kind != DepthParameterKind::Scalar &&
+           spec->kind != DepthParameterKind::Color;
+}
+[[nodiscard]] constexpr bool isImagePixelColorSchemaKey(const std::string_view key) noexcept {
+    const auto* spec = imagePixelParameterSpec(key);
+    return spec != nullptr && spec->kind == DepthParameterKind::Color;
 }
 [[nodiscard]] constexpr bool isImagePixelScalarWithinDomain(const std::string_view key,
                                                             const double value) noexcept {
