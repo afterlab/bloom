@@ -184,31 +184,25 @@ class AgentFeedback(unittest.TestCase):
         position = server.role('position')
         self.assertEqual(self.constant(position), [960.0, 540.0])
 
-    def test_text_font_takes_a_font_asset_id_and_says_which(self):
-        # #432, from a blind field test: unknown fonts were stored and rendered in the fallback
-        # face, and the refusal listed legacy face numbers it then refused.
+    def test_text_font_takes_a_font_id_and_says_which(self):
+        # #432 and #489: unknown values were stored and drawn in the fallback face; a text font now
+        # takes a font ID, and a refusal describes the form.
         server = self.server
         server.transact(('bloom.layer.add-text', {'composition': 1, 'name': 'T', 'text': 'Hi'}))
         font = server.role('font')
         default = self.constant(font)
-        listed = f'"{default}" (DejaVu Sans Book)'
+        self.assertTrue(default.startswith('source=builtin;family=DejaVu Sans'), default)
         for value in (2, 'Inter Medium', 'Nonexistent Face', '999'):
             refused = server.transact(set_source(font, value=value))
             self.assertFalse(refused['succeeded'], value)
             message = refused['diagnostics'][0]['message']
-            self.assertIn('the id of a Font asset in this project, as a string: ' + listed,
-                          message)
-            self.assertNotIn('Inter', message.partition('; it takes ')[2])
+            self.assertIn('it takes a font ID', message)
             self.assertEqual(self.constant(font), default)
+        google = 'source=google;family=Roboto;style=Bold;weight=700;italic=false'
+        self.assertTrue(server.transact(set_source(font, value=google))['succeeded'])
+        self.assertEqual(self.constant(font), google)
         self.assertTrue(server.transact(set_source(font, value=default))['succeeded'])
-        # ensure-font names the argument constraint a refused face broke.
         with tempfile.TemporaryDirectory() as directory:
-            face = os.path.join(directory, 'Face.ttf')
-            refused = server.transact(('bloom.asset.ensure-font', {
-                'path': face, 'digest': '3' * 64, 'family': 'Face', 'style': 'Regular'}))
-            self.assertFalse(refused['succeeded'])
-            self.assertIn('relinkHint to start with "file:"',
-                          refused['diagnostics'][0]['message'])
             # Re-importing a file returns the asset that already holds it.
             image = os.path.join(directory, 'still.png')
             rows = zlib.compress(b'\x00\xff\x00\x00\xff')
@@ -234,20 +228,14 @@ class AgentFeedback(unittest.TestCase):
                                                           'text': 'Hi'}))
         self.assertEqual(added['compileWarnings'], [])
         font = server.role('font')
-        with tempfile.TemporaryDirectory() as directory:
-            face = os.path.join(directory, 'Gone.ttf')
-            ensured = server.transact(('bloom.asset.ensure-font', {
-                'path': face, 'digest': '3' * 64, 'family': 'Gone', 'style': 'Regular',
-                'relinkHint': 'file://' + face}))
-            self.assertTrue(ensured['succeeded'], ensured)
-            asset = [o['id'] for o in ensured['outputs'] if o['name'] == 'asset'][0]
-            result = server.transact(set_source(font, value=str(asset)))
+        gone = 'source=system;family=Gone Face;style=Regular;weight=400;italic=false'
+        result = server.transact(set_source(font, value=gone))
         self.assertTrue(result['succeeded'], result)
         self.assertEqual(result['compileFailures'], [])
         self.assertEqual(len(result['compileWarnings']), 1, result)
         warning = result['compileWarnings'][0]
-        self.assertEqual(warning['code'], 'bloom.runtime.compile.font-asset-unavailable')
-        self.assertIn('DejaVu Sans was used', warning['detail'])
+        self.assertEqual(warning['code'], 'bloom.runtime.compile.font-missing')
+        self.assertIn('Gone Face', warning['detail'])
         self.assertEqual(warning['subject']['parameter'], font)
 
     def test_rejections_carry_operation_index_and_reason(self):

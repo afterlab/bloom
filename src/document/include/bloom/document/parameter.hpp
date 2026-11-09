@@ -52,8 +52,9 @@ inline constexpr std::string_view kGradientEndColorParameterSchemaKey = "bloom.g
 inline constexpr std::string_view kGradientRepeatParameterSchemaKey = "bloom.gradient.repeat";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
-// Font references are family|style|digest strings. The old integer values remain accepted while
-// opening FONT-1 documents, but new documents never persist a closed face enum.
+// A text font is a font ID's stored text (font_id.hpp, docs/architecture/fonts.md). The integer
+// faces below and the old family|style|digest references are read only while opening an older
+// document, which converts them; new documents never persist either.
 inline constexpr std::string_view kTextFontParameterSchemaKey = "bloom.text.font";
 inline constexpr std::int64_t kTextFontDejaVuSans = 0;
 inline constexpr std::int64_t kTextFontInterRegular = 1;

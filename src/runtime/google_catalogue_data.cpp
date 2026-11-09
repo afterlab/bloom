@@ -6,7 +6,7 @@
 
 namespace bloom::runtime::fonts::detail {
 namespace {
-// 1999 families, in pieces short enough for every compiler's string literal limit.
+// 1998 families, in pieces short enough for every compiler's string literal limit.
 constexpr std::string_view kChunks[] = {
 R"bloomfonts(#index-date=2026-11-09
 #source-revision=5bb28733cec313b63fbd415b574b5ae35c8aa8b8
@@ -22,7 +22,6 @@ Acme	sans	v29	400
 Actor	sans	v18	400	
 Adamina	serif	v22	400	
 ADLaM Display	display	v1	400	
-Adobe Blank	monospace	v23	400	
 Advent Pro	sans	v33	100,100i,200,200i,300,300i,400,400i,500,500i,600,600i,700,700i,800,800i,900,900i	wdth:100:200,wght:100:900
 Afacad	sans	v3	400,400i,500,500i,600,600i,700,700i	wght:400:700
 Afacad Flux	sans	v4	100,200,300,400,500,600,700,800,900	slnt:-14:14,wght:100:1000
@@ -476,7 +475,8 @@ Edu AU VIC WA NT Guides	handwriting	v3	400,500,600,700	wght:400:700
 Edu AU VIC WA NT Hand	handwriting	v3	400,500,600,700	wght:400:700
 Edu AU VIC WA NT Pre	handwriting	v3	400,500,600,700	wght:400:700
 Edu NSW ACT Foundation	handwriting	v5	400,500,600,700	wght:400:700
-Edu QLD Beginner	handwriting	v5	400,500,600,700	wght:400:700
+Edu Q)bloomfonts"
+R"bloomfonts(LD Beginner	handwriting	v5	400,500,600,700	wght:400:700
 Edu SA Beginner	handwriting	v5	400,500,600,700	wght:400:700
 Edu TAS Beginner	handwriting	v5	400,500,600,700	wght:400:700
 Edu VIC WA NT Beginner	handwriting	v6	400,500,600,700	wght:400:700
@@ -1422,8 +1422,10 @@ Playwrite AT	handwriting	v6	100,100i,200,200i,300,300i,400,400i	wght:100:400
 Playwrite AT Guides	handwriting	v1	400,400i	
 Playwrite AU NSW	handwriting	v11	100,200,300,400	wght:100:400
 Playwrite AU NSW Guides	handwriting	v1	400	
-Playwrite AU QLD	handwriting	v11	100,200,300,400	wght:100:400
-Playwrite AU QLD Guides	handwriting	v1	400	
+Playwrite AU Q)bloomfonts"
+R"bloomfonts(LD	handwriting	v11	100,200,300,400	wght:100:400
+Playwrite AU Q)bloomfonts"
+R"bloomfonts(LD Guides	handwriting	v1	400	
 Playwrite AU SA	handwriting	v11	100,200,300,400	wght:100:400
 Playwrite AU SA Guides	handwriting	v1	400	
 Playwrite AU TAS	handwriting	v11	100,200,300,400	wght:100:400

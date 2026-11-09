@@ -142,7 +142,7 @@ void FontResolver::setNoticeSink(std::function<void(const FontNotice&)> sink) {
     noticeSink_ = std::move(sink);
 }
 
-void FontResolver::setArrivalSink(std::function<void()> sink) {
+void FontResolver::setArrivalSink(std::function<void(bool)> sink) {
     std::lock_guard lock(mutex_);
     arrivalSink_ = std::move(sink);
 }
@@ -369,8 +369,8 @@ void FontResolver::runJob(Job& job) {
                     job.state = Job::State::Succeeded;
                     job.finished = std::chrono::steady_clock::now();
                 }
-                epoch_.fetch_add(1);
-                std::function<void()> arrived;
+                (job.preview ? previewEpoch_ : epoch_).fetch_add(1);
+                std::function<void(bool)> arrived;
                 {
                     std::lock_guard lock(mutex_);
                     arrived = arrivalSink_;
@@ -379,7 +379,7 @@ void FontResolver::runJob(Job& job) {
                     notify({FontNoticeKind::DownloadFinished, job.id.family,
                             "Downloaded " + quoteName(display) + " from Google Fonts"});
                 if (arrived)
-                    arrived();
+                    arrived(job.preview);
                 return;
             }
         }

@@ -63,7 +63,9 @@ constexpr auto kPythonSourceRoots = std::to_array<std::string_view>(
 // Manual qualification orchestration only; no application/build code generation. The owning
 // scripting architecture document names this bounded exception, not a general tools/ Python root.
 constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
-    {"tools/ci/configure_gpu_qualification.py", "tools/ci/gpu_qualification.py",
+    {"tools/ci/configure_gpu_qualification.py",
+     // The Google Fonts index generator (docs/architecture/fonts.md): run by hand before a release.
+     "tools/fonts/generate_google_catalogue.py", "tools/ci/gpu_qualification.py",
      "tools/quality/qualify_private_share_outage.py",
      // The documented local qualification runner and its own test (local-validation.md).
      "tools/local/sprint_validation.py", "tools/local/test_sprint_validation.py",

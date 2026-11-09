@@ -389,10 +389,12 @@ void previewSubsetIsFetchedOnlyOnRequest() {
     expect(resolver->previewSubset("Test Family", false) == nullptr &&
                fixture.transport->requests.load() == 0,
            "asking without a request fetches nothing");
-    const auto before = resolver->epoch();
+    const auto before = resolver->previewEpoch();
     expect(resolver->previewSubset("Test Family", true) == nullptr,
            "a row shows the interface font until its subset arrives");
-    waitFor(*resolver, before);
+    for (int i = 0; i < 400 && resolver->previewEpoch() == before; ++i)
+        std::this_thread::sleep_for(5ms);
+    expect(resolver->epoch() == 0, "a name subset does not invalidate compiled plans");
     expect(resolver->previewSubset("Test Family", false) != nullptr, "then the subset is cached");
     {
         std::lock_guard lock(fixture.transport->mutex);

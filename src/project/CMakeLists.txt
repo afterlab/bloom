@@ -29,6 +29,7 @@ target_sources(
         document_curves_migration.cpp
         document_glow_migration.cpp
         document_gradient_migration.cpp
+        document_font_migration.cpp
         document_migration.cpp
         document_layout_migration.cpp
         document_decode_layout.cpp
@@ -351,6 +352,11 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_project_asset_organization_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_asset_organization_test)
     bloom_add_test(NAME bloom.project.asset-organization COMMAND bloom_project_asset_organization_test LABELS unit persistence)
+
+    add_executable(bloom_project_font_migration_test tests/font_migration_tests.cpp)
+    target_link_libraries(bloom_project_font_migration_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_font_migration_test)
+    bloom_add_test(NAME bloom.project.font-migration COMMAND bloom_project_font_migration_test LABELS unit persistence)
 
     add_executable(bloom_project_node_layout_test tests/node_layout_persistence_tests.cpp)
     target_link_libraries(bloom_project_node_layout_test PRIVATE bloom_project ZLIB::ZLIB)

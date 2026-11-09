@@ -1,5 +1,7 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
 
+#include <bloom/runtime/font_resolver.hpp>
+
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -33,10 +35,15 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
     // Provenance is the retained project-state object, not the numeric ids: a different Document
     // reuses ProjectId 1 / CompositionId 1 / the same revision numbers. Matching the address of
     // `project()` distinguishes two documents while still letting copies of one snapshot hit.
-    const auto sameInput = [&request, revision](const Entry& entry) {
+    // A font that arrived since the plan was compiled may replace a fallback the plan drew, so the
+    // font arrival count is part of the key (docs/architecture/fonts.md).
+    const auto fontEpoch = (request.fontResolver ? *request.fontResolver
+                                                 : fonts::processFontResolver())
+                               .epoch();
+    const auto sameInput = [&request, revision, fontEpoch](const Entry& entry) {
         return entry.compositionId == request.compositionId && entry.revision == revision &&
                &entry.snapshot.project() == &request.snapshot.project() &&
-               entry.channelInspection == request.channelInspection;
+               entry.channelInspection == request.channelInspection && entry.fontEpoch == fontEpoch;
     };
     if (!request.parameterOverrides.empty()) {
         // An overridden request's plan is not the revision's plan; it is this one gesture frame's.
@@ -77,7 +84,8 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
                                             .compositionId = request.compositionId,
                                             .revision = revision,
                                             .result = result,
-                                            .channelInspection = request.channelInspection});
+                                            .channelInspection = request.channelInspection,
+                                            .fontEpoch = fontEpoch});
     if (entries_.size() > capacity_) {
         // Erase rather than resize: Snapshot is not default-constructible.
         entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(capacity_), entries_.end());

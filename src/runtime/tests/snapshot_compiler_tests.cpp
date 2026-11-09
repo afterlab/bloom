@@ -1,4 +1,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/document/font_id.hpp>
+#include <bloom/platform/font_catalog.hpp>
+#include <bloom/runtime/font_resolver.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/camera_shake.hpp>
 #include <bloom/document/test_card_nodes.hpp>
@@ -388,7 +391,7 @@ void retypeFirstSourceToText(document::Project& project, const std::string& cont
                                    std::string(kTextLetterSpacingParameterSchemaKey),
                                    ConstantValueSource{0.0}}) &&
                 parameters.insert({kTextFont, std::string(kTextFontParameterSchemaKey),
-                                   ConstantValueSource{kDefaultTextFontValue}}),
+                                   ConstantValueSource{document::encodeFontId(document::defaultFontId())}}),
             "text fixture parameters must be accepted");
 }
 
@@ -421,6 +424,18 @@ compile(document::Project project, runtime::NodeDefinitionRegistry& registry,
     document::Document document(std::move(project));
     runtime::SnapshotCompiler compiler(registry);
     return compiler.compile({document.snapshot(), kCompositionId, std::move(parameterOverrides)},
+                            runtime::CancellationToken{});
+}
+
+[[nodiscard]] runtime::SnapshotCompileResult
+compileWithFonts(document::Project project, runtime::NodeDefinitionRegistry& registry,
+                 std::shared_ptr<runtime::fonts::FontResolver> resolver) {
+    document::Document document(std::move(project));
+    runtime::SnapshotCompiler compiler(registry);
+    return compiler.compile({.snapshot = document.snapshot(),
+                             .compositionId = kCompositionId,
+                             .fontResolver = std::move(resolver),
+                             .fontFetch = runtime::fonts::FontFetch::CachedOnly},
                             runtime::CancellationToken{});
 }
 
@@ -1076,8 +1091,10 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
     expectations.expect(
         interComposition != nullptr &&
             interComposition->parameters().setSource(
-                kTextFont, document::ConstantValueSource{document::kTextFontInterSemiBold}),
-        "the text font selector accepts Inter SemiBold");
+                kTextFont,
+                document::ConstantValueSource{document::encodeFontId(
+                    {document::FontSource::Builtin, "Inter", "SemiBold", 600, false, {}, {}, {}})}),
+        "the text font selector accepts the built-in Inter SemiBold font ID");
     const auto interResult = compile(std::move(interText), registry);
     const auto* interCompiledText =
         interResult.plan && !interResult.plan->operations().empty()
@@ -1111,6 +1128,63 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
                             legacyCompiledText != nullptr &&
                             legacyCompiledText->face == render::EmbeddedFace::DejaVuSans,
                         "an older Text v2 document defaults the missing face to DejaVu Sans");
+
+    // An installed system font is read through the resolver; the face is drawn from its bytes and
+    // keyed by their digest. A font nobody has still compiles: the fallback is drawn, the text is
+    // marked missing and a warning names both fonts.
+    {
+        auto resolver = std::make_shared<runtime::fonts::FontResolver>();
+        const std::array<std::filesystem::path, 1> directories{
+            std::filesystem::path(BLOOM_FONT_FIXTURE_DIRECTORY)};
+        resolver->systemFonts().install(
+            platform::FontCatalogueProvider::enumerateDirectories(directories, {}, false));
+        const auto withFont = [&](const document::FontId& id) {
+            auto project = makeProject(singleLayerOptions());
+            retypeFirstSourceToText(project, "Title", 48.0, textColorValue);
+            auto* composition = project.findComposition(kCompositionId);
+            require(composition != nullptr &&
+                        composition->parameters().setSource(
+                            kTextFont, document::ConstantValueSource{document::encodeFontId(id)}),
+                    "the font ID is stored");
+            return compileWithFonts(std::move(project), registry, resolver);
+        };
+        const auto installed = withFont(
+            {document::FontSource::System, "Inter", "Medium", 500, false, {}, "Inter-Medium", {}});
+        const auto* installedText =
+            installed.plan && !installed.plan->operations().empty()
+                ? std::get_if<runtime::CompiledText>(&installed.plan->operations().front())
+                : nullptr;
+        const auto* external = installedText == nullptr
+                                   ? nullptr
+                                   : std::get_if<render::ExternalFontFile>(&installedText->font);
+        expectations.expect(installed.status == runtime::SnapshotCompileStatus::Compiled &&
+                                installed.diagnostics.empty() && external != nullptr &&
+                                external->bytes != nullptr && !installedText->fontMissing &&
+                                installedText->fontId.find("family=Inter") != std::string::npos,
+                            "an installed system font compiles to its own bytes with no warning");
+
+        const auto missing = withFont({document::FontSource::System, "Nobody Has This", "Regular",
+                                       400, false, {}, "NobodyHasThis-Regular", {}});
+        const auto* missingText =
+            missing.plan && !missing.plan->operations().empty()
+                ? std::get_if<runtime::CompiledText>(&missing.plan->operations().front())
+                : nullptr;
+        const auto warning = std::ranges::find_if(missing.diagnostics, [](const auto& diagnostic) {
+            return diagnostic.code == runtime::CompileDiagnosticCode::FontMissing;
+        });
+        expectations.expect(missing.status == runtime::SnapshotCompileStatus::Compiled &&
+                                missingText != nullptr && missingText->fontMissing &&
+                                warning != missing.diagnostics.end() &&
+                                warning->detail.find("\"Nobody Has This Regular\"") !=
+                                    std::string::npos &&
+                                warning->detail.find("DejaVu Sans") != std::string::npos,
+                            "a font nobody has compiles with the fallback and a warning that "
+                            "names both");
+        expectations.expect(missingText != nullptr &&
+                                missingText->fontId.find("family=Nobody Has This") !=
+                                    std::string::npos,
+                            "the plan keeps the recorded font ID, so installing it later restores it");
+    }
 
     // A size the schema refuses never reaches the evaluator: the document rejects the value at
     // insertion, so there is no "valid document, unrenderable plan" state to lower.

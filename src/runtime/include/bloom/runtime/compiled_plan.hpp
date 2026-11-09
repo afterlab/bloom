@@ -1488,12 +1488,17 @@ struct CompiledText {
     // every digest an existing plan produces is unchanged.
     std::optional<ValueOutputIndex> drivenContent{};
 
-    // The render face is a closed, non-animatable choice. It is optional at the document binding
+    // The built-in face drawn when `font` is a built-in face. It is optional at the document binding
     // boundary for old text-source nodes, which lower to this default and therefore retain the
     // pre-FONT-1 DejaVu Sans pixels exactly.
     render::EmbeddedFace face = render::EmbeddedFace::DejaVuSans;
-    document::AssetId fontAssetId;
     render::TextFont font = render::EmbeddedFace::DejaVuSans;
+    // The font ID text the node stores (docs/architecture/fonts.md). `font` is the face drawn: the
+    // font itself, or the fallback when `fontMissing`.
+    std::string fontId;
+    bool fontMissing = false;
+    // The font is downloading; `font` is the fallback until it arrives.
+    bool fontPending = false;
 
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };

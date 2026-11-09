@@ -44,8 +44,8 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.unsupported-parameter-override";
     case CompileDiagnosticCode::BoundsReadoutDrivesImageOperation:
         return "bloom.runtime.compile.bounds-readout-drives-image-operation";
-    case CompileDiagnosticCode::FontAssetUnavailable:
-        return "bloom.runtime.compile.font-asset-unavailable";
+    case CompileDiagnosticCode::FontMissing:
+        return "bloom.runtime.compile.font-missing";
     case CompileDiagnosticCode::TopologyInvariant:
         return "bloom.runtime.compile.topology-invariant";
     case CompileDiagnosticCode::TimeScopeLimit:

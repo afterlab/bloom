@@ -1,5 +1,6 @@
 #include <bloom/core/color.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/parameter.hpp>
@@ -860,7 +861,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             text->parameters[2].defaultValue ==
                 document::ParameterValue{core::Color4d{1.0, 1.0, 1.0, 1.0}} &&
             text->parameters[6].defaultValue ==
-                document::ParameterValue{std::string(document::kDefaultTextFontReference)},
+                document::ParameterValue{document::encodeFontId(document::defaultFontId())},
         "a new text layer defaults to 72 px opaque white and a DejaVu Sans reference");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);

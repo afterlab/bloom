@@ -3,6 +3,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/runtime/font_fallback.hpp>
+#include <bloom/runtime/font_fetch.hpp>
 #include <bloom/runtime/font_transport.hpp>
 #include <bloom/runtime/google_catalogue.hpp>
 #include <bloom/runtime/system_font_index.hpp>
@@ -22,17 +23,6 @@
 #include <vector>
 
 namespace bloom::runtime::fonts {
-
-// What to do when a Google font is not installed and not yet in the per-user cache.
-enum class FontFetch : std::uint8_t {
-    // Never touch the network.
-    CachedOnly,
-    // Start the download on the font worker and answer with the fallback now (the Viewer; the
-    // picture is rebuilt when the font arrives).
-    Background,
-    // Start the download and wait for it, honoring cancellation (export and headless render).
-    Wait,
-};
 
 enum class FontResolutionKind : std::uint8_t { System, Cache, Downloaded, Builtin, Fallback };
 
@@ -153,12 +143,14 @@ class FontResolver final {
     void setTransport(std::shared_ptr<FontTransport> transport);
     [[nodiscard]] bool hasTransport() const;
     void setNoticeSink(std::function<void(const FontNotice&)> sink);
-    // Called on the worker thread whenever a font file arrives (not for failures).
-    void setArrivalSink(std::function<void()> sink);
+    // Called on the worker thread whenever a font file arrives (not for failures); `preview` is true
+    // for a picker row's name-only subset.
+    void setArrivalSink(std::function<void(bool preview)> sink);
 
-    // Counts arrivals: a compiled plan or a picker row built before the count changed may have used
-    // a fallback.
+    // Counts arrivals of faces: a compiled plan built before the count changed may have used a
+    // fallback. previewEpoch() counts the picker's name subsets, which no plan uses.
     [[nodiscard]] std::uint64_t epoch() const noexcept { return epoch_.load(); }
+    [[nodiscard]] std::uint64_t previewEpoch() const noexcept { return previewEpoch_.load(); }
     [[nodiscard]] std::vector<FontDownloadState> downloads() const;
     // Cancels every queued and running download.
     void cancelDownloads();
@@ -209,7 +201,7 @@ class FontResolver final {
     std::condition_variable wake_;
     std::shared_ptr<FontTransport> transport_;
     std::function<void(const FontNotice&)> noticeSink_;
-    std::function<void()> arrivalSink_;
+    std::function<void(bool)> arrivalSink_;
     std::map<std::string, std::shared_ptr<Job>> jobs_;
     std::deque<std::shared_ptr<Job>> queue_;
     std::map<std::string, CachedFace> memory_;
@@ -217,6 +209,7 @@ class FontResolver final {
     std::thread worker_;
     bool stopping_ = false;
     std::atomic<std::uint64_t> epoch_{0};
+    std::atomic<std::uint64_t> previewEpoch_{0};
 };
 
 // The font resolver of this process. The desktop application, the command-line tools and tests

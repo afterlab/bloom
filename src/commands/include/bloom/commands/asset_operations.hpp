@@ -154,32 +154,6 @@ class ReorderAssets final : public Operation {
     std::vector<document::AssetId> order_;
 };
 
-class EnsureFontAsset final : public Operation {
-  public:
-    explicit EnsureFontAsset(document::AssetRecord asset) : asset_(std::move(asset)) {}
-    [[nodiscard]] std::string_view typeId() const noexcept override {
-        return "bloom.asset.ensure-font";
-    }
-    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
-
-  private:
-    document::AssetRecord asset_;
-};
-
-class RelinkFontAsset final : public Operation {
-  public:
-    RelinkFontAsset(document::AssetId id, document::AssetRecord replacement)
-        : id_(id), replacement_(std::move(replacement)) {}
-    [[nodiscard]] std::string_view typeId() const noexcept override {
-        return "bloom.asset.relink-font";
-    }
-    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
-
-  private:
-    document::AssetId id_;
-    document::AssetRecord replacement_;
-};
-
 // One file a batch import could not admit, with its own reason. The rest of the batch imports.
 struct ImportFailure final {
     std::filesystem::path path;

@@ -1,4 +1,5 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
+#include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include "channel_static.hpp"
@@ -1048,10 +1049,7 @@ class CompilePass final {
             return;
         }
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
-            const bool legacyTextFont =
-                definition.schemaKey == document::kTextFontParameterSchemaKey &&
-                std::holds_alternative<std::int64_t>(constant->value);
-            if (!hasValueKind(constant->value, definition.valueKind) && !legacyTextFont) {
+            if (!hasValueKind(constant->value, definition.valueKind)) {
                 auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
                 diagnosticSubject.parameterId = parameter->id;
                 addFailure(runtime::CompileDiagnosticCode::ParameterValueKindMismatch,

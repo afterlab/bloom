@@ -51,8 +51,7 @@ const std::string kReload =
     R"(runs when the operation is created, off the UI thread, and stops when the request is )"
     R"(cancelled. Reload several assets by giving one operation per asset. )"
     R"(Outputs: none. )"
-    R"(Errors: "Asset N does not exist"; "A font reloads from the system catalogue" - use )"
-    R"(bloom.asset.relink-font; "The asset has no file to read" - a data asset or an empty or )"
+    R"(Errors: "Asset N does not exist"; "The asset has no file to read" - a data asset or an empty or )"
     R"(unusable locator; the probe's own reason when the file is missing or unreadable )"
     R"((bloom.asset.relink then points the asset at another file); bloom.scripting.cancelled. )"
     R"(Undo: one step restores the asset as it was. )"
@@ -177,7 +176,7 @@ ReadOutcome<Value> runCancellable(const std::stop_token& stop, std::string name,
 [[nodiscard]] std::filesystem::path assetSourcePath(const document::AssetRecord& asset,
                                                     const std::filesystem::path& base) {
     const auto& path = asset.locator.path;
-    if (path.empty() || asset.kind == document::AssetKind::Font)
+    if (path.empty())
         return {};
     if (path.find(':') != std::string::npos)
         return core::absolutePathFromFileUri(path).value_or(std::filesystem::path{});
@@ -202,9 +201,6 @@ OperationCreateResult reload(const std::string& op, const Arguments& args,
     const auto* asset = source->snapshot.project().findAsset(assetId);
     if (asset == nullptr)
         return invalid(op, "asset", "Asset " + std::to_string(assetId.value()) + " does not exist");
-    if (asset->kind == document::AssetKind::Font)
-        return invalid(op, "asset",
-                       "A font reloads from the system catalogue; use bloom.asset.relink-font");
     const auto path = assetSourcePath(*asset, source->assetBaseDirectory);
     if (path.empty())
         return invalid(op, "asset", "The asset has no file to read");

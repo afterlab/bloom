@@ -204,13 +204,6 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.asset.create-folder",
         "Creates an Assets folder.", "folder", "bloom.asset.move bloom.asset.move-folders query:assets",
         ""},
-    OperationNotes{"bloom.asset.ensure-font",
-        "Adds a font face as an asset, or returns the existing asset with the same digest, so a "
-        "Text layer can use it.",
-        "asset", "bloom.asset.relink-font query:assets", ""},
-    OperationNotes{"bloom.asset.relink-font",
-        "Points a font asset at another file with the given digest.", "asset",
-        "bloom.asset.ensure-font", ""},
     OperationNotes{"bloom.asset.import",
         "Imports media files and folders into Assets in one step: hashes and probes each file "
         "(image sequences are detected from numbered names) and adds one asset per item. Files "
@@ -381,7 +374,8 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.layer.add-text",
         "Adds a text layer on top of the layer stack. Font, alignment, box and the other text "
         "parameters are edited afterwards with bloom.parameter.set-source; their ids are in the "
-        "outputs and in query:layers.",
+        "outputs and in query:layers. The font is a font ID string (family, style, weight and "
+        "source), never an asset.",
         "layer, slot, textNode, layerOutputNode, textParameter, sizeParameter, colorParameter, "
         "fontParameter, boxParameter, wrapParameter, anchorModeParameter, overflowParameter, "
         "positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter, "
@@ -583,7 +577,10 @@ constexpr std::array kNotes{
         "a value-graph `driverNode` with `driverPort`. Enumerations (blend mode, loop mode, text "
         "alignment and so on) take either the stored value or its label, matched "
         "case-insensitively (3 or \"screen\" for the Screen blend mode); query "
-        "{kind:\"parameter\"} lists the choices.",
+        "{kind:\"parameter\"} lists the choices. A text font takes a font ID as a string, for "
+        "example \"source=google;family=Roboto;style=Bold;weight=700;italic=false\" (source is "
+        "system, google or builtin; family is required; style, weight, italic, axes, ps and "
+        "version are optional); query {kind:\"parameter\"} reports it with its fontStatus.",
         "", "query:parameter bloom.animation.set-keyframe-at-time-for-parameter",
         "[invalid-argument] None of value, curve or driverNode is given => pass exactly one.\nAn unknown label or an out-of-range value of "
         "an enumeration => the message names the valid choices.\nThe value does not fit "

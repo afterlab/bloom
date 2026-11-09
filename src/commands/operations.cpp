@@ -45,25 +45,6 @@ OperationResult exhaustedIds(const std::string_view kinds) {
                                      "The " + std::string(kinds) + " ID space is exhausted; the project cannot create another one");
 }
 
-[[nodiscard]] std::optional<document::AssetId> ensureDefaultTextFont(document::Draft& draft) {
-    const auto digest = core::Sha256Digest::fromLowercaseHex(
-        "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954");
-    if (!digest)
-        return std::nullopt;
-    document::AssetRecord face;
-    face.kind = document::AssetKind::Font;
-    face.locator = {"font", "builtin", "embedded/0", "font:embedded:DejaVu Sans|Book"};
-    face.contentDigest = *digest;
-    face.fontFamily = "DejaVu Sans";
-    face.fontStyle = "Book";
-    const auto result = EnsureFontAsset(std::move(face)).apply(draft);
-    for (const auto& output : result.outputs)
-        if (output.name == "asset")
-            if (const auto* id = std::get_if<document::AssetId>(&output.id))
-                return *id;
-    return std::nullopt;
-}
-
 struct CompositionCloneIds final {
     document::CompositionId composition;
     std::unordered_map<document::NodeId, document::NodeId> nodes;
@@ -943,24 +924,10 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
     if (style_.alignment && (*style_.alignment < 0 || *style_.alignment > 2))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Text alignment must be left, center or right");
-    std::optional<document::AssetId> fontAssetId;
-    if (style_.font) {
-        if (style_.font->kind != document::AssetKind::Font)
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "The text font must be a Font asset");
-        const auto ensured = EnsureFontAsset(*style_.font).apply(draft);
-        if (ensured.status == OperationStatus::Rejected)
-            return ensured;
-        for (const auto& output : ensured.outputs)
-            if (output.name == "asset")
-                if (const auto* id = std::get_if<document::AssetId>(&output.id))
-                    fontAssetId = *id;
-    } else {
-        fontAssetId = ensureDefaultTextFont(draft);
-    }
-    if (!fontAssetId)
-        return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "The text Font asset could not be created");
+    if (style_.font && !document::isValidFontId(*style_.font))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "The text font must be a valid font ID");
+    const auto fontText = document::encodeFontId(style_.font.value_or(document::defaultFontId()));
 
     return addStructuredLayer(
         draft, *composition, name_,
@@ -981,7 +948,7 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
           {document::kTextLetterSpacingParameterRole,
            document::kTextLetterSpacingParameterSchemaKey, 0.0, "letterSpacingParameter"},
           {document::kTextFontParameterRole, document::kTextFontParameterSchemaKey,
-           std::to_string(fontAssetId->value()), kAddTextLayerFontParameterOutput},
+           fontText, kAddTextLayerFontParameterOutput},
           {document::kTextBoxParameterRole, document::kTextBoxParameterSchemaKey, document::Vec2d{},
            kAddTextLayerBoxParameterOutput},
           {document::kTextWrapParameterRole, document::kTextWrapParameterSchemaKey, false,

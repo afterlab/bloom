@@ -10,6 +10,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 
@@ -126,13 +127,13 @@ class AddSolidLayer final : public Operation {
 // authoring value, the same encoding a solid color uses; both default to the registered text
 // definition's own defaults so a caller that only has content does not have to restate them.
 //
-// The font is a non-animatable Font-asset reference whose default is the embedded DejaVu Sans
-// face. Box layout controls are created as ordinary source parameters so every authoring surface
+// The font is a non-animatable font ID (docs/architecture/fonts.md) whose default is the built-in
+// DejaVu Sans face. Box layout controls are created as ordinary source parameters so every authoring surface
 // can project the same registry rows.
 // The font and alignment new text starts with (the context bar's options for new text). An empty
-// font is the bundled default face; an empty alignment is left-aligned.
+// font is the built-in default face; an empty alignment is left-aligned.
 struct TextLayerStyle {
-    std::optional<document::AssetRecord> font;
+    std::optional<document::FontId> font;
     std::optional<std::int64_t> alignment;
 };
 

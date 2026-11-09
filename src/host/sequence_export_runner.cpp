@@ -244,7 +244,11 @@ struct detail::SequenceExportWorkV1 {
                     FrameRangeRunnerV1::timeForFrame(range, range.firstFrame).has_value() &&
                     FrameRangeRunnerV1::timeForFrame(range, range.lastFrame).has_value(),
                 "Invalid composition frame range");
-        auto compiled = compiler.compile(request.composition, context.cancellation());
+        // An export waits for a Google font that is still downloading; the Viewer would draw the
+        // fallback instead.
+        auto compositionRequest = request.composition;
+        compositionRequest.fontFetch = runtime::fonts::FontFetch::Wait;
+        auto compiled = compiler.compile(compositionRequest, context.cancellation());
         checkpoint();
         if (compiled.plan == nullptr) {
             // #431/#437: the detail is the compiler's sentence naming the failure's subject

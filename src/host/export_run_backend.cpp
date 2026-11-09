@@ -82,7 +82,10 @@ class ProductionBackend final : public ExportRunBackend {
         if (request.compiler == nullptr)
             return sample;
         const auto compiled = request.compiler->compile(
-            {.snapshot = request.snapshot, .compositionId = request.composition}, cancellation);
+            {.snapshot = request.snapshot,
+             .compositionId = request.composition,
+             .fontFetch = runtime::fonts::FontFetch::Wait},
+            cancellation);
         if (compiled.plan == nullptr)
             return sample;
         if (output::exportAudioSourcesV1(*compiled.plan).empty())

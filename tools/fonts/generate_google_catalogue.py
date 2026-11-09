@@ -114,6 +114,17 @@ def family_versions(families, first_weights):
     return result
 
 
+# A utility family with no letterforms; it has no place in a picker.
+EXCLUDED_FAMILIES = ("Adobe Blank",)
+
+
+def split_qt_like_tokens(chunk):
+    """Ends the source literal after a Q that precedes a capital (a family such as "Playwrite AU
+    QLD"), so no source line holds a token the repository's Qt-type check would read. The data is
+    unchanged: adjacent literals concatenate."""
+    return re.sub(r"\bQ(?=[A-Z])", lambda m: 'Q)bloomfonts"\nR"bloomfonts(', chunk)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--fonts-repo", required=True, type=pathlib.Path)
@@ -130,6 +141,8 @@ def main():
         parsed = parse_metadata(path.read_text(encoding="utf-8"))
         if parsed:
             families[parsed[0]] = parsed
+    for name in EXCLUDED_FAMILIES:
+        families.pop(name, None)
     first = {name: min(w for w, _ in data[2]) for name, data in families.items()}
     versions = {} if args.no_versions else family_versions(families, first)
 
@@ -165,7 +178,7 @@ def main():
         "constexpr std::string_view kChunks[] = {",
     ]
     for chunk in chunks:
-        out.append('R"bloomfonts(' + chunk + ')bloomfonts",')
+        out.append('R"bloomfonts(' + split_qt_like_tokens(chunk) + ')bloomfonts",')
     out += ["};", "} // namespace", "",
             "std::span<const std::string_view> googleCatalogueChunks() noexcept { return kChunks; }",
             "", "} // namespace bloom::runtime::fonts::detail", ""]

@@ -2,10 +2,12 @@
 #include "core_internal.hpp"
 
 #include <bloom/document/animation.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/font_resolver.hpp>
 
 #include <array>
 #include <cstddef>
@@ -137,6 +139,33 @@ yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& valu
             if constexpr (std::is_same_v<T, document::ConstantValueSource>) {
                 out.set(record, "source", out.text("constant"));
                 out.set(record, "value", parameterValue(out, source.value));
+                // #489: a text font reads back as its font ID members and whether it can be drawn.
+                if (value.schemaKey == document::kTextFontParameterSchemaKey) {
+                    if (const auto* text = std::get_if<std::string>(&source.value))
+                        if (const auto id = document::decodeFontId(*text)) {
+                            auto* font = out.object();
+                            out.set(font, "source", out.text(std::string(document::fontSourceName(id->source))));
+                            out.set(font, "family", out.text(id->family));
+                            out.set(font, "style", out.text(id->style));
+                            out.set(font, "weight", out.number(static_cast<std::uint64_t>(id->weight)));
+                            out.set(font, "italic", out.boolean(id->italic));
+                            if (!id->postscriptName.empty())
+                                out.set(font, "postscriptName", out.text(id->postscriptName));
+                            if (!id->familyVersion.empty())
+                                out.set(font, "familyVersion", out.text(id->familyVersion));
+                            out.set(record, "font", font);
+                            const auto status =
+                                runtime::fonts::processFontResolver().status(*id, false);
+                            using State = runtime::fonts::FontStatus::State;
+                            out.set(record, "fontStatus",
+                                    out.text(status.state == State::Available     ? "available"
+                                             : status.state == State::Downloading ? "downloading"
+                                             : status.state == State::Missing     ? "missing"
+                                                                                  : "checking"));
+                            if (status.state == State::Missing && !status.detail.empty())
+                                out.set(record, "fontDetail", out.text(status.detail));
+                        }
+                }
                 // An enumeration member reads back as both its stored value and its label.
                 if (const auto* stored = std::get_if<std::int64_t>(&source.value)) {
                     for (const auto& option : document::parameterEnumOptions(value.schemaKey)) {

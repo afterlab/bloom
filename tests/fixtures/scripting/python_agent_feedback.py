@@ -130,21 +130,16 @@ class AgentFeedback(unittest.TestCase):
         row = next(c for c in bloom.data.snapshot()['compositions']
                    if c['id'] == int(bloom.context.composition))
         font = next(n['parameters']['font'] for n in row['nodes'] if 'font' in n['parameters'])
-        with tempfile.TemporaryDirectory() as directory:
-            face = os.path.join(directory, 'Gone.ttf')
-            ensured = bloom.ops.asset.ensure_font(
-                path=face, digest='3' * 64, family='Gone', style='Regular',
-                relinkHint='file://' + face)
-            asset = next(o['id'] for o in ensured['outputs'] if o['name'] == 'asset')
-            result = bloom.ops.parameter.set_source(parameter=font, value=str(asset))
+        gone = 'source=system;family=Gone Face;style=Regular;weight=400;italic=false'
+        result = bloom.ops.parameter.set_source(parameter=font, value=gone)
         self.assertTrue(result['succeeded'], result)
         self.assertEqual(len(result['compile_warnings']), 1, result)
         warning = result['compile_warnings'][0]
-        self.assertEqual(warning['code'], 'bloom.runtime.compile.font-asset-unavailable')
-        self.assertIn('DejaVu Sans was used', warning['detail'])
+        self.assertEqual(warning['code'], 'bloom.runtime.compile.font-missing')
+        self.assertIn('Gone Face', warning['detail'])
         self.assertEqual(warning['subject']['parameter'], font)
         # An edit that changes nothing reports no warnings.
-        again = bloom.ops.parameter.set_source(parameter=font, value=str(asset))
+        again = bloom.ops.parameter.set_source(parameter=font, value=gone)
         self.assertEqual(len(again['compile_warnings']), 0)
 
 

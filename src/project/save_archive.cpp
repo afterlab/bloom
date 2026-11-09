@@ -497,6 +497,7 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         // already is the source's name.
         auto envelope = *decodedDocument.value();
         if (!capturedInputVersion.has_value()) {
+            migrateLegacyFontAssets(envelope);
             migrateLegacySourceColorSpaces(envelope);
             migrateLegacyCurvesNodes(envelope);
             migrateLegacyGradientColorPairs(envelope);

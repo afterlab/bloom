@@ -684,49 +684,6 @@ format(const Arguments& arguments, const std::string& operationId, OperationCrea
     return result;
 }
 
-// A font face the artist already picked: its bytes are addressed by path and identified by digest,
-// exactly the pair the Assets and Properties surfaces build from a platform font face.
-[[nodiscard]] std::optional<document::AssetRecord> fontRecord(const Arguments& arguments,
-                                                              const std::string& operationId,
-                                                              OperationCreateResult& error) {
-    const auto path = text(arguments, operationId, "path", error);
-    const auto digest = text(arguments, operationId, "digest", error);
-    const auto family = text(arguments, operationId, "family", error, false);
-    const auto style = text(arguments, operationId, "style", error, false);
-    const auto index = integer(arguments, operationId, "index", error, false);
-    const auto portability = text(arguments, operationId, "portability", error, false);
-    const auto relinkHint = text(arguments, operationId, "relinkHint", error, false);
-    const auto name = text(arguments, operationId, "name", error, false);
-    const auto tags = strings(arguments, operationId, "tags", error, false);
-    if (!path.has_value() || !digest.has_value() || error) {
-        return std::nullopt;
-    }
-    std::string_view hex = *digest;
-    if (hex.starts_with("sha256:")) {
-        hex.remove_prefix(std::string_view("sha256:").size());
-    }
-    const auto contentDigest = core::Sha256Digest::fromLowercaseHex(hex);
-    if (!contentDigest.has_value()) {
-        error = failure(operationId, "digest", "expects 64 lowercase hex characters");
-        return std::nullopt;
-    }
-    if (index.value_or(0) < 0 || index.value_or(0) > std::numeric_limits<std::uint32_t>::max()) {
-        error = failure(operationId, "index", "expects a face index in 0..4294967295");
-        return std::nullopt;
-    }
-    document::AssetRecord asset;
-    asset.kind = document::AssetKind::Font;
-    asset.contentDigest = *contentDigest;
-    asset.fontFamily = family.value_or(std::string());
-    asset.fontStyle = style.value_or(std::string());
-    asset.fontIndex = static_cast<std::uint32_t>(index.value_or(0));
-    asset.locator = {"font", portability.value_or(std::string("system")), *path,
-                     relinkHint.value_or(std::string())};
-    asset.name = name.value_or(std::string());
-    asset.tags = tags.value_or(std::vector<std::string>{});
-    return asset;
-}
-
 [[nodiscard]] std::optional<document::DataBlockPayload>
 payload(const Arguments& arguments, const std::string& operationId, OperationCreateResult& error) {
     const auto kind = text(arguments, operationId, "payloadKind", error, false);
@@ -1936,54 +1893,6 @@ OperationRegistry OperationRegistry::builtIn() {
                     *name, parent.has_value()
                                ? std::optional(document::AssetFolderId::fromRaw(*parent))
                                : std::nullopt),
-                std::nullopt);
-        });
-
-    const auto fontArguments = [](std::vector<ArgumentSchema> leading) {
-        leading.push_back(need("path", ValueKind::String, "/usr/share/fonts/DejaVuSans.ttf",
-                               "The face's file path, or an embedded locator path."));
-        leading.push_back(need("digest", ValueKind::String,
-                               "0000000000000000000000000000000000000000000000000000000000000000",
-                               "The face's SHA-256 content digest, 64 lowercase hex characters."));
-        leading.push_back(maybe("family", ValueKind::String, "DejaVu Sans", "The family name."));
-        leading.push_back(maybe("style", ValueKind::String, "Book", "The style name."));
-        leading.push_back(maybe("index", ValueKind::Integer, std::int64_t{0},
-                                "The face index inside a collection file."));
-        leading.push_back(maybe(
-            "portability", ValueKind::String, "system",
-            R"(Locator portability: "system" (path is an absolute file path) or "builtin" (an embedded face).)"));
-        leading.push_back(maybe(
-            "relinkHint", ValueKind::String, "",
-            R"(Required: for "system", the path's file:// URI (it must start with "file:"); for "builtin", "font:" followed by a face name.)"));
-        leading.push_back(maybe("name", ValueKind::String, "DejaVu Sans", "The asset name."));
-        leading.push_back(
-            maybe("tags", ValueKind::Array, ValueArray{Value("title")}, "Asset tags."));
-        return leading;
-    };
-
-    add("bloom.asset.ensure-font", fontArguments({}),
-        [](const std::string& op, const Arguments& args) {
-            OperationCreateResult error(nullptr, std::nullopt);
-            auto record = fontRecord(args, op, error);
-            if (!record) {
-                return error;
-            }
-            return OperationCreateResult(
-                std::make_unique<commands::EnsureFontAsset>(*std::move(record)), std::nullopt);
-        });
-
-    add("bloom.asset.relink-font",
-        fontArguments({need("asset", ValueKind::Id, StableId{1}, "The font asset to repoint.")}),
-        [](const std::string& op, const Arguments& args) {
-            OperationCreateResult error(nullptr, std::nullopt);
-            const auto asset = id(args, op, "asset", error);
-            auto record = fontRecord(args, op, error);
-            if (!asset || !record) {
-                return error;
-            }
-            return OperationCreateResult(
-                std::make_unique<commands::RelinkFontAsset>(document::AssetId::fromRaw(*asset),
-                                                            *std::move(record)),
                 std::nullopt);
         });
 

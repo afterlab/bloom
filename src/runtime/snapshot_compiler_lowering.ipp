@@ -1536,6 +1536,8 @@ lowerCompositionSource(const document::NodeRecord& node) {
         ++index;
     if (index == nestedPlans_.size()) {
         runtime::SnapshotCompileRequest nestedRequest{request_.snapshot, nestedId};
+        nestedRequest.fontResolver = request_.fontResolver;
+        nestedRequest.fontFetch = request_.fontFetch;
         auto nested =
             planCache_ ? planCache_->compile(runtime::SnapshotCompiler(registry_), nestedRequest,
                                              cancellation_)
@@ -2975,99 +2977,46 @@ lowerText(const document::NodeRecord& node) {
     const auto drivenContent = drivenOutput(contentBinding, runtime::SocketValueKind::String);
     const auto size = compiledScalarParameter(sizeBinding);
     const auto color = compiledColorParameter(colorBinding);
-    const auto* storedFont = parameterConstant<std::int64_t>(fontBinding);
     auto face = render::EmbeddedFace::DejaVuSans;
-    document::AssetId fontAssetId;
     render::TextFont font = face;
-    const auto fontWarning = [&](const std::string& detail) {
-        auto diagnosticSubject = subject(node.id, "font");
-        if (fontBinding != nullptr)
-            diagnosticSubject.parameterId = fontBinding->parameterId;
-        addWarning(runtime::CompileDiagnosticCode::FontAssetUnavailable,
-                   std::move(diagnosticSubject), "Text font is unavailable", detail);
-    };
-    const auto embeddedDigest = [](const render::EmbeddedFace candidate) {
-        constexpr std::array<std::string_view, 4> digests{
-            "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
-            "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
-            "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872",
-            "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"};
-        return core::Sha256Digest::fromLowercaseHex(digests[static_cast<std::size_t>(candidate)]);
-    };
-    const auto useEmbedded = [&](const render::EmbeddedFace candidate,
-                                 const document::AssetId assetId = {}) {
-        face = candidate;
-        font = candidate;
-        fontAssetId = assetId;
-    };
+    // The font ID the node stores. A node authored before fonts were named (no binding) or holding
+    // anything that is not a font ID draws in the built-in default, with a warning for the latter.
+    auto fontId = document::defaultFontId();
     if (fontBinding != nullptr) {
-        if (storedFont != nullptr) {
-            if (*storedFont < 0 || *storedFont >= kTextFontChoiceCount) {
-                fontWarning("The legacy embedded face value is outside the supported range; DejaVu "
-                            "Sans was used.");
-            } else {
-                useEmbedded(static_cast<render::EmbeddedFace>(*storedFont));
-            }
-        } else if (const auto* reference = parameterConstant<std::string>(fontBinding)) {
-            std::uint64_t rawId = 0;
-            const auto parsedId =
-                std::from_chars(reference->data(), reference->data() + reference->size(), rawId);
-            const auto* asset =
-                parsedId.ec == std::errc{} && parsedId.ptr == reference->data() + reference->size()
-                    ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(rawId))
-                    : nullptr;
-            if (asset == nullptr || asset->kind != document::AssetKind::Font) {
-                fontWarning("The font reference does not name a Font asset; DejaVu Sans was used.");
-            } else {
-                fontAssetId = asset->id;
-                if (asset->locator.portability == "builtin") {
-                    if (asset->fontIndex >= kTextFontChoiceCount) {
-                        fontWarning(
-                            "The embedded Font asset face index is invalid; DejaVu Sans was used.");
-                    } else {
-                        const auto candidate = static_cast<render::EmbeddedFace>(asset->fontIndex);
-                        if (embeddedDigest(candidate).value_or(core::Sha256Digest{}) !=
-                            asset->contentDigest) {
-                            fontWarning(
-                                "The embedded Font asset digest changed; DejaVu Sans was used.");
-                        } else {
-                            useEmbedded(candidate, asset->id);
-                        }
-                    }
-                } else {
-                    constexpr std::uintmax_t kMaximumFontBytes =
-                        static_cast<std::uintmax_t>(64) * 1024U * 1024U;
-                    std::error_code error;
-                    const auto sizeOnDisk = std::filesystem::file_size(asset->locator.path, error);
-                    if (error || sizeOnDisk == 0 || sizeOnDisk > kMaximumFontBytes) {
-                        fontWarning("The system font file is missing or exceeds the compile-time "
-                                    "size limit; DejaVu Sans was used.");
-                    } else {
-                        try {
-                            auto bytes = std::make_shared<std::vector<std::uint8_t>>(
-                                static_cast<std::size_t>(sizeOnDisk));
-                            std::ifstream input(asset->locator.path, std::ios::binary);
-                            input.read(reinterpret_cast<char*>(bytes->data()),
-                                       static_cast<std::streamsize>(bytes->size()));
-                            const auto digest =
-                                input ? core::Sha256Hasher::hash(std::as_bytes(std::span(*bytes)))
-                                      : std::nullopt;
-                            if (!input || !digest.has_value() || *digest != asset->contentDigest) {
-                                fontWarning("The system font file is missing or its digest "
-                                            "changed; DejaVu Sans was used.");
-                            } else {
-                                font = render::ExternalFontFile{std::move(bytes), *digest,
-                                                                asset->fontIndex};
-                            }
-                        } catch (const std::bad_alloc&) {
-                            fontWarning("The system font could not be loaded within the compile "
-                                        "memory budget; DejaVu Sans was used.");
-                        }
-                    }
-                }
-            }
+        const auto* stored = parameterConstant<std::string>(fontBinding);
+        const auto decoded = stored != nullptr ? document::decodeFontId(*stored) : std::nullopt;
+        if (decoded) {
+            fontId = *decoded;
         } else {
-            fontWarning("The Font parameter has an unsupported value; DejaVu Sans was used.");
+            auto diagnosticSubject = subject(node.id, "font");
+            diagnosticSubject.parameterId = fontBinding->parameterId;
+            addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
+                       "Text font is unavailable",
+                       "The Font parameter does not hold a font ID; DejaVu Sans was used.");
+        }
+    }
+    bool fontMissing = false;
+    bool fontPending = false;
+    {
+        auto& resolver = request_.fontResolver ? *request_.fontResolver
+                                               : runtime::fonts::processFontResolver();
+        const auto resolution = resolver.resolve(
+            fontId, request_.fontFetch, [this] { return cancellation_.isCancellationRequested(); });
+        if (resolution.bytes) {
+            font = render::ExternalFontFile{resolution.bytes, resolution.digest,
+                                            resolution.faceIndex};
+        } else {
+            face = static_cast<render::EmbeddedFace>(resolution.builtinFace);
+            font = face;
+        }
+        fontMissing = resolution.missing();
+        fontPending = resolution.pendingDownload();
+        if (fontMissing && fontBinding != nullptr) {
+            // The font stays in the project; installing it later restores it with no edit.
+            auto diagnosticSubject = subject(node.id, "font");
+            diagnosticSubject.parameterId = fontBinding->parameterId;
+            addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
+                       "Text font is missing", resolution.diagnostic);
         }
     }
     if (contentBinding == nullptr || sizeBinding == nullptr || colorBinding == nullptr ||
@@ -3139,8 +3088,10 @@ lowerText(const document::NodeRecord& node) {
     result.layout = layout;
     result.drivenContent = drivenContent;
     result.face = face;
-    result.fontAssetId = fontAssetId;
     result.font = std::move(font);
+    result.fontId = document::encodeFontId(fontId);
+    result.fontMissing = fontMissing;
+    result.fontPending = fontPending;
     return result;
 }
 

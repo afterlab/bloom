@@ -1,4 +1,5 @@
 #include <bloom/document/alpha_association_nodes.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
@@ -1581,7 +1582,7 @@ template <typename Definition>
                                      ParameterValueKind::Float64, true, true, 0.0});
     definition.parameters.push_back(
         {std::string(kTextFontParameterRole), std::string(kTextFontParameterSchemaKey),
-         ParameterValueKind::String, false, false, std::string(kDefaultTextFontReference)});
+         ParameterValueKind::String, false, false, encodeFontId(defaultFontId())});
     definition.parameters.push_back({std::string(kTextBoxParameterRole),
                                      std::string(kTextBoxParameterSchemaKey),
                                      ParameterValueKind::Vec2d, false, false, Vec2d{}});

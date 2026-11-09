@@ -3,6 +3,7 @@
 #include <bloom/runtime/channel_inspection.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/font_fetch.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/task_types.hpp>
 
@@ -14,6 +15,10 @@
 #include <vector>
 
 namespace bloom::runtime {
+
+namespace fonts {
+class FontResolver;
+}
 
 class CompiledPlanCache;
 
@@ -43,7 +48,8 @@ enum class CompileDiagnosticCode {
     InvalidParameterOverride,
     UnsupportedParameterOverride,
     BoundsReadoutDrivesImageOperation,
-    FontAssetUnavailable,
+    // A text font that could not be resolved: the fallback is drawn and the Viewer marks the text.
+    FontMissing,
     TopologyInvariant,
     // ADR 0024: too many layer time clocks or scoped operation copies.
     TimeScopeLimit,
@@ -96,6 +102,11 @@ struct SnapshotCompileRequest {
     std::vector<SnapshotParameterOverride> parameterOverrides{};
     // ADR 0026: a viewer-only plan whose output shows these channels raw (see channel_inspection).
     std::optional<ChannelInspection> channelInspection{};
+    // Resolves the text fonts; null uses the process font resolver (docs/architecture/fonts.md).
+    std::shared_ptr<fonts::FontResolver> fontResolver{};
+    // The Viewer starts a missing Google font downloading and draws the fallback until it arrives;
+    // an export waits for it.
+    fonts::FontFetch fontFetch = fonts::FontFetch::Background;
 };
 
 struct SnapshotCompileResult {

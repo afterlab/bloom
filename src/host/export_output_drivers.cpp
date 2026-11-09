@@ -747,8 +747,11 @@ class ImageDriver final : public DriverBase {
                 if (context.isCancellationRequested())
                     return Result::cancelled();
                 context.reportProgress({"Compiling composition", "", 0, std::nullopt});
-                auto compiled = compiler.compile(
-                    {.snapshot = snapshot, .compositionId = composition}, context.cancellation());
+                // An export waits for a Google font that is still downloading.
+                auto compiled = compiler.compile({.snapshot = snapshot,
+                                                  .compositionId = composition,
+                                                  .fontFetch = runtime::fonts::FontFetch::Wait},
+                                                 context.cancellation());
                 if (compiled.status == runtime::SnapshotCompileStatus::Cancelled)
                     return Result::cancelled();
                 if (compiled.status != runtime::SnapshotCompileStatus::Compiled ||

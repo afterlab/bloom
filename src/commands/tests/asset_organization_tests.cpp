@@ -284,113 +284,6 @@ void testAssetInputColor(TestContext& test) {
                         .status == CommandStatus::Rejected,
                 "contradictory legacy and config choices are rejected");
 }
-void testRelinkAndSaturatedOrder(TestContext& test) {
-    auto initial = document::makeNewProject("Assets", "Main", core::RationalTime::fromInteger(24));
-    document::AssetRecord existing;
-    existing.id = AssetId::fromRaw(1);
-    existing.locator = {"file", "project-relative", "last.png", "file:///last.png"};
-    existing.width = 1;
-    existing.height = 1;
-    existing.order = std::numeric_limits<std::uint64_t>::max();
-    requireFixture(initial.project.addAsset(existing), "saturated asset order fixture");
-    Document document(std::move(initial.project));
-    CommandStack stack(document);
-    document::AssetRecord font;
-    font.kind = document::AssetKind::Font;
-    font.name = "Picked face";
-    font.locator = {"font", "builtin", "", "font:fixture"};
-    font.fontFamily = "Fixture";
-    font.fontStyle = "Regular";
-    const auto imported = execute<EnsureFontAsset>(document, stack, font)
-                              .outputId<AssetId>("asset")
-                              .value_or(AssetId{});
-    test.expect(
-        imported.value() > existing.id.value() &&
-            document.snapshot().project().findAsset(imported)->order == existing.order,
-        "import after maximum order uses the stable ID tie-break instead of wrapping to the front");
-    const auto folder = execute<CreateAssetFolder>(document, stack, "Fonts")
-                            .outputId<AssetFolderId>(kCreateAssetFolderOutput)
-                            .value_or(AssetFolderId{});
-    test.expect(execute<MoveAssets>(document, stack, Assets{imported}, folder, 0).changed(),
-                "move font into folder");
-    test.expect(execute<SetAssetTags>(document, stack, imported, std::vector<std::string>{"brand"})
-                    .changed(),
-                "tag font fixture");
-    const auto organized = *document.snapshot().project().findAsset(imported);
-    font.name = "Replacement default";
-    font.fontStyle = "Italic";
-    test.expect(execute<RelinkFontAsset>(document, stack, imported, font).changed(),
-                "font relink publishes");
-    const auto relinked = *document.snapshot().project().findAsset(imported);
-    test.expect(relinked.id == organized.id && relinked.name == organized.name &&
-                    relinked.tags == organized.tags && relinked.folder == organized.folder &&
-                    relinked.order == organized.order && relinked.fontStyle == "Italic",
-                "relink changes source metadata while preserving every organization field");
-    test.expect(stack.undo().changed() &&
-                    *document.snapshot().project().findAsset(imported) == organized,
-                "relink undo restores source and organization");
-}
-// #432: a font face ensure-font cannot store is refused with the constraint it broke, in the
-// terms of the operation's arguments, rather than a bare "Invalid font face reference".
-void testFontFaceRefusalStatesConstraints(TestContext& test) {
-    auto initial = document::makeNewProject("Fonts", "Main", core::RationalTime::fromInteger(24));
-    Document document(std::move(initial.project));
-    CommandStack stack(document);
-    const auto digest = core::Sha256Digest::fromLowercaseHex(
-        "2222222222222222222222222222222222222222222222222222222222222222");
-    requireFixture(digest.has_value(), "font digest fixture");
-    document::AssetRecord face;
-    face.kind = document::AssetKind::Font;
-    face.contentDigest = *digest;
-    face.fontFamily = "Fixture";
-    face.fontStyle = "Regular";
-    const auto refusal = [&](const document::AssetRecord& candidate) {
-        const auto result = execute<EnsureFontAsset>(document, stack, candidate);
-        return result.status == CommandStatus::Rejected && result.operationFailures.size() == 1
-                   ? result.operationFailures.front().issue.message
-                   : std::string{};
-    };
-    const auto mentions = [](const std::string& message, const std::string& text) {
-        return message.starts_with("Invalid font face reference: ") &&
-               message.find(text) != std::string::npos;
-    };
-
-    // Absolute on every platform: a drive-less "/fonts/..." is not absolute on Windows.
-    const auto absolute = (std::filesystem::current_path() / "Fixture.ttf").generic_string();
-    auto system = face;
-    system.locator = {"font", "system", absolute, ""};
-    const auto missingHint = refusal(system);
-    test.expect(mentions(missingHint, "relinkHint to start with \"file:\""),
-                "a system face without a file: relink hint says so: " + missingHint);
-    system.locator.path = "fonts/Fixture.ttf";
-    system.locator.relinkHint = "file:///Fixture.ttf";
-    test.expect(mentions(refusal(system), "absolute file path"),
-                "a system face with a relative path says the path must be absolute");
-
-    auto builtin = face;
-    builtin.locator = {"font", "builtin", "embedded/0", "embedded"};
-    test.expect(mentions(refusal(builtin), "relinkHint to start with \"font:\""),
-                "a builtin face states its font: relink hint");
-
-    auto relative = face;
-    relative.locator = {"font", "project-relative", "fonts/Fixture.ttf", "file:///Fixture.ttf"};
-    test.expect(mentions(refusal(relative), "portability must be \"system\" or \"builtin\""),
-                "an unsupported portability names the supported ones");
-
-    auto unnamed = face;
-    unnamed.fontFamily.clear();
-    unnamed.locator = {"font", "system", absolute, "file:///Fixture.ttf"};
-    test.expect(mentions(refusal(unnamed), "family and style"),
-                "a face without a family states the family and style constraint");
-
-    auto valid = unnamed;
-    valid.fontFamily = "Fixture";
-    const auto id = execute<EnsureFontAsset>(document, stack, valid).outputId<AssetId>("asset");
-    test.expect(id.has_value() &&
-                    execute<EnsureFontAsset>(document, stack, valid).outputId<AssetId>("asset") ==
-                        id,
-                "a face that meets the constraints is stored once and its id returned again");
-}
 // #378: folders hold compositions and other folders, move without cycles or name clashes, give
 // their contents back to their parent on removal, and "Delete with contents" is one transaction.
 void testFolderStructure(TestContext& test) {
@@ -637,8 +530,6 @@ int main() {
         bloom::commands::test::testCompositionFromAssets(test);
         bloom::commands::test::testWideImageAssetCommand(test);
         bloom::commands::test::testAssetInputColor(test);
-        bloom::commands::test::testRelinkAndSaturatedOrder(test);
-        bloom::commands::test::testFontFaceRefusalStatesConstraints(test);
     } catch (const std::exception& error) {
         test.fail(error.what());
     }

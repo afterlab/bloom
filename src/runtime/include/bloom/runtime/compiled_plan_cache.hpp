@@ -36,6 +36,9 @@ inline constexpr std::size_t kDefaultCompiledPlanCacheCapacity = 4;
 // lowered into the plan as a constant for that one request, so its plan is not the revision's plan.
 // Caching it under the revision would hand a dragged value to every later frame.
 //
+// The key also carries the font resolver's arrival count: a Google font that arrives after a plan
+// was compiled with its fallback makes that plan a miss, so the real font is drawn.
+//
 // A cancelled compilation is never retained, and neither is a failed one -- a failure's diagnostics
 // belong to the request that asked, and re-deriving them costs what it cost the first time. Only a
 // Compiled or Unsupported outcome is retained, both of which are a property of the revision.
@@ -78,6 +81,7 @@ class CompiledPlanCache final {
         document::Revision revision;
         SnapshotCompileResult result;
         std::optional<ChannelInspection> channelInspection{};
+        std::uint64_t fontEpoch = 0;
     };
 
     mutable std::mutex mutex_;

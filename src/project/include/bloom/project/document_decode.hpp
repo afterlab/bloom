@@ -508,6 +508,11 @@ inline constexpr std::uint32_t kCompoundPathsMinor = 43;
 // "Gradient Colour Pairs"). Open path only, before migrateLegacyGlowNodes.
 void migrateLegacyGradientColorPairs(DecodedDocumentEnvelope& envelope);
 
+// Fonts are not assets (docs/architecture/fonts.md): opening a document that has Font assets, or a
+// text font stored as an asset id, a face number or a "family|style|digest" reference, stores each
+// text font as a font ID and drops the Font assets. Open path only, before reconstruction.
+void migrateLegacyFontAssets(DecodedDocumentEnvelope& envelope);
+
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
 // DecodedDocumentEnvelope. `root` must outlive the call; nothing is retained past return. See the
 // file-level comment above for exact scope. May throw std::bad_alloc; never throws otherwise.

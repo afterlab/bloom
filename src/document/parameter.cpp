@@ -1,4 +1,5 @@
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
@@ -579,10 +580,10 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value && *value >= 0 && *value <= 2;
     }
     if (schemaKey == kTextFontParameterSchemaKey) {
-        if (const auto* reference = std::get_if<std::string>(&constant.value))
-            return bloom::core::isValidUtf8(*reference) && reference->size() <= 4096;
-        const auto* value = std::get_if<std::int64_t>(&constant.value);
-        return value && *value >= 0 && *value < kTextFontChoiceCount;
+        // A text font is a font ID (docs/architecture/fonts.md). Older documents' asset ids,
+        // references and face numbers are converted to one when the project opens.
+        const auto* text = std::get_if<std::string>(&constant.value);
+        return text != nullptr && decodeFontId(*text).has_value();
     }
     if (schemaKey == kTextBoxParameterSchemaKey) {
         const auto* value = std::get_if<Vec2d>(&constant.value);

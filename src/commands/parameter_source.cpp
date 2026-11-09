@@ -2,9 +2,9 @@
 // script client sends is read in the parameter's own declared kind (a whole number for an Integer
 // or enumeration, a number for a Float64, a member name for an enumeration), and every refusal
 // names the parameter, the node that owns it and what it accepts, so an artist or an agent never
-// has to guess why an edit was refused. A text font takes one value form only: the id of a Font
-// asset in this project, as a decimal string. Any other value is refused here, with the project's
-// Font assets listed, instead of being stored and silently rendered in the fallback face. Replacing
+// has to guess why an edit was refused. A text font takes one value form only: a font ID's text
+// (docs/architecture/fonts.md). Any other value is refused here, with the form described, instead
+// of being stored and silently rendered in the fallback face. Replacing
 // an animated source retires the parameter's animation curve in the same edit.
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -12,6 +12,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -91,54 +92,27 @@ std::string formatNumber(const double value) {
     return text;
 }
 
-// The Font asset a text font value names: a decimal asset id string, nothing else. The legacy
-// integer face values are read only when an old document is opened, never accepted from an edit.
-const document::AssetRecord* namedFontAsset(const document::Project& project,
-                                            const document::ParameterValue& value) {
-    const auto* reference = std::get_if<std::string>(&value);
-    if (reference == nullptr || reference->empty())
-        return nullptr;
-    std::uint64_t raw = 0;
-    const auto* end = reference->data() + reference->size();
-    const auto parsed = std::from_chars(reference->data(), end, raw);
-    if (parsed.ec != std::errc{} || parsed.ptr != end || raw == 0)
-        return nullptr;
-    const auto* asset = project.findAsset(document::AssetId::fromRaw(raw));
-    return asset != nullptr && asset->kind == document::AssetKind::Font ? asset : nullptr;
+// A text font value is a font ID's stored text (docs/architecture/fonts.md), nothing else.
+bool isFontIdValue(const document::ParameterValue& value) {
+    const auto* text = std::get_if<std::string>(&value);
+    return text != nullptr && document::decodeFontId(*text).has_value();
 }
 
-// Exactly the values a text font accepts in this project: each Font asset's id, as a string,
-// with the face it names.
-std::string acceptedFonts(const document::Project& project) {
-    constexpr std::size_t kListed = 32;
-    std::string listed;
-    std::size_t count = 0;
-    for (const auto& asset : project.assets()) {
-        if (asset.kind != document::AssetKind::Font)
-            continue;
-        if (++count > kListed)
-            continue;
-        // Family and style name the face; the asset name is the artist's and may be anything.
-        listed += (listed.empty() ? "" : ", ") + std::string("\"") +
-                  std::to_string(asset.id.value()) + "\" (" + asset.fontFamily + " " +
-                  asset.fontStyle + ")";
-    }
-    const std::string form = "the id of a Font asset in this project, as a string";
-    const std::string add = "bloom.asset.ensure-font adds a face and returns its id";
-    if (count == 0)
-        return form + "; the project has no Font assets yet, and " + add;
-    auto text = form + ": " + listed;
-    if (count > kListed)
-        text +=
-            ", and " + std::to_string(count - kListed) + " more listed by query {kind:\"assets\"}";
-    return text + "; " + add;
+// What a text font accepts, in words: the font ID text, with an example per source.
+std::string acceptedFonts() {
+    return "a font ID, written as source=<system|google|builtin>;family=<name>;style=<style>;"
+           "weight=<1-1000>;italic=<true|false>, with optional axes=<tag>:<value>|..., "
+           "ps=<PostScript name> (system fonts) and version=<family version> (Google fonts), "
+           "for example \"source=google;family=Roboto;style=Bold;weight=700;italic=false\"; "
+           "separators inside a name are written %3B for a semicolon, %3D for an equals sign, "
+           "%7C for a bar, %3A for a colon and %25 for a percent sign";
 }
 
 // What the parameter accepts, in words: its kind, then its members or its range.
 std::string accepts(const document::ParameterRecord& record, const ParameterOwner& owner,
-                    const document::Project& project) {
+                    [[maybe_unused]] const document::Project& project) {
     if (record.schemaKey == document::kTextFontParameterSchemaKey)
-        return acceptedFonts(project);
+        return acceptedFonts();
     if (owner.parameter == nullptr)
         return "a value of its schema " + record.schemaKey;
     const auto kind = owner.parameter->valueKind;
@@ -192,12 +166,11 @@ std::optional<document::ParameterValue> coerce(const document::ParameterValue& v
             return document::ParameterValue(static_cast<double>(*whole));
         return value;
     case document::ParameterValueKind::String:
-        // A Font or media asset parameter holds the asset's id as text; the integer an `asset`
+        // A media asset parameter holds the asset's id as text; the integer an `asset`
         // query reports is accepted as the same id.
         if (const auto* whole = std::get_if<std::int64_t>(&value);
             whole != nullptr && *whole > 0 &&
-            (record.schemaKey == document::kTextFontParameterSchemaKey ||
-             std::string_view(record.schemaKey).ends_with(".asset")))
+            std::string_view(record.schemaKey).ends_with(".asset"))
             return document::ParameterValue(std::to_string(*whole));
         return value;
     case document::ParameterValueKind::Path:
@@ -263,8 +236,8 @@ std::optional<OperationResult> refusedDriver(const document::Composition& compos
         return OperationResult::rejected(
             OperationIssueCode::Unsupported,
             describe(record, owner) +
-                " cannot be driven: a text font is the id of a Font asset and is read as a "
-                "constant. Set a constant Font asset id instead.");
+                " cannot be driven: a text font is a font ID and is read as a constant. Set a "
+                "constant font ID instead.");
     if (owner.entryLayer != nullptr)
         return OperationResult::rejected(
             OperationIssueCode::Unsupported,
@@ -351,7 +324,7 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
     if (auto* constant = std::get_if<document::ConstantValueSource>(&source)) {
         auto value = coerce(constant->value, *parameter, owner);
         if (!value || (parameter->schemaKey == document::kTextFontParameterSchemaKey &&
-                       namedFontAsset(draft.project(), *value) == nullptr))
+                       !isFontIdValue(*value)))
             return refusedValue(*parameter, owner, constant->value, draft.project());
         constant->value = *std::move(value);
     } else if (auto* curve = std::get_if<document::AnimationCurveSource>(&source);
