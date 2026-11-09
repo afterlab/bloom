@@ -1,6 +1,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/platform/font_catalog.hpp>
+#include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/camera_shake.hpp>
@@ -1190,6 +1191,97 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
                                 missingText->fontId.find("family=Nobody Has This") !=
                                     std::string::npos,
                             "the plan keeps the recorded font ID, so installing it later restores it");
+    }
+
+    // A Google font that arrives after a plan was cached makes that plan stale: the next request
+    // compiles again and draws the real font; until then the cached plan stood in with the fallback.
+    {
+        class InterTransport final : public runtime::fonts::FontTransport {
+          public:
+            runtime::fonts::FontHttpResult
+            get(const std::string& url, std::uint64_t, const std::function<bool()>&,
+                const std::function<void(std::uint64_t, std::uint64_t)>&) override {
+                runtime::fonts::FontHttpResult result;
+                result.status = runtime::fonts::FontHttpStatus::Ok;
+                if (url.starts_with("https://fonts.googleapis.com/css2")) {
+                    const std::string css =
+                        "@font-face {\n  font-family: 'Arrival Family';\n  font-style: normal;\n"
+                        "  font-weight: 400;\n  src: url(https://fonts.gstatic.com/s/arrival/v1/"
+                        "face400.ttf) format('truetype');\n}\n";
+                    result.body.assign(css.begin(), css.end());
+                    return result;
+                }
+                std::ifstream input(std::filesystem::path(BLOOM_FONT_FIXTURE_DIRECTORY) /
+                                        "Inter-Regular.ttf",
+                                    std::ios::binary);
+                result.body.assign(std::istreambuf_iterator<char>(input),
+                                   std::istreambuf_iterator<char>());
+                return result;
+            }
+        };
+        const auto cacheRoot = std::filesystem::temp_directory_path() /
+                               ("bloom-plan-font-arrival-" +
+                                std::to_string(std::chrono::steady_clock::now()
+                                                   .time_since_epoch()
+                                                   .count()));
+        runtime::fonts::FontResolver::Options options;
+        options.cacheDirectory = cacheRoot;
+        options.transport = std::make_shared<InterTransport>();
+        auto resolver = std::make_shared<runtime::fonts::FontResolver>(std::move(options));
+        const std::array<std::filesystem::path, 1> directories{
+            std::filesystem::path(BLOOM_FONT_FIXTURE_DIRECTORY)};
+        resolver->systemFonts().install(
+            platform::FontCatalogueProvider::enumerateDirectories(directories, {}, false));
+
+        auto project = makeProject(singleLayerOptions());
+        retypeFirstSourceToText(project, "Title", 48.0, textColorValue);
+        auto* arrivalComposition = project.findComposition(kCompositionId);
+        require(arrivalComposition != nullptr &&
+                    arrivalComposition->parameters().setSource(
+                        kTextFont,
+                        document::ConstantValueSource{document::encodeFontId(
+                            {document::FontSource::Google, "Arrival Family", "Regular", 400, false,
+                             {}, {}, {}})}),
+                "the Google font ID is stored");
+        document::Document document(std::move(project));
+        const runtime::SnapshotCompiler compiler(registry);
+        runtime::CompiledPlanCache cache;
+        const runtime::SnapshotCompileRequest request{
+            .snapshot = document.snapshot(),
+            .compositionId = kCompositionId,
+            .fontResolver = resolver,
+            .fontFetch = runtime::fonts::FontFetch::Background};
+        const auto textOf = [](const runtime::SnapshotCompileResult& result) {
+            return result.plan && !result.plan->operations().empty()
+                       ? std::get_if<runtime::CompiledText>(&result.plan->operations().front())
+                       : nullptr;
+        };
+        const auto before = cache.compile(compiler, request, runtime::CancellationToken{});
+        const auto* beforeText = textOf(before);
+        expectations.expect(beforeText != nullptr && beforeText->fontPending,
+                            "before the font arrives the plan draws the fallback and says it is "
+                            "pending");
+        const auto again = cache.compile(compiler, request, runtime::CancellationToken{});
+        expectations.expect(again.plan == before.plan && cache.statistics().hits >= 1,
+                            "with no arrival the cached plan is reused");
+
+        for (int i = 0; i < 1000 && resolver->epoch() == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        expectations.expect(resolver->epoch() > 0, "the font arrived");
+        const auto compilesBefore = cache.statistics().compiles;
+        const auto after = cache.compile(compiler, request, runtime::CancellationToken{});
+        const auto* afterText = textOf(after);
+        expectations.expect(after.plan != before.plan &&
+                                cache.statistics().compiles == compilesBefore + 1,
+                            "the arrival invalidates the cached plan: it is compiled again");
+        expectations.expect(afterText != nullptr && !afterText->fontPending &&
+                                !afterText->fontMissing &&
+                                std::holds_alternative<render::ExternalFontFile>(afterText->font),
+                            "the rebuilt plan draws the arrived font");
+        const auto last = cache.compile(compiler, request, runtime::CancellationToken{});
+        expectations.expect(last.plan == after.plan, "the rebuilt plan is cached again");
+        std::error_code removeError;
+        std::filesystem::remove_all(cacheRoot, removeError);
     }
 
     // A size the schema refuses never reaches the evaluator: the document rejects the value at
