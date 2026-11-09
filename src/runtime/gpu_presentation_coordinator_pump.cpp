@@ -429,7 +429,8 @@ void CoordinatorState::drivePresent(Entry& entry) {
         entry.state = GpuPresentationTargetState::Active;
         entry.message.clear();
         publish(entry, GpuPresentationTargetState::Active, false, presentCode, {});
-        if (presentCode == render::GpuPresentationTargetCode::Suboptimal) {
+        if (presentCode == render::GpuPresentationTargetCode::Suboptimal &&
+            entry.shouldRebuildAfterSuboptimal()) {
             entry.pendingResize =
                 GpuPresentationPendingResize{entry.info.width, entry.info.height, 0U};
         }

@@ -466,8 +466,31 @@ void testResetRefusesRealCommittedGeneration(Expectations& expectations) {
                         "the test reset refuses to drop a committed generation with a live alias");
 }
 
+// #463: a surface that stays Suboptimal after the swapchain was rebuilt (for instance after the
+// window moved to another monitor) rebuilds it once for that extent, not on every present.
+void testSuboptimalRebuildsOncePerExtent(Expectations& expectations) {
+    CoordinatorState::Entry entry;
+    entry.info.width = 800;
+    entry.info.height = 600;
+    expectations.expect(entry.shouldRebuildAfterSuboptimal(),
+                        "the first Suboptimal present rebuilds the swapchain");
+    bool again = false;
+    for (int present = 0; present < 100; ++present)
+        again = again || entry.shouldRebuildAfterSuboptimal();
+    expectations.expect(!again,
+                        "a surface that stays Suboptimal does not rebuild on every present");
+    entry.info.width = 1024;
+    expectations.expect(entry.shouldRebuildAfterSuboptimal(),
+                        "a new extent may be rebuilt once more");
+    expectations.expect(!entry.shouldRebuildAfterSuboptimal(), "and then once only");
+    entry.suboptimalRebuiltAt.reset();
+    expectations.expect(entry.shouldRebuildAfterSuboptimal(),
+                        "a new request from the window's owner allows another rebuild");
+}
+
 int run() {
     Expectations expectations;
+    testSuboptimalRebuildsOncePerExtent(expectations);
     testOwnerPumpIdleDoesNotSelfWake(expectations);
     testCachedShutdownSummaryTransitions(expectations);
     testReservationBounds(expectations);

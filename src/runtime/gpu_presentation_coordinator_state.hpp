@@ -93,6 +93,10 @@ struct CoordinatorState {
         render::GpuPresentationTargetInfo info{};
         std::optional<detail::GpuPresentationPendingUpdate> pendingUpdate;
         std::optional<detail::GpuPresentationPendingResize> pendingResize;
+        // The extent a Suboptimal present last rebuilt the swapchain for. A surface that stays
+        // Suboptimal after that rebuild (for example after the window moved to another monitor)
+        // would otherwise rebuild the swapchain, and allocate its images, on every present.
+        std::optional<std::pair<std::uint32_t, std::uint32_t>> suboptimalRebuiltAt;
         bool retirePending = false;
         std::uint64_t appliedSequence = 0;
         std::uint64_t completedResizeSequence = 0;
@@ -115,6 +119,18 @@ struct CoordinatorState {
         // The surface this entry owns, so ownership can be released exactly once when the native
         // target is proven gone (Retired) or was never created (Rejected).
         detail::GpuPresentationMailbox::SurfaceKey surfaceKey{};
+
+        // A present reported the swapchain Suboptimal at the entry's current extent. Returns
+        // whether to rebuild it: once per extent until the window's owner asks for another size,
+        // so a surface that stays Suboptimal does not rebuild the swapchain every present.
+        [[nodiscard]] bool shouldRebuildAfterSuboptimal() {
+            const std::pair<std::uint32_t, std::uint32_t> extent{info.width, info.height};
+            if (suboptimalRebuiltAt == extent) {
+                return false;
+            }
+            suboptimalRebuiltAt = extent;
+            return true;
+        }
     };
 
     CoordinatorState() = default;
@@ -342,6 +358,9 @@ struct CoordinatorState {
                 }
                 if (slot.resize.has_value()) {
                     entry.pendingResize = slot.resize;
+                    // A new request from the owner of the window may change what the surface
+                    // wants; a later Suboptimal present may rebuild again.
+                    entry.suboptimalRebuiltAt.reset();
                     slot.resize.reset();
                 }
                 if (slot.update.has_value()) {
