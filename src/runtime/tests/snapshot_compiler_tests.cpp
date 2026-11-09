@@ -53,6 +53,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>

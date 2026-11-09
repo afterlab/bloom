@@ -9,6 +9,25 @@
 // own image, a displacement against an independent reading, HDR and partial alpha kept, the region of
 // interest, the pixel budget and cancellation.
 
+// With BLOOM_GRAMMAR_ARTIFACT_DIR set, writes an image as a binary PPM (colour over mid grey, clamped)
+// beside the other captures, so an effect can be looked at. Without it, nothing is written.
+void warpDump(const std::string_view name, const render::Rgba32fImage& image, const std::uint32_t width,
+              const std::uint32_t height) {
+    const char* directory = std::getenv("BLOOM_GRAMMAR_ARTIFACT_DIR"); // NOLINT(concurrency-mt-unsafe)
+    if (directory == nullptr || *directory == '\0')
+        return;
+    std::ofstream out(std::string(directory) + "/" + std::string(name) + ".ppm", std::ios::binary);
+    out << "P6\n" << width << " " << height << "\n255\n";
+    for (std::uint32_t j = 0; j < height; ++j)
+        for (std::uint32_t i = 0; i < width; ++i) {
+            const auto p = lensPixel(image, i, j);
+            for (std::size_t c = 0; c < 3; ++c) {
+                const auto v = std::clamp(p[c] + (1.0F - p[3]) * 0.4F, 0.0F, 1.0F);
+                out.put(static_cast<char>(static_cast<unsigned char>(v * 255.0F + 0.5F)));
+            }
+        }
+}
+
 // Adds `type` to the fixture's composition with each parameter at its default unless `values` names
 // it, under the node id `node` and parameter ids from `first`.
 void warpAddNode(document::Project& project, const std::string_view type, const document::NodeId node,
@@ -277,6 +296,8 @@ void testCornerPinPixels(Expectations& expectations) {
         expectations.expect(pinned.frame() != nullptr, "the pinned image evaluates");
         if (pinned.frame()) {
             const auto& image = pinned.frame()->processImage();
+            warpDump("frame-corner-pin-source", source, 240, 135);
+            warpDump("frame-corner-pin", image, 240, 135);
             const std::array<double, 8> quad{
                 -960.0 + 300.0, 540.0 - 120.0, 960.0 - 120.0, 540.0 - 200.0,
                 960.0 - 260.0,  -540.0 + 150.0, -960.0 + 180.0, -540.0 + 90.0};
@@ -526,6 +547,10 @@ void testStMapPixels(Expectations& expectations) {
             std::size_t transparent = 0;
             for (std::uint32_t j = 0; j < 135; ++j)
                 for (std::uint32_t i = 0; i < 240; ++i) {
+                    if (i == 0 && j == 0) {
+                        warpDump("frame-st-map-source", source, 240, 135);
+                        warpDump("frame-st-map-via-lens-map", viaMap.frame()->processImage(), 240, 135);
+                    }
                     const auto a = lensPixel(viaMap.frame()->processImage(), i, j);
                     const auto b = lensPixel(direct.frame()->processImage(), i, j);
                     for (std::size_t c = 0; c < 4; ++c)
@@ -764,6 +789,10 @@ void testDisplacePixels(Expectations& expectations) {
         expectations.expect(drawn.frame() != nullptr, std::string(item.name) + ": evaluates");
         if (!drawn.frame())
             continue;
+        if (&item == &cases.front()) {
+            warpDump("frame-displace-source", source, 240, 135);
+            warpDump("frame-displace-red-green", drawn.frame()->processImage(), 240, 135);
+        }
         const bool nearest = item.values.contains("filter");
         double worst = 0.0;
         for (std::uint32_t j = 0; j < 135; j += 2)
