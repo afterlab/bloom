@@ -15,6 +15,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
 #include <bloom/ui/node_card_widget.hpp>

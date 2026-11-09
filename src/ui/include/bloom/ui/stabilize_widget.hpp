@@ -15,13 +15,13 @@
 #include <optional>
 #include <string_view>
 
-class QLabel;
 
 namespace bloom::ui {
 
 namespace kit {
 class KButton;
 class KProgressBar;
+class KLabel;
 } // namespace kit
 
 class PointPadRow;
@@ -43,7 +43,7 @@ class StabilizeCardWidget final : public NodeCardWidget {
     [[nodiscard]] PointPadRow* padRow() const noexcept { return pad_; }
     [[nodiscard]] kit::KButton* trackButton() const noexcept { return button_; }
     [[nodiscard]] kit::KProgressBar* progressBar() const noexcept { return progress_; }
-    [[nodiscard]] QLabel* statusLabel() const noexcept { return status_; }
+    [[nodiscard]] kit::KLabel* statusLabel() const noexcept { return status_; }
     void refresh();
 
   protected:
@@ -59,7 +59,7 @@ class StabilizeCardWidget final : public NodeCardWidget {
     PointPadRow* pad_ = nullptr;
     kit::KButton* button_ = nullptr;
     kit::KProgressBar* progress_ = nullptr;
-    QLabel* status_ = nullptr;
+    kit::KLabel* status_ = nullptr;
     TrackController* connected_ = nullptr;
 };
 
