@@ -237,7 +237,8 @@ QString nodeSearchKeywords(const std::string_view typeId) {
                               "looping timer countdown motion");
     if (typeId == document::kDenoiseNodeType)
         return QStringLiteral("denoise noise grain median bilateral smooth despeckle dust "
-                              "scratches temporal spatial clean up smart blur");
+                              "scratches temporal spatial clean up smart blur auto strength noise "
+                              "profile sample region");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     if (typeId == document::kFrameRateHoldNodeType)

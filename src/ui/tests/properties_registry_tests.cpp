@@ -1402,16 +1402,28 @@ void fourColorDefaultsFollowTheComposition() {
 
 void extensionPropertiesRows() {
     fourColorDefaultsFollowTheComposition();
-    // Denoise: the radius while the mode is not Temporal, the frame count only in Temporal.
+    // Denoise: the radius while the mode is not Temporal, the frame count only in Temporal, the
+    // strength while Auto strength is off and the sample region only while it is on.
     const std::vector<std::pair<std::string, QString>> spatial{
         {"mode", QStringLiteral("Mode")},
         {"radius", QStringLiteral("Radius (pixels)")},
-        {"strength", QStringLiteral("Strength (noise tolerance)")}};
-    extensionRows("bloom.denoise", "denoise", spatial, {"frames"});
-    // Temporal: the frame count; neither the radius nor the strength is read by the temporal mean.
+        {"strength", QStringLiteral("Strength (noise tolerance)")},
+        {"autoStrength", QStringLiteral("Auto strength")}};
+    extensionRows("bloom.denoise", "denoise", spatial, {"frames", "sampleFrom", "sampleTo"});
+    // Temporal: the frame count and the patch tolerance; the radius is not read.
     extensionRows("bloom.denoise", "denoise",
-                  {{"mode", QStringLiteral("Mode")}, {"frames", QStringLiteral("Frames")}},
-                  {"radius", "strength"}, {{"mode", std::int64_t{3}}}, "-temporal");
+                  {{"mode", QStringLiteral("Mode")},
+                   {"frames", QStringLiteral("Frames")},
+                   {"strength", QStringLiteral("Strength (noise tolerance)")}},
+                  {"radius", "sampleFrom", "sampleTo"}, {{"mode", std::int64_t{3}}}, "-temporal");
+    // Auto strength: the sample region's two corners instead of the strength.
+    extensionRows("bloom.denoise", "denoise",
+                  {{"mode", QStringLiteral("Mode")},
+                   {"radius", QStringLiteral("Radius (pixels)")},
+                   {"autoStrength", QStringLiteral("Auto strength")},
+                   {"sampleFrom", QStringLiteral("Sample corner 1")},
+                   {"sampleTo", QStringLiteral("Sample corner 2")}},
+                  {"strength", "frames"}, {{"autoStrength", true}}, "-auto", 1100);
     extensionRows("bloom.four-color-gradient", "four-color-gradient",
                   {{"point1", QStringLiteral("Point 1")}, {"point2", QStringLiteral("Point 2")},
                    {"point3", QStringLiteral("Point 3")}, {"point4", QStringLiteral("Point 4")},

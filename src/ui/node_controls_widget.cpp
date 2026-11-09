@@ -6,6 +6,8 @@
 
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/denoise_nodes.hpp>
+#include <bloom/document/parameter_activity.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
@@ -436,6 +438,8 @@ struct Controls final {
     std::vector<Curve> curves;
     // #484: a role is shown only while the node's motion blur reads it (Transform 2D).
     bool readsMotion = false;
+    // #514: the pad is shown only while this parameter is active, when set.
+    std::string padActivityKey;
 };
 
 [[nodiscard]] std::optional<Controls> controlsFor(const std::string_view typeId) {
@@ -521,6 +525,18 @@ struct Controls final {
                            point("point4", QCoreApplication::translate("NodeControls", "Point 4"))};
         controls.nodeSizedFrame = true;
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move Points");
+    } else if (typeId == document::kDenoiseNodeType) {
+        // #514: the two opposite corners of the region Auto strength measures the noise over, in
+        // field units (pixels from the centre, +y up), on one pad shown while Auto strength is on.
+        const auto point = [](std::string role, QString label) {
+            return PointPadRow::Point{std::move(role), std::move(label), true, true};
+        };
+        controls.points = {
+            point("sampleFrom", QCoreApplication::translate("NodeControls", "Sample corner 1")),
+            point("sampleTo", QCoreApplication::translate("NodeControls", "Sample corner 2"))};
+        controls.connected = true;
+        controls.padLabel = QCoreApplication::translate("NodeControls", "Move Sample Region");
+        controls.padActivityKey = std::string(document::kDenoiseSampleFromSchemaKey);
     } else if (typeId == "bloom.luma-key") {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,
@@ -671,7 +687,10 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
         else
             spec.frame = [this] { return compositionFrame(session_); };
         pad_ = new PointPadRow(session_, node_, std::move(spec), this);
+        padActivityKey_ = std::move(controls.padActivityKey);
+        padShown_ = padShown();
     }
+    inactive_ = inactiveRoles();
     for (auto& gradient : controls.gradients) {
         gradients_.push_back(new GradientParameterRow(session_, node_, std::move(gradient), this));
         // #543: the stops' rows open, close and follow their links.
@@ -708,8 +727,35 @@ bool NodeControlsCardWidget::readsRole(const std::string_view role) const {
     return typeId_.empty() || motionRoleRead(session_, node_, typeId_, role);
 }
 
+bool NodeControlsCardWidget::padShown() const {
+    if (pad_ == nullptr)
+        return false;
+    if (padActivityKey_.empty())
+        return true;
+    const auto* composition = session_.composition();
+    const auto* node = composition != nullptr ? composition->graph().findNode(node_) : nullptr;
+    return node == nullptr || !document::isParameterInactive(*composition, *node, padActivityKey_);
+}
+
+std::vector<std::string> NodeControlsCardWidget::inactiveRoles() const {
+    std::vector<std::string> roles;
+    const auto* composition = session_.composition();
+    const auto* node = composition != nullptr ? composition->graph().findNode(node_) : nullptr;
+    const auto* definition = definitionOf(session_, node_);
+    if (node == nullptr || definition == nullptr)
+        return roles;
+    for (const auto& parameter : definition->parameters)
+        if (document::isParameterInactive(*composition, *node, parameter.schemaKey))
+            roles.push_back(parameter.role);
+    return roles;
+}
+
+bool NodeControlsCardWidget::roleActive(const std::string_view role) const {
+    return std::ranges::find(inactive_, role) == inactive_.end();
+}
+
 bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
-    if (!readsRole(role))
+    if (!readsRole(role) || !roleActive(role))
         return false;
     // The pad's points keep their own X/Y rows (the exact numbers, keys and sockets); a range or
     // an angle row or a gradient row is drawn here.
@@ -745,7 +791,7 @@ int NodeControlsCardWidget::heightAt(const int width) const {
     int height = 0;
     for (const auto* gradient : gradients_)
         height += gradient->heightHint() + small();
-    if (pad_ != nullptr)
+    if (padShown_)
         height += pad_->heightAt(width) + small();
     for (const auto* range : ranges_)
         height += range->heightHint() + small();
@@ -801,9 +847,12 @@ void NodeControlsCardWidget::place() {
         y += gradient->heightHint() + small();
     }
     if (pad_ != nullptr) {
-        const int h = pad_->heightAt(width());
-        pad_->setGeometry(0, y, width(), h);
-        y += h + small();
+        pad_->setVisible(padShown_);
+        if (padShown_) {
+            const int h = pad_->heightAt(width());
+            pad_->setGeometry(0, y, width(), h);
+            y += h + small();
+        }
     }
     for (auto* range : ranges_) {
         range->setLabelWidth(labels);
@@ -839,8 +888,21 @@ void NodeControlsCardWidget::refresh() {
     const bool locked = composition == nullptr || composition->nodeLocked(node_);
     for (auto* gradient : gradients_)
         gradient->refresh(locked);
-    if (pad_ != nullptr)
+    if (pad_ != nullptr) {
         pad_->refresh(locked);
+        // The pad appears or goes with the parameter it follows.
+        if (const bool shown = padShown(); shown != padShown_) {
+            padShown_ = shown;
+            place();
+            updateGeometry();
+            emit rowsChanged();
+        }
+    }
+    // A value row appears or goes with what the node reads.
+    if (auto inactive = inactiveRoles(); inactive != inactive_) {
+        inactive_ = std::move(inactive);
+        emit rowsChanged();
+    }
     for (auto* range : ranges_)
         range->refresh(locked);
     for (auto* angle : angles_)

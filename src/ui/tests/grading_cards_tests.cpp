@@ -1810,6 +1810,46 @@ void colorizeGradientMap() {
 
 // #541: an angle turns on a dial, a range drags both its ends on one track and a gradient's start
 // and end drag over a picture of its frame -- each one command, the numbers beside them.
+// #514: Denoise & Smooth's sample region pad shows only while Auto strength is on (the parameter
+// activity rule), the card growing to hold it, and the pad moves both corners of the region.
+void denoiseCard() {
+    CardFixture fixture("bloom.denoise");
+    auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(
+                                    fixture.item->cardWidget())
+                              : nullptr;
+    if (card == nullptr || card->padRow() == nullptr)
+        return expect(false, "Denoise & Smooth draws its sample region pad");
+    QApplication::processEvents();
+    expect(!card->padRow()->isVisibleTo(card),
+           "the sample region pad is hidden while Auto strength is off");
+    expect(card->showsRole("strength") && !card->showsRole("frames") &&
+               !card->showsRole("sampleFrom"),
+           "the card shows a value row only for what the node reads");
+    const int width = card->width() > 0 ? card->width() : card->minimumWidthHint();
+    const int closed = card->heightAt(width);
+    capture(fixture, QStringLiteral("denoise"));
+    expect(fixture.session.setNodeParameterValue(fixture.node, "autoStrength", true,
+                                                 QStringLiteral("Auto")),
+           "Auto strength turns on");
+    QApplication::processEvents();
+    expect(card->padRow()->isVisibleTo(card) && card->heightAt(width) > closed,
+           "turning Auto strength on shows the pad and the card grows to hold it");
+    expect(!card->showsRole("strength") && card->showsRole("sampleFrom") &&
+               card->showsRole("sampleTo"),
+           "with Auto strength on the card shows the region's rows instead of the strength");
+    if (!paintsInsideCard(*fixture.item))
+        expect(false, "the Denoise card paints inside its card with the pad shown");
+    expect(cardContentFits(*fixture.item, "denoise-auto"),
+           "the Denoise card's content fits with the pad shown");
+    capture(fixture, QStringLiteral("denoise-auto"));
+    expect(fixture.session.setNodeParameterValue(fixture.node, "autoStrength", false,
+                                                 QStringLiteral("Auto")),
+           "Auto strength turns off");
+    QApplication::processEvents();
+    expect(!card->padRow()->isVisibleTo(card) && card->heightAt(width) == closed,
+           "turning Auto strength off hides the pad again");
+}
+
 void nodeControlCards() {
     const std::array<std::pair<std::string_view, const char*>, 17> cards{{
         {"bloom.four-color-gradient", "four-color-gradient"},
@@ -2654,6 +2694,7 @@ int main(int argc, char** argv) {
     depthEffectCards();
     motionBlurCards();
     nodeControlCards();
+    denoiseCard();
     linkedGradientStop();
     gradientBlendModes();
     if (failures != 0)

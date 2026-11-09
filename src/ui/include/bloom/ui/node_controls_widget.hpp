@@ -228,6 +228,17 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     std::string typeId_;
     std::vector<bool> reads_;
     PointPadRow* pad_ = nullptr;
+    // #514: the parameter whose activity (document::isParameterInactive) shows or hides the pad,
+    // or empty for a pad always shown (Denoise & Smooth's sample region follows Auto strength).
+    std::string padActivityKey_;
+    bool padShown_ = false;
+    [[nodiscard]] bool padShown() const;
+    // #514: whether the node reads `role` now (document::isParameterInactive): the card shows no
+    // value row for a parameter that does nothing, as Properties does not. `inactive_` is the
+    // inactive roles at the last refresh.
+    [[nodiscard]] bool roleActive(std::string_view role) const;
+    [[nodiscard]] std::vector<std::string> inactiveRoles() const;
+    std::vector<std::string> inactive_;
     std::vector<GradientParameterRow*> gradients_;
     std::vector<RangeRow*> ranges_;
     std::vector<AngleDialRow*> angles_;
