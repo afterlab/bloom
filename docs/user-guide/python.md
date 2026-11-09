@@ -111,9 +111,11 @@ operation's place in its transaction group) and a message naming the cause.
 An edit's result also carries `compile_warnings`: after an edit that changed the project, each
 edited composition is compiled once (never rendered), and what still compiles but degrades is listed
 as `[{composition, code, detail, subject: {composition, node, parameter}}]`, as MCP `transact` does
-in `compileWarnings`. For example a text layer whose Font asset was removed, or whose system font
-file is missing or changed, is drawn in DejaVu Sans and reports
-`bloom.runtime.compile.font-asset-unavailable`. An empty list means nothing degrades.
+in `compileWarnings`. For example a text layer whose font is not installed and not in the Google Fonts cache, which is
+drawn in a fallback face and reports `bloom.runtime.compile.font-missing`. Python has no network
+transport, so it never downloads a font; set a text `font` with `bloom.parameter.set-source` and a font
+ID string such as `source=google;family=Roboto;style=Bold;weight=700;italic=false`. An empty list
+means nothing degrades.
 
 ```python
 bloom.ops.layer.add_solid("Red", (1, 0, 0, 1))

@@ -130,9 +130,13 @@ Toggle on uses Fill; off uses Regular, centered in a ToggleCell column.
 (Regular, Medium, SemiBold; SIL OFL); Geist Mono remains the value face. Intake includes
 upstream release identity, digests computed from downloaded bytes, license and manifest.
 Render-module text-source rendering embeds the same DejaVu Sans and Inter face files for deterministic
-CPU evaluation; it is independent of Qt's font database. Artist text fonts are selected through a
-searchable `KDropdown`: embedded faces appear first, then the asynchronously enumerated system
-catalogue. The selected row creates or reuses a Font asset and stores only its stable reference.
+CPU evaluation; it is independent of Qt's font database. Artist text fonts are chosen with the font field (`FontField` in `src/ui/font_picker.cpp`): a
+`KDropdown` with an external popup that opens the font picker, a style `KDropdown` beside it, and a
+field per variable axis. The picker is a `KPopupList` with the filter and a category `KDropdown`
+in its filter band; Recent, Installed and Google Fonts are its headings, and each row is drawn in
+its own typeface (`Qt::FontRole`). The current row previews live in the Viewer, Escape reverts, and
+choosing is one undo step. A missing font's name is drawn in the Error color in the field and the
+picker; the font ID is kept ([Fonts](../architecture/fonts.md)).
 `QFont(` outside the kit is a quality violation.
 
 ## Declared chrome and rows

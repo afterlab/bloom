@@ -34,6 +34,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/task-system.md`](architecture/task-system.md),
    [`architecture/workspace-layout.md`](architecture/workspace-layout.md),
    [`architecture/project-format.md`](architecture/project-format.md),
+   [`architecture/fonts.md`](architecture/fonts.md),
    [`architecture/project-session.md`](architecture/project-session.md),
    [`architecture/color-management.md`](architecture/color-management.md),
    [`architecture/frame-output.md`](architecture/frame-output.md),

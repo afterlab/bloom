@@ -123,14 +123,12 @@ integer interpretation and image/video `colorSpace` parameter remain for compati
 
 Document `1.14` adds the bounded `path` constant value (see "Path values" below).
 
-Document `1.15` adds the `Font` asset kind and the text-source font reference plus optional box,
-wrap, vertical-alignment, anchor, and overflow parameters. A Font asset stores an open path
-locator, family/style metadata, and the digest observed when the artist picked the face; it never
-stores font bytes. System font bytes are read and digest-verified only during compile, while an
-unavailable or changed face produces a warning and uses the deterministic fallback. The schema
-minor is additive and the `1.14` → `1.15` migration preserves existing point-text behavior by
-supplying the legacy default font and zero-sized point-text box. A `Font` asset can be relinked
-through the normal missing-asset flow.
+Document `1.15` added the `Font` asset kind and the text-source font reference plus optional box,
+wrap, vertical-alignment, anchor, and overflow parameters. The `Font` asset kind is retired (issue
+489, [Fonts](fonts.md)): fonts are not assets, a text node stores a font ID, and no font file is
+bundled or saved. The schema minor is unchanged. Opening a project that holds Font assets converts
+them and the text references to font IDs (see "Font IDs And Text Layout" below); the migration
+preserves existing point-text behavior and the writer no longer emits Font assets.
 
 Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
 value -- the third authoring vector width, with its own kind token rather than a third component on
@@ -1492,23 +1490,22 @@ Absence means no parent and is omitted by the writer. Null, zero, unknown or cro
 identities, self-parenting and parent cycles are refused. Parenting changes transform space only;
 it does not change Merge membership, stack order, opacity or visibility.
 
-## Font Assets And Text Layout In Document 1.15
+## Font IDs And Text Layout
 
-Document `1.15` adds the `Font` asset kind and the text capability fields. A Font asset carries
-the shared `id`, `kind`, `locator`, `contentDigest`, `interpretation`, `width`, `height`, `manifest`
-envelope followed by `font`; 1.16 appends organization metadata afterward. Its closed `font`
-object stores `family`, `style`, and `faceIndex`; its locator uses `kind: "font"` with portability
-`system` (an absolute path and a relink hint that is its RFC 8089 `file:` URI) or `builtin` (an
-embedded face and a relink hint starting `font:`). Font bytes are never written into the project.
-The catalogue records the digest at pick time, and the compiler accepts the asset only when the
-resolved bytes hash to that digest. Removing an asset keeps text references intact so Assets can
-show a missing-font warning and the artist can replace or relink it.
+Text fonts are stored as font IDs ([Fonts](fonts.md)); a project holds no Font asset and no font
+bytes. A document written before issue 489 may hold Font assets (kind `font`, an `Asset` envelope
+followed by a closed `font` object with `family`, `style` and `faceIndex`, and a `system` or
+`builtin` locator). The open path converts each into a font ID (an embedded face becomes a
+`builtin` ID, a system face a `system` ID whose weight and slope come from its style name), rewrites
+every text `font` reference that named one (a decimal asset id, an integer 0 to 3, or a
+`family|style|digest` reference), and removes the Font assets and their data blocks. A reference
+that names nothing becomes the built-in DejaVu Sans. Saving writes IDs only.
 
-Text v2 appends `font` as a String asset reference, then `box` as a Vec2 width/height in pixels,
-`wrap` as a Boolean, `verticalAlignment`, `anchorMode`, and `overflow` as Integer selectors. A zero
-box is point text; a non-zero box is the authored local bounds. These fields are optional while
-reading the pre-1.15 text grammar and canonicalized to the defaults above during migration. The
-writer retains the 1.15 parameter sources in their stable graph order.
+Text v2 appends `font` as a String holding the encoded font ID, then `box` as a Vec2 width/height in
+pixels, `wrap` as a Boolean, `verticalAlignment`, `anchorMode`, and `overflow` as Integer selectors.
+A zero box is point text; a non-zero box is the authored local bounds. These fields are optional
+while reading the pre-1.15 text grammar and canonicalized to the defaults above during migration.
+The writer retains the parameter sources in their stable graph order.
 
 The introduction artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`; the
 `1.14 -> 1.15` migration is intentionally small and preserves all prior IDs, values, graph edges,

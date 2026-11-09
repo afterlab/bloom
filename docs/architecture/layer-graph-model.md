@@ -678,16 +678,17 @@ mode (Left/Center/Right), and overflow (Clip/Grow). Size, color, line height and
 animatable. Content, alignment, font, box, wrap, vertical alignment, anchor mode and overflow are
 non-animatable values.
 
-Font is stored as the decimal `AssetId` of a `Font` asset in the project, as a String; that is the
-only value an edit can set. The font pickers identify a catalogue face by its `family|style|digest`
-reference, ensure its Font asset and store that asset's id. `bloom.parameter.set-source` refuses any
-other value (a family name, an integer, an id that names no Font asset) and lists the project's
-Font assets by id, so an unknown face is never stored and silently drawn in the fallback face. It also refuses a driver binding on font, which is read only as a constant. The
-legacy integer face values 0..3 are read only when an older document is opened. The asset stores
-family, style, face index, content digest and a portable locator; it never stores font bytes. Embedded faces are listed before system faces in the asynchronous platform font
-catalogue. A missing or digest-changed system face warns and falls back to DejaVu Sans while the
-Font asset remains visible to Assets for relink or replacement. A version-2 node authored before
-the font binding existed decodes with the definition's DejaVu Sans reference.
+Font is stored as a String holding the encoded font ID ([Fonts](fonts.md)): the source (`system`,
+`google` or `builtin`), family, style, weight, slope, variable-axis values, the PostScript name of a
+system font, and the family version of a Google font. The font picker, the Properties field, the
+node card and the Text tool's bar all write that text, and `bloom.parameter.set-source` refuses
+anything that does not decode to a valid font ID, naming the form it takes. It also refuses a driver
+binding on font, which is read only as a constant. Fonts are not assets; no font bytes are stored. At
+compile time the ID resolves to an installed system font, the per-user Google Fonts cache, a
+download, or a category fallback; an unresolved font warns (`bloom.runtime.compile.font-missing`)
+and the node keeps its ID. A version-2 node authored before the font binding existed decodes with the
+definition's built-in DejaVu Sans ID, and the legacy integer faces 0..3 and asset references are
+converted when an older document is opened.
 
 When box width and height are both non-zero, the box is the local bounds and horizontal alignment
 positions each line within it. `wrap` breaks at word boundaries inside the box width; explicit
