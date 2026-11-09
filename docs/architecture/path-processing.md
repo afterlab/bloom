@@ -89,6 +89,25 @@ though closed.
 The result is line segments at `tolerance`, even-odd, and has no groups. Both write their coordinates at
 a thousandth of a pixel.
 
+## Path Stroke
+
+`bloom.path-stroke` (#509). Operands `path`, `width` (8), `start` (0), `end` (100), `offset` (0),
+`taperStart`, `taperEnd` (0, percent of the drawn stretch), `dashLength` (0 is solid), `dashGap` (8),
+`dashOffset`, `spacing` (0 is continuous; above 0 the brush stamps round dots of the width every
+`spacing` pixels), `wiggle` (0, pixels), `wiggleFrequency` (2, cycles per 100 pixels), `wigglePhase`,
+`seed`, `coreWidth` (0, percent of the width) and `tolerance`; selectors `cap` (Butt, Round default,
+Square) and `join` (Miter, Round default, Bevel). Outputs `path` (the body), `core` and `length` (the
+drawn length before dashes).
+
+The stroke is answered as the closed outline it covers, one polygon union of a trapezoid per segment,
+joins and caps, so Shape Source's production fill draws it on every route; the node itself produces no
+pixels. Write-on is `end` animated; a taper narrows the stroke to a point at the drawn end, so it follows
+the tip. A wiggle moves points along the normal by smooth noise that is a function of the distance along
+the path, the seed and the phase (animate the phase to make it boil). `core` is the same stroke at its
+share of the width: draw it brighter over the body for a beam. Glow itself is not part of the node; blur
+the body with an image node. Counts of dashes, dots and wiggle samples are bounded, and a result beyond
+them fails with a diagnostic. The outline's groups are dropped.
+
 ## Reference library
 
 Offset, union, difference, intersection and exclusive-or use a vendored polygon clipping library, the

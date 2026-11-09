@@ -68,11 +68,11 @@ constexpr std::array<std::string_view, 2> kColorManagement{"bloom.ocio-colour-sp
                                                            "bloom.ocio-file-transform"};
 // Planned: Time Offset, Frame Hold, Time Remap, Flow Retime.
 constexpr std::array<std::string_view, 2> kTime{"bloom.echo", "bloom.frame-rate-hold"};
-// Planned: SVG Vector Source, Text Layout, Text Animator, Text On Path, Text To Shape, Path Stroke.
-constexpr std::array<std::string_view, 11> kTextPaths{
+// Planned: SVG Vector Source, Text Layout, Text Animator, Text On Path, Text To Shape.
+constexpr std::array<std::string_view, 12> kTextPaths{
     "bloom.text-source",   "bloom.shape-source", "bloom.function-plot", "bloom.axes",
     "bloom.axis-tick",     "bloom.transform-path", "bloom.trim-path",   "bloom.offset-path",
-    "bloom.boolean-paths", "bloom.merge-paths",  "bloom.round-corners"};
+    "bloom.boolean-paths", "bloom.merge-paths",  "bloom.round-corners", "bloom.path-stroke"};
 // Planned: Point, Grid, Scatter, Points Along Path, Shape To Points, Text To Points, Clone To
 // Points, Draw Instances, Particle System.
 constexpr std::array<std::string_view, 0> kInstancesParticles{};

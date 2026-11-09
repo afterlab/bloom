@@ -177,6 +177,34 @@ constexpr std::array<ValueUtilitySelector, 1> kPathCombineSelector{ValueUtilityS
 constexpr std::array<ValueUtilityOperand, 2> kMergePathsOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
+// #509 Path Stroke. The body and the core are outlines to fill; distances are pixels, shares are percent.
+constexpr std::array<ValueUtilityOperand, 17> kPathStrokeOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "width", .kind = SocketValueKind::Scalar, .number = 8.0},
+    ValueUtilityOperand{.role = "start", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "end", .kind = SocketValueKind::Scalar, .number = 100.0},
+    ValueUtilityOperand{.role = "offset", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "taperStart", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "taperEnd", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "dashLength", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "dashGap", .kind = SocketValueKind::Scalar, .number = 8.0},
+    ValueUtilityOperand{.role = "dashOffset", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "spacing", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "wiggle", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "wiggleFrequency", .kind = SocketValueKind::Scalar, .number = 2.0},
+    ValueUtilityOperand{.role = "wigglePhase", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "seed", .kind = SocketValueKind::Integer, .integer = 0},
+    ValueUtilityOperand{.role = "coreWidth", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
+constexpr std::array<ValueUtilitySelector, 2> kPathStrokeSelectors{
+    ValueUtilitySelector{"cap", bloom::document::kStrokeCapParameterSchemaKey,
+                         bloom::document::selectorStoredValue(bloom::document::StrokeCap::Round)},
+    ValueUtilitySelector{"join", bloom::document::kOffsetJoinParameterSchemaKey,
+                         bloom::document::selectorStoredValue(bloom::document::OffsetJoin::Round)}};
+constexpr std::array<ValueUtilityOutput, 3> kPathStrokeOutputs{
+    ValueUtilityOutput{"path", SocketValueKind::Path},
+    ValueUtilityOutput{"core", SocketValueKind::Path},
+    ValueUtilityOutput{"length", SocketValueKind::Scalar}};
 constexpr std::array<ValueUtilityOperand, 2> kRoundCornersOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "radius", .kind = SocketValueKind::Scalar, .number = 10.0}};
@@ -482,7 +510,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 78> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 79> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -720,6 +748,9 @@ constexpr std::array<ValueUtilityDescriptor, 78> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kRoundCornersNodeType, "Round Corners",
                            ValueUtilityKernel::RoundCorners, NodeCategory::Values,
                            kRoundCornersOperands, kNoSelectors, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kPathStrokeNodeType, "Path Stroke",
+                           ValueUtilityKernel::PathStroke, NodeCategory::Values,
+                           kPathStrokeOperands, kPathStrokeSelectors, kPathStrokeOutputs},
 };
 
 } // namespace

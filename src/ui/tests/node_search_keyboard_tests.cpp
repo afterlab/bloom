@@ -634,7 +634,7 @@ void testSearchKeyboardAndMenus() {
             "Text & Paths",
             {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle",
              "Function Plot", "Axes", "Axis Tick", "Transform Path", "Trim Path", "Offset Path",
-             "Boolean Paths", "Merge Paths", "Round Corners"},
+             "Boolean Paths", "Merge Paths", "Round Corners", "Path Stroke"},
             "Text & Paths holds Text and the shape presets");
         hasGroup("Utilities",
                  {"Combine XY", "Combine XYZ", "Group Input", "Group Output", "Node Group", "Reroute",

@@ -358,6 +358,9 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kOffsetJoinParameterSchemaKey)
         return named(kOffsetJoins, {"Miter", "Round", "Bevel"},
                      [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kStrokeCapParameterSchemaKey)
+        return named(kStrokeCaps, {"Butt", "Round", "Square"},
+                     [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kPathCombineParameterSchemaKey)
         return named(kPathCombines, {"Union", "Subtract", "Intersect", "Exclude"},
                      [](const auto value) { return selectorStoredValue(value); });

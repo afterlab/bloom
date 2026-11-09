@@ -573,7 +573,7 @@ class DepthScenario(unittest.TestCase):
         steps = scenario["layers"][0]["pathChain"]["steps"]
         self.assertEqual([step["type"] for step in steps], [
             "bloom.offset-path", "bloom.round-corners", "bloom.merge-paths", "bloom.trim-path",
-            "bloom.transform-path"])
+            "bloom.path-stroke", "bloom.transform-path"])
 
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415

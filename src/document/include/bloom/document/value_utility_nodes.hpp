@@ -127,6 +127,8 @@ enum class ValueUtilityKernel : std::uint8_t {
     BooleanPaths,
     MergePaths,
     RoundCorners,
+    // #509: a path drawn as a stroke, answered as the outline it covers.
+    PathStroke,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -216,6 +218,7 @@ inline constexpr std::string_view kOffsetPathNodeType = "bloom.offset-path";
 inline constexpr std::string_view kBooleanPathsNodeType = "bloom.boolean-paths";
 inline constexpr std::string_view kMergePathsNodeType = "bloom.merge-paths";
 inline constexpr std::string_view kRoundCornersNodeType = "bloom.round-corners";
+inline constexpr std::string_view kPathStrokeNodeType = "bloom.path-stroke";
 
 // #344 and #530 path processing (docs/architecture/path-processing.md). A Path operand is a socket
 // whose unconnected value is the empty path; it holds a constant or a driver, never keys (keys
@@ -225,6 +228,7 @@ inline constexpr std::string_view kPathOperandParameterSchemaKey = "bloom.operan
 inline constexpr std::string_view kTrimModeParameterSchemaKey = "bloom.path.trim-mode";
 inline constexpr std::string_view kOffsetJoinParameterSchemaKey = "bloom.path.offset-join";
 inline constexpr std::string_view kPathCombineParameterSchemaKey = "bloom.path.combine";
+inline constexpr std::string_view kStrokeCapParameterSchemaKey = "bloom.path.stroke-cap";
 
 // Trim Path trims every contour against the length of all of them together, or each against its own.
 enum class TrimMode : std::uint8_t { Simultaneously = 0, Individually = 1 };
@@ -238,6 +242,10 @@ inline constexpr std::array<OffsetJoin, 3> kOffsetJoins{OffsetJoin::Miter, Offse
 enum class PathCombine : std::uint8_t { Union = 0, Subtract = 1, Intersect = 2, Exclude = 3 };
 inline constexpr std::array<PathCombine, 4> kPathCombines{
     PathCombine::Union, PathCombine::Subtract, PathCombine::Intersect, PathCombine::Exclude};
+// How Path Stroke ends an open stretch.
+enum class StrokeCap : std::uint8_t { Butt = 0, Round = 1, Square = 2 };
+inline constexpr std::array<StrokeCap, 3> kStrokeCaps{StrokeCap::Butt, StrokeCap::Round,
+                                                      StrokeCap::Square};
 // The hard bounds of the processed value: a coordinate beyond this magnitude, or an offset or tolerance
 // that would make a result larger than a path value may be, is refused with a diagnostic.
 inline constexpr double kMaximumPathCoordinate = 1.0e9;

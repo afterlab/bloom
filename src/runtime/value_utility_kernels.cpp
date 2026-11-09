@@ -103,6 +103,7 @@ enum class Family : std::uint8_t {
     case Kernel::BooleanPaths:
     case Kernel::MergePaths:
     case Kernel::RoundCorners:
+    case Kernel::PathStroke:
         return Family::Path;
     case Kernel::DataSample:
     case Kernel::RampSample:

@@ -356,6 +356,152 @@ void testCombine(Expectations& expectations) {
                         "a tolerance outside 0.001 to 1000 is refused");
 }
 
+struct StrokeOptions final {
+    double width = 10.0, start = 0.0, end = 100.0, offset = 0.0, taperStart = 0.0, taperEnd = 0.0;
+    double dashLength = 0.0, dashGap = 8.0, dashOffset = 0.0, spacing = 0.0, wiggle = 0.0;
+    double frequency = 2.0, phase = 0.0, core = 0.0, tolerance = 0.25;
+    std::int64_t seed = 0, cap = 0, join = 0;
+};
+
+[[nodiscard]] ValueUtilityOutcome stroke(const PathValue& path, const StrokeOptions& o) {
+    return run(Kernel::PathStroke,
+               {wrap(path), o.width, o.start, o.end, o.offset, o.taperStart, o.taperEnd,
+                o.dashLength, o.dashGap, o.dashOffset, o.spacing, o.wiggle, o.frequency, o.phase,
+                o.seed, o.core, o.tolerance},
+               {o.cap, o.join});
+}
+
+[[nodiscard]] const PathValue& coreOf(const ValueUtilityOutcome& outcome) {
+    static const PathValue empty;
+    const auto* held = std::get_if<runtime::CompiledPathValue>(&outcome.outputs[1]);
+    return held == nullptr ? empty : *held->value;
+}
+
+[[nodiscard]] double totalLengthOf(const ValueUtilityOutcome& outcome) {
+    const auto* length = std::get_if<double>(&outcome.outputs[2]);
+    return length == nullptr ? -1.0 : *length;
+}
+
+void testPathStroke(Expectations& expectations) {
+    const PathValue line = single(polygon({{0, 0}, {100, 0}}, false));
+    const auto solid = stroke(line, {});
+    expectations.expect(!solid.failed && pathOf(solid).contours.size() == 1 &&
+                            near(area(pathOf(solid)), 1000.0, 1e-6) &&
+                            totalLengthOf(solid) == 100.0,
+                        "a 10 wide butt stroke of a 100 line covers 1000 and reports its length");
+    StrokeOptions round;
+    round.cap = 1;
+    // Two discs of radius 5 as 16-gons: 2 * 0.5 * 16 * 25 * sin(2 pi / 16), half of each outside
+    // the body.
+    const double capArea = 0.5 * 16 * 25.0 * std::sin(2.0 * std::numbers::pi / 16.0);
+    expectations.expect(near(area(pathOf(stroke(line, round))), 1000.0 + capArea, 0.5),
+                        "round caps add a disc's area at the ends");
+    StrokeOptions squared;
+    squared.cap = 2;
+    expectations.expect(near(area(pathOf(stroke(line, squared))), 1100.0, 1e-6),
+                        "square caps extend each end by half the width");
+
+    StrokeOptions half;
+    half.end = 50;
+    expectations.expect(near(area(pathOf(stroke(line, half))), 500.0, 1e-6) &&
+                            totalLengthOf(stroke(line, half)) == 50.0,
+                        "the end trims the stroke to the first half");
+    StrokeOptions slid;
+    slid.start = 0;
+    slid.end = 50;
+    slid.offset = 25;
+    expectations.expect(near(area(pathOf(stroke(line, slid))), 500.0, 1e-6),
+                        "the offset slides the drawn stretch");
+    StrokeOptions nothing;
+    nothing.end = 0;
+    expectations.expect(pathOf(stroke(line, nothing)).contours.empty(),
+                        "an empty range draws nothing");
+
+    StrokeOptions dashed;
+    dashed.dashLength = 20;
+    dashed.dashGap = 10;
+    const auto dashes = stroke(line, dashed);
+    expectations.expect(pathOf(dashes).contours.size() == 4 &&
+                            near(area(pathOf(dashes)), 700.0, 1e-6),
+                        "dashes 20 on and 10 off cover 0-20, 30-50, 60-80 and 90-100");
+    dashed.dashOffset = 10;
+    const auto shifted = stroke(line, dashed);
+    expectations.expect(pathOf(shifted).contours.size() == 4 &&
+                            near(area(pathOf(shifted)), 700.0, 1e-6),
+                        "the dash offset moves the pattern along the path");
+
+    StrokeOptions tapered;
+    tapered.taperEnd = 100;
+    expectations.expect(near(area(pathOf(stroke(line, tapered))), 500.0, 1e-6),
+                        "a full end taper narrows the stroke to a point: a triangle");
+    tapered.taperStart = 100;
+    tapered.taperEnd = 0;
+    expectations.expect(near(area(pathOf(stroke(line, tapered))), 500.0, 1e-6),
+                        "a full start taper does the same from the other end");
+
+    StrokeOptions cored;
+    cored.core = 50;
+    const auto glowing = stroke(line, cored);
+    expectations.expect(near(area(coreOf(glowing)), 500.0, 1e-6) &&
+                            near(area(pathOf(glowing)), 1000.0, 1e-6),
+                        "the core is the body at its share of the width");
+    expectations.expect(coreOf(stroke(line, {})).contours.empty(),
+                        "no core share, no core outline");
+
+    StrokeOptions dotted;
+    dotted.spacing = 25;
+    dotted.width = 10;
+    const auto dots = stroke(line, dotted);
+    expectations.expect(pathOf(dots).contours.size() == 5 &&
+                            near(area(pathOf(dots)),
+                                 5 * 0.5 * 16 * 25.0 * std::sin(2.0 * std::numbers::pi / 16.0),
+                                 0.5),
+                        "brush spacing stamps a dot every 25 along the path");
+
+    // A closed square stroked with mitered joins is a ring: 110 outside, 90 inside.
+    const PathValue box = single(square(0, 0, 100));
+    StrokeOptions ring;
+    const auto closed = stroke(box, ring);
+    expectations.expect(pathOf(closed).contours.size() == 2 &&
+                            near(area(pathOf(closed)), 110.0 * 110.0 - 90.0 * 90.0, 1e-6) &&
+                            totalLengthOf(closed) == 400.0,
+                        "a closed contour strokes as a ring with no caps");
+
+    // Wiggle is a pure function of the seed and the phase.
+    StrokeOptions shaky;
+    shaky.wiggle = 6;
+    shaky.width = 2;
+    const auto first = stroke(line, shaky);
+    shaky.seed = 1;
+    const auto second = stroke(line, shaky);
+    shaky.seed = 0;
+    const auto again = stroke(line, shaky);
+    expectations.expect(!first.failed && pathOf(first) == pathOf(again) &&
+                            !(pathOf(first) == pathOf(second)),
+                        "the same seed wiggles the same way and another seed does not");
+    shaky.phase = 0.5;
+    expectations.expect(!(pathOf(stroke(line, shaky)) == pathOf(first)),
+                        "the phase moves the wiggle");
+    double reach = 0.0;
+    for (const auto& contour : pathOf(first).contours)
+        for (const auto& anchor : contour.anchors)
+            reach = std::max(reach, std::abs(anchor.point.y));
+    expectations.expect(reach <= 6.0 + 1.0 + 1e-6 && reach > 0.5,
+                        "the wiggle stays within its amount");
+
+    StrokeOptions bad;
+    bad.width = std::numeric_limits<double>::quiet_NaN();
+    expectations.expect(stroke(line, bad).failed, "a width that is not finite is refused");
+    StrokeOptions tiny;
+    tiny.spacing = 1.0e-6;
+    expectations.expect(stroke(line, tiny).failed,
+                        "a spacing that would stamp millions of dots is refused");
+    StrokeOptions fine;
+    fine.dashLength = 1.0e-6;
+    fine.dashGap = 0.0;
+    expectations.expect(stroke(line, fine).failed, "dashes that would number millions are refused");
+}
+
 } // namespace
 
 int main() {
@@ -365,5 +511,6 @@ int main() {
     testRoundCorners(expectations);
     testOffset(expectations);
     testCombine(expectations);
+    testPathStroke(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

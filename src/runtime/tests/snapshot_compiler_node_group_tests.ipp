@@ -870,7 +870,8 @@ struct PathStep final {
     return project;
 }
 
-// The last path any value operation answers at the first frame: the chain's result.
+// The last non-empty path any value operation answers at the first frame: the chain's result (a
+// stroke's empty core is not it).
 [[nodiscard]] std::shared_ptr<const document::PathValue>
 chainResult(const runtime::CompiledCompositionPlan& plan) {
     const auto evaluation =
@@ -878,7 +879,8 @@ chainResult(const runtime::CompiledCompositionPlan& plan) {
                                     core::RationalTime::fromInteger(0), plan.format().frameRate());
     std::shared_ptr<const document::PathValue> last;
     for (const auto& output : evaluation.outputs)
-        if (const auto* path = std::get_if<runtime::CompiledPathValue>(&output))
+        if (const auto* path = std::get_if<runtime::CompiledPathValue>(&output);
+            path != nullptr && !path->value->contours.empty())
             last = path->value;
     return last;
 }
@@ -949,6 +951,12 @@ void testPathProcessingFrames(Expectations& expectations) {
         {"offset-path", {{kOffsetPathNodeType, {{"amount", 24.0}}}}},
         {"offset-path-round", {{kOffsetPathNodeType, {{"amount", 24.0}, {"join", std::int64_t{1}}}}}},
         {"round-corners", {{kRoundCornersNodeType, {{"radius", 40.0}}}}},
+        {"path-stroke-dashed",
+         {{kPathStrokeNodeType, {{"width", 24.0}, {"dashLength", 50.0}, {"dashGap", 30.0}}}}},
+        {"path-stroke-write-on",
+         {{kPathStrokeNodeType,
+           {{"width", 30.0}, {"end", 70.0}, {"taperStart", 30.0}, {"taperEnd", 40.0},
+            {"wiggle", 6.0}, {"coreWidth", 40.0}}}}},
         {"merge-paths-subtract",
          {{kMergePathsNodeType, {{"operation", std::int64_t{1}}}}}},
     };

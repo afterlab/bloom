@@ -186,6 +186,10 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kPathCombines, *stored).has_value();
     }
+    if (schemaKey == kStrokeCapParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kStrokeCaps, *stored).has_value();
+    }
     // #344: a path operand holds any valid path value, as a constant or a driver.
     if (schemaKey == kPathOperandParameterSchemaKey) {
         const auto* path = std::get_if<PathValue>(&constant.value);

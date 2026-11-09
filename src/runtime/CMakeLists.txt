@@ -312,6 +312,7 @@ target_sources(
         value_utility_numeric.cpp
         value_utility_plot.cpp
         value_utility_path.cpp
+        value_utility_path_stroke.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include

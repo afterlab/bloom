@@ -6,7 +6,7 @@
 // sequence and a scripted render, and whatever draws it (Shape Source) is the production fill that
 // is already covered on every route. Nothing here reads the time.
 
-#include "value_utility_support.hpp"
+#include "value_utility_path_support.hpp"
 
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/path_value.hpp>
@@ -43,50 +43,7 @@ using Kernel = document::ValueUtilityKernel;
 constexpr int kClipPrecision = 3;
 constexpr std::size_t kLengthSamples = 64;
 
-[[nodiscard]] ValueUtilityOutcome
-refuse(ValueUtilityOutcome outcome, const std::string_view summary, const std::string_view detail) {
-    outcome.failed = true;
-    outcome.summary = summary;
-    outcome.detail = detail;
-    return outcome;
-}
-
-void publish(ValueUtilityOutcome& outcome, PathValue value) {
-    outcome.outputs[0] =
-        runtime::CompiledPathValue{std::make_shared<document::PathValue>(std::move(value))};
-}
-
-[[nodiscard]] bool finite(const Vec2d value) noexcept {
-    return std::isfinite(value.x) && std::isfinite(value.y);
-}
-[[nodiscard]] bool inRange(const Vec2d value) noexcept {
-    return finite(value) && std::abs(value.x) <= document::kMaximumPathCoordinate &&
-           std::abs(value.y) <= document::kMaximumPathCoordinate;
-}
-
-// Every point and handle is a finite number a polygon operation can hold.
-[[nodiscard]] bool coordinatesUsable(const PathValue& value) noexcept {
-    for (const auto& contour : value.contours)
-        for (const auto& anchor : contour.anchors)
-            if (!inRange(anchor.point) || (anchor.inHandle && !inRange(*anchor.inHandle)) ||
-                (anchor.outHandle && !inRange(*anchor.outHandle)))
-                return false;
-    return true;
-}
-
-// A result a path value can hold: each contour within the anchor cap and the whole within the
-// value's caps.
-[[nodiscard]] bool fitsValue(const PathValue& value) noexcept {
-    if (value.contours.size() > document::kMaximumPathContours)
-        return false;
-    std::size_t total = 0;
-    for (const auto& contour : value.contours) {
-        if (contour.anchors.size() > document::kMaximumPathAnchors)
-            return false;
-        total += contour.anchors.size();
-    }
-    return total <= document::kMaximumPathValueAnchors;
-}
+using namespace runtime::detail::pathsupport;
 
 // Groups follow the contours that descend from them: `produced[i]` is how many output contours
 // input contour `i` became, in order. A group keeps its key over the contours its inputs became and
@@ -423,35 +380,6 @@ struct Piece {
     return tail;
 }
 
-// The trimmed stretch as fractions of the whole, at most two: a stretch that runs past the end of a
-// looping path continues from its start.
-[[nodiscard]] std::vector<std::pair<double, double>> windowsFor(const double startPercent,
-                                                                const double endPercent,
-                                                                const double offsetPercent,
-                                                                const bool wrap) {
-    const double start = std::clamp(std::min(startPercent, endPercent) / 100.0, 0.0, 1.0);
-    const double end = std::clamp(std::max(startPercent, endPercent) / 100.0, 0.0, 1.0);
-    const double span = end - start;
-    const double offset = offsetPercent / 100.0;
-    if (!(span > 0.0))
-        return {};
-    if (span >= 1.0)
-        return {{0.0, 1.0}};
-    if (wrap) {
-        double first = start + offset;
-        first -= std::floor(first);
-        const double last = first + span;
-        if (last <= 1.0)
-            return {{first, last}};
-        return {{first, 1.0}, {0.0, last - 1.0}};
-    }
-    const double first = std::clamp(start + offset, 0.0, 1.0);
-    const double last = std::clamp(end + offset, 0.0, 1.0);
-    if (!(last > first))
-        return {};
-    return {{first, last}};
-}
-
 ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
     auto outcome = shapedOutcome(invocation.operation);
     ValueUtilityReader reader(invocation);
@@ -579,25 +507,10 @@ ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
 // Polygon operations: Offset Path, Boolean Paths, Merge Paths
 // ---------------------------------------------------------------------------------------------
 
-[[nodiscard]] render::Path renderPath(const PathContour& contour) {
-    render::Path path;
-    path.closed = true; // a fill closes an open contour with a straight line
-    path.anchors.reserve(contour.anchors.size());
-    for (const auto& anchor : contour.anchors) {
-        render::PathAnchor each{{anchor.point.x, anchor.point.y}, {}, {}};
-        if (anchor.inHandle)
-            each.inHandle = render::PathPoint{anchor.inHandle->x, anchor.inHandle->y};
-        if (anchor.outHandle)
-            each.outHandle = render::PathPoint{anchor.outHandle->x, anchor.outHandle->y};
-        path.anchors.push_back(each);
-    }
-    return path;
-}
-
 // One contour as a polygon, flattened at `tolerance`. Fewer than three points is no area.
 [[nodiscard]] std::optional<Clipper2Lib::PathD> polygonOf(const PathContour& contour,
                                                           const double tolerance) {
-    auto flattened = render::flattenPathContour(renderPath(contour), tolerance);
+    auto flattened = render::flattenPathContour(renderPath(contour, true), tolerance);
     if (!flattened)
         return std::nullopt;
     Clipper2Lib::PathD polygon;
@@ -629,28 +542,6 @@ polygonsOf(const PathValue& value, const double tolerance, const bool closedOnly
             polygons.push_back(std::move(*polygon));
     }
     return polygons;
-}
-
-[[nodiscard]] PathValue valueOf(const Clipper2Lib::PathsD& polygons) {
-    PathValue value;
-    value.fillRule = document::PathFillRule::EvenOdd;
-    value.contours.reserve(polygons.size());
-    for (const auto& polygon : polygons) {
-        if (polygon.size() < 3)
-            continue;
-        PathContour contour;
-        contour.closed = true;
-        contour.anchors.reserve(polygon.size());
-        for (const auto& point : polygon)
-            contour.anchors.push_back(
-                {{point.x, point.y}, std::nullopt, std::nullopt, PathAnchorMode::Corner});
-        value.contours.push_back(std::move(contour));
-    }
-    return value;
-}
-
-[[nodiscard]] bool toleranceUsable(const double tolerance) noexcept {
-    return std::isfinite(tolerance) && tolerance >= 0.001 && tolerance <= 1000.0;
 }
 
 ValueUtilityOutcome offsetPath(const ValueUtilityInvocation& invocation) {
@@ -839,6 +730,8 @@ ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation) 
         return mergePaths(invocation);
     case Kernel::RoundCorners:
         return roundCorners(invocation);
+    case Kernel::PathStroke:
+        return evaluateValuePathStroke(invocation);
     default:
         break;
     }

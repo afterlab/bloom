@@ -158,8 +158,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners.
-    expectations.expect(registry.definitions().size() == 232,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke.
+    expectations.expect(registry.definitions().size() == 233,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",

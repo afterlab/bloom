@@ -137,6 +137,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.offset-path", "Inflate|Expand Path|Contract|Grow Path|Shrink Path|Offset Paths"},
     {"bloom.boolean-paths", "Pathfinder|Union|Subtract|Intersect|Exclude|Combine Shapes|Minus Front"},
     {"bloom.merge-paths", "Pathfinder|Merge Shapes|Combine Contours|Union|Weld"},
+    {"bloom.path-stroke", "Stroke|Beam|Write On|Glow Line|Dashed Line|Taper|Outline Stroke|Brush Stroke"},
     {"bloom.round-corners", "Rounded Corners|Fillet|Smooth Corners|Corner Radius"},
     {"bloom.function-plot", "Graph|Plot|Curve|Chart|Equation|Sine Wave"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},

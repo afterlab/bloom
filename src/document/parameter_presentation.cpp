@@ -370,6 +370,7 @@ constexpr std::array kChoiceSchemas{
     std::string_view("bloom.path.trim-mode"),
     std::string_view("bloom.path.offset-join"),
     std::string_view("bloom.path.combine"),
+    std::string_view("bloom.path.stroke-cap"),
     std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),

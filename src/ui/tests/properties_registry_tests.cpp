@@ -1307,7 +1307,7 @@ void groupAndPlotRows() {
           document::kFunctionNodeType, document::kFunctionPlotNodeType, document::kAxesNodeType,
           document::kAxisTickNodeType, document::kTransformPathNodeType, document::kTrimPathNodeType,
           document::kOffsetPathNodeType, document::kBooleanPathsNodeType, document::kMergePathsNodeType,
-          document::kRoundCornersNodeType}) {
+          document::kRoundCornersNodeType, document::kPathStrokeNodeType}) {
         auto project = document::makeNewProject("Plot", "Main", core::RationalTime::fromInteger(10));
         document::Document document(std::move(project.project));
         commands::CommandStack stack(document);

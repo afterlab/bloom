@@ -1312,7 +1312,9 @@ void pixelAndMotionCards() {
         {"bloom.offset-path", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
         {"bloom.boolean-paths", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
         {"bloom.merge-paths", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
-        {"bloom.round-corners", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}}};
+        {"bloom.round-corners", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        // #509
+        {"bloom.path-stroke", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}}};
     for (const auto& spec : specs) {
         CardFixture fixture(spec.type);
         expect(fixture.item != nullptr, "a new node draws a card");

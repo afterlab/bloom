@@ -635,6 +635,7 @@ bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
         schemaKey == kBooleanOperationParameterSchemaKey ||
         schemaKey == kTrimModeParameterSchemaKey || schemaKey == kOffsetJoinParameterSchemaKey ||
         schemaKey == kPathCombineParameterSchemaKey ||
+        schemaKey == kStrokeCapParameterSchemaKey ||
         schemaKey == kDataBlockParameterSchemaKey) {
         return true;
     }
