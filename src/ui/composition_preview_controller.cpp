@@ -237,6 +237,30 @@ CompositionPreviewController::selectedLayerBounds(PreparedPreviewFrameHandle sou
     return result;
 }
 
+std::vector<runtime::EvaluatedOperationBounds>
+CompositionPreviewController::missingFontBounds(PreparedPreviewFrameHandle source) const {
+    std::vector<runtime::EvaluatedOperationBounds> result;
+    if (!source)
+        source = state_.frame;
+    if (!source || source->desiredIdentity().compositionId != session_.compositionId() ||
+        source->desiredIdentity().projectId != session_.snapshot().project().id())
+        return result;
+    const auto operations = source->processIdentity().plan->operations();
+    const auto allBounds = source->evaluatedBounds();
+    for (std::size_t index = 0; index < allBounds.size() && index < operations.size(); ++index) {
+        const auto* boundary = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
+        if (boundary == nullptr || allBounds[index].output.empty())
+            continue;
+        const auto input = static_cast<std::size_t>(boundary->input.value());
+        if (input >= operations.size())
+            continue;
+        const auto* text = std::get_if<runtime::CompiledText>(&operations[input]);
+        if (text != nullptr && text->fontMissing)
+            result.push_back(allBounds[index]);
+    }
+    return result;
+}
+
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {

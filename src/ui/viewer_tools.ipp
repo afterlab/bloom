@@ -240,7 +240,8 @@ bool ViewerEditor::textPress(QMouseEvent* event) {
         style.size > 0.0 ? style.size : document::kDefaultTextSizePixels,
         {1, 1, 1, 1},
         mapping->toComposition(event->position()),
-        {fontAssetForReference(style.fontReference), style.alignment}};
+        {style.fontId.isEmpty() ? std::nullopt : document::decodeFontId(style.fontId.toStdString()),
+         style.alignment}};
     if (session_.addTextLayer(created.name, created.placeholder, created.size, created.color,
                               created.position, created.style)) {
         selectTool(ViewerTool::Select);

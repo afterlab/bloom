@@ -168,6 +168,10 @@ class CompositionPreviewController final : public QObject {
     // No layout, evaluation, or image walk takes place on the UI thread.
     [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds>
     selectedLayerBounds(PreparedPreviewFrameHandle frame = nullptr) const;
+    // #489: the boxes of the text layers in `frame` whose font is missing (the fallback face is
+    // drawn instead), for the Viewer's red overlay. Reads the delivered immutable frame only.
+    [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds>
+    missingFontBounds(PreparedPreviewFrameHandle frame = nullptr) const;
     // SPLIT-2. The displayed frame's evaluated geometry, translated from its retained snapshot's
     // layer/node identities to the CURRENT live graph. This is the one place viewer paint/hit/text
     // consumers read geometry, so a retained frame after an equivalent split targets the live tail.

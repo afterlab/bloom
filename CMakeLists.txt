@@ -82,7 +82,7 @@ add_custom_target(
 )
 
 if(BLOOM_BUILD_DESKTOP)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS Svg Widgets)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Network Svg Widgets)
     qt_standard_project_setup()
 
     add_subdirectory(src/ui)

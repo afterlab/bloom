@@ -14,7 +14,6 @@ target_sources(
         export_run_backend.cpp
         export_queue_service_views.cpp
         export_verification.cpp
-        font_catalogue.cpp
         frame_export_publication.cpp
         frame_export_publication_naming.cpp
         frame_range_runner.cpp
@@ -52,7 +51,6 @@ target_sources(
             include/bloom/host/gpu_export_tool_package.hpp
             include/bloom/host/layer_alignment.hpp
             include/bloom/host/sequence_export_runner.hpp
-            include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
             include/bloom/host/project_color_choice.hpp
             include/bloom/host/project_session.hpp

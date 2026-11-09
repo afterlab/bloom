@@ -336,9 +336,8 @@ void AssetsEditor::newCompositionFromSelection() {
     const auto& project = snapshot.project();
     std::vector<document::AssetId> footage;
     for (const auto id : selectedAssets())
-        if (const auto* asset = project.findAsset(id); asset &&
-                                                       asset->kind != document::AssetKind::Lut &&
-                                                       asset->kind != document::AssetKind::Font)
+        if (const auto* asset = project.findAsset(id);
+            asset && asset->kind != document::AssetKind::Lut)
             footage.push_back(id);
     if (footage.empty())
         return;

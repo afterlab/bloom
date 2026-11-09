@@ -52,8 +52,7 @@ Usage assetUsage(const document::Project& project, const document::AssetId id) {
         std::size_t uses = 0;
         for (const auto& node : composition.graph().nodes())
             for (const auto& binding : node.parameters) {
-                const bool stringReference =
-                    binding.role == "asset" || binding.role == document::kTextFontParameterRole;
+                const bool stringReference = binding.role == "asset";
                 if (!stringReference && binding.role != "lut")
                     continue;
                 const auto* parameter = composition.parameters().find(binding.parameterId);

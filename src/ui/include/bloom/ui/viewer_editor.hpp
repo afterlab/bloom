@@ -1059,6 +1059,7 @@ class ViewerEditor final : public QWidget,
     QAction* thirdsAction_ = nullptr;
     QAction* rulersAction_ = nullptr;
     QAction* pixelGridAction_ = nullptr;
+    QAction* missingFontsAction_ = nullptr;
     QMenu* safeAreaPresetMenu_ = nullptr;
     std::array<QAction*, 5> safeAreaPresetActions_{};
     // Each mirrors its footer dropdown item for item (viewer_editor_menus.cpp).

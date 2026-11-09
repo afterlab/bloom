@@ -1,3 +1,4 @@
+#include "font_service.hpp"
 #include "import_progress_dialog.hpp"
 #include "preferences_window.hpp"
 #include "project_color_settings_dialog.hpp"
@@ -131,6 +132,8 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     // Before createMenus()/updateFileActions(): every one of those paths can already want to say
     // something, and the strip is what says it.
     createCentralStack();
+    // #489: font downloads, their notices and the refresh when a font arrives.
+    new FontServiceBridge(statusStrip_, previewController_, this);
     createMenus(*menuBar_);
     createWorkspaceActions();
     updateEditActions();

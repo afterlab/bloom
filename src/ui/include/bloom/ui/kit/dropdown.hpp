@@ -11,6 +11,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <optional>
 
 class QListView;
 class QStandardItemModel;
@@ -67,6 +68,21 @@ class KDropdown final : public QWidget {
     [[nodiscard]] int findData(const QVariant& data) const;
     [[nodiscard]] QVariant currentData() const;
     void clearItems();
+    // The value's ink, when it is not the control's own (the font field draws a missing font's name
+    // in Error). Nullopt restores it.
+    void setValueTone(std::optional<Color> tone) {
+        valueTone_ = tone;
+        update();
+    }
+    // The dropdown only asks to open: a popup of the owner's own (the font picker, which is not a
+    // list of this dropdown's items) answers openRequested(). A mouse press, Space, Return and the
+    // arrow keys that open a popup all end in showPopup(), which then emits instead.
+    void setExternalPopup(bool external) { externalPopup_ = external; }
+    // Holds the field in its pressed look while the owner's popup is open.
+    void setExternalPopupOpen(bool open) {
+        externalOpen_ = open;
+        update();
+    }
     void setMutedValue(bool muted) {
         mutedValue_ = muted;
         update();
@@ -131,6 +147,8 @@ class KDropdown final : public QWidget {
     // Items were added, removed, renamed, enabled or disabled, or the dropdown itself was enabled
     // or disabled: a mirror of this list (a menu that offers the same choices) rebuilds.
     void itemsChanged();
+    // With setExternalPopup(true): the artist asked to open the popup.
+    void openRequested();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -157,6 +175,9 @@ class KDropdown final : public QWidget {
     ControlSize controlSize_ = ControlSize::Default;
     bool hovered_ = false;
     bool mutedValue_ = false;
+    bool externalPopup_ = false;
+    bool externalOpen_ = false;
+    std::optional<Color> valueTone_;
     mutable int widest_ = -1;
     QString typed_;
     QElapsedTimer typedClock_;

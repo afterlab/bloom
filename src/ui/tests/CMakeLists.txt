@@ -2611,3 +2611,10 @@ bloom_add_test(
     TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
+
+# #489: the font picker and field, and the Qt network transport against a loopback server.
+add_executable(bloom_font_picker_test font_picker_tests.cpp)
+target_include_directories(bloom_font_picker_test PRIVATE ..)
+target_link_libraries(bloom_font_picker_test PRIVATE bloom_ui bloom_runtime_compiler bloom_platform Qt6::Test Qt6::Network)
+bloom_enable_warnings(bloom_font_picker_test)
+bloom_add_test(NAME bloom.ui.font-picker COMMAND bloom_font_picker_test LABELS ui integration kit TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

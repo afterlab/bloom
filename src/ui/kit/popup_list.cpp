@@ -9,6 +9,8 @@
 #include <QApplication>
 #include <QHelpEvent>
 #include <QKeyEvent>
+#include <QHBoxLayout>
+#include <QItemSelectionModel>
 #include <QListView>
 #include <QMouseEvent>
 #include <QPainter>
@@ -72,9 +74,15 @@ class ListDelegate final : public QStyledItemDelegate {
         return index.data(Qt::DisplayRole).toString();
     }
 
+    // The font a row's label is drawn in: its own (Qt::FontRole), else the list's.
+    [[nodiscard]] static QFont rowFont(const QStyleOptionViewItem& option, const QModelIndex& index) {
+        const auto own = index.data(Qt::FontRole);
+        return own.canConvert<QFont>() ? own.value<QFont>() : option.font;
+    }
+
     [[nodiscard]] bool elided(const QStyleOptionViewItem& option, const QModelIndex& index) const {
         const QFontMetrics metrics(kindOf(index) == RowKind::Heading ? font(TypeRole::UiSmall)
-                                                                     : option.font);
+                                                                     : rowFont(option, index));
         const int available = textRight(option.rect) - (option.rect.left() + KPopupList::textOffset());
         return metrics.horizontalAdvance(label(index)) > available;
     }
@@ -146,13 +154,14 @@ class ListDelegate final : public QStyledItemDelegate {
                         iconPixmap(IconId::Check, Size::IconMedium, ink, ratio,
                                    iconWeight(IconRole::Chrome)));
         }
-        painter->setFont(option.font);
+        const QFont drawn = rowFont(option, index);
+        painter->setFont(drawn);
         painter->setPen(ink);
         const int left = row.left() + KPopupList::textOffset();
         const QRect text(left, row.top(), std::max(0, textRight(row) - left), row.height());
         painter->drawText(text, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine,
-                          option.fontMetrics.elidedText(label(index), Qt::ElideRight,
-                                                        text.width()));
+                          QFontMetrics(drawn).elidedText(label(index), Qt::ElideRight,
+                                                         text.width()));
         painter->restore();
     }
 
@@ -188,7 +197,7 @@ KPopupList::KPopupList(QWidget* parent) : QWidget(parent) {
     layout->setSpacing(0);
 
     filterBox_ = new QWidget(this);
-    auto* filterLayout = new QVBoxLayout(filterBox_);
+    auto* filterLayout = new QHBoxLayout(filterBox_);
     // The filter sits in its own band above the rows; the rows themselves still meet the frame.
     filterLayout->setContentsMargins(px(Spacing::XS), px(Spacing::XS), px(Spacing::XS),
                                      px(Spacing::XS));
@@ -232,6 +241,10 @@ void KPopupList::setModel(QAbstractItemModel* model) {
     view_->setModel(model);
     if (model == nullptr)
         return;
+    connect(view_->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            [this](const QModelIndex& current) {
+                Q_EMIT currentRowChanged(current.isValid() ? current.row() : -1);
+            });
     connect(model, &QAbstractItemModel::modelReset, this, &KPopupList::rowsChanged);
     connect(model, &QAbstractItemModel::layoutChanged, this, &KPopupList::rowsChanged);
     connect(model, &QAbstractItemModel::rowsInserted, this, &KPopupList::rowsChanged);
@@ -241,6 +254,13 @@ void KPopupList::setModel(QAbstractItemModel* model) {
 QAbstractItemModel* KPopupList::model() const { return view_->model(); }
 
 void KPopupList::setUniformRows(const bool uniform) { view_->setUniformItemSizes(uniform); }
+
+void KPopupList::setFilterAccessory(QWidget* accessory) {
+    if (accessory == nullptr)
+        return;
+    accessory->setParent(filterBox_);
+    static_cast<QHBoxLayout*>(filterBox_->layout())->addWidget(accessory);
+}
 
 void KPopupList::setFilterVisible(const bool visible) { filterBox_->setVisible(visible); }
 

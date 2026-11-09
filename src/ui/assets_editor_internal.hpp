@@ -139,7 +139,6 @@ struct KindCounts final {
     std::size_t images = 0;
     std::size_t videos = 0;
     std::size_t audio = 0;
-    std::size_t fonts = 0;
     std::size_t luts = 0;
     std::size_t data = 0;
     void add(const QTreeWidgetItem& item, const document::Project& project);

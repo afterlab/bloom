@@ -6,7 +6,7 @@
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include "row_inline_controls.hpp"
-#include "text_font_choices.hpp"
+#include "font_picker.hpp"
 #include "value_presentation.hpp"
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
@@ -36,7 +36,6 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
-#include <bloom/host/font_catalogue.hpp>
 #include <bloom/host/project_color_choice.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/channel_set_controller.hpp>
@@ -348,15 +347,13 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                definition_.schemaKey == "bloom.ocio-file.lut" ||
                definition_.schemaKey == "bloom.image.asset" ||
                definition_.schemaKey == "bloom.video.asset" ||
-               definition_.schemaKey == "bloom.audio.asset" ||
-               isFontSchema(definition_.schemaKey)) {
+               definition_.schemaKey == "bloom.audio.asset") {
         selector_ = new kit::KDropdown(controls);
         selector_->setObjectName(
             definition_.schemaKey == "bloom.ocio-file.lut"       ? "propertiesLutAsset"
             : isEffectColorSpaceSchema(definition_.schemaKey)    ? "propertiesEffectColorSpace"
             : definition_.schemaKey == "bloom.image.asset"       ? "propertiesImageAsset"
             : definition_.schemaKey == "bloom.audio.asset"       ? "propertiesAudioAsset"
-            : isFontSchema(definition_.schemaKey)                ? "propertiesTextFont"
             : definition_.schemaKey == "bloom.image.loop-mode"   ? "propertiesImageLoopMode"
             : definition_.schemaKey == "bloom.image.color-space" ? "propertiesImageColorSpace"
             : definition_.schemaKey == document::kImageInputColorSpaceIdParameterSchemaKey
@@ -368,18 +365,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                 ? "propertiesDataBlock"
                 : "propertiesRegistryEnum");
         selector_->setControlSize(kit::KDropdown::ControlSize::Dense);
-        if (isFontSchema(definition_.schemaKey)) {
-            selector_->setSearchable(true);
-            populateFontSelector();
-            // Existing automation identifies generic enum controls by this name. Keep a hidden
-            // four-face embedded probe for that contract while the visible selector carries the
-            // complete system catalogue under its explicit font name.
-            auto* embeddedProbe = new kit::KDropdown(controls);
-            embeddedProbe->setObjectName(QStringLiteral("propertiesRegistryEnum"));
-            for (const auto& face : platform::FontCatalogueProvider::embeddedCatalogue().faces)
-                embeddedProbe->addItem(QString::fromStdString(face.family));
-            embeddedProbe->hide();
-        } else if (isInputColorSpaceSchema(definition_.schemaKey)) {
+        if (isInputColorSpaceSchema(definition_.schemaKey)) {
             selector_->setSearchable(true);
             populateInputColorSpaceSelector();
         } else if (isShuffleSlotSchema(definition_.schemaKey)) {
@@ -396,8 +382,14 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         selector_->setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
         layout->addWidget(selector_);
         connect(selector_, &kit::KDropdown::activated, this, [this] { commit(); });
-        if (isFontSchema(definition_.schemaKey))
-            QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
+    } else if (isFontSchema(definition_.schemaKey)) {
+        // #489: a font is a font ID chosen in the picker; there is no font asset to pick.
+        fontField_ = new FontField(controls);
+        fontField_->setAccessibleName(label);
+        layout->addWidget(fontField_, 1);
+        bindFontFieldToParameter(*fontField_, session_, [this] {
+            return detached_ ? std::nullopt : std::optional(parameter_);
+        });
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
         // A whole-number parameter is a value field in integer mode: it scrubs and steps in whole
         // units, parses exactly across the int64 range, and edits live like every number.
@@ -554,60 +546,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     refresh();
 }
 
-void PropertiesRegistryRow::populateFontSelector() {
-    if (detached_ || selector_ == nullptr || !isFontSchema(definition_.schemaKey))
-        return;
-    auto& cache = fontCatalogueCache();
-    (void)cache.poll();
-    const auto snapshot = cache.snapshot();
-    if (!snapshot)
-        return;
-    const auto current = storedFontReference(
-        session_, session_.constantStringValue(parameter_).value_or(QString{}));
-    // A catalogue refresh rebuilds the list and re-selects the stored face. Neither is the artist's
-    // choice, so neither may reach commit(): commit listens to activated() alone, and the blocker
-    // keeps even the value notification quiet while the list is half built.
-    const QSignalBlocker blocker(selector_);
-    selector_->clearItems();
-    fontFaces_ = snapshot->faces;
-    for (const auto& face : fontFaces_) {
-        const auto label =
-            QString::fromStdString(face.family) +
-            (face.style.empty() ? QString{}
-                                : QStringLiteral(" ") + QString::fromStdString(face.style));
-        const auto index = selector_->addItem(label, fontReference(face));
-        if (!face.path.empty())
-            selector_->setItemToolTip(index, QString::fromStdString(face.path.string()));
-    }
-    for (int index = 0; index < selector_->count(); ++index) {
-        if (selector_->itemData(index).toString() == current) {
-            selector_->setCurrentIndex(index);
-            break;
-        }
-    }
-}
-
 void PropertiesRegistryRow::populateInputColorSpaceSelector() {
     if (selector_ == nullptr || !isInputColorSpaceSchema(definition_.schemaKey))
         return;
     populateColorSpaceSelector(*selector_, session_, definition_.schemaKey,
                                session_.constantStringValue(parameter_).value_or(QString{}));
-}
-
-void PropertiesRegistryRow::pollFontCatalogue() {
-    // detached_ is set by detachFromSession() before this row is orphaned for deferred deletion.
-    // A poll that was already armed can still fire in the window between that orphaning and the
-    // row's actual destruction (deleteLater() is not synchronous), so this check has to be the
-    // very first thing here -- nothing below it may touch session_ (CRASH-2).
-    if (detached_ || selector_ == nullptr || !isFontSchema(definition_.schemaKey))
-        return;
-    auto& cache = fontCatalogueCache();
-    if (cache.poll()) {
-        populateFontSelector();
-        refresh();
-    }
-    if (cache.pending())
-        QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
 }
 
 void PropertiesRegistryRow::detachFromSession() { detached_ = true; }
@@ -638,7 +581,7 @@ void PropertiesRegistryRow::refresh() {
                           static_cast<QWidget*>(toggle_), static_cast<QWidget*>(color_),
                           static_cast<QWidget*>(text_), static_cast<QWidget*>(multiline_),
                           static_cast<QWidget*>(integer_), static_cast<QWidget*>(slider_),
-                          static_cast<QWidget*>(checklist_)})
+                          static_cast<QWidget*>(checklist_), static_cast<QWidget*>(fontField_)})
         if (control)
             control->setEnabled(editable);
     if (dial_)
@@ -697,14 +640,9 @@ void PropertiesRegistryRow::refresh() {
             if (segments_)
                 segments_->setCurrentIndex(static_cast<int>(*integer));
             if (selector_) {
-                if (isFontSchema(definition_.schemaKey)) {
-                    if (*integer >= 0 && *integer < static_cast<std::int64_t>(fontFaces_.size()))
-                        selector_->setCurrentIndex(static_cast<int>(*integer));
-                } else {
-                    for (int index = 0; index < selector_->count(); ++index)
-                        if (selector_->itemData(index).value<std::int64_t>() == *integer)
-                            selector_->setCurrentIndex(index);
-                }
+                for (int index = 0; index < selector_->count(); ++index)
+                    if (selector_->itemData(index).value<std::int64_t>() == *integer)
+                        selector_->setCurrentIndex(index);
             }
         }
         if (auto* vector = std::get_if<document::Vec2d>(&value); vector && fields_[1]) {
@@ -729,27 +667,8 @@ void PropertiesRegistryRow::refresh() {
                 refreshImageAssetSelector(*selector_, session_, QString::fromStdString(*text));
             if (selector_ && definition_.schemaKey == "bloom.audio.asset")
                 refreshAudioAssetSelector(*selector_, session_, QString::fromStdString(*text));
-            if (selector_ && isFontSchema(definition_.schemaKey)) {
-                auto current = QString::fromStdString(*text);
-                bool numeric = false;
-                const auto assetNumber = current.toULongLong(&numeric);
-                if (numeric) {
-                    if (const auto* asset = session_.snapshot().project().findAsset(
-                            document::AssetId::fromRaw(assetNumber));
-                        asset != nullptr && asset->kind == document::AssetKind::Font) {
-                        const auto digest = asset->contentDigest.toLowercaseHex();
-                        current = QString::fromStdString(asset->fontFamily) + QLatin1Char('|') +
-                                  QString::fromStdString(asset->fontStyle) + QLatin1Char('|') +
-                                  QString::fromLatin1(digest.data(),
-                                                      static_cast<qsizetype>(digest.size()));
-                    }
-                }
-                for (int index = 0; index < selector_->count(); ++index)
-                    if (selector_->itemData(index).toString() == current) {
-                        selector_->setCurrentIndex(index);
-                        break;
-                    }
-            }
+            if (fontField_)
+                fontField_->setFontText(QString::fromStdString(*text));
             if (selector_ && node && isShuffleSlotSchema(definition_.schemaKey)) {
                 refreshShuffleSlotSelector(*selector_, session_, *node, definition_.schemaKey);
                 // The probe enables a slot once it is listed; a locked node stays locked.
@@ -807,21 +726,8 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
     document::ParameterValue value = definition_.defaultValue;
     if (segments_)
         value = propertiesSelectorItems(definition_.schemaKey)[segments_->currentIndex()].second;
-    else if (selector_ && isFontSchema(definition_.schemaKey)) {
-        const auto index = selector_->currentIndex();
-        if (index < 0 || index >= static_cast<int>(fontFaces_.size()))
-            return;
-        commands::Transaction transaction("Choose Font", session_.snapshot().revision());
-        transaction.emplace<commands::EnsureFontAsset>(
-            fontAssetRecord(fontFaces_[static_cast<std::size_t>(index)]));
-        const auto result = session_.executeTransaction(std::move(transaction));
-        const auto asset = result.outputId<document::AssetId>("asset");
-        if (!asset)
-            return;
-        (void)session_.setParameterValue(parameter_, std::to_string(asset->value()),
-                                         tr("Set Text Font"));
-        refresh();
-        return;
+    else if (fontField_) {
+        return; // The font field commits itself through bindFontFieldToParameter().
     } else if (selector_ && isSourceInputColorSpaceSchema(definition_.schemaKey)) {
         (void)commitSourceInputColorSpace(
             session_, node_, selector_->itemData(selector_->currentIndex()).toString());

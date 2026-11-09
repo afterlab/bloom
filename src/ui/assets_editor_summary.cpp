@@ -80,9 +80,6 @@ void KindCounts::add(const QTreeWidgetItem& item, const document::Project& proje
     case document::AssetKind::Audio:
         ++audio;
         break;
-    case document::AssetKind::Font:
-        ++fonts;
-        break;
     case document::AssetKind::Lut:
         ++luts;
         break;
@@ -93,18 +90,17 @@ void KindCounts::add(const QTreeWidgetItem& item, const document::Project& proje
 }
 
 std::size_t KindCounts::items() const noexcept {
-    return compositions + sequences + images + videos + audio + fonts + luts;
+    return compositions + sequences + images + videos + audio + luts;
 }
 
 QString KindCounts::text() const {
-    std::array<std::pair<std::size_t, QString>, 9> parts{{
+    std::array<std::pair<std::size_t, QString>, 8> parts{{
         {compositions,
          counted(compositions, QObject::tr("composition"), QObject::tr("compositions"))},
         {sequences, counted(sequences, QObject::tr("sequence"), QObject::tr("sequences"))},
         {images, counted(images, QObject::tr("image"), QObject::tr("images"))},
         {videos, counted(videos, QObject::tr("video"), QObject::tr("videos"))},
         {audio, counted(audio, QObject::tr("audio file"), QObject::tr("audio files"))},
-        {fonts, counted(fonts, QObject::tr("font"), QObject::tr("fonts"))},
         {luts, counted(luts, QObject::tr("LUT"), QObject::tr("LUTs"))},
         {folders, counted(folders, QObject::tr("folder"), QObject::tr("folders"))},
         {data, counted(data, QObject::tr("data block"), QObject::tr("data blocks"))},
@@ -213,13 +209,6 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
                               : dimensions(asset->width, asset->height);
         QStringList facts{kind, size};
         kindLong = chips({kind, size});
-        if (asset->kind == document::AssetKind::Font && !asset->fontFamily.empty()) {
-            const auto face =
-                QStringLiteral("%1 %2").arg(QString::fromStdString(asset->fontFamily),
-                                            QString::fromStdString(asset->fontStyle));
-            facts.push_back(face);
-            kindLong = chips({kindLong, face});
-        }
         QString timingLong;
         switch (asset->kind) {
         case document::AssetKind::Video:

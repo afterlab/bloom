@@ -379,7 +379,7 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
     auto* guides = fixture.viewer.findChild<QMenu*>("viewerGuidesMenu");
     for (const char* name :
          {"viewerSafeAreasAction", "viewerCentreCrossAction", "viewerThirdsAction", "viewerRulers",
-          "viewerPixelGridAction", "viewerCustomSafeAreasAction"})
+          "viewerPixelGridAction", "viewerMissingFontsAction", "viewerCustomSafeAreasAction"})
         expectations.expect(guides->actions().contains(
                                 fixture.viewer.findChild<QAction*>(QString::fromLatin1(name))),
                             std::string{name} + " lives under View > Guides");

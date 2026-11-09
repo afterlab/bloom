@@ -1,5 +1,6 @@
 #include "asset_drop.hpp"
 #include "channel_checklist_field.hpp"
+#include "font_picker.hpp"
 #include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
@@ -24,7 +25,6 @@
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
-#include <bloom/host/font_catalogue.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -120,50 +120,6 @@ inline constexpr qreal kSelectionEdgeWidth = kit::px(kit::Size::SelectionEdge);
 inline constexpr qreal kGroupTitleHeight = kit::px(kit::Size::NodeGroupTitle);
 inline constexpr qreal kGroupFillOpacity = 0.35;
 inline constexpr auto kGroupRadius = kit::Radius::Panel;
-
-inline QString nodeFontReference(const platform::FontFace& face) {
-    const auto digest = face.contentDigest.toLowercaseHex();
-    return QString::fromStdString(face.family) + QLatin1Char('|') +
-           QString::fromStdString(face.style) + QLatin1Char('|') +
-           QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size()));
-}
-
-inline QString nodeFontDisplayName(const platform::FontFace& face) {
-    if (face.source == platform::FontSource::Embedded && face.faceIndex == 0)
-        return QStringLiteral("DejaVu Sans");
-    return QString::fromStdString(face.family) +
-           (face.style.empty() ? QString{}
-                               : QStringLiteral(" ") + QString::fromStdString(face.style));
-}
-
-inline document::AssetRecord nodeFontAssetRecord(const platform::FontFace& face) {
-    document::AssetRecord asset;
-    asset.kind = document::AssetKind::Font;
-    asset.contentDigest = face.contentDigest;
-    asset.fontFamily = face.family;
-    asset.fontStyle = face.style;
-    asset.fontIndex = face.faceIndex;
-    if (face.source == platform::FontSource::Embedded) {
-        asset.locator = {"font", "builtin", "embedded/" + std::to_string(face.faceIndex),
-                         "font:embedded:" + face.family + "|" + face.style};
-    } else {
-        const auto path = std::filesystem::absolute(face.path).lexically_normal().generic_string();
-        asset.locator = {
-            "font", "system", path,
-            QUrl::fromLocalFile(QString::fromStdString(path)).toEncoded().toStdString()};
-    }
-    return asset;
-}
-
-inline host::FontCatalogueCache& nodeFontCatalogueCache() {
-    static host::FontCatalogueCache cache;
-    static bool requested = false;
-    if (!requested) {
-        cache.refresh();
-        requested = true;
-    }
-    return cache;
-}
 
 class NodeEdgeItem;
 class NodeItem;
@@ -750,7 +706,8 @@ class NodeItem final : public QGraphicsObject {
         // #487: a channel pattern chosen from the input's channels (Copy, Select Channels, the
         // Composition Output's layers).
         ChannelChecklistField* checklist = nullptr;
-        std::vector<platform::FontFace> fontFaces;
+        // #489: a text font is a font ID chosen in the picker (family, style, axes).
+        FontField* fontField = nullptr;
         // #512: the dial of a Camera Shake angle and the Randomise button of its Seed.
         kit::KAngleDial* dial = nullptr;
         kit::KButton* randomise = nullptr;
@@ -1300,6 +1257,22 @@ class NodeItem final : public QGraphicsObject {
         // list here, so a row cannot offer a key the command layer would refuse.
         const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
+        if (declared->schemaKey == document::kTextFontParameterSchemaKey && session_ != nullptr) {
+            row.fontField = new FontField;
+            row.fontField->setObjectName(QStringLiteral("nodeTextFont"));
+            row.fontField->setAccessibleName(label);
+            row.fontField->setDense(true);
+            row.fontField->resize(row.fontField->sizeHint());
+            prepareField(row.fontField);
+            registerControlRole(row.fontField, role);
+            const auto parameterId = row.parameterId;
+            bindFontFieldToParameter(*row.fontField, *session_, [parameterId] {
+                return std::optional(parameterId);
+            });
+            valueRows_.push_back({label, row.fontField, nullptr, {}});
+            operandRows_.push_back(row);
+            return true;
+        }
         if (const auto checklistKind = channelChecklistKind(declared->schemaKey);
             checklistKind && session_ != nullptr) {
             row.checklist =
@@ -1313,7 +1286,6 @@ class NodeItem final : public QGraphicsObject {
             operandRows_.push_back(row);
             return true;
         }
-        const bool fontSelector = declared->schemaKey == document::kTextFontParameterSchemaKey;
         // ADR 0026 / #364: values the file's probe lists, filled on refresh.
         const bool probeSelector =
             declared->schemaKey == document::kImagePartParameterSchemaKey ||
@@ -1331,7 +1303,7 @@ class NodeItem final : public QGraphicsObject {
                                    declared->schemaKey == "bloom.audio.asset" ||
                                    declared->schemaKey == "bloom.ocio-file.lut";
         if (const auto items = selectorItems(declared->schemaKey);
-            fontSelector || probeSelector || colorSpaceSelector || assetSelector ||
+            probeSelector || colorSpaceSelector || assetSelector ||
             !items.isEmpty()) {
             row.selector = new kit::KDropdown;
             row.selector->setObjectName(
@@ -1352,15 +1324,7 @@ class NodeItem final : public QGraphicsObject {
             row.selector->setControlSize(kit::KDropdown::ControlSize::Dense);
             if (isShuffleSlotSchema(declared->schemaKey))
                 row.selector->setSearchable(true);
-            if (fontSelector) {
-                row.selector->setSearchable(true);
-                const auto snapshot = nodeFontCatalogueCache().snapshot();
-                row.fontFaces = snapshot
-                                    ? snapshot->faces
-                                    : platform::FontCatalogueProvider::embeddedCatalogue().faces;
-                for (const auto& face : row.fontFaces)
-                    row.selector->addItem(nodeFontDisplayName(face), nodeFontReference(face));
-            } else if (colorSpaceSelector) {
+            if (colorSpaceSelector) {
                 if (session_ != nullptr)
                     populateColorSpaceSelector(*row.selector, *session_, declared->schemaKey,
                                                QString{});
@@ -1377,8 +1341,6 @@ class NodeItem final : public QGraphicsObject {
                     [commit](int) { commit(); });
             valueRows_.push_back({label, row.selector, nullptr, {}});
             operandRows_.push_back(row);
-            if (fontSelector)
-                QTimer::singleShot(50, this, [this, index] { pollFontOperandCatalogue(index); });
             return true;
         }
 
@@ -1509,26 +1471,6 @@ class NodeItem final : public QGraphicsObject {
         return propertiesSelectorItems(schemaKey);
     }
 
-    void pollFontOperandCatalogue(const std::size_t index) {
-        if (index >= operandRows_.size() || operandRows_[index].selector == nullptr)
-            return;
-        auto& cache = nodeFontCatalogueCache();
-        if (cache.poll()) {
-            const auto snapshot = cache.snapshot();
-            if (snapshot && session_ != nullptr && session_->composition() != nullptr) {
-                auto& row = operandRows_[index];
-                const QSignalBlocker blocker(row.selector);
-                row.fontFaces = snapshot->faces;
-                row.selector->clearItems();
-                for (const auto& face : row.fontFaces)
-                    row.selector->addItem(nodeFontDisplayName(face), nodeFontReference(face));
-                refreshOperandRows(*session_->composition());
-            }
-        }
-        if (cache.pending())
-            QTimer::singleShot(50, this, [this, index] { pollFontOperandCatalogue(index); });
-    }
-
     // Writes one operand's authored constant. One transaction, one undo entry -- the same shape
     // every other card commit has -- and the value is assembled from the row's own widgets, so the
     // kind the document receives is the kind the registry declared.
@@ -1556,21 +1498,6 @@ class NodeItem final : public QGraphicsObject {
                 const auto* parameter = composition == nullptr
                                             ? nullptr
                                             : composition->parameters().find(row.parameterId);
-                if (row.kind == document::ParameterValueKind::String && parameter != nullptr &&
-                    parameter->schemaKey == document::kTextFontParameterSchemaKey) {
-                    const auto selected = static_cast<std::size_t>(row.selector->currentIndex());
-                    if (selected >= row.fontFaces.size())
-                        return std::nullopt;
-                    commands::Transaction transaction("Choose Font",
-                                                      session_->snapshot().revision());
-                    transaction.emplace<commands::EnsureFontAsset>(
-                        nodeFontAssetRecord(row.fontFaces[selected]));
-                    const auto result = session_->executeTransaction(std::move(transaction));
-                    const auto asset = result.outputId<document::AssetId>("asset");
-                    if (!asset)
-                        return std::nullopt;
-                    return document::ParameterValue{std::to_string(asset->value())};
-                }
                 if (parameter != nullptr && isSourceInputColorSpaceSchema(parameter->schemaKey)) {
                     // #487: one edit writes the OCIO id and the legacy choice together.
                     (void)commitSourceInputColorSpace(*session_, id_, stored.toString());
@@ -1693,6 +1620,21 @@ class NodeItem final : public QGraphicsObject {
                                               scalarEditable(*session_, row.parameterId));
             }
         for (const auto& row : operandRows_) {
+            if (row.fontField != nullptr) {
+                const auto liveFont =
+                    session_ ? session_->liveValue(row.parameterId) : std::nullopt;
+                const auto* fontParameter = composition.parameters().find(row.parameterId);
+                const auto* fontConstant =
+                    fontParameter ? std::get_if<document::ConstantValueSource>(&fontParameter->source)
+                                  : nullptr;
+                const auto* fontValue =
+                    liveFont ? &*liveFont : fontConstant ? &fontConstant->value : nullptr;
+                if (fontValue != nullptr)
+                    if (const auto* text = std::get_if<std::string>(fontValue))
+                        row.fontField->setFontText(QString::fromStdString(*text));
+                row.fontField->setEnabled(!composition.nodeLocked(id_));
+                continue;
+            }
             if (row.checklist != nullptr) {
                 if (!timeOnly_)
                     row.checklist->refresh();
@@ -1728,33 +1670,9 @@ class NodeItem final : public QGraphicsObject {
             if (row.selector != nullptr) {
                 if (row.kind == document::ParameterValueKind::String && session_ && !timeOnly_)
                     if (const auto* stored = std::get_if<std::string>(value)) {
-                        // FEEDBACK-1's live value edits reach the font selector too: `value` is
-                        // the live override when one is staged and the committed constant
-                        // otherwise, so a font chosen mid-gesture previews like every other kind.
+                        // A live value edit reaches the selector too: `value` is the live
+                        // override when one is staged and the committed constant otherwise.
                         if (parameter != nullptr &&
-                            parameter->schemaKey == document::kTextFontParameterSchemaKey) {
-                            auto current = QString::fromStdString(*stored);
-                            bool numeric = false;
-                            const auto assetNumber = current.toULongLong(&numeric);
-                            if (numeric) {
-                                if (const auto* asset = session_->snapshot().project().findAsset(
-                                        document::AssetId::fromRaw(assetNumber));
-                                    asset != nullptr && asset->kind == document::AssetKind::Font) {
-                                    const auto digest = asset->contentDigest.toLowercaseHex();
-                                    current =
-                                        QString::fromStdString(asset->fontFamily) +
-                                        QLatin1Char('|') +
-                                        QString::fromStdString(asset->fontStyle) +
-                                        QLatin1Char('|') +
-                                        QString::fromLatin1(digest.data(),
-                                                            static_cast<qsizetype>(digest.size()));
-                                }
-                            }
-                            const QSignalBlocker blocker(row.selector);
-                            const auto selected = row.selector->findData(current);
-                            if (selected >= 0)
-                                row.selector->setCurrentIndex(selected);
-                        } else if (parameter != nullptr &&
                                    (parameter->schemaKey ==
                                         document::kImagePartParameterSchemaKey ||
                                     parameter->schemaKey ==

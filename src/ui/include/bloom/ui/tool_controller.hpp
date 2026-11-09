@@ -74,12 +74,12 @@ struct NewShapeStyle {
 };
 [[nodiscard]] commands::ShapeLayerStyle shapeLayerStyle(const NewShapeStyle& style);
 
-// The style new text starts with. An empty font reference is the bundled default face; otherwise
-// it is a font catalogue reference ("family|style|digest", text_font_choices.hpp).
+// The style new text starts with. An empty font ID is the built-in default face; otherwise it is
+// the stored text of a font ID (document::encodeFontId, docs/architecture/fonts.md).
 struct NewTextStyle {
     double size = 0.0; // 0: the text schema's default size
     std::int64_t alignment = 0;
-    QString fontReference;
+    QString fontId;
     friend bool operator==(const NewTextStyle&, const NewTextStyle&) = default;
 };
 

@@ -934,10 +934,9 @@ void registryRows() {
     auto* font = row(panel, "font");
     expect(font != nullptr, "registry adds the text font parameter");
     if (font) {
-        auto* dropdown = font->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum");
-        expect(dropdown != nullptr && dropdown->count() == 4 &&
-                   dropdown->currentText() == QStringLiteral("DejaVu Sans"),
-               "Font is a generic Properties dropdown with the four faces in face order");
+        auto* dropdown = font->findChild<ui::kit::KDropdown*>("propertiesTextFont");
+        expect(dropdown != nullptr && dropdown->currentText() == QStringLiteral("DejaVu Sans"),
+               "Font is the font field, showing the font ID's family");
     }
     const auto layer = std::get<document::LayerId>(session.selection().primary);
     const auto boundary = session.boundaryNodeForLayer(layer);

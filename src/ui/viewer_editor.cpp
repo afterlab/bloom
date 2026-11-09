@@ -10,7 +10,6 @@
 #include "composition_editor_support.hpp"
 #include "layer_drop.hpp"
 #include "layer_mask_support.hpp"
-#include "text_font_choices.hpp"
 #include "viewer_editor_internal.hpp"
 #include "viewer_editor_text_layout.hpp"
 #include "viewer_timecode_readout.hpp"
@@ -1056,7 +1055,10 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                                 overlayOptions_,
                                 textEdit_ ? std::span<const runtime::EvaluatedOperationBounds>{}
                                           : bounds,
-                                pointTextLayers(session_, bounds));
+                                pointTextLayers(session_, bounds),
+                                overlayOptions_.missingFonts
+                                    ? previewController_->missingFontBounds(cpuFrame)
+                                    : std::vector<runtime::EvaluatedOperationBounds>{});
                             painter.restore();
                         }
                     }

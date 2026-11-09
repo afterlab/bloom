@@ -3,7 +3,7 @@
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
-#include "text_font_choices.hpp"
+#include "font_picker.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -308,13 +308,11 @@ TextStyleOptions::TextStyleOptions(CompositionSession& session, std::function<vo
     : QWidget(parent), session_(session), committed_(std::move(committed)) {
     setObjectName(QStringLiteral("contextBarTextOptions"));
     auto* layout = rowLayout(this);
-    font_ = new kit::KDropdown(this);
+    font_ = new FontField(this);
     font_->setObjectName(QStringLiteral("contextBarTextFont"));
     font_->setAccessibleName(tr("Font"));
-    font_->setSearchable(true);
-    font_->setFocusPolicy(Qt::ClickFocus);
-    font_->setWidthFloor(kit::px(kit::Size::DropdownWidthWide));
-    font_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
+    font_->familyDropdown()->setFocusPolicy(Qt::ClickFocus);
+    font_->familyDropdown()->setWidthFloor(kit::px(kit::Size::DropdownWidthWide));
     size_ = new kit::KValueField(this);
     size_->setObjectName(QStringLiteral("contextBarTextSize"));
     size_->setAccessibleName(tr("Font size"));
@@ -336,8 +334,17 @@ TextStyleOptions::TextStyleOptions(CompositionSession& session, std::function<vo
     properties::bindValueEdit(session_, *size_, [this] {
         return parameter(document::kTextSizeParameterRole).value_or(document::ParameterId{});
     });
-    connect(font_, &kit::KDropdown::activated, this, [this](const int index) {
-        chooseFont(index);
+    // A selected text layer: the field edits its font parameter (live preview, one undo step). With
+    // none selected it sets the font new text starts with.
+    bindFontFieldToParameter(*font_, session_,
+                             [this] { return parameter(document::kTextFontParameterRole); });
+    connect(font_, &FontField::fontCommitted, this, [this](const QString& text) {
+        if (!parameter(document::kTextFontParameterRole)) {
+            auto style = session_.tools().newTextStyle();
+            style.fontId = text;
+            session_.tools().setNewTextStyle(style);
+        }
+        refresh();
         if (committed_)
             committed_();
     });
@@ -374,10 +381,7 @@ TextStyleOptions::TextStyleOptions(CompositionSession& session, std::function<vo
     connect(&session_, &CompositionSession::snapshotChanged, this, later);
     connect(&session_, &CompositionSession::currentTimeChanged, this, later);
     connect(&session_.tools(), &ToolController::newTextStyleChanged, this, later);
-    populateFonts();
     refresh();
-    // The installed fonts arrive from a scan off the UI thread.
-    QTimer::singleShot(50, this, &TextStyleOptions::pollFonts);
 }
 
 const document::NodeRecord* TextStyleOptions::target() const {
@@ -388,55 +392,6 @@ std::optional<document::ParameterId> TextStyleOptions::parameter(const std::stri
     return roleParameter(target(), role);
 }
 
-void TextStyleOptions::populateFonts() {
-    auto& cache = fontCatalogueCache();
-    (void)cache.poll();
-    const auto snapshot = cache.snapshot();
-    if (!snapshot)
-        return;
-    // Building the list is not a choice: activated() alone reaches chooseFont().
-    const QSignalBlocker blocker(font_);
-    font_->clearItems();
-    faces_ = snapshot->faces;
-    for (const auto& face : faces_) {
-        const auto label =
-            QString::fromStdString(face.family) +
-            (face.style.empty() ? QString{}
-                                : QStringLiteral(" ") + QString::fromStdString(face.style));
-        font_->addItem(label, fontReference(face));
-    }
-}
-
-void TextStyleOptions::pollFonts() {
-    auto& cache = fontCatalogueCache();
-    if (cache.poll()) {
-        populateFonts();
-        refresh();
-    }
-    if (cache.pending())
-        QTimer::singleShot(50, this, &TextStyleOptions::pollFonts);
-}
-
-void TextStyleOptions::chooseFont(const int index) {
-    if (refreshing_ || index < 0 || index >= static_cast<int>(faces_.size()))
-        return;
-    const auto& face = faces_[static_cast<std::size_t>(index)];
-    if (const auto id = parameter(document::kTextFontParameterRole)) {
-        // Properties' own two steps: the face becomes a Font asset, then the layer points at it.
-        commands::Transaction transaction("Choose Font", session_.snapshot().revision());
-        transaction.emplace<commands::EnsureFontAsset>(fontAssetRecord(face));
-        const auto result = session_.executeTransaction(std::move(transaction));
-        if (const auto asset = result.outputId<document::AssetId>("asset"))
-            (void)session_.setParameterValue(*id, std::to_string(asset->value()),
-                                             tr("Set Text Font"));
-    } else {
-        auto style = session_.tools().newTextStyle();
-        style.fontReference = fontReference(face);
-        session_.tools().setNewTextStyle(style);
-    }
-    refresh();
-}
-
 void TextStyleOptions::refresh() {
     refreshing_ = true;
     const auto* node = target();
@@ -444,27 +399,22 @@ void TextStyleOptions::refresh() {
     double size = defaults.size > 0.0 ? defaults.size : document::kDefaultTextSizePixels;
     std::int64_t alignment = defaults.alignment;
     // The bundled default face is what new text uses until a font is chosen.
-    QString font = defaults.fontReference;
+    QString font = defaults.fontId;
     if (node != nullptr) {
         if (const auto id = roleParameter(node, document::kTextSizeParameterRole))
             size = session_.effectiveScalarValue(*id).value_or(size);
         if (const auto id = roleParameter(node, document::kTextAlignmentParameterRole))
             alignment = session_.effectiveIntegerValue(*id).value_or(alignment);
         if (const auto id = roleParameter(node, document::kTextFontParameterRole))
-            font = storedFontReference(session_,
-                                       session_.effectiveStringValue(*id).value_or(QString{}));
+            font = session_.effectiveStringValue(*id).value_or(QString{});
     }
     {
-        const QSignalBlocker a(size_), b(alignment_), c(font_);
+        const QSignalBlocker a(size_), b(alignment_);
         size_->setValue(size);
         alignment_->setCurrentIndex(static_cast<int>(alignment));
-        int current = -1;
-        for (int index = 0; index < font_->count(); ++index)
-            if (font_->itemData(index).toString() == font ||
-                (font.isEmpty() && font_->itemText(index).startsWith(QStringLiteral("DejaVu Sans"))))
-                current = index;
-        if (current >= 0)
-            font_->setCurrentIndex(current);
+        font_->setFontText(font.isEmpty() ? QString::fromStdString(
+                                                  document::encodeFontId(document::defaultFontId()))
+                                          : font);
     }
     const QString subject = node != nullptr ? tr("the selected text") : tr("new text");
     font_->setToolTip(tr("Font of %1").arg(subject));

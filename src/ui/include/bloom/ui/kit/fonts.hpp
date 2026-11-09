@@ -3,6 +3,8 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QLoggingCategory>
+#include <QByteArray>
+#include <QFont>
 #include <QString>
 #include <QStringList>
 
@@ -40,5 +42,12 @@ const BundledFontStatus& bundledFontStatus();
 
 // True when `family` is one of the bundled chrome families and it registered.
 [[nodiscard]] bool isBundledFontFamily(const QString& family);
+
+// The font picker draws each family in its own typeface. These two are the only way a family the
+// artist chose reaches a QFont: a family by name at a pixel size, and a name-only subset file
+// (downloaded for a picker row) registered with Qt so the row can use it. registerPickerFont returns
+// the family Qt registered, or empty when the data was not a usable font.
+[[nodiscard]] QFont pickerFont(const QString& family, int pixelSize);
+[[nodiscard]] QString registerPickerFont(const QByteArray& data);
 
 } // namespace bloom::ui::kit

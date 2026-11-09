@@ -256,6 +256,10 @@ void KDropdown::setControlSize(const ControlSize size) {
 KDropdown::ControlSize KDropdown::controlSize() const noexcept { return controlSize_; }
 
 void KDropdown::showPopup() {
+    if (externalPopup_) {
+        Q_EMIT openRequested();
+        return;
+    }
     if (model_->rowCount() == 0) {
         return;
     }
@@ -285,7 +289,9 @@ void KDropdown::setSearchable(const bool searchable) { popup_->setSearchable(sea
 
 bool KDropdown::searchable() const noexcept { return popup_->searchable(); }
 
-bool KDropdown::isPopupVisible() const { return popup_->isVisible(); }
+bool KDropdown::isPopupVisible() const {
+    return externalPopup_ ? externalOpen_ : popup_->isVisible();
+}
 
 KDropdownPopup* KDropdown::popup() const noexcept { return popup_; }
 
@@ -485,8 +491,9 @@ void KDropdown::paintEvent(QPaintEvent* event) {
 
     // A value that is no longer available (its item was disabled under it) reads muted.
     const bool unavailable = currentIndex_ >= 0 && !isItemEnabled(currentIndex_);
-    const QColor ink =
-        mutedValue_ || unavailable ? inkForState(Color::Muted, state) : colors.ink;
+    const QColor ink = valueTone_ ? inkForState(*valueTone_, state)
+                       : mutedValue_ || unavailable ? inkForState(Color::Muted, state)
+                                                    : colors.ink;
     const qreal ratio = devicePixelRatioF();
     const auto snap = [ratio](const qreal value) { return std::round(value * ratio) / ratio; };
 

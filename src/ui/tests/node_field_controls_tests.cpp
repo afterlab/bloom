@@ -7,6 +7,7 @@
 // be a KDropdown on the card AND in Properties, bools a KSwitch, colors a KColorChip. The audit
 // table is printed so the docs table can be regenerated from it.
 #include "channel_checklist_field.hpp"
+#include "font_picker.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
 
@@ -88,7 +89,7 @@ bool hasPurposeBuiltPropertiesRow(const document::ParameterDefinition& p) {
 const char* controlName(QWidget* w) {
     if (qobject_cast<ui::ChannelChecklistField*>(w))
         return "checklist";
-    if (qobject_cast<ui::kit::KDropdown*>(w)) return "dropdown";
+    if (qobject_cast<ui::kit::KDropdown*>(w) || qobject_cast<ui::FontField*>(w)) return "dropdown";
     if (qobject_cast<ui::kit::KSwitch*>(w)) return "switch";
     if (qobject_cast<ui::kit::KColorChip*>(w)) return "color chip";
     if (qobject_cast<ui::kit::KValueField*>(w)) return "value field";
@@ -201,10 +202,13 @@ int main(int argc, char** argv) {
             if (card == nullptr)
                 continue; // not drawn as an editable card row (special rows, hidden, path)
             if (isPickList(declared) && !hidden) {
-                expect(qobject_cast<ui::kit::KDropdown*>(card) != nullptr,
+                // The font is the font field: a dropdown that opens the picker (#489).
+                expect(qobject_cast<ui::kit::KDropdown*>(card) != nullptr ||
+                           qobject_cast<ui::FontField*>(card) != nullptr,
                        "card shows a dropdown for " + label);
                 expect(qobject_cast<ui::kit::KDropdown*>(props) != nullptr ||
-                           qobject_cast<ui::kit::KRadioGroup*>(props) != nullptr,
+                           qobject_cast<ui::kit::KRadioGroup*>(props) != nullptr ||
+                           qobject_cast<ui::FontField*>(props) != nullptr,
                        "Properties shows a dropdown for " + label);
             }
             if (declared.valueKind == document::ParameterValueKind::Boolean)

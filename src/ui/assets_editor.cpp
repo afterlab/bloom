@@ -282,12 +282,11 @@ void AssetsEditor::showContextMenu(const QPoint position) {
                 controller->relink(id, this);
         })->setEnabled(single);
         auto* controller = session_.assetController();
-        const bool font = asset && asset->kind == document::AssetKind::Font;
         add(tr("Reload Footage"), "assetsReloadAction", [this, selected] {
             if (auto* assets = session_.assetController())
                 for (const auto asset : selected)
                     assets->reload(asset);
-        })->setEnabled(controller != nullptr && !font);
+        })->setEnabled(controller != nullptr);
         add(tr("Reveal in File Manager"), "assetsRevealAction", [this, id] {
             revealInFileManager(id);
         })->setEnabled(controller != nullptr && !controller->sourcePath(id).empty());

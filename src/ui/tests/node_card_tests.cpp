@@ -308,18 +308,11 @@ void testFontDropdownOnATextCardUsesTheGenericSelector() {
                     dropdown = candidate;
         }
     }
-    expect(dropdown != nullptr, "the text card hosts the generic operand selector for Font");
+    expect(dropdown != nullptr, "the text card hosts the font field for Font");
     if (dropdown == nullptr)
         return;
-    expect(dropdown->count() >= 4 && dropdown->currentText() == QStringLiteral("DejaVu Sans"),
-           "the text card offers embedded faces first and keeps the default selected");
-    if (dropdown->count() >= 4) {
-        expect(dropdown->itemText(0) == QStringLiteral("DejaVu Sans") &&
-                   dropdown->itemText(1) == QStringLiteral("Inter Regular") &&
-                   dropdown->itemText(2) == QStringLiteral("Inter Medium") &&
-                   dropdown->itemText(3) == QStringLiteral("Inter SemiBold"),
-               "the embedded text faces retain their shared order");
-    }
+    expect(dropdown->currentText() == QStringLiteral("DejaVu Sans"),
+           "the text card shows the font ID's family and keeps the built-in default selected");
 }
 
 // Item 7, Merge. One ordered multi-input for the whole stack, with the slot model untouched

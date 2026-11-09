@@ -87,8 +87,6 @@ QString assetKindText(const document::AssetRecord& asset) {
     switch (asset.kind) {
     case document::AssetKind::Lut:
         return QObject::tr("LUT");
-    case document::AssetKind::Font:
-        return QObject::tr("Font");
     case document::AssetKind::Video:
         return QObject::tr("Video");
     case document::AssetKind::Sequence:
@@ -116,8 +114,6 @@ kit::IconId assetKindIcon(const document::AssetRecord& asset) {
     switch (asset.kind) {
     case document::AssetKind::Lut:
         return kit::IconId::SlidersHorizontal;
-    case document::AssetKind::Font:
-        return kit::IconId::Text;
     case document::AssetKind::Sequence:
         return kit::IconId::Images;
     case document::AssetKind::Audio:
@@ -246,7 +242,6 @@ QString AssetsEditor::rowSignature() const {
         text(asset.locator.kind);
         text(asset.locator.path);
         text(asset.manifest.pattern);
-        text(asset.fontStyle);
         text(asset.interpretation.inputColorSpaceId);
         // #381: the interpretation the rows show (rate, length, alpha).
         number(static_cast<int>(asset.interpretation.colorSpace));
@@ -358,13 +353,12 @@ void AssetsEditor::rebuild() {
     for (const auto& asset : project.assets()) {
         auto* item = new AssetItem(parentFor(asset.folder));
         const bool lut = asset.kind == document::AssetKind::Lut;
-        const bool font = asset.kind == document::AssetKind::Font;
         const bool video = asset.kind == document::AssetKind::Video;
         const bool audio = asset.kind == document::AssetKind::Audio;
         const bool sequence = asset.kind == document::AssetKind::Sequence;
         item->setText(NameColumn, QString::fromStdString(asset.name));
         setColumn(item, TypeColumn, assetKindText(asset));
-        if (!lut && !font && !audio)
+        if (!lut && !audio)
             setDimensions(item, asset.width, asset.height);
         if (video) {
             const auto rate = videoFrameRate(asset);
@@ -418,7 +412,6 @@ void AssetsEditor::rebuild() {
             tooltip = tr("Audio preview unavailable: %1").arg(audioError);
         else if (missing)
             tooltip = lut     ? tr("Missing LUT — Replace Footage in Assets")
-                      : font  ? tr("Missing font — Replace Footage in Assets")
                       : audio ? tr("Missing audio — Replace Footage in Assets")
                       : video ? tr("Missing video — Replace Footage in Assets")
                               : tr("Missing image — Replace Footage in Assets");

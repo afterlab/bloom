@@ -283,14 +283,6 @@ struct ThumbnailSelection {
     std::int64_t firstRow = 0;
 };
 
-[[nodiscard]] bool fontFileMatches(const document::AssetRecord& asset) {
-    if (asset.locator.portability == "builtin")
-        return true;
-    constexpr std::uint64_t kMaximumFontBytes = std::uint64_t{64} * 1024U * 1024U;
-    return platform::verifySourceDigest(asset.locator.path, asset.contentDigest, {},
-                                        kMaximumFontBytes) == platform::SourceCheck::Matches;
-}
-
 // The bytes an asset's source occupies on disk (a sequence's members summed), for the Assets File
 // Size column. Runs on the thumbnail worker only, beside the probes that already resolve these
 // paths; a member that cannot be stat'ed, a non-file locator or a cancellation leaves it unknown.
@@ -302,10 +294,7 @@ struct ThumbnailSelection {
             return std::nullopt;
         std::error_code error;
         const auto size = std::filesystem::file_size(
-            asset.kind == document::AssetKind::Font
-                ? std::filesystem::path(locator.path)
-                : media::resolveImagePath(locator.path, locator.relinkHint, directory),
-            error);
+            media::resolveImagePath(locator.path, locator.relinkHint, directory), error);
         return error ? std::nullopt : std::optional<std::uint64_t>(size);
     };
     if (asset.kind != document::AssetKind::Sequence || asset.manifest.members.empty())
@@ -322,25 +311,6 @@ struct ThumbnailSelection {
     return total;
 }
 
-[[nodiscard]] document::AssetRecord fontAssetRecord(const platform::FontFace& face) {
-    document::AssetRecord asset;
-    asset.kind = document::AssetKind::Font;
-    asset.contentDigest = face.contentDigest;
-    asset.fontFamily = face.family;
-    asset.fontStyle = face.style;
-    asset.fontIndex = face.faceIndex;
-    if (face.source == platform::FontSource::Embedded) {
-        asset.locator = {"font", "builtin", "embedded/" + std::to_string(face.faceIndex),
-                         "font:embedded:" + face.family + "|" + face.style};
-    } else {
-        const auto absolute = std::filesystem::absolute(face.path).lexically_normal();
-        const auto path = absolute.generic_string();
-        asset.locator = {
-            "font", "system", path,
-            QUrl::fromLocalFile(QString::fromStdString(path)).toEncoded().toStdString()};
-    }
-    return asset;
-}
 // UI-only frame projection of the Image source contract. Use the public exact frame mapping;
 // runtime implementation headers are deliberately outside this module's boundary.
 ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
@@ -919,8 +889,7 @@ AssetController::ImportFollowUp AssetController::compositionFollowUp() {
         std::vector<document::AssetId> footage;
         for (const auto id : assets)
             if (const auto* asset = project.findAsset(id);
-                asset != nullptr && asset->kind != document::AssetKind::Lut &&
-                asset->kind != document::AssetKind::Font)
+                asset != nullptr && asset->kind != document::AssetKind::Lut)
                 footage.push_back(id);
         if (footage.empty())
             return {};
@@ -959,25 +928,20 @@ void AssetController::importFiles(const QStringList& paths,
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())
         return;
-    const auto* asset = session_.snapshot().project().findAsset(id);
-    const bool font = asset != nullptr && asset->kind == document::AssetKind::Font;
     if (parent == nullptr)
         return;
-    const auto chosen =
-        kit::chooseFile(*parent, {.mode = kit::KFileRequest::Mode::Open,
-                                  .title = font ? tr("Relink Font") : tr("Relink Media"),
-                                  .kind = font ? QStringLiteral("font") : QStringLiteral("media"),
-                                  .nameFilters = font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF "
-                                                           "*.TTC)")
-                                                      : mediaFileFilter(),
-                                  .defaultSuffix = {},
-                                  .startPath = {}});
+    const auto chosen = kit::chooseFile(*parent, {.mode = kit::KFileRequest::Mode::Open,
+                                                  .title = tr("Relink Media"),
+                                                  .kind = QStringLiteral("media"),
+                                                  .nameFilters = mediaFileFilter(),
+                                                  .defaultSuffix = {},
+                                                  .startPath = {}});
     if (chosen)
         prepare({*chosen}, id);
 }
 std::filesystem::path AssetController::sourcePath(const document::AssetId id) const {
     const auto* asset = session_.snapshot().project().findAsset(id);
-    if (asset == nullptr || asset->locator.path.empty() || asset->kind == document::AssetKind::Font)
+    if (asset == nullptr || asset->locator.path.empty())
         return {};
     const auto& path = asset->locator.path;
     // An external locator stores its absolute file URI; a project-relative one is lexical.
@@ -1028,8 +992,6 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
         files.push_back(nativePath(path));
     const auto directory = baseDirectory();
     base_ = session_.snapshot();
-    const bool relinkFont = relinkId.isValid() && base_->project().findAsset(relinkId) != nullptr &&
-                            base_->project().findAsset(relinkId)->kind == document::AssetKind::Font;
     // Relink and Reload read the file the way the asset was imported (a still stays a still, a
     // sequence keeps its frame range).
     if (const auto* target = relinkId.isValid() ? base_->project().findAsset(relinkId) : nullptr)
@@ -1041,26 +1003,12 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, relinkFont, folder, shared, options,
+        [files = std::move(files), directory, relinkId, folder, shared, options,
          hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
             auto cancel = [&] { return context.isCancellationRequested(); };
-            if (relinkFont) {
-                const auto catalogue = platform::FontCatalogueProvider{}.enumerate(cancel);
-                const auto found = std::ranges::find_if(
-                    catalogue.faces, [&](const auto& face) { return face.path == files.front(); });
-                if (found == catalogue.faces.end())
-                    return runtime::TaskResult<OperationHandle>::failed(
-                        {.code = "bloom.font.relink-not-found",
-                         .severity = runtime::DiagnosticSeverity::Error,
-                         .summary = "The selected file is not in the system font catalogue",
-                         .detail = "Choose an installed font face file.",
-                         .suggestedAction = "Select a .ttf, .otf, or .ttc file reported by the "
-                                            "system catalogue."});
-                *result =
-                    std::make_unique<commands::RelinkFontAsset>(relinkId, fontAssetRecord(*found));
-            } else if (relinkId.isValid())
+            if (relinkId.isValid())
                 *result = std::make_unique<commands::RelinkAsset>(relinkId, files.front(),
                                                                   directory, cancel, options);
             else {
@@ -1875,10 +1823,6 @@ void AssetController::startThumbnails() {
                             path, [&context] { return context.isCancellationRequested(); });
                         preview.missing =
                             lut.error != color::LutError::None || lut.digest != asset.contentDigest;
-                        results->assets.emplace(asset.id, std::move(preview));
-                    } else if (asset.kind == document::AssetKind::Font) {
-                        Preview preview;
-                        preview.missing = !fontFileMatches(asset);
                         results->assets.emplace(asset.id, std::move(preview));
                     } else {
                         runtime::CompiledImageSource source;

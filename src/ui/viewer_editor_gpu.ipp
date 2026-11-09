@@ -111,7 +111,10 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
                                 effectiveZoom(displayRect, *geometry), overlayOptions_,
                                 textEdit_ ? std::span<const runtime::EvaluatedOperationBounds>{}
                                           : bounds,
-                                pointTextLayers(session_, bounds));
+                                pointTextLayers(session_, bounds),
+                                overlayOptions_.missingFonts
+                                    ? previewController_->missingFontBounds(frame)
+                                    : std::vector<runtime::EvaluatedOperationBounds>{});
         }
         paintRoi(painter);
         paintCreation(painter);

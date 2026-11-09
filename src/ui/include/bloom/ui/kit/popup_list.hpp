@@ -19,6 +19,8 @@ class KSearchField;
 // current, never chosen. Qt::UserRole is left to the caller's own payload.
 inline constexpr int kListHeadingRole = Qt::UserRole + 1;
 // A row that is a separator: a hairline between groups, never current, never chosen.
+// Qt::FontRole on an entry row draws its label in that font (the font picker draws each family in
+// its own typeface); without it the row uses the list's UI font.
 inline constexpr int kListSeparatorRole = Qt::UserRole + 2;
 
 // The most rows a list popup shows before it scrolls.
@@ -58,6 +60,9 @@ class KPopupList final : public QWidget {
     void setFilterVisible(bool visible);
     [[nodiscard]] bool filterVisible() const noexcept;
     [[nodiscard]] KSearchField* filterField() const noexcept { return filter_; }
+    // A widget shown beside the filter field in the same band (the font picker's category dropdown).
+    // The band takes it over.
+    void setFilterAccessory(QWidget* accessory);
 
     // The row marked by the check column (the value the popup's owner holds), or -1.
     void setCommittedRow(int row);
@@ -98,6 +103,8 @@ class KPopupList final : public QWidget {
   Q_SIGNALS:
     // A row the artist chose (left-button release, Enter/Return, Tab), in the model's row numbers.
     void rowChosen(int row);
+    // The current row (the one under the pointer or the keyboard's) changed; -1 for none.
+    void currentRowChanged(int row);
     // Tab or Shift+Tab after rowChosen: the owner moves focus on past its anchor.
     void tabbed(bool forward);
     void dismissed();

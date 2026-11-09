@@ -5,7 +5,6 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/shape.hpp>
-#include <bloom/platform/font_catalog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <vector>
@@ -92,6 +91,7 @@ void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QW
                                                 const document::NodeRecord& node);
 class KeyframeDiamond;
 class ChannelChecklistField;
+class FontField;
 namespace kit {
 class KColorChip;
 class KLineEdit;
@@ -126,9 +126,7 @@ class PropertiesRegistryRow final : public QWidget {
 
   private:
     void commit(std::optional<std::size_t> component = {});
-    void populateFontSelector();
     void populateInputColorSpaceSelector();
-    void pollFontCatalogue();
     [[nodiscard]] double displayScale() const;
     CompositionSession& session_;
     document::NodeId node_;
@@ -137,7 +135,7 @@ class PropertiesRegistryRow final : public QWidget {
     std::array<kit::KValueField*, 4> fields_{};
     kit::KRadioGroup* segments_ = nullptr;
     kit::KDropdown* selector_ = nullptr;
-    std::vector<platform::FontFace> fontFaces_;
+    FontField* fontField_ = nullptr;
     kit::KSlider* slider_ = nullptr;
     kit::KSwitch* toggle_ = nullptr;
     kit::KColorChip* color_ = nullptr;

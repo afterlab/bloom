@@ -213,10 +213,10 @@ void ViewerEditor::buildMenus() {
                                                           const QString& objectName,
                                                           const QString& setting,
                                                           const QKeySequence& shortcut,
-                                                          bool* state) {
+                                                          bool* state, const bool defaultOn = false) {
         auto* action = shortcutAction(label, objectName, shortcut);
         action->setCheckable(true);
-        *state = QSettings().value(setting, false).toBool();
+        *state = QSettings().value(setting, defaultOn).toBool();
         action->setChecked(*state);
         guidesMenu_->addAction(action);
         connect(action, &QAction::toggled, this, [state, setting](const bool enabled) {
@@ -242,6 +242,10 @@ void ViewerEditor::buildMenus() {
     pixelGridAction_ = addOverlayToggle(
         tr("Pixel Grid"), QStringLiteral("viewerPixelGridAction"), kPixelGridSetting,
         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P), &overlayOptions_.pixelGrid);
+    // #489: red wash over text whose font is missing; on until the artist turns it off.
+    missingFontsAction_ = addOverlayToggle(
+        tr("Highlight Missing Fonts"), QStringLiteral("viewerMissingFontsAction"),
+        kMissingFontsSetting, QKeySequence(), &overlayOptions_.missingFonts, true);
     viewerViewMenu_->addMenu(guidesMenu_);
     backgroundMenu_ = mirrorMenu(
         tr("Background"), QStringLiteral("viewerBackgroundMenu"), backgroundDropdown_,

@@ -75,6 +75,7 @@ inline constexpr auto kCentreCrossSetting = "viewer/overlay/centre-cross";
 inline constexpr auto kThirdsSetting = "viewer/overlay/thirds";
 inline constexpr auto kRulersSetting = "viewer/overlay/rulers";
 inline constexpr auto kPixelGridSetting = "viewer/overlay/pixel-grid";
+inline constexpr auto kMissingFontsSetting = "viewer/overlay/missing-fonts";
 
 // The footer's collapse order (docs/ux/ui-grammar.md, "Viewer footer"): the lowest rank leaves the
 // row first. Transport play/step, loop and the timecode readout never collapse.

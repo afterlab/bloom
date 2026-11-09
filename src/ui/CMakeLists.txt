@@ -566,8 +566,12 @@ target_sources(
         context_bar_options.cpp
         context_bar_options.hpp
         layer_alignment_actions.cpp
-        text_font_choices.cpp
-        text_font_choices.hpp
+        font_picker.cpp
+        font_picker.hpp
+        font_service.cpp
+        font_service.hpp
+        qt_font_transport.cpp
+        qt_font_transport.hpp
         tool_controller.cpp
         composition_thumbnail_controller.cpp
         curve_graph.cpp
@@ -860,6 +864,7 @@ target_link_libraries(
         bloom_ui_kit
         bloom_media_audio
         Qt6::Widgets
+        Qt6::Network
 )
 target_link_libraries(bloom_ui PUBLIC bloom_mcp)
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)

@@ -122,6 +122,20 @@ const BundledFontStatus& registerBundledFonts() {
 
 const BundledFontStatus& bundledFontStatus() { return registerBundledFonts(); }
 
+QFont pickerFont(const QString& family, const int pixelSize) {
+    QFont font(family);
+    font.setPixelSize(pixelSize);
+    return font;
+}
+
+QString registerPickerFont(const QByteArray& data) {
+    const int handle = QFontDatabase::addApplicationFontFromData(data);
+    if (handle < 0)
+        return {};
+    const QStringList families = QFontDatabase::applicationFontFamilies(handle);
+    return families.isEmpty() ? QString() : families.front();
+}
+
 QStringList fontFamiliesForRole(const TypeRole role) {
     const BundledFontStatus& status = bundledFontStatus();
     const bool monospace = role == TypeRole::Value;

@@ -263,12 +263,32 @@ void paintSelectionBounds(QPainter& painter, const ViewerMapping& mapping,
     }
 }
 
+// Text with a missing font: the box the fallback face occupies, washed in the error color so the
+// artist sees at a glance which text is not drawn in the font it asks for.
+void paintMissingFonts(QPainter& painter, const ViewerMapping& mapping,
+                       const std::span<const runtime::EvaluatedOperationBounds> bounds) {
+    QColor wash = kit::color(kit::Color::Error);
+    wash.setAlphaF(0.28f);
+    QPen pen(kit::color(kit::Color::Error), kit::px(kit::Size::Hairline));
+    pen.setCosmetic(true);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(pen);
+    painter.setBrush(wash);
+    for (const auto& bound : bounds) {
+        QPolygonF polygon;
+        for (const auto point : bound.polygon)
+            polygon << mapping.toScreen(point);
+        painter.drawPolygon(polygon);
+    }
+}
+
 } // namespace
 
 void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const ViewerMapping& mapping,
                          const double effectiveZoom, const ViewerOverlayOptions& options,
                          const std::span<const runtime::EvaluatedOperationBounds> bounds,
-                         const std::span<const document::LayerId> pointText) {
+                         const std::span<const document::LayerId> pointText,
+                         const std::span<const runtime::EvaluatedOperationBounds> missingFontBounds) {
     const auto& displayRect = mapping.displayRect;
     const QSize compositionSize(static_cast<int>(mapping.compositionFormat.width()),
                                 static_cast<int>(mapping.compositionFormat.height()));
@@ -291,6 +311,8 @@ void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const View
     if (options.rulers) {
         paintRulers(painter, canvasRect, displayRect, compositionSize);
     }
+    if (options.missingFonts && !missingFontBounds.empty())
+        paintMissingFonts(painter, mapping, missingFontBounds);
     paintSelectionBounds(painter, mapping, bounds, pointText);
     painter.restore();
 }

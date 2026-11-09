@@ -1,7 +1,6 @@
 #pragma once
 
 #include <bloom/document/ids.hpp>
-#include <bloom/platform/font_catalog.hpp>
 
 #include <QPointer>
 #include <QWidget>
@@ -24,6 +23,7 @@ class KValueField;
 namespace bloom::ui {
 
 class CompositionSession;
+class FontField;
 class ViewerEditor;
 
 // The context bar's tool options (ADR 0031). Each group reads real session or document state and
@@ -81,13 +81,9 @@ class TextStyleOptions final : public QWidget {
   private:
     [[nodiscard]] const document::NodeRecord* target() const;
     [[nodiscard]] std::optional<document::ParameterId> parameter(std::string_view role) const;
-    void populateFonts();
-    void pollFonts();
-    void chooseFont(int index);
     CompositionSession& session_;
     std::function<void()> committed_;
-    kit::KDropdown* font_ = nullptr;
-    std::vector<platform::FontFace> faces_;
+    FontField* font_ = nullptr;
     kit::KValueField* size_ = nullptr;
     kit::KRadioGroup* alignment_ = nullptr;
     bool refreshing_ = false;

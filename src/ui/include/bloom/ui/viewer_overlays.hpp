@@ -79,6 +79,9 @@ struct ViewerOverlayOptions final {
     bool thirds = false;
     bool rulers = false;
     bool pixelGrid = false;
+    // #489: text whose font is missing is washed in red. A display overlay only: it is never drawn
+    // into a rendered frame or an export.
+    bool missingFonts = true;
     ViewerSafeAreaPreset safeAreaPreset = ViewerSafeAreaPreset::Broadcast;
     document::SafeAreaSettings safeAreaSettings{};
 };
@@ -89,6 +92,7 @@ struct ViewerOverlayOptions final {
 void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const ViewerMapping& mapping,
                          double effectiveZoom, const ViewerOverlayOptions& options,
                          std::span<const runtime::EvaluatedOperationBounds> bounds,
-                         std::span<const document::LayerId> pointText = {});
+                         std::span<const document::LayerId> pointText = {},
+                         std::span<const runtime::EvaluatedOperationBounds> missingFontBounds = {});
 
 } // namespace bloom::ui
