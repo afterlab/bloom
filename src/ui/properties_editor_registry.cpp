@@ -3,6 +3,7 @@
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
+#include "properties_value_outputs.hpp"
 #include "properties_sections.hpp"
 #include <QLabel>
 #include <QLineEdit>
@@ -296,19 +297,9 @@ void PropertiesEditor::configureRegistryRows() {
                 }
             }
             bool hasValueOutputs = false;
-            // #342: a Node Group is replaced by its group before anything is evaluated, and a group's
-            // boundaries republish the values it was given, so none has a result of its own to read.
-            const bool groupBoundary = definition->lowering == document::NodeLoweringKind::NodeGroup ||
-                                       definition->lowering == document::NodeLoweringKind::GroupBoundary;
+            // The rows and the evaluation request share one predicate (properties_value_outputs.hpp).
             for (const auto& output : definition->outputs) {
-                if (groupBoundary)
-                    continue;
-                // Pixel and sound outputs carry no value to read out (a Mask or a channel set
-                // never resolves to text, which left "Resolving…" on screen for good).
-                if (output.valueKind == document::SocketValueKind::Image ||
-                    output.valueKind == document::SocketValueKind::Audio ||
-                    output.valueKind == document::SocketValueKind::Mask ||
-                    output.valueKind == document::SocketValueKind::ChannelSet)
+                if (!nodeShowsValueOutputs(*definition) || !isReadableValueOutput(output))
                     continue;
                 hasValueOutputs = true;
                 const auto label = node_editor::displayTypeName(output.name);

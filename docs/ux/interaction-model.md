@@ -757,7 +757,16 @@ selection. Driver results update from ONE cancellable background evaluation owne
 read by every surface that shows a driven value, at the current session time, so the Properties row
 and the timeline row for one parameter always show the same string. A driven String shows its
 resolved text read-only, exactly as every other kind shows its resolved value. A stale result cannot
-overwrite a newer selection, snapshot, or time. Collapsed section state
+overwrite a newer selection, snapshot, or time. A selected node's value-output rows (a Trim Path's
+`length`, a Path Stroke's `path`, `core` and `length`, an Image Statistics' five numbers, and every
+other value node's outputs) come from the same evaluation: the rows and the request are drawn from
+one rule (`src/ui/properties_value_outputs.hpp`: every output that is not an image, sound, mask or
+channel set, on a node that is not a Node Group or its boundaries), so a node that shows a readout is
+always a node that is asked for it. A row shows the value, or the reason there is none ("Unavailable",
+the first compile diagnostic, or "Image Statistics are not ready"); an empty text reads "(empty)";
+no row waits on "Resolving…" for good. One node that cannot be inspected does not stop the driven
+values of the others. The evaluation runs on the resolver's worker, is cancelled by a newer request
+and never runs on the interface thread. Collapsed section state
 is a UI preference; searching temporarily exposes matches without changing that preference.
 
 A layer's Masks section lists each mask with a name field, a closed Mode dropdown (None, Add,

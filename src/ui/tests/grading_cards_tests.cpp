@@ -58,6 +58,15 @@
 #include <bloom/ui/corner_pin_widget.hpp>
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/test_card_widget.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/host/project_color_choice.hpp>
+#include <QRegularExpression>
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <vector>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/ui/light_rays_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
@@ -1172,6 +1181,182 @@ void testCardCard() {
     if (!cardContentFits(*fixture.item, "test-card-patch"))
         ++failures;
     capture(fixture, QStringLiteral("test-card-patch"));
+}
+
+// #587 / #639: the Patch readout is what the colour pipeline produces. The expected value is worked
+// out here from the colour library alone (the configuration's own colour space processor into the
+// working space, then its Display and View processor), never through the widget's own helper, and
+// the readout's 8-bit codes and four-decimal floats must equal it.
+struct ShownPatch final {
+    QString view;
+    std::array<int, 3> code{};
+    std::array<double, 3> display{};
+};
+
+std::optional<ShownPatch> independentPatch(const document::ColorSettings& settings,
+                                           const std::string& working, const std::string& display,
+                                           const std::string& view, const std::string_view space,
+                                           const std::array<double, 3>& signal) {
+    const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+    if (builtIn == nullptr)
+        return std::nullopt;
+    auto resolution = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn,
+                                                builtIn->uri, settings.ocioConfig.expectedRevision.digest,
+                                                working);
+    auto config = std::move(resolution).takeResolved();
+    if (!config)
+        return std::nullopt;
+    std::array<std::array<float, 4>, 1> pixel{
+        {{static_cast<float>(signal[0]), static_cast<float>(signal[1]),
+          static_cast<float>(signal[2]), 1.0F}}};
+    if (!space.empty()) {
+        const auto prepared = color::CpuColorSpaceProcessor::prepare(
+            *config, std::string(space), config->processColorSpaceId());
+        if (!prepared || !prepared.processor()->apply(pixel))
+            return std::nullopt;
+    }
+    auto handle = color::buildCpuDisplayProcessorForView(*config, display, view).takeHandle();
+    if (!handle)
+        return std::nullopt;
+    const auto shown = handle->referenceToDisplay(core::Color4d{static_cast<double>(pixel[0][0]), static_cast<double>(pixel[0][1]), static_cast<double>(pixel[0][2]), 1.0});
+    if (!shown)
+        return std::nullopt;
+    ShownPatch result;
+    result.view = QString::fromUtf8(color::displayViewLabel(view));
+    const std::array<double, 3> rgb{shown->red, shown->green, shown->blue};
+    for (std::size_t i = 0; i < 3; ++i) {
+        result.display[i] = rgb[i];
+        result.code[i] = static_cast<int>(std::lround(std::clamp(rgb[i], 0.0, 1.0) * 255.0));
+    }
+    return result;
+}
+
+// The readout's text, once the worker has answered; "Expected on <view>: 8-bit r g b, float r g b".
+QString waitForExpected(ui::TestCardCardWidget& card) {
+    QElapsedTimer wait;
+    wait.start();
+    while ((card.expectedText().isEmpty() || card.expectedText().contains(QChar(0x2026))) &&
+           wait.elapsed() < 10'000)
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    QApplication::processEvents();
+    return card.expectedText();
+}
+
+bool readoutMatches(const QString& text, const ShownPatch& expected) {
+    static const QRegularExpression pattern(
+        QStringLiteral("^Expected on (.+): 8-bit (\\d+) (\\d+) (\\d+), float (-?[\\d.]+) (-?[\\d.]+) "
+                       "(-?[\\d.]+)$"));
+    const auto match = pattern.match(text);
+    if (!match.hasMatch() || match.captured(1) != expected.view)
+        return false;
+    for (int i = 0; i < 3; ++i) {
+        if (match.captured(2 + i).toInt() != expected.code[static_cast<std::size_t>(i)])
+            return false;
+        if (std::abs(match.captured(5 + i).toDouble() - expected.display[static_cast<std::size_t>(i)]) >
+            0.00006)
+            return false;
+    }
+    return true;
+}
+
+void testCardExpectedReadout() {
+    CardFixture fixture(document::kTestCardNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::TestCardCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Test Card draws its card widget for the readout");
+    if (card == nullptr)
+        return;
+    const auto set = [&](const std::string_view role, const std::int64_t value) {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
+        expect(id && fixture.session.setParameterValue(*id, value, QStringLiteral("Set")),
+               "a Test Card value is set for the readout");
+        QApplication::processEvents();
+    };
+    set("card", static_cast<std::int64_t>(document::TestCard::Patch));
+    // The default Display and View of the project's colour configuration.
+    auto working = std::string(fixture.session.colorIntent().workingColorSpaceId);
+    const auto defaultPair = [&](const document::ColorSettings& settings)
+        -> std::optional<std::pair<std::string, std::string>> {
+        const auto* builtIn =
+            std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+        if (builtIn == nullptr)
+            return std::nullopt;
+        auto config = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn,
+                                                builtIn->uri, settings.ocioConfig.expectedRevision.digest,
+                                                working)
+                          .takeResolved();
+        if (!config || config->displays().empty())
+            return std::nullopt;
+        const auto* pair = color::viewerDefaultDisplayView(config->displays());
+        return pair == nullptr ? std::nullopt
+                               : std::optional(std::pair{pair->display, pair->view});
+    };
+    auto pair = defaultPair(fixture.session.colorSettings());
+    expect(pair.has_value(), "the project's configuration offers a default Display and View");
+    if (!pair)
+        return;
+    struct Case final {
+        std::int64_t value;
+        std::int64_t space;
+        const char* name;
+    };
+    std::vector<QString> seen;
+    for (const auto& item : {Case{7, 0, "Rec.709 grey 50%"}, Case{14, 0, "full-field white"},
+                             Case{7, 2, "Rec.2100 PQ grey 50%"}, Case{7, 1, "Rec.2100 HLG grey 50%"}}) {
+        set("patchValue", item.value);
+        set("patchSpace", item.space);
+        const auto text = waitForExpected(*card);
+        const auto expected = independentPatch(
+            fixture.session.colorSettings(), working, pair->first, pair->second,
+            document::testCardSignalSpaceId(static_cast<std::int64_t>(document::TestCard::Patch),
+                                            item.space, 0),
+            document::testCardPatchSignal(item.value));
+        const std::string label = std::string("the expected display value of ") + item.name +
+                                  " equals the colour pipeline's: " + text.toStdString();
+        if (expected)
+            expect(readoutMatches(text, *expected), label.c_str());
+        else
+            expect(text.startsWith(QStringLiteral("Expected display value unavailable")),
+                   label.c_str());
+        expect(!text.contains(QChar(0x2026)), "the readout finished working it out");
+        expect(std::ranges::find(seen, text) == seen.end(),
+               "each patch value or space shows a different expected display value");
+        seen.push_back(text);
+    }
+    // A different Display and View changes the text: an ACES configuration offers more than one view.
+    set("patchValue", 7);
+    set("patchSpace", 0);
+    const auto neutralText = waitForExpected(*card);
+    auto resolvedSettings = host::resolveProjectColorSettings(
+        fixture.session.colorSettings(), host::ProjectColorConfig::AcesCg, std::nullopt);
+    expect(resolvedSettings.settings.has_value(), "an ACES configuration is available");
+    if (!resolvedSettings.settings)
+        return;
+    fixture.session.setColorSettings(*resolvedSettings.settings);
+    working = std::string(fixture.session.colorIntent().workingColorSpaceId);
+    card->refresh();
+    const auto untoneMapped = waitForExpected(*card);
+    expect(untoneMapped != neutralText, "changing the colour configuration changes the readout");
+    const auto acesPair = defaultPair(fixture.session.colorSettings());
+    const auto acesExpected = acesPair ? independentPatch(fixture.session.colorSettings(), working,
+                                                            acesPair->first, acesPair->second,
+                                                            document::kTestCardRec709Space,
+                                                            document::testCardPatchSignal(7))
+                                       : std::nullopt;
+    expect(acesExpected && readoutMatches(untoneMapped, *acesExpected),
+           "the ACES default view's readout equals the colour pipeline's");
+    const auto digest = fixture.session.colorSettings().ocioConfig.expectedRevision.digest.toLowercaseHex();
+    fixture.session.projectViewMemory().rememberDisplayView(
+        QString::fromLatin1(digest.data(), static_cast<int>(digest.size())),
+        {QStringLiteral("sRGB - Display"), QStringLiteral("ACES 1.0 - SDR Video")});
+    set("patchSpace", 3);
+    set("patchSpace", 0);
+    const auto toneMapped = waitForExpected(*card);
+    const auto toneExpected = independentPatch(fixture.session.colorSettings(), working, "sRGB - Display",
+                                               "ACES 1.0 - SDR Video", document::kTestCardRec709Space,
+                                               document::testCardPatchSignal(7));
+    expect(toneMapped != untoneMapped && toneExpected && readoutMatches(toneMapped, *toneExpected),
+           "choosing another View changes the readout to the pipeline's value for it");
 }
 
 // #508: the Light Rays card paints inside its card with no label cut short, writes nothing of its
@@ -2689,6 +2874,7 @@ int main(int argc, char** argv) {
     chromaticAberrationCard();
     cornerPinCard();
     testCardCard();
+    testCardExpectedReadout();
     lightRaysCard();
     cameraShakeCard();
     depthEffectCards();

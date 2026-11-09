@@ -35,7 +35,10 @@ class DrivenValueResolver final : public QObject {
     explicit DrivenValueResolver(CompositionSession& session, QObject* parent);
     [[nodiscard]] const Work& work() const noexcept { return *work_; }
     ~DrivenValueResolver() override;
-    void request(std::vector<document::ParameterId> parameters);
+    // `readoutNodes` are the nodes whose value outputs a surface reads out (Properties): each gets
+    // an entry in Values::outputs, a value or the reason there is none, never a missing one.
+    void request(std::vector<document::ParameterId> parameters,
+                 std::vector<document::NodeId> readoutNodes = {});
     std::function<void(const Values&)> ready;
 
   private:
@@ -52,6 +55,7 @@ class DrivenValueResolver final : public QObject {
     runtime::TaskHandle<std::shared_ptr<Values>> task_;
     QTimer* timer_;
     std::vector<document::ParameterId> parameters_;
+    std::vector<document::NodeId> readoutNodes_;
     std::uint64_t generation_ = 0;
     std::uint64_t activeGeneration_ = 0;
     bool active_ = false;

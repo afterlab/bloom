@@ -1408,6 +1408,11 @@ add_executable(bloom_properties_registry_test properties_registry_tests.cpp)
 target_link_libraries(bloom_properties_registry_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_properties_registry_test)
 bloom_add_test(NAME bloom.ui.properties-registry COMMAND bloom_properties_registry_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# #582: the label audit again at a device pixel ratio of 1.5 (the full registry test above runs at 1).
+add_test(NAME bloom.ui.properties-registry.labels.dpr1.5 COMMAND bloom_properties_registry_test --label-audit)
+set_tests_properties(bloom.ui.properties-registry.labels.dpr1.5 PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5"
+    LABELS "ui;integration;kit" TIMEOUT 120)
 
 add_executable(bloom_properties_layer_time_test properties_layer_time_tests.cpp)
 target_link_libraries(bloom_properties_layer_time_test PRIVATE bloom_ui)

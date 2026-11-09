@@ -1,5 +1,6 @@
 #include "driven_value_resolver.hpp"
 #include "node_editor_items.hpp"
+#include "properties_value_outputs.hpp"
 #include <algorithm>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
@@ -160,7 +161,18 @@ void CompositionSession::refreshDrivenValues() {
     const auto* current = composition();
     std::vector<document::ParameterId> driven;
     bool hasBoundsReadout = false;
+    // The selected nodes Properties reads value outputs out of, by the predicate that draws those
+    // rows (properties_value_outputs.hpp): a node that shows a readout is a node that is asked.
+    std::vector<document::NodeId> readoutNodes;
     if (current != nullptr) {
+        for (const auto id : selectedNodes_) {
+            const auto* node = current->graph().findNode(id);
+            const auto* definition =
+                node ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
+                     : nullptr;
+            if (definition != nullptr && !readableValueOutputs(*definition).empty())
+                readoutNodes.push_back(id);
+        }
         for (const auto& parameter : current->parameters().records()) {
             if (std::holds_alternative<document::DriverBindingSource>(parameter.source)) {
                 driven.push_back(parameter.id);
@@ -187,11 +199,14 @@ void CompositionSession::refreshDrivenValues() {
                 node.typeId == document::kCameraShakeNodeType)
                 signature += QString("/bounds:%1").arg(node.id.value());
     }
+    for (const auto id : readoutNodes) {
+        signature += QString("/readout:%1").arg(id.value());
+    }
     if (signature == drivenRequest_) {
         return;
     }
     drivenRequest_ = signature;
-    if (driven.empty() && !hasBoundsReadout) {
+    if (driven.empty() && !hasBoundsReadout && readoutNodes.empty()) {
         if (!drivenText_.empty() || !valueOutputText_.empty()) {
             drivenText_.clear();
             drivenTyped_.clear();
@@ -209,6 +224,6 @@ void CompositionSession::refreshDrivenValues() {
             Q_EMIT drivenValuesChanged();
         };
     }
-    drivenValues_->request(std::move(driven));
+    drivenValues_->request(std::move(driven), std::move(readoutNodes));
 }
 } // namespace bloom::ui

@@ -5,6 +5,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include "properties_value_outputs.hpp"
 #include <vector>
 
 namespace bloom::ui {
@@ -49,6 +50,7 @@ class DriverProbe final {
 runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snapshot,
                                                   document::CompositionId compositionId,
                                                   std::span<const document::ParameterId> parameters,
+                                                  std::span<const document::NodeId> readoutNodes,
                                                   const runtime::CancellationToken& cancellation) {
     const auto* composition = snapshot.project().findComposition(compositionId);
     if (!composition || !composition->graph().compositionOutput())
@@ -82,12 +84,32 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
         for (const auto port : {document::kCameraShakeOffsetPort, document::kCameraShakeRollPort})
             outputs.push_back({node.id, std::string(port)});
     }
-    for (auto output : outputs) {
+    // Every value output a selected node reads out in Properties (properties_value_outputs.hpp),
+    // so a node nothing consumes still gets a value operation to read.
+    const auto readoutBegin = outputs.size();
+    for (const auto nodeId : readoutNodes) {
+        const auto* node = composition->graph().findNode(nodeId);
+        const auto* definition =
+            node ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
+                 : nullptr;
+        if (definition == nullptr || node->typeId == document::kCameraShakeNodeType)
+            continue;
+        for (const auto& port : readableValueOutputs(*definition))
+            outputs.push_back({nodeId, port});
+    }
+    for (std::size_t index = 0; index < outputs.size(); ++index) {
+        auto output = outputs[index];
+        // A readout the probe has no sink for stays unresolved on its own; only a driven parameter
+        // or Camera Shake output that cannot be read fails the whole inspection.
+        const bool optional = index >= readoutBegin;
         if (cancellation.isCancellationRequested())
             return {};
         const auto kind = composition->graph().outputKind(output);
-        if (!kind || *kind == document::SocketValueKind::Image)
+        if (!kind || *kind == document::SocketValueKind::Image) {
+            if (optional)
+                continue;
             return {};
+        }
         auto valueKind = document::ParameterValueKind::Float64;
         auto type = document::kSolidSourceNodeType;
         if (*kind == document::SocketValueKind::Color)
@@ -110,13 +132,19 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
             if (!probe.connect(
                     output,
                     document::NodeInputRef{
-                        reduce, probe.operand(reduce, document::ParameterValueKind::Vec3d)}))
+                        reduce, probe.operand(reduce, document::ParameterValueKind::Vec3d)})) {
+                if (optional)
+                    continue;
                 return {};
+            }
             output = {reduce, std::string(document::kResultPortName)};
         }
         const auto image = probe.add(type);
-        if (!probe.connect(output, document::NodeInputRef{image, probe.operand(image, valueKind)}))
+        if (!probe.connect(output, document::NodeInputRef{image, probe.operand(image, valueKind)})) {
+            if (optional)
+                continue;
             return {};
+        }
         if (type == document::kLayerOutputNodeType) {
             const auto source = probe.add(document::kSolidSourceNodeType);
             if (!probe.connect({source, "image"}, document::NodeInputRef{image, "image"}))

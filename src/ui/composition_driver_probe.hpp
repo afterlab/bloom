@@ -7,5 +7,6 @@ namespace bloom::ui {
 [[nodiscard]] runtime::SnapshotCompileResult
 compileDriverProbe(const document::Snapshot& snapshot, document::CompositionId composition,
                    std::span<const document::ParameterId> parameters,
+                   std::span<const document::NodeId> readoutNodes,
                    const runtime::CancellationToken& cancellation);
 } // namespace bloom::ui

@@ -367,6 +367,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     if (definition_.valueKind == document::ParameterValueKind::Path) {
         auto* summary = new kit::KLabel(controls);
         summary->setObjectName("propertiesPathSummary");
+        summary->setTone(kit::Color::Foreground);
         layout->addWidget(summary);
     } else if (definition_.schemaKey == document::kAudioLevelParameterSchemaKey) {
         slider_ = new kit::KSlider(controls);

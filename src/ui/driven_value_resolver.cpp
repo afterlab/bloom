@@ -2,8 +2,10 @@
 #include "composition_driver_probe.hpp"
 #include <QTimer>
 #include <algorithm>
+#include "properties_value_outputs.hpp"
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/ui/composition_authoring.hpp>
@@ -61,6 +63,27 @@ std::optional<std::size_t> valueSlot(const document::NodeRecord& node,
     return static_cast<std::size_t>(found - definition.outputs.begin());
 }
 
+// Every (node, port) a readout was asked for, by the same predicate the Properties rows use.
+std::vector<DrivenValueResolver::ValueOutputKey>
+readoutOutputKeys(const document::Snapshot& snapshot, const document::CompositionId compositionId,
+                  const std::vector<document::NodeId>& nodes) {
+    std::vector<DrivenValueResolver::ValueOutputKey> keys;
+    const auto* composition = snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return keys;
+    for (const auto id : nodes) {
+        const auto* node = composition->graph().findNode(id);
+        const auto* definition =
+            node ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
+                 : nullptr;
+        if (definition == nullptr)
+            continue;
+        for (auto& port : readableValueOutputs(*definition))
+            keys.emplace_back(id, std::move(port));
+    }
+    return keys;
+}
+
 QString valueText(const runtime::CompiledValue& value) {
     return std::visit(
         [](const auto& held) -> QString {
@@ -75,7 +98,8 @@ QString valueText(const runtime::CompiledValue& value) {
                     .arg(held.y, 0, 'g', 12)
                     .arg(held.z, 0, 'g', 12);
             else if constexpr (std::is_same_v<T, std::string>)
-                return QString::fromStdString(held);
+                // An empty text is an answer, not a missing one (an empty row reads as unresolved).
+                return held.empty() ? QObject::tr("(empty)") : QString::fromStdString(held);
             else if constexpr (std::is_same_v<T, bool>)
                 return held ? QObject::tr("True") : QObject::tr("False");
             else if constexpr (std::is_same_v<T, double>)
@@ -111,24 +135,35 @@ struct DrivenValueResolver::ProbeCache final {
     std::optional<document::Snapshot> snapshot;
     document::CompositionId composition;
     std::vector<document::ParameterId> parameters;
-    runtime::SnapshotCompileResult compiled;
+    std::vector<document::NodeId> readouts;
+    // What one inspection answered: the compile, and why the readouts were left out of it when
+    // the compile that included them failed (empty when they were included or none were asked).
+    struct Entry final {
+        runtime::SnapshotCompileResult compiled;
+        QString readoutReason;
+    };
+    Entry entry;
 
-    [[nodiscard]] std::optional<runtime::SnapshotCompileResult>
-    find(const document::Snapshot& state, const document::CompositionId id,
-         const std::vector<document::ParameterId>& asked) {
+    [[nodiscard]] std::optional<Entry> find(const document::Snapshot& state,
+                                            const document::CompositionId id,
+                                            const std::vector<document::ParameterId>& asked,
+                                            const std::vector<document::NodeId>& readoutNodes) {
         const std::lock_guard lock(mutex);
         if (snapshot && snapshot->revision() == state.revision() &&
-            &snapshot->project() == &state.project() && composition == id && parameters == asked)
-            return compiled;
+            &snapshot->project() == &state.project() && composition == id && parameters == asked &&
+            readouts == readoutNodes)
+            return entry;
         return std::nullopt;
     }
     void store(const document::Snapshot& state, const document::CompositionId id,
-               std::vector<document::ParameterId> asked, runtime::SnapshotCompileResult result) {
+               std::vector<document::ParameterId> asked, std::vector<document::NodeId> readoutNodes,
+               Entry result) {
         const std::lock_guard lock(mutex);
         snapshot = state;
         composition = id;
         parameters = std::move(asked);
-        compiled = std::move(result);
+        readouts = std::move(readoutNodes);
+        entry = std::move(result);
     }
 };
 DrivenValueResolver::DrivenValueResolver(CompositionSession& session, QObject* parent)
@@ -145,8 +180,10 @@ DrivenValueResolver::~DrivenValueResolver() {
     retire_->store(true);
     retire_->notify_one();
 }
-void DrivenValueResolver::request(std::vector<document::ParameterId> parameters) {
+void DrivenValueResolver::request(std::vector<document::ParameterId> parameters,
+                                  std::vector<document::NodeId> readoutNodes) {
     parameters_ = std::move(parameters);
+    readoutNodes_ = std::move(readoutNodes);
     ++generation_;
     if (active_)
         task_.cancel();
@@ -172,28 +209,48 @@ void DrivenValueResolver::start() {
     const auto compositionId = session_.compositionId();
     const auto time = session_.currentTime();
     const auto parameters = parameters_;
+    const auto readoutNodes = readoutNodes_;
     activeGeneration_ = generation_;
     const auto submission = scheduler_->submit<std::shared_ptr<Values>>(
         runtime::TaskRequest{
             "Resolve Properties Drivers",
             {runtime::TaskOwnerKind::Application, runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Interactive},
-        [snapshot, compositionId, time, parameters, cache = probeCache_,
+        [snapshot, compositionId, time, parameters, readoutNodes, cache = probeCache_,
          work = work_](runtime::TaskContext& context) {
             auto values = std::make_shared<Values>();
             for (auto parameter : parameters)
                 values->parameters[parameter] = QObject::tr("Unavailable");
-            auto cached = cache->find(snapshot, compositionId, parameters);
+            const auto readoutKeys = readoutOutputKeys(snapshot, compositionId, readoutNodes);
+            for (const auto& key : readoutKeys)
+                values->outputs[key] = QObject::tr("Unavailable");
+            auto cached = cache->find(snapshot, compositionId, parameters, readoutNodes);
             if (!cached) {
                 ++work->probeCompiles;
-                auto fresh =
-                    compileDriverProbe(snapshot, compositionId, parameters, context.cancellation());
+                ProbeCache::Entry fresh;
+                fresh.compiled = compileDriverProbe(snapshot, compositionId, parameters,
+                                                    readoutNodes, context.cancellation());
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<std::shared_ptr<Values>>::cancelled();
-                cache->store(snapshot, compositionId, parameters, fresh);
+                // One node that cannot compile must not take the driven values down with it:
+                // inspect again without the readouts and keep the reason for them.
+                if (!fresh.compiled.plan && !readoutNodes.empty()) {
+                    fresh.readoutReason =
+                        fresh.compiled.diagnostics.empty()
+                            ? QObject::tr("Unavailable")
+                            : QString::fromStdString(fresh.compiled.diagnostics.front().summary);
+                    fresh.compiled = compileDriverProbe(snapshot, compositionId, parameters, {},
+                                                        context.cancellation());
+                    if (context.isCancellationRequested())
+                        return runtime::TaskResult<std::shared_ptr<Values>>::cancelled();
+                }
+                cache->store(snapshot, compositionId, parameters, readoutNodes, fresh);
                 cached = std::move(fresh);
             }
-            const auto& compiled = *cached;
+            const auto& compiled = cached->compiled;
+            if (!cached->readoutReason.isEmpty())
+                for (auto& [key, text] : values->outputs)
+                    text = cached->readoutReason;
             ++work->evaluations;
             if (context.isCancellationRequested())
                 return runtime::TaskResult<std::shared_ptr<Values>>::cancelled();
@@ -202,7 +259,13 @@ void DrivenValueResolver::start() {
                 const auto& plan = *compiled.plan;
                 std::vector<runtime::CompiledValue> evaluatedOutputs;
                 std::vector<runtime::ValueGraphDiagnostic> valueDiagnostics;
+                // Why the pictures' statistics are not a measurement, when the evaluation says so.
+                std::string statisticsReason;
+                // A value that needs the rendered picture (a layer's bounds) or the statistics of one
+                // (Image Statistics, measured through the evaluator's preparation on this worker)
+                // is read from an evaluation; every other value comes from the value graph alone.
                 const bool hasPostImageValues =
+                    runtime::planReadsImageStatistics(plan) ||
                     std::ranges::any_of(plan.valueOperations(), [](const auto& operation) {
                         return operation.requiresPostImage;
                     });
@@ -221,6 +284,10 @@ void DrivenValueResolver::start() {
                         const auto outputSpan = evaluation.frame()->valueOutputs();
                         evaluatedOutputs.assign(outputSpan.begin(), outputSpan.end());
                     }
+                    for (const auto& diagnostic : evaluation.diagnostics())
+                        if (diagnostic.summary.starts_with("Image Statistics") &&
+                            statisticsReason.empty())
+                            statisticsReason = diagnostic.summary;
                 } else {
                     runtime::ValueGraphMemoization memoization;
                     memoization.cancellation = &context.cancellation();
@@ -251,6 +318,21 @@ void DrivenValueResolver::start() {
                             values->outputs[{node->id, output.name}] =
                                 readoutText(*node, output.name, evaluatedOutputs[index]);
                     }
+                }
+                // An Image Statistics that produced nothing (cancelled, or its image never
+                // rendered) says so rather than leaving its rows on the placeholder.
+                for (auto& [key, text] : values->outputs) {
+                    const auto* node = composition->graph().findNode(key.first);
+                    const auto* definition = node ? document::builtInNodeDefinitions().find(
+                                                        node->typeId, node->schemaVersion)
+                                                  : nullptr;
+                    if (definition == nullptr ||
+                        definition->lowering != document::NodeLoweringKind::ValueImageStatistics)
+                        continue;
+                    if (!statisticsReason.empty())
+                        text = QString::fromStdString(statisticsReason);
+                    else if (text == QObject::tr("Unavailable"))
+                        text = QObject::tr("Image Statistics are not ready");
                 }
                 for (auto id : parameters) {
                     const auto* parameter = composition->parameters().find(id);
@@ -308,6 +390,9 @@ void DrivenValueResolver::start() {
         Values unavailable;
         for (auto id : parameters_)
             unavailable.parameters[id] = message;
+        for (const auto& key :
+             readoutOutputKeys(session_.snapshot(), session_.compositionId(), readoutNodes_))
+            unavailable.outputs[key] = message;
         ready(unavailable);
     }
 }
@@ -325,6 +410,9 @@ void DrivenValueResolver::poll() {
                         : QString::fromStdString(result->diagnostics().front().summary);
                 for (auto id : parameters_)
                     unavailable.parameters[id] = message;
+                for (const auto& key : readoutOutputKeys(session_.snapshot(), session_.compositionId(),
+                                                         readoutNodes_))
+                    unavailable.outputs[key] = message;
                 ready(unavailable);
             }
             timer_->stop();

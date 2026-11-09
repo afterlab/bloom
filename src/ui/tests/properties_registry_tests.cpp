@@ -1,6 +1,9 @@
 #include <QAction>
 #include <QDir>
 #include <QPixmap>
+#include <QRegularExpression>
+#include <functional>
+#include <map>
 #include <QScreen>
 #include <QApplication>
 #include <QElapsedTimer>
@@ -36,6 +39,7 @@
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -1799,6 +1803,241 @@ void cameraShakeRows() {
 }
 
 
+// #344 #530 #349: a selected node's value-output rows are asked for and resolved on a worker, whatever
+// the node: no row stays on "Resolving…", each shows the value (or the reason there is none), and a new
+// input or time updates it.
+struct ReadoutFixture final {
+    document::NewProject project =
+        document::makeNewProject("Readouts", "Main", core::RationalTime::fromInteger(10));
+    document::Document document{std::move(project.project)};
+    commands::CommandStack stack{document};
+    ui::CompositionSession session{document, stack, project.initialCompositionId};
+    ui::PropertiesEditor properties{session};
+    ReadoutFixture() {
+        properties.resize(900, 1400);
+        properties.show();
+    }
+};
+
+std::map<QString, QString> readoutTexts(QWidget& panel) {
+    std::map<QString, QString> texts;
+    for (auto* label : panel.findChildren<QLabel*>())
+        if (const auto port = label->property("valueOutputPort").toString(); !port.isEmpty())
+            texts[port] = label->text();
+    return texts;
+}
+
+// Waits (bounded) until the node's rows exist and none is still on the placeholder.
+std::map<QString, QString> resolvedReadouts(QWidget& panel, const int timeoutMs = 15000) {
+    QElapsedTimer wait;
+    wait.start();
+    std::map<QString, QString> texts;
+    while (wait.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+        texts = readoutTexts(panel);
+        if (!texts.empty() &&
+            std::ranges::none_of(texts, [](const auto& entry) {
+                return entry.second == QStringLiteral("Resolving…") || entry.second.isEmpty();
+            }))
+            break;
+    }
+    return texts;
+}
+
+void setNodeValue(ui::CompositionSession& session, document::NodeId node, const char* role,
+                  const document::ParameterValue& value) {
+    const auto id = ui::nodeRoleParameter(session, node, role);
+    expect(id && session.setParameterValue(*id, value, "Set"),
+           (std::string("a readout fixture value is set: ") + role).c_str());
+    QCoreApplication::processEvents();
+}
+
+document::PathValue squarePath(const double side) {
+    std::vector<document::PathAnchor> anchors;
+    for (const auto point : {document::Vec2d{0, 0}, document::Vec2d{side, 0},
+                             document::Vec2d{side, side}, document::Vec2d{0, side}})
+        anchors.push_back({point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
+    return document::PathValue::fromContour(std::move(anchors), true);
+}
+
+void saveReadoutCapture(QWidget& panel, const char* name) {
+    const auto directory = qEnvironmentVariable("BLOOM_READOUT_CAPTURE_DIR");
+    if (directory.isEmpty())
+        return;
+    QDir().mkpath(directory);
+    panel.grab().save(directory + QLatin1Char('/') + QString::fromLatin1(name) +
+                      QStringLiteral(".png"));
+}
+
+void pathReadoutsResolve() {
+    const QRegularExpression pathText(QStringLiteral("^\\d+ contours, \\d+ anchors$"));
+    const std::map<std::string_view, std::vector<const char*>> nodes{
+        {document::kTransformPathNodeType, {"path"}},
+        {document::kTrimPathNodeType, {"path", "length"}},
+        {document::kOffsetPathNodeType, {"path"}},
+        {document::kBooleanPathsNodeType, {"path"}},
+        {document::kMergePathsNodeType, {"path"}},
+        {document::kRoundCornersNodeType, {"path"}},
+        {document::kPathStrokeNodeType, {"path", "core", "length"}}};
+    for (const auto& [type, ports] : nodes) {
+        ReadoutFixture fixture;
+        const auto node = addNode(fixture.session, type);
+        fixture.session.selectNode(node);
+        if (type != document::kBooleanPathsNodeType)
+            setNodeValue(fixture.session, node, "path", squarePath(100.0));
+        else {
+            setNodeValue(fixture.session, node, "first", squarePath(100.0));
+            setNodeValue(fixture.session, node, "second", squarePath(50.0));
+        }
+        const auto texts = resolvedReadouts(fixture.properties);
+        const std::string name(type);
+        for (const auto* port : ports) {
+            const auto found = texts.find(QString::fromLatin1(port));
+            const auto shown = found == texts.end() ? QString() : found->second;
+            expect(found != texts.end() && shown != QStringLiteral("Resolving…") && !shown.isEmpty(),
+                   (name + " " + port + " leaves the placeholder: " + shown.toStdString()).c_str());
+            if (std::string_view(port) == "length")
+                expect(shown == QStringLiteral("400") || shown.startsWith(QStringLiteral("400.")) ||
+                           shown.startsWith(QStringLiteral("399.99")),
+                       (name + " length is the square's perimeter, 400 px: " + shown.toStdString())
+                           .c_str());
+            else
+                expect(pathText.match(shown).hasMatch(),
+                       (name + " " + port + " reads as a path: " + shown.toStdString()).c_str());
+        }
+        if (type == document::kTransformPathNodeType || type == document::kRoundCornersNodeType) {
+            const auto path = texts.find(QStringLiteral("path"));
+            expect(path != texts.end() &&
+                       (type == document::kRoundCornersNodeType ||
+                        path->second == QStringLiteral("1 contours, 4 anchors")),
+                   "Transform Path of a square reads 1 contours, 4 anchors");
+        }
+        if (type == document::kTrimPathNodeType) {
+            saveReadoutCapture(fixture.properties, "properties-trim-path");
+            // A new input updates the readout.
+            setNodeValue(fixture.session, node, "path", squarePath(200.0));
+            QElapsedTimer wait;
+            wait.start();
+            QString length;
+            while (wait.elapsed() < 15000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(5);
+                const auto again = readoutTexts(fixture.properties);
+                length = again.contains(QStringLiteral("length")) ? again.at(QStringLiteral("length"))
+                                                                  : QString();
+                if (length.startsWith(QStringLiteral("800")) || length.startsWith(QStringLiteral("799.99")))
+                    break;
+            }
+            expect(length.startsWith(QStringLiteral("800")) || length.startsWith(QStringLiteral("799.99")),
+                   ("Trim Path length follows its path: " + length.toStdString()).c_str());
+        }
+        if (type == document::kOffsetPathNodeType || type == document::kPathStrokeNodeType)
+            saveReadoutCapture(fixture.properties, type == document::kOffsetPathNodeType
+                                                       ? "properties-offset-path"
+                                                       : "properties-path-stroke");
+    }
+}
+
+void imageStatisticsReadoutsResolve() {
+    ReadoutFixture fixture;
+    const auto solid = addNode(fixture.session, document::kSolidSourceNodeType);
+    const auto stats = addNode(fixture.session, document::kImageStatisticsNodeType);
+    // Before an image is connected, the rows say why instead of waiting.
+    fixture.session.selectNode(stats);
+    auto texts = resolvedReadouts(fixture.properties);
+    expect(texts.size() == 5, "Image Statistics presents its five outputs");
+    for (const auto& [port, text] : texts)
+        expect(text != QStringLiteral("Resolving…") && !text.isEmpty(),
+               ("an unconnected Image Statistics row says something: " + port.toStdString()).c_str());
+    connectNodes(fixture.session, solid, stats, "input");
+    setNodeValue(fixture.session, solid, "color", core::Color4d{0.5, 0.5, 0.5, 1.0});
+    const auto& format = fixture.session.composition()->format();
+    setNodeValue(fixture.session, solid, "width", static_cast<double>(format.width()));
+    setNodeValue(fixture.session, solid, "height", static_cast<double>(format.height()));
+    const auto expectedCount = static_cast<double>(format.width()) * format.height();
+    const auto waitFor = [&](const char* what, const std::function<bool(const std::map<QString, QString>&)>& done) {
+        QElapsedTimer wait;
+        wait.start();
+        std::map<QString, QString> current;
+        while (wait.elapsed() < 20000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(5);
+            current = readoutTexts(fixture.properties);
+            if (current.size() == 5 && done(current))
+                break;
+        }
+        expect(current.size() == 5 && done(current), what);
+        if (!(current.size() == 5 && done(current)))
+            for (const auto& [port, text] : current)
+                std::cerr << "  " << port.toStdString() << " = " << text.toStdString() << '\n';
+        return current;
+    };
+    texts = waitFor("Image Statistics of a grey Solid reads out its five numbers",
+                    [&](const auto& t) {
+                        return std::abs(t.at("count").toDouble() - expectedCount) < 0.5 &&
+                               std::abs(t.at("mean").toDouble() - 0.5) < 1e-4;
+                    });
+    saveReadoutCapture(fixture.properties, "properties-image-statistics");
+    expect(std::abs(texts["minimum"].toDouble() - 0.5) < 1e-4 &&
+               std::abs(texts["maximum"].toDouble() - 0.5) < 1e-4 &&
+               std::abs(texts["deviation"].toDouble()) < 1e-4,
+           "a flat grey has equal minimum, maximum and mean, and no deviation");
+    for (const auto& [port, text] : texts)
+        expect(text != QStringLiteral("Resolving…"), "no Image Statistics row stays on the placeholder");
+    // A new input updates the readout.
+    setNodeValue(fixture.session, solid, "color", core::Color4d{0.25, 0.25, 0.25, 1.0});
+    waitFor("Image Statistics follows its input", [&](const auto& t) {
+        return std::abs(t.at("mean").toDouble() - 0.25) < 1e-4;
+    });
+}
+
+void timeUpdatesReadout() {
+    ReadoutFixture fixture;
+    const auto frame = addNode(fixture.session, document::kFrameNumberNodeType);
+    fixture.session.selectNode(frame);
+    auto texts = resolvedReadouts(fixture.properties);
+    expect(texts.size() == 1 && texts.begin()->second == QStringLiteral("0"),
+           "Frame Number reads 0 at the start");
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
+    QElapsedTimer wait;
+    wait.start();
+    QString text;
+    while (wait.elapsed() < 15000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+        texts = readoutTexts(fixture.properties);
+        text = texts.empty() ? QString() : texts.begin()->second;
+        if (text == QStringLiteral("72"))
+            break;
+    }
+    expect(text == QStringLiteral("72"), ("Frame Number follows the playhead: " + text.toStdString()).c_str());
+}
+
+// Every node that shows a value-output row resolves it: the request comes from the predicate that draws
+// the rows, so no built-in can be left on the placeholder.
+void everyValueOutputResolves() {
+    int checked = 0;
+    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+        ReadoutFixture fixture;
+        const auto node = addNode(fixture.session, definition.key.typeId);
+        if (!node.isValid())
+            continue;
+        fixture.session.selectNode(node);
+        QCoreApplication::processEvents();
+        if (readoutTexts(fixture.properties).empty())
+            continue;
+        ++checked;
+        const auto texts = resolvedReadouts(fixture.properties);
+        for (const auto& [port, text] : texts)
+            expect(text != QStringLiteral("Resolving…") && !text.isEmpty(),
+                   ("a value-output row is still unresolved: " + definition.key.typeId + " " +
+                    port.toStdString() + " = " + text.toStdString())
+                       .c_str());
+    }
+    expect(checked > 20, "the value-output audit visits the value nodes");
+}
+
 // #587: Properties shows only the chosen Test Card's rows, and a Patch's readout keeps the height
 // its text needs once the expected value arrives, so nothing under it is clipped or overlapped.
 void testCardRows() {
@@ -1845,6 +2084,20 @@ int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
+    if (argc > 1 && std::string_view(argv[1]) == "--readouts") {
+        pathReadoutsResolve();
+        imageStatisticsReadoutsResolve();
+        timeUpdatesReadout();
+        QSettings().clear();
+        return failures ? 1 : 0;
+    }
+    // `--label-audit` runs only the #582 label audit, which is what the second device pixel ratio
+    // registers: the same audit over every built-in node at the same widths and assertions.
+    if (argc > 1 && std::string_view(argv[1]) == "--label-audit") {
+        everyBuiltInLabelIsShownWhole();
+        QSettings().clear();
+        return failures ? 1 : 0;
+    }
     // First: it must be the first font row in the process, so the system catalogue arrives (and
     // the selector is rebuilt) while it watches.
     fontCatalogueRefreshIsNotAnEdit();
@@ -1874,6 +2127,10 @@ int main(int argc, char** argv) try {
     everyBuiltInLabelIsShownWhole();
     videoRows();
     testCardRows();
+    pathReadoutsResolve();
+    imageStatisticsReadoutsResolve();
+    timeUpdatesReadout();
+    everyValueOutputResolves();
     QSettings().clear();
     return failures ? 1 : 0;
 }
