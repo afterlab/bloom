@@ -47,6 +47,8 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
+#include "audio_plot_test_support.hpp"
+#include <bloom/runtime/audio_analysis.hpp>
 #include "field_test_programs.hpp"
 #include <bloom/runtime/point_tracker_job.hpp>
 #include "snapshot_compiler_support.hpp"
@@ -2119,6 +2121,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_warp_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
+#include "snapshot_compiler_audio_amplitude_tests.ipp"
 #include "snapshot_compiler_node_group_tests.ipp"
 
 } // namespace
@@ -2153,6 +2156,8 @@ int main() {
         testPixelMathLowering(expectations);
         testHistogramCompareLowering(expectations);
         testImageStatisticsLowering(expectations);
+        testAudioAmplitudeLowering(expectations);
+        testAudioAmplitudeEvaluation(expectations);
         testNodeGroupExpansion(expectations);
         testNodeGroupValues(expectations);
         testNodeGroupRefusals(expectations);
