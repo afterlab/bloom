@@ -15,6 +15,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -276,6 +278,74 @@ void testCancellation() {
         std::this_thread::yield();
 }
 
+// BLOOM_PIXEL_MATH_ARTIFACT_DIR: a sheet of a depth ramp (2 to 12 across 256 columns) and what each
+// node makes of it, one row each (display-clamped sRGB), and the values read at three columns.
+void writeCapture() {
+    const char* directory = std::getenv("BLOOM_PIXEL_MATH_ARTIFACT_DIR");
+    if (directory == nullptr || *directory == '\0')
+        return;
+    using namespace pixel_math_test;
+    constexpr std::uint32_t width = 256;
+    constexpr std::uint32_t height = 8;
+    const auto window = render::ImageWindow::create(0, 0, width, height);
+    auto descriptor = render::Rgba32fImageDescriptor::create(*window.value(), *window.value(),
+                                                             core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 1U << 26U);
+    for (std::int64_t y = 0; y < height; ++y)
+        for (std::int64_t x = 0; x < width; ++x) {
+            const float depth = 2.0F + 10.0F * static_cast<float>(x) / 255.0F;
+            const auto stored = render::Rgba32f::fromPremultiplied(depth, depth, depth, 1.0F);
+            if (!stored || builder.value()->write(x, y, *stored.value()))
+                throw std::logic_error("capture pixel writes");
+        }
+    auto frozen = std::move(*builder.value()).freeze();
+    const render::Rgba32fImage ramp = std::move(*frozen.value());
+    const auto apply = [](const runtime::PixelMathKernel& kernel, const render::Rgba32fImage& in) {
+        const auto grade = prepare(kernel);
+        const auto result = detail::applyPixelMath(*grade, in, nullptr, 1U << 26U, {},
+                                                   runtime::OperationIndex::fromRaw(0), {});
+        if (!result.image)
+            throw std::logic_error("the capture pass applies");
+        return result.image;
+    };
+    const auto normalized = apply(mapRange(1, 2.0, 12.0, 0.0, 1.0, false, kColor, false), ramp);
+    const auto halved = apply(math(1, PixelMathOperation::Multiply, 0.5, kColor, false), *normalized);
+    const auto clamped =
+        apply(clampKernel(1, {0.25, 0.75, 0.25, 0.75, 0.25, 0.75, 0.0, 1.0}, false), *normalized);
+    const auto squared = apply(math(1, PixelMathOperation::Power, 2.0, kColor, false), *normalized);
+    const std::array<std::pair<const char*, const render::Rgba32fImage*>, 5> rows{
+        {{"depth 2..12 (raw)", &ramp},
+         {"Map Range 2..12 -> 0..1", normalized.get()},
+         {"then Multiply 0.5", halved.get()},
+         {"Map Range then Clamp 0.25..0.75", clamped.get()},
+         {"Map Range then Power 2", squared.get()}}};
+    const auto encode = [](const double linear) {
+        const double v = std::clamp(linear, 0.0, 1.0);
+        const double e = v <= 0.0031308 ? 12.92 * v : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+        return static_cast<unsigned char>(std::lround(e * 255.0));
+    };
+    constexpr int rowHeight = 24;
+    std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * rowHeight * rows.size() * 3);
+    for (std::size_t row = 0; row < rows.size(); ++row) {
+        for (int y = 0; y < rowHeight; ++y)
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const auto p = at(*rows[row].second, x, 0);
+                const auto offset =
+                    ((row * rowHeight + static_cast<std::size_t>(y)) * width + x) * 3;
+                for (std::size_t c = 0; c < 3; ++c)
+                    rgb[offset + c] = encode(static_cast<double>(p[c]));
+            }
+        const auto a = at(*rows[row].second, 0, 0);
+        const auto b = at(*rows[row].second, 128, 0);
+        const auto c = at(*rows[row].second, 255, 0);
+        std::cout << rows[row].first << ": x0=" << a[0] << " x128=" << b[0] << " x255=" << c[0]
+                  << '\n';
+    }
+    std::ofstream out(std::string(directory) + "/image-math-ramp.ppm", std::ios::binary);
+    out << "P6\n" << width << ' ' << rowHeight * rows.size() << "\n255\n";
+    out.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+}
+
 } // namespace
 
 int main() {
@@ -286,6 +356,7 @@ int main() {
         testSecondImageAndBudget();
         testDomainAndIdentity();
         testCancellation();
+        writeCapture();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

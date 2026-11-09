@@ -1272,6 +1272,72 @@ void autoExposureCard() {
         std::cerr << "could not write the Auto Exposure neighbors capture\n";
 }
 
+// #481 and #341: each new Channels and Math node is a plain card that paints inside itself with no
+// label cut short. With BLOOM_GRAMMAR_ARTIFACT_DIR set, each is written beside its group's neighbors.
+void pixelAndMotionCards() {
+    struct Spec final {
+        const char* type;
+        std::vector<const char*> neighbors;
+    };
+    const std::vector<Spec> specs{
+        {"bloom.image-math", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
+        {"bloom.image-map-range", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
+        {"bloom.image-clamp", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
+        {"bloom.oscillator", {"bloom.math", "bloom.map-range", "bloom.random"}},
+        {"bloom.wiggle", {"bloom.math", "bloom.map-range", "bloom.random"}},
+        {"bloom.loop-value", {"bloom.math", "bloom.map-range", "bloom.random"}}};
+    for (const auto& spec : specs) {
+        CardFixture fixture(spec.type);
+        expect(fixture.item != nullptr, "a new node draws a card");
+        if (fixture.item == nullptr)
+            continue;
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << spec.type << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, spec.type))
+            ++failures;
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        if (directory.isEmpty())
+            continue;
+        std::vector<ui::node_editor::NodeItem*> row{fixture.item};
+        double x = fixture.item->mapRectToScene(fixture.item->cardRect()).right() + 40.0;
+        for (const auto type : spec.neighbors) {
+            const auto node = addNode(fixture.session, type);
+            QApplication::processEvents();
+            auto* item =
+                ui::node_editor::nodeItemAncestor(fixture.editor->graphScene()->findNodeItem(node));
+            if (item == nullptr)
+                continue;
+            item->setPos(item->pos() +
+                         QPointF(x - item->mapRectToScene(item->cardRect()).left(),
+                                 fixture.item->mapRectToScene(fixture.item->cardRect()).top() -
+                                     item->mapRectToScene(item->cardRect()).top()));
+            x = item->mapRectToScene(item->cardRect()).right() + 40.0;
+            row.push_back(item);
+        }
+        QApplication::processEvents();
+        QRectF source;
+        for (auto* item : row)
+            source = source.united(item->mapRectToScene(item->cardRect()));
+        source.adjust(-24, -24, 24, 24);
+        constexpr qreal scale = 2.0;
+        QImage image((source.size() * scale).toSize(), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(scale);
+        image.fill(ui::kit::color(ui::kit::Color::Canvas));
+        {
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            fixture.editor->graphScene()->render(&painter, QRectF(QPointF(), source.size()), source);
+        }
+        QDir().mkpath(directory);
+        if (!image.save(directory + QStringLiteral("/") + QString::fromLatin1(spec.type) +
+                        QStringLiteral("-neighbors-card.png")))
+            std::cerr << "could not write the " << spec.type << " neighbors capture\n";
+    }
+}
+
 // #569: each audio effect node is a plain card: its rows and sockets paint inside the card with no
 // label cut short and no value of its own written. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the cards
 // are written beside their Sources neighbors.
@@ -2459,6 +2525,7 @@ int main(int argc, char** argv) {
     sharpenCard();
     codecDegradeCard();
     autoExposureCard();
+    pixelAndMotionCards();
     audioEffectCards();
     lensDistortionCard();
     chromaticAberrationCard();
