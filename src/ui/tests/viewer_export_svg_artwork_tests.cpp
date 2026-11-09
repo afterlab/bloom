@@ -259,7 +259,8 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     }
     auto created = scripting::Session::createNew(
         "SVG artwork routes", "Main",
-        *core::RationalTime::create(static_cast<std::int64_t>(kFrames), static_cast<std::int64_t>(kFps)),
+        *core::RationalTime::create(static_cast<std::int64_t>(kFrames),
+                                    static_cast<std::int64_t>(kFps)),
         *format);
     checks.expect(static_cast<bool>(created), "the authoring session is created");
     if (!created) {
@@ -276,8 +277,8 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
         std::ofstream out(file);
         out << artworkSvg();
     }
-    const auto imported =
-        edit<commands::AddSvgArtwork>(authored, authored.composition, nullptr, file, "artwork", true);
+    const auto imported = edit<commands::AddSvgArtwork>(authored, authored.composition, nullptr,
+                                                        file, "artwork", true);
     checks.expect(imported.succeeded(), "the generated artwork imports");
     std::filesystem::remove(file);
     if (!imported.succeeded()) {
@@ -314,7 +315,8 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     }
     auto moved = *start;
     for (auto& anchor : moved.contours[0].anchors)
-        anchor.point.x += 200.0 * (anchor.point.x > moved.contours[0].anchors[0].point.x ? 1.2 : 1.0);
+        anchor.point.x +=
+            200.0 * (anchor.point.x > moved.contours[0].anchors[0].point.x ? 1.2 : 1.0);
     checks.expect(edit<commands::SetKeyframeAtTimeForParameter>(
                       authored, authored.composition, *mover,
                       *core::RationalTime::create(static_cast<std::int64_t>(kFrames - 1),
@@ -322,8 +324,8 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
                       moved)
                       .succeeded(),
                   "the mover takes its last-frame key");
-    checks.expect(edit<commands::SetKeyframeAtTimeForParameter>(authored, authored.composition,
-                                                                *mover, core::RationalTime{}, *start)
+    checks.expect(edit<commands::SetKeyframeAtTimeForParameter>(
+                      authored, authored.composition, *mover, core::RationalTime{}, *start)
                       .succeeded(),
                   "the mover takes its first-frame key");
     return authored;

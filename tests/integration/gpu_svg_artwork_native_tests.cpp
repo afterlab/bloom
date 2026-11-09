@@ -29,9 +29,12 @@
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -747,8 +750,12 @@ int corpusParity(const CorpusRun& run, const Options& options) {
             std::cerr << "FAIL: preparation: " << built.diagnostic.message << '\n';
             return 1;
         }
+        // The final render's executor shape: one image may be as large as the request budget
+        // (gpu_process_frame.cpp), here 8 GiB.
+        runtime::GpuSceneExecutorBudgets finalBudgets;
+        finalBudgets.maxImageBytes = 8 * kGib;
         auto cache = device.cache();
-        auto executor = cache ? executorFor(*device.device, *cache) : nullptr;
+        auto executor = cache ? executorFor(*device.device, *cache, finalBudgets) : nullptr;
         if (!executor || executor->begin(built.scene, 8 * kGib).code !=
                              runtime::GpuSceneExecutorDiagnosticCode::None) {
             std::cerr << "FAIL: the executor did not start: "
@@ -779,7 +786,7 @@ int corpusParity(const CorpusRun& run, const Options& options) {
         const auto peak = executor->counters().peakLiveImageBytes;
         const auto cachedImages = cache->entryCount();
         // The live set without batching, against what the phase claims for it.
-        runtime::GpuSceneExecutorBudgets serialBudgets;
+        auto serialBudgets = finalBudgets;
         serialBudgets.enableNativeBatches = false;
         auto serialCache = device.cache();
         auto serial =
@@ -837,35 +844,53 @@ int corpusParity(const CorpusRun& run, const Options& options) {
         }
     }
 
-    // The CPU reference, tile by tile.
+    // The CPU reference, tile by tile, on a few threads (BLOOM_SVG_CORPUS_THREADS, default 4). A
+    // tile may hold a whole Merge at the size of its unclipped support, hence the generous limit.
     constexpr std::uint32_t kTileWidth = 240;
     constexpr std::uint32_t kTileHeight = 135;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> origins;
+    for (std::uint32_t top = 0; top < height; top += kTileHeight)
+        for (std::uint32_t left = 0; left < width; left += kTileWidth)
+            origins.emplace_back(left, top);
+    const char* threadSetting = std::getenv("BLOOM_SVG_CORPUS_THREADS");
+    const std::size_t threadCount = std::clamp<std::size_t>(
+        threadSetting ? std::strtoul(threadSetting, nullptr, 10) : 4, 1, 16);
+    std::atomic<std::size_t> next{0};
+    std::mutex merge;
     std::uint64_t mismatched = 0;
     float largest = 0.0F;
     std::size_t tiles = 0;
-    for (std::uint32_t top = 0; top < height; top += kTileHeight) {
-        for (std::uint32_t left = 0; left < width; left += kTileWidth) {
-            const auto tileWidth = std::min(kTileWidth, width - left);
-            const auto tileHeight = std::min(kTileHeight, height - top);
+    std::string failure;
+    const auto gpuWidth = static_cast<std::int64_t>(gpuWindow->extent().width());
+    const auto compareTiles = [&] {
+        for (auto index = next++; index < origins.size(); index = next++) {
+            const auto [left, top] = origins[index];
             auto tile = request;
-            tile.pixelStorageByteLimit = std::size_t{4} * kGib;
+            tile.pixelStorageByteLimit = std::size_t{8} * kGib;
             tile.bypassOperationCache = true;
-            const auto roi = render::ImageWindow::create(left, top, tileWidth, tileHeight);
+            const auto roi = render::ImageWindow::create(
+                left, top, std::min(kTileWidth, width - left), std::min(kTileHeight, height - top));
             if (!roi)
-                return 1;
+                return;
             tile.roi = *roi.value();
             const auto result =
                 runtime::CpuCompositionEvaluator{}.evaluate(compiled.plan, tile, {});
             if (result.frame() == nullptr) {
-                std::cerr << "FAIL: the CPU reference tile at " << left << ',' << top
-                          << " did not evaluate\n";
-                return 1;
+                const std::lock_guard lock(merge);
+                failure =
+                    "the CPU reference tile at " + std::to_string(left) + ',' +
+                    std::to_string(top) + " did not evaluate: " +
+                    (result.diagnostics().empty() ? std::string("no diagnostic")
+                                                  : result.diagnostics().front().summary + " " +
+                                                        result.diagnostics().front().detail);
+                next = origins.size();
+                return;
             }
-            ++tiles;
             const auto& image = result.frame()->processImage();
             const auto window = image.descriptor()->dataWindow();
             const auto pixels = image.pixels();
-            const auto gpuWidth = static_cast<std::int64_t>(gpuWindow->extent().width());
+            std::uint64_t tileMismatched = 0;
+            float tileLargest = 0.0F;
             for (std::int64_t y = window.originY(); y < window.maxYExclusive(); ++y)
                 for (std::int64_t x = window.originX(); x < window.maxXExclusive(); ++x) {
                     const auto& expected = pixels[static_cast<std::size_t>(
@@ -884,15 +909,29 @@ int corpusParity(const CorpusRun& run, const Options& options) {
                         const float a = actual.components()[c];
                         const float e = expected.components()[c];
                         const float difference = std::abs(a - e);
-                        largest = std::max(largest, difference);
+                        tileLargest = std::max(tileLargest, difference);
                         if (!std::isfinite(a) || !std::isfinite(e) ||
                             difference > 2e-6F * std::max(1.0F, std::max(std::abs(a), std::abs(e))))
                             same = false;
                     }
                     if (!same)
-                        ++mismatched;
+                        ++tileMismatched;
                 }
+            const std::lock_guard lock(merge);
+            ++tiles;
+            mismatched += tileMismatched;
+            largest = std::max(largest, tileLargest);
         }
+    };
+    std::vector<std::thread> workers;
+    for (std::size_t worker = 0; worker < threadCount; ++worker)
+        workers.emplace_back(compareTiles);
+    for (auto& worker : workers)
+        worker.join();
+    if (!failure.empty() || tiles != origins.size()) {
+        std::cerr << "FAIL: "
+                  << (failure.empty() ? std::string("a tile was not compared") : failure) << '\n';
+        return 1;
     }
     std::cout << file.filename().string() << ' ' << width << 'x' << height << ": " << tiles
               << " CPU reference tiles, " << mismatched
