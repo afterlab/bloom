@@ -404,6 +404,24 @@ directly, preserves finite signed/HDR RGB and partial alpha, and uses exact tran
 outside the source data window. Quarter turns and whole-pixel translations interpolate nothing, and
 proxy frames conjugate the full-resolution map by the per-axis proxy factors.
 
+**Skew and opacity.** Three optional parameters follow the motion blur's, animatable/drivable with a
+socket each, and read as none in a document saved without them: `skew` (`bloom.transform-2d.skew`,
+degrees in `[-89, 89]`, default 0), `skewAxis` (`bloom.transform-2d.skew-axis`, degrees clockwise
+from screen right, default 0) and `opacity` (`bloom.transform-2d.opacity`, `[0, 1]`, default 1). The
+skew shears the image by `tan(skew)` along the axis before the scale and rotation, so the linear
+part of the map is `R(rotation) * S(scale) * K` with `K = [[1 - t s c, t c^2], [-t s^2, 1 + t s c]]`,
+`t = tan(skew)` and `(c, s) = (cos, sin)` of the axis (unit determinant; axis 0 slants verticals,
+axis 90 slants horizontals). The pivot is unmoved by it. `LayerMatrix::authored` and
+`render::LayerTransform` gained the same optional skew (zero skew takes the code path unchanged, so
+every earlier map is bit for bit what it was), and the CPU rows and the GPU affine command read the
+one author-space matrix. Opacity multiplies every premultiplied channel: the translation pass and
+the affine command already took an opacity, and a pure move with an opacity stays on the translation
+pass. The identity needs no skew and full opacity, the operation key gains the three values only
+when set, and the output window is the bounding box of the skewed support. With the node's motion
+blur on, the shutter samples carry translate, pivot, scale and rotation only, so a skew or an
+opacity other than none is a named compile failure ("Transform 2D skew and opacity need motion blur
+off") rather than a silent omission.
+
 `extent` chooses the output data window. **Transformed** (0, default) keeps the full transformed
 support, including overscan outside the display window, like a Layer. **Input** (1) clips it to the
 input data window, and **Display** (2) clips it to the input display window. The display window and

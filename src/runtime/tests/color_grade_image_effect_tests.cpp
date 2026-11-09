@@ -786,6 +786,68 @@ void hueSaturationTests() {
             "Hue/Saturation refuses out-of-domain values");
 }
 
+// Vibrance (saturation weighted toward low-chroma pixels) and Colorize (the luma times one tint),
+// each against answers worked by hand from the documented formulas.
+void vibranceColorizeTests() {
+    const auto prepare = [](const bool colorize, const std::vector<double>& values) {
+        runtime::HueSaturationKernel kernel{};
+        kernel.colorize = colorize;
+        auto grade = runtime::detail::prepareColorGrade(kernel, values);
+        require(grade.has_value(), "Vibrance and Colorize prepare");
+        return *grade;
+    };
+    const double luma = 0.213 * 0.6 + 0.715 * 0.4 + 0.072 * 0.2;
+    // Chroma is max - min = 0.4, so the saturation factor is 1 + vibrance * (1 - 0.4).
+    for (const double vibrance : {1.0, 0.5, -1.0, -0.25}) {
+        const auto grade = prepare(false, {0.0, 1.0, vibrance});
+        require(!grade.identity, "a vibrance is not an identity");
+        std::array<float, 4> p{0.6F, 0.4F, 0.2F, 1.0F};
+        require(runtime::detail::colorGradePixel(grade, p), "Vibrance runs");
+        const double factor = 1.0 + vibrance * 0.6;
+        require(near(p[0], luma + factor * (0.6 - luma), 1e-5) &&
+                    near(p[1], luma + factor * (0.4 - luma), 1e-5) &&
+                    near(p[2], luma + factor * (0.2 - luma), 1e-5) && p[3] == 1.0F,
+                "Vibrance scales the distance from luma by 1 + vibrance * (1 - chroma)");
+    }
+    // A fully saturated primary (chroma 1) and a neutral are left alone by any vibrance.
+    const auto strong = prepare(false, {0.0, 1.0, 1.0});
+    std::array<float, 4> red{1.0F, 0.0F, 0.0F, 1.0F};
+    std::array<float, 4> grey{0.3F, 0.3F, 0.3F, 0.5F};
+    require(runtime::detail::colorGradePixel(strong, red) && near(red[0], 1.0, 1e-5) &&
+                near(red[1], 0.0, 1e-5) && near(red[2], 0.0, 1e-5) &&
+                runtime::detail::colorGradePixel(strong, grey) && near(grey[0], 0.3, 1e-5) &&
+                near(grey[1], 0.3, 1e-5) && near(grey[2], 0.3, 1e-5) && grey[3] == 0.5F,
+            "vibrance leaves full chroma, neutrals and alpha alone");
+    require(prepare(false, {0.0, 1.0, 0.0}).identity && prepare(false, {0.0, 1.0}).identity &&
+                !prepare(true, {0.0, 1.0, 0.0}).identity,
+            "zero vibrance is the identity and Colorize never is");
+    // Colorize: the hue at full strength turns the luma into one primary, scaled to keep the luma.
+    struct Tint final {
+        double hue;
+        double saturation;
+        std::array<double, 3> color;
+    };
+    for (const auto& tint : {Tint{0.0, 1.0, {1.0, 0.0, 0.0}}, Tint{120.0, 1.0, {0.0, 1.0, 0.0}},
+                             Tint{-120.0, 1.0, {0.0, 0.0, 1.0}}, Tint{60.0, 1.0, {1.0, 1.0, 0.0}},
+                             Tint{240.0, 0.0, {1.0, 1.0, 1.0}}, Tint{480.0, 5.0, {0.0, 1.0, 0.0}},
+                             Tint{0.0, 0.5, {1.0, 0.5, 0.5}}}) {
+        const auto grade = prepare(true, {tint.hue, tint.saturation, 0.0});
+        std::array<float, 4> p{0.6F, 0.4F, 0.2F, 0.75F};
+        require(runtime::detail::colorGradePixel(grade, p), "Colorize runs");
+        const double tintLuma =
+            0.213 * tint.color[0] + 0.715 * tint.color[1] + 0.072 * tint.color[2];
+        for (std::size_t i = 0; i < 3; ++i)
+            require(near(p[i], luma * tint.color[i] / tintLuma, 1e-5),
+                    "Colorize is the luma times the tint, scaled to the luma");
+        require(p[3] == 0.75F, "Colorize keeps alpha");
+    }
+    runtime::HueSaturationKernel colorize{};
+    colorize.colorize = true;
+    require(!runtime::detail::prepareColorGrade(colorize, std::vector<double>{0.0, 1.0, 1.5}) &&
+                !runtime::detail::prepareColorGrade(colorize, std::vector<double>{0.0, 1.0, -2.0}),
+            "a vibrance outside [-1, 1] refuses");
+}
+
 // #494 Grade: the wheels and primaries in double precision, written from the documented formulas
 // (not from the prepared table): exposure and white balance, then lift and gain, offset, the power,
 // the contrast about the pivot and the saturation, on straight colour with alpha unchanged.
@@ -934,7 +996,7 @@ void programTests() {
     for (const auto& [grade, semantics, function] :
          {Case{&*levels, "bloom.render.levels.v1", "bloom_levels"},
           Case{&*curves, "bloom.render.curves.v1", "bloom_curves"},
-          Case{&*hue, "bloom.render.hue-saturation.v1", "bloom_hue_saturation"},
+          Case{&*hue, "bloom.render.hue-saturation.v2", "bloom_hue_saturation"},
           Case{&*gradeTable, "bloom.render.grade.v1", "bloom_grade"}}) {
         auto program = runtime::detail::buildColorGradeProgram(grade->kind, grade->data);
         require(program.succeeded() && render::validateOcioGpuProgram(*program.program(), {}) ==
@@ -1024,6 +1086,7 @@ int main() {
         hueModelTests();
         hueCurvesTests();
         hueSaturationTests();
+        vibranceColorizeTests();
         gradeTests();
         programTests();
         cancellationTest();

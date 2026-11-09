@@ -23,14 +23,18 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
     const auto pivot = resolveParameter(kernel.pivot, plan, resolved);
     const auto scale = resolveParameter(kernel.scale, plan, resolved);
     const auto rotation = resolveParameter(kernel.rotation, plan, resolved);
-    if (!translate || !pivot || !scale || !rotation)
+    const auto skew = resolveParameter(kernel.skew, plan, resolved);
+    const auto skewAxis = resolveParameter(kernel.skewAxis, plan, resolved);
+    const auto opacity = resolveParameter(kernel.opacity, plan, resolved);
+    if (!translate || !pivot || !scale || !rotation || !skew || !skewAxis || !opacity)
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                     "Transform 2D parameters are not evaluable");
     const auto& inputBounds = (*ctx.bounds)[input.value()].output;
     const PreparedTransform2D prepared{kernel.extent, kernel.filter,
                                        Transform2DValues{translate->value, pivot->value,
                                                          scale->value, rotation->value,
-                                                         inputBounds.centre()}};
+                                                         inputBounds.centre(), skew->value,
+                                                         skewAxis->value, opacity->value}};
     if (!validTransform2DValues(prepared.values))
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                     "Transform 2D parameters are not finite");
@@ -93,12 +97,14 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
                                : translationOnlyDeviceDelta(*geometry->transform, source->data, output);
     if (delta) {
         if (const auto error = emitTranslationOpacityCommand(
-                inputCommand, inputKey, source->data, output, delta->first, delta->second, 1.0,
+                inputCommand, inputKey, source->data, output, delta->first, delta->second,
+                prepared.values.opacity,
                 source->pixelAspect, operation, charge, emit, emitted, key))
             return error;
     } else if (const auto error = emitAffineLayerCommand(
                    inputCommand, inputKey, source->data, output, geometry->matrix, ctx.hScale,
-                   ctx.vScale, 1.0, source->pixelAspect, operation, charge, emit, emitted, key,
+                   ctx.vScale, prepared.values.opacity, source->pixelAspect, operation, charge,
+                   emit, emitted, key,
                    nearest ? render::GpuAffineFilter::Nearest : render::GpuAffineFilter::Bilinear)) {
         return error;
     }

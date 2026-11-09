@@ -334,6 +334,20 @@ struct Transform2DKernel final {
     CompiledScalarParameter rotation;
     Transform2DExtent extent = Transform2DExtent::Transformed;
     std::int64_t filter = 0;
+    // Skew in degrees (a shear along the skew axis, an angle clockwise from the horizontal, applied
+    // before scale and rotation) and an opacity multiplier in [0, 1]. The defaults are the plain
+    // transform; a document saved before they existed lowers with them.
+    CompiledScalarParameter skew{{}, 0.0};
+    CompiledScalarParameter skewAxis{{}, 0.0};
+    CompiledScalarParameter opacity{{}, 1.0};
+    // True when skew and opacity are the constants that leave the transform as it was.
+    [[nodiscard]] bool plainSkewOpacity() const noexcept {
+        const auto constantIs = [](const CompiledScalarParameter& parameter, const double value) {
+            const auto* constant = std::get_if<double>(&parameter.source);
+            return constant != nullptr && *constant == value;
+        };
+        return constantIs(skew, 0.0) && constantIs(skewAxis, 0.0) && constantIs(opacity, 1.0);
+    }
     friend bool operator==(const Transform2DKernel&, const Transform2DKernel&) = default;
 };
 // Neighborhood filters operate on associated RGBA, including coverage. Radius is finite full-
@@ -351,6 +365,10 @@ struct SeparableBlurKernel final {
     CompiledScalarParameter radius;
     BlurEdgeMode edge = BlurEdgeMode::Transparent;
     BlurChannels channels = BlurChannels::Rgba;
+    // With `separate`, `radius` is the horizontal radius and `radiusY` the vertical one; otherwise
+    // both axes use `radius`.
+    CompiledScalarParameter radiusY{{}, 0.0};
+    bool separate = false;
     friend bool operator==(const SeparableBlurKernel&, const SeparableBlurKernel&) = default;
 };
 // ADR 0028 layer masks. A path parameter is a constant or an inline Path curve.
@@ -416,6 +434,10 @@ struct CurvesKernel final {
 struct HueSaturationKernel final {
     CompiledScalarParameter hue;        // degrees
     CompiledScalarParameter saturation; // factor, 1 = unchanged
+    // Vibrance in [-1, 1]: saturation weighted toward the low-chroma pixels. Colorize turns the
+    // result into a single tint: hue and saturation then choose the tint color.
+    CompiledScalarParameter vibrance{{}, 0.0};
+    bool colorize = false;
     friend bool operator==(const HueSaturationKernel&, const HueSaturationKernel&) = default;
 };
 // #494 Grade: Resolve-style primaries on straight colour with alpha unchanged and no colour
@@ -1145,6 +1167,7 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
     if (const auto* hueSaturation = std::get_if<HueSaturationKernel>(&kernel)) {
         visit(hueSaturation->hue);
         visit(hueSaturation->saturation);
+        visit(hueSaturation->vibrance);
         return true;
     }
     if (const auto* grade = std::get_if<GradeKernel>(&kernel)) {

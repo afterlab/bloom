@@ -394,6 +394,9 @@ enum class NodeLoweringKind {
     // #587 Test Card: a source drawn procedurally by one field raster over a canvas the size of the
     // composition (or a custom size), then the node's signal color space into the working space.
     TestCard,
+    // Four-Color Gradient: a source drawn procedurally by one field raster over a canvas the size
+    // of the composition, from four colors anchored at four points.
+    FourColorGradient,
     // #383: Mask Combine and Image to Mask (matte_nodes.hpp), lowered to image combines.
     Matte,
     // #342: a Node Group instance. It has no operation of its own: the compiler replaces it with
@@ -462,6 +465,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Adjustment:
     case NodeLoweringKind::Matte:
     case NodeLoweringKind::TestCard:
+    case NodeLoweringKind::FourColorGradient:
         return false;
     }
     return false;

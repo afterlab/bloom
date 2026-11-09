@@ -34,7 +34,8 @@ struct PreparedSeparableBlur final {
 struct ImageEffectResult;
 [[nodiscard]] std::optional<PreparedSeparableBlur>
 prepareSeparableBlur(const SeparableBlurKernel&, std::optional<double> radius,
-                     double horizontalScale, double verticalScale);
+                     double horizontalScale, double verticalScale,
+                     std::optional<double> verticalRadius = std::nullopt);
 [[nodiscard]] std::optional<render::ImageWindow> blurOutputWindow(const PreparedSeparableBlur&,
                                                                   render::ImageWindow);
 [[nodiscard]] ImageEffectResult applySeparableBlur(const PreparedSeparableBlur&,

@@ -1922,6 +1922,37 @@ displayProofRunner(const bool customView) {
                      "production Test Card lowering: all sixteen cards, full frame and ROI");
             base += 2000;
         }
+        // #524 Four-Color Gradient: the one program its lowering builds, at a soft, the default
+        // and a sharp blend.
+        addField("node.bloom.four-color-gradient",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::fourColorGradientProgram(
+                          base, 0.5,
+                          {bloom::document::Vec2d{-5.5, 3.5}, bloom::document::Vec2d{5.5, 3.5},
+                           bloom::document::Vec2d{-5.5, -3.5}, bloom::document::Vec2d{2.0, -1.0}},
+                          {{{1.5, 0.0, 0.0, 1.0}, {0.0, 1.0, 0.25, 1.0}, {0.0, 0.25, 1.0, 0.5},
+                            {1.0, 1.0, 0.0, 1.0}}}),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::fourColorGradientProgram(
+                          base + 100, 2.0,
+                          {bloom::document::Vec2d{-5.5, 3.5}, bloom::document::Vec2d{5.5, 3.5},
+                           bloom::document::Vec2d{-5.5, -3.5}, bloom::document::Vec2d{2.0, -1.0}},
+                          {{{1.5, 0.0, 0.0, 1.0}, {0.0, 1.0, 0.25, 1.0}, {0.0, 0.25, 1.0, 0.5},
+                            {1.0, 1.0, 0.0, 1.0}}}),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::fourColorGradientProgram(
+                          base + 200, 8.0,
+                          {bloom::document::Vec2d{-5.5, 3.5}, bloom::document::Vec2d{5.5, 3.5},
+                           bloom::document::Vec2d{-5.5, -3.5}, bloom::document::Vec2d{2.0, -1.0}},
+                          {{{1.5, 0.0, 0.0, 1.0}, {0.0, 1.0, 0.25, 1.0}, {0.0, 0.25, 1.0, 0.5},
+                            {1.0, 1.0, 0.0, 1.0}}}),
+                      1}},
+                 base + 300,
+                 "production Four-Color Gradient lowering: soft, default and sharp blends, full "
+                 "frame and ROI");
+        base += 1000;
         // #508 Light Rays: the one program its lowering builds, rays gathered from the input's
         // luma and from its alpha and added to the input's premultiplied texel.
         addField("node.bloom.light-rays",

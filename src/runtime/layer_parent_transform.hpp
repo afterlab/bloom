@@ -22,7 +22,9 @@ struct LayerMatrix {
                 c * q.b + d * q.d, offset.x,          offset.y};
     }
     [[nodiscard]] static LayerMatrix authored(document::Vec2d position, document::Vec2d pivot,
-                                              document::Vec2d scale, double degrees) {
+                                              document::Vec2d scale, double degrees,
+                                              double skewDegrees = 0.0,
+                                              double skewAxisDegrees = 0.0) {
         const double angle = std::remainder(degrees, 360.0);
         double cosine = std::cos(angle * std::numbers::pi / 180.0);
         double sine = std::sin(angle * std::numbers::pi / 180.0);
@@ -41,6 +43,33 @@ struct LayerMatrix {
         }
         LayerMatrix result{
             cosine * scale.x, -sine * scale.y, sine * scale.x, cosine * scale.y, 0, 0};
+        if (skewDegrees != 0.0) {
+            // R * S * K, K the shear by tan(skew) along the axis (the same map as
+            // render::LayerTransform): K = [[1 - t s c, t c^2], [-t s^2, 1 + t s c]].
+            const double axis = std::remainder(skewAxisDegrees, 360.0);
+            double axisCosine = std::cos(axis * std::numbers::pi / 180.0);
+            double axisSine = std::sin(axis * std::numbers::pi / 180.0);
+            if (axis == 0 || std::abs(axis) == 180) {
+                axisCosine = axis == 0 ? 1 : -1;
+                axisSine = 0;
+            } else if (std::abs(axis) == 90) {
+                axisCosine = 0;
+                axisSine = axis > 0 ? 1 : -1;
+            }
+            // The same snap to a whole tangent as render::LayerTransform.
+            const double rawTangent = std::tan(skewDegrees * std::numbers::pi / 180.0);
+            const double t = std::abs(rawTangent - std::round(rawTangent)) < 1.0e-12
+                                 ? std::round(rawTangent)
+                                 : rawTangent;
+            const double k11 = 1.0 - t * axisSine * axisCosine;
+            const double k12 = t * axisCosine * axisCosine;
+            const double k21 = -t * axisSine * axisSine;
+            const double k22 = 1.0 + t * axisSine * axisCosine;
+            const double m11 = scale.x * k11, m12 = scale.x * k12;
+            const double m21 = scale.y * k21, m22 = scale.y * k22;
+            result = {cosine * m11 - sine * m21, cosine * m12 - sine * m22,
+                      sine * m11 + cosine * m21, sine * m12 + cosine * m22, 0, 0};
+        }
         const auto moved = result.map(pivot);
         result.x = position.x - moved.x;
         result.y = position.y - moved.y;

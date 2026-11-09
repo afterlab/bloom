@@ -790,15 +790,26 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     std::vector<GpuOcioTransformSpec> legs;
     if (blurKernel != nullptr) {
         const auto sampled = resolveParameter(blurKernel->radius, plan, resolved);
+        std::optional<double> verticalRadius;
+        if (blurKernel->separate) {
+            const auto vertical = resolveParameter(blurKernel->radiusY, plan, resolved);
+            if (!vertical)
+                return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                            "Blur vertical radius is not evaluable");
+            verticalRadius = vertical->value;
+        }
         blur = prepareSeparableBlur(*blurKernel,
                                     sampled ? std::optional{sampled->value} : std::nullopt,
-                                    ctx.hScale, ctx.vScale);
+                                    ctx.hScale, ctx.vScale, verticalRadius);
         if (!blur)
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Blur radius is out of domain");
         if (blur->identity())
             return identity();
         for (unsigned axis = 0; axis < 2; ++axis) {
+            // A one-tap axis (a separate radius of zero) is a copy, as on the CPU.
+            if ((axis == 0 ? blur->horizontal : blur->vertical).size() == 1)
+                continue;
             GpuOcioTransformSpec leg;
             leg.kind = GpuOcioTransformKind::SeparableBlur;
             leg.blurWeights = axis == 0 ? blur->horizontal : blur->vertical;

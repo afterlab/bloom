@@ -31,6 +31,25 @@ RGB and alpha together, preserve signed/HDR RGB without a display clamp, and bou
 `[0,1]` after each pass to remove normalization roundoff. A nonfinite output is a diagnosed failure.
 No straight-RGB reconstruction or alpha-preserving color-transform behavior is implied.
 
+**Separate axes and per-channel radius (Gaussian Blur only).** Gaussian Blur has a constant boolean
+`separate` (`bloom.blur.separate`, default off) and an animatable/drivable `radiusY`
+(`bloom.blur.radius-y`, same domain as `radius`, default 0). With `separate` on, `radius` is the
+horizontal radius and `radiusY` the vertical one; each axis has its own support and its own
+coefficients, so the node blurs one axis alone when the other is 0 (the zero axis is a one-tap copy
+and the GPU route dispatches only the other). The prepared coefficient sets were already one per
+axis, so the CPU reference (`prepareSeparableBlur`'s optional vertical radius) and the GPU legs
+(one per axis with more than one tap) read the same binary32 weights; the operation key carries the
+vertical weights as before, so a changed `radiusY` is a new identity. A constant boolean
+`perChannel` (`bloom.blur.per-channel`) and four animatable `redScale`, `greenScale`, `blueScale`,
+`alphaScale` (`bloom.blur.<channel>-scale`, `[0, 1]`, default 1) give Channel Blur: each associated
+channel is the input blurred by `radius * scale` (and `radiusY * scale`). The node lowers
+(`appendChannelBlur`) to a blur at the widest scale, which owns the output window, then four
+Channel Combine operations that put each channel of its own blur over it: five blurs and four
+combines of existing primitives, so every operation keeps its CPU reference, GPU command, cache
+identity, ROI, budget and cancellation. Alpha is blurred by its own scale like a colour channel.
+A document saved without these parameters reads as a plain blur on both axes; no schema version
+changed.
+
 Transparent samples outside the input data window as zero. Its output data window grows by the
 horizontal and vertical support on both sides, retaining negative origins. Clamp replicates the
 nearest input data-window sample and preserves the input data window. Both preserve display window,
@@ -280,6 +299,21 @@ saturation zero is the luminance on every channel.
 The matrix is linear, so it is applied directly to associated RGB: alpha is unchanged, HDR and
 negative values scale linearly and are never clamped, and no unpremultiply is needed.
 
+Hue/Saturation also has an animatable/drivable `vibrance` (`bloom.hue-saturation.vibrance`, `[-1, 1]`,
+default 0) and a constant boolean `colorize` (`bloom.hue-saturation.colorize`, default off), both
+optional additions that read as 0 and off in a document saved without them (no schema version
+changed). **Vibrance** is applied after the matrix: with `chroma = clamp(max(r, g, b) - min(r, g, b),
+0, 1)` of the input pixel and `Y = 0.213 r + 0.715 g + 0.072 b` of the result `c`, the result becomes
+`Y + f (c - Y)` with `f = 1 + vibrance (1 - chroma)`, so a positive vibrance saturates dull pixels
+(`f` up to `1 + vibrance`) and leaves fully saturated ones (chroma 1) and neutrals alone, and a
+negative one mutes dull pixels the most. It uses no division, so the CPU and the GPU program run the
+same binary32 operations. **Colorize** replaces the matrix by a rank-one one: every output is the
+input's luma times one tint, `out_i = tint_i / L * (0.213 r + 0.715 g + 0.072 b)`, where the tint is
+the hue `h` (degrees) at full chroma (`r = clamp(|h/60 - 3| - 1, 0, 1)` and its rotations for g and b)
+blended toward white by `min(saturation, 1)`, and `L` is the tint's own luma so the picture keeps
+its brightness. Hue and Saturation are the tint's hue and strength in this mode; alpha is untouched.
+The program is `bloom.render.hue-saturation.v2` (the table gained a fourth vec4 for the vibrance).
+
 Each grade prepares one packed binary32 table on the host (`PreparedColorGrade`): per Levels
 channel the pivot, reciprocal range, inverse gamma, output black and range; per Curves channel the
 control vec4 `[clamp, hueActive]`, the luma weights, the two opponent rows and `e1`, `e2`, then a
@@ -300,7 +334,7 @@ reports per-row progress, and allocates its output only within the request's pix
 cancellation, budget refusal and failures publish no partial image.
 
 The GPU route emits one resident `ProcessNeighborhood` command from one fixed program per kind
-(semantics `bloom.render.levels.v1`, `bloom.render.curves.v1`, `bloom.render.hue-saturation.v1`)
+(semantics `bloom.render.levels.v1`, `bloom.render.curves.v1`, `bloom.render.hue-saturation.v2`)
 whose storage buffer holds the prepared table, so animated values change only data and the command
 identity, never the shader. The straight-colour grades use the wrapper's correctly rounded division,
 matching the CPU. The command runs through the same scene builder, executor, admission, caches,

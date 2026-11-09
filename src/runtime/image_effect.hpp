@@ -83,7 +83,8 @@ class ImageEffectContext final {
             std::optional<Transform2DValues> transform2D = {},
             std::optional<std::array<double, 2>> lumaKeyRange = {},
             std::optional<std::vector<double>> gradeValues = {},
-            std::optional<std::array<double, 2>> directionalValues = {});
+            std::optional<std::array<double, 2>> directionalValues = {},
+            std::optional<double> sampledVerticalRadius = {});
 
   private:
     std::mutex mutex_;

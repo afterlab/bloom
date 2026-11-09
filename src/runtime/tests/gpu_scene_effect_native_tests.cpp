@@ -902,6 +902,9 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
         Vec2d pivot;
         Transform2DExtent extent;
         std::int64_t filter = bloom::runtime::kResampleFilterBilinear;
+        double skew = 0.0;
+        double skewAxis = 0.0;
+        double opacity = 1.0;
     };
     constexpr auto kNearest = bloom::runtime::kResampleFilterNearest;
     const std::array cases{
@@ -916,7 +919,17 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
         Case{{1.25, -0.375}, {1, 1}, 0.0, {}, Transform2DExtent::Transformed, kNearest},
         Case{{0.25, 0.375}, {1.5, 0.75}, 30.0, {1, 0.5}, Transform2DExtent::Transformed,
              kNearest},
-        Case{{2, 1}, {-1, 1}, 90.0, {}, Transform2DExtent::Display, kNearest}};
+        Case{{2, 1}, {-1, 1}, 90.0, {}, Transform2DExtent::Display, kNearest},
+        // Skew along the horizontal and a tilted axis, with and without rotation and scale, and an
+        // opacity alone (the translation pass carries it) and with a skew and Nearest.
+        Case{{0.5, 0.25}, {1, 1}, 0.0, {}, Transform2DExtent::Transformed,
+             bloom::runtime::kResampleFilterBilinear, 20.0, 0.0, 1.0},
+        Case{{0, 0}, {1.25, 0.75}, 15.0, {0.5, 0}, Transform2DExtent::Display,
+             bloom::runtime::kResampleFilterBilinear, -30.0, 40.0, 0.75},
+        Case{{1.5, -0.5}, {1, 1}, 0.0, {}, Transform2DExtent::Transformed,
+             bloom::runtime::kResampleFilterBilinear, 0.0, 0.0, 0.5},
+        Case{{0.25, 0.125}, {1, 1}, 0.0, {}, Transform2DExtent::Input, kNearest, 25.0, 90.0,
+             0.625}};
     std::uint64_t id = 26000;
     for (const auto& item : cases) {
         for (const bool shapeSource : {false, true}) {
@@ -927,7 +940,10 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
                     CompiledVec2Parameter{ParameterId::fromRaw(id + 31), item.pivot},
                     CompiledVec2Parameter{ParameterId::fromRaw(id + 32), item.scale},
                     CompiledScalarParameter{ParameterId::fromRaw(id + 33), item.rotation},
-                    item.extent, item.filter};
+                    item.extent, item.filter,
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 34), item.skew},
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 35), item.skewAxis},
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 36), item.opacity}};
                 auto definition = effectPlan(CstKernel{}, id)->copyDefinition();
                 std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
                 if (shapeSource) {
@@ -1010,6 +1026,95 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
                         "Transform 2D native: a changed value invalidates the resident result");
                 }
                 id += 100;
+            }
+        }
+    }
+}
+
+// Gaussian Blur's separate vertical radius: both axes, a vertical-only blur (the horizontal pass is
+// a one-tap copy and is not dispatched) and a horizontal-only one, at full scale, on a proxy with a
+// region of interest, against the CPU reference.
+void runSeparateBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::BlurChannels;
+    using bloom::runtime::BlurEdgeMode;
+    using bloom::runtime::SeparableBlurKernel;
+    using bloom::runtime::SeparableBlurKind;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::uint64_t id = 7800;
+    for (const auto [horizontal, vertical] :
+         {std::pair{3.0, 1.0}, std::pair{0.0, 2.5}, std::pair{2.0, 0.0}}) {
+        for (const auto edge : {BlurEdgeMode::Transparent, BlurEdgeMode::Clamp}) {
+            for (const bool proxy : {false, true}) {
+                cache.clear();
+                SeparableBlurKernel kernel{SeparableBlurKind::Gaussian,
+                                           {ParameterId::fromRaw(id + 90), horizontal}, edge,
+                                           BlurChannels::Rgba};
+                kernel.separate = true;
+                kernel.radiusY = {ParameterId::fromRaw(id + 91), vertical};
+                const auto plan = effectPlan(kernel, id);
+                id += 100;
+                auto request = requestFor(*plan);
+                if (proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(7, 6);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                    const auto roi = ImageWindow::create(1, 1, 4, 3);
+                    request.roi = *roi.value();
+                }
+                auto oracleRequest = request;
+                oracleRequest.bypassOperationCache = true;
+                const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+                const auto prepared = builder.build(plan, request);
+                expectations.expect(oracle.frame() && prepared,
+                                    "separate blur native: CPU oracle and scene prepare");
+                if (!oracle.frame() || !prepared)
+                    continue;
+                auto executor = GpuSceneExecutor::create(device, cache);
+                if (!executor)
+                    continue;
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto coldCounters = executor.executor->counters();
+                std::string detail;
+                expectations.expect(
+                    cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                    "separate blur native: CPU parity (2e-6, exact alpha): " + detail);
+                const auto& descriptor = *oracle.frame()->processImage().descriptor();
+                expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow(),
+                                    "separate blur native: data and display window parity");
+                const std::uint64_t legs = (horizontal > 0.0 ? 1U : 0U) + (vertical > 0.0 ? 1U : 0U);
+                expectations.expect(coldCounters.ocioEffectDispatches == legs &&
+                                        coldCounters.readbacks == 0,
+                                    "separate blur native: one resident dispatch per non-zero "
+                                    "axis and no internal readback");
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(
+                    warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                        executor.executor->counters().ocioEffectDispatches ==
+                            coldCounters.ocioEffectDispatches,
+                    "separate blur native: warm reuse has identical pixels and zero dispatches");
+                // A changed vertical radius invalidates the result and keeps parity.
+                auto changedDefinition = plan->copyDefinition();
+                std::get<SeparableBlurKernel>(
+                    std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                    .radiusY.source = 1.5;
+                const auto changedPlan = std::make_shared<const CompiledCompositionPlan>(
+                    std::move(changedDefinition));
+                const auto changed = builder.build(changedPlan, request);
+                const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+                if (!changed || !changedOracle.frame())
+                    continue;
+                const auto before = executor.executor->counters().ocioEffectDispatches;
+                const auto rerun = runScene(*executor.executor, changed.scene);
+                expectations.expect(
+                    rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(rerun.pixels, changedOracle.frame()->processImage().pixels(),
+                               detail) &&
+                        executor.executor->counters().ocioEffectDispatches > before,
+                    "separate blur native: a changed vertical radius re-dispatches with CPU "
+                    "parity: " + detail);
             }
         }
     }
@@ -1180,6 +1285,14 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         return bloom::runtime::ImageEffectKernel{
             HueSaturationKernel{{ParameterId::fromRaw(id), oversaturate ? 200.0 : -70.0},
                                 {ParameterId::fromRaw(id + 1), oversaturate ? 2.5 : 0.3}}};
+    };
+    // Vibrance at both signs with a hue turn, and Colorize with a vibrance.
+    const auto vibrance = [](const std::uint64_t id, const bool colorize) {
+        HueSaturationKernel kernel{{ParameterId::fromRaw(id), colorize ? 200.0 : 40.0},
+                                   {ParameterId::fromRaw(id + 1), colorize ? 0.7 : 1.4},
+                                   {ParameterId::fromRaw(id + 2), colorize ? -0.4 : 0.8},
+                                   colorize};
+        return bloom::runtime::ImageEffectKernel{kernel};
     };
     // #494: every Grade control, with contrast and saturation on or off.
     const auto grade = [](const std::uint64_t id, const bool primaries) {
@@ -1404,7 +1517,8 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         for (const auto& kernel :
              {levels(id + 50, false),  levels(id + 50, true),     curves(id + 50, false),
               curves(id + 50, true),   hueCurves(id + 50, false), hueCurves(id + 50, true),
-              hue(id + 50, false),     hue(id + 50, true),        grade(id + 50, false),
+              hue(id + 50, false),     hue(id + 50, true),        vibrance(id + 50, false),
+              vibrance(id + 50, true),        grade(id + 50, false),
               grade(id + 50, true),    association(id + 50, 0),   association(id + 50, 1),
               association(id + 50, 2), association(id + 50, 3),   association(id + 50, 4),
               colorize(id + 50, 0),    colorize(id + 50, 1),      colorize(id + 50, 2),
@@ -2091,6 +2205,20 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                  bloom::field_test_programs::testCardProgram(
                                      id, card, card == 3 ? 2 : 14, card == 9 ? 15 : 2, card % 2 == 0),
                                  4U});
+        id += 100;
+    }
+    // #524 Four-Color Gradient: the program its lowering builds, at a soft, the default and a sharp
+    // blend (HDR colors, one partly transparent).
+    for (const double blend : {0.5, 2.0, 8.0}) {
+        kernels.emplace_back("four-color gradient blend " + std::to_string(blend),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::fourColorGradientProgram(
+                                     id, blend,
+                                     {bloom::document::Vec2d{-5.5, 3.5}, bloom::document::Vec2d{5.5, 3.5},
+                                      bloom::document::Vec2d{-5.5, -3.5}, bloom::document::Vec2d{2.0, -1.0}},
+                                     {{{1.5, 0.0, 0.0, 1.0}, {0.0, 1.0, 0.25, 1.0},
+                                       {0.0, 0.25, 1.0, 0.5}, {1.0, 1.0, 0.0, 1.0}}}),
+                                 1U});
         id += 100;
     }
     // #348 Corner Pin, ST Map and Displace: the programs their lowerings build, each filter.
@@ -3826,6 +3954,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runResizeFit(expectations, device, cache);
     runTransform2D(expectations, device, cache);
     runBlurs(expectations, device, cache);
+    runSeparateBlurs(expectations, device, cache);
     runLumaKeys(expectations, device, cache);
     runColorGrades(expectations, device, cache);
     runChannelSelects(expectations, device, cache);

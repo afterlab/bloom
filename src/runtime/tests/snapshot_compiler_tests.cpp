@@ -5,6 +5,7 @@
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/camera_shake.hpp>
+#include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -2121,6 +2122,8 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_warp_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
+#include "snapshot_compiler_four_color_gradient_tests.ipp"
+#include "snapshot_compiler_extension_frames.ipp"
 #include "snapshot_compiler_audio_amplitude_tests.ipp"
 #include "snapshot_compiler_node_group_tests.ipp"
 
@@ -2135,6 +2138,8 @@ int main() {
         testExposureOffsetLowering(expectations);
         testCanvasLowering(expectations);
         testBlurLowering(expectations);
+        testBlurExtensionLowering(expectations);
+        testHueSaturationExtensionLowering(expectations);
         testTransform2DLowering(expectations);
         testMatteBlurLowering(expectations);
         testImagePreviewInspection(expectations);
@@ -2193,6 +2198,9 @@ int main() {
         testRollingShutterPixels(expectations);
         testSharpenLowering(expectations);
         testTestCardLowering(expectations);
+        testFourColorGradientLowering(expectations);
+        testFourColorGradientPixels(expectations);
+        testExtensionFrames(expectations);
         testTestCardPixels(expectations);
         testTestCardPatchMatchesTheTransform(expectations);
         testTestCardKeepsLevelsBelowBlack(expectations);

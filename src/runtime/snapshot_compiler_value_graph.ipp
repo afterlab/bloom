@@ -822,6 +822,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::Matte:
     case runtime::NodeLoweringKind::ImagePreview:
     case runtime::NodeLoweringKind::TestCard:
+    case runtime::NodeLoweringKind::FourColorGradient:
         break;
     }
     return std::nullopt;

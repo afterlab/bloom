@@ -134,6 +134,11 @@ class LayerTransform final {
         double scaleY = 1.0;
         double rotationDegrees = 0.0;
         double opacity = 1.0;
+        // Transform 2D's skew: a shear by `skewDegrees` along the axis at `skewAxisDegrees`
+        // (clockwise from the horizontal), applied to the layer before scale and rotation. A zero
+        // skew leaves every map below exactly as it was.
+        double skewDegrees = 0.0;
+        double skewAxisDegrees = 0.0;
 
         friend constexpr bool operator==(const Authored&, const Authored&) noexcept = default;
     };

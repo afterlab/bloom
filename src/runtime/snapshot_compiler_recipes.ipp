@@ -59,6 +59,43 @@ lowerSharpen(const document::NodeRecord& node, std::vector<runtime::CompiledOper
     return runtime::detail::appendSharpen(emitter, *input, {*amount, *radius, *threshold});
 }
 
+// Gaussian Blur with a radius per channel: five blurs and four channel combines
+// (appendChannelBlur).
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerChannelBlur(const document::NodeRecord& node,
+                 std::vector<runtime::CompiledOperation>& operations,
+                 std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    runtime::detail::ChannelBlurOperands operands;
+    const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
+    const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
+    const auto* separate = parameterConstant<bool>(findParameterBinding(node, "separate"));
+    const auto radiusY = compiledScalarParameter(findParameterBinding(node, "radiusY"));
+    bool lowered = radius && edge && *edge >= 0 && *edge <= 1 && separate && radiusY;
+    constexpr std::array<const char*, 4> roles{"redScale", "greenScale", "blueScale",
+                                               "alphaScale"};
+    for (std::size_t channel = 0; channel < roles.size(); ++channel) {
+        const auto scale = compiledScalarParameter(findParameterBinding(node, roles[channel]));
+        lowered = lowered && scale.has_value();
+        if (scale)
+            operands.scales[channel] = *scale;
+    }
+    if (!lowered) {
+        addTopologyFailure(node.id, "Gaussian Blur parameters could not be lowered.");
+        return std::nullopt;
+    }
+    operands.radius = *radius;
+    operands.radiusY = *radiusY;
+    operands.separate = *separate;
+    operands.edge = static_cast<runtime::BlurEdgeMode>(*edge);
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    return runtime::detail::appendChannelBlur(emitter, *input, operands);
+}
+
 // #563 Codec Degrade: its look-back chain of codec passes over time samples of its input.
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerCodecDegrade(const document::NodeRecord& node,

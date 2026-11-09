@@ -29,6 +29,7 @@ namespace {
 
 constexpr std::string_view kHueRole = "hue";
 constexpr std::string_view kSaturationRole = "saturation";
+constexpr std::string_view kVibranceRole = "vibrance";
 constexpr int kSpectrumStops = 48;
 
 [[nodiscard]] int control() { return kit::px(kit::Size::Control); }
@@ -317,6 +318,18 @@ HueSaturationCardWidget::HueSaturationCardWidget(CompositionSession& session,
     slider.neutral = 1.0;
     slider.gradient = greyToColourStops(0.5);
     saturation_->setSlider(slider);
+    vibrance_ = new GradingValueRow(session_, node_, std::string(kVibranceRole),
+                                    document::kHueSaturationVibranceSchemaKey, tr("Vibrance"), 0.0,
+                                    this);
+    vibrance_->setShowsSign(true);
+    vibrance_->setDescription(
+        tr("Saturates dull colors more than strong ones; negative values mute the dull ones."));
+    GradingSliderSpec vibranceSlider;
+    vibranceSlider.minimum = -1.0;
+    vibranceSlider.maximum = 1.0;
+    vibranceSlider.neutral = 0.0;
+    vibranceSlider.ticks = 0.5;
+    vibrance_->setSlider(vibranceSlider);
     for (const auto signal :
          {&CompositionSession::snapshotChanged, &CompositionSession::liveValueChanged,
           &CompositionSession::currentTimeChanged})
@@ -325,7 +338,7 @@ HueSaturationCardWidget::HueSaturationCardWidget(CompositionSession& session,
 }
 
 bool HueSaturationCardWidget::showsRole(const std::string_view role) const {
-    return role != kHueRole && role != kSaturationRole;
+    return role != kHueRole && role != kSaturationRole && role != kVibranceRole;
 }
 
 std::optional<int> HueSaturationCardWidget::socketY(const std::string_view role) const {
@@ -333,15 +346,20 @@ std::optional<int> HueSaturationCardWidget::socketY(const std::string_view role)
         return hue_->y() + hue_->socketY();
     if (role == kSaturationRole)
         return control() + small() + control() + small() + saturation_->socketY();
+    if (role == kVibranceRole)
+        return control() + small() + control() + small() + saturation_->heightHint() + small() +
+               vibrance_->socketY();
     return std::nullopt;
 }
 
 int HueSaturationCardWidget::heightAt(const int) const {
-    return control() + small() + control() + small() + saturation_->heightHint();
+    return control() + small() + control() + small() + saturation_->heightHint() + small() +
+           vibrance_->heightHint();
 }
 
 int HueSaturationCardWidget::minimumWidthHint() const {
     return std::max({hue_->minimumWidthHint(), saturation_->minimumWidthHint(),
+                     vibrance_->minimumWidthHint(),
                      kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control)});
 }
 
@@ -357,14 +375,18 @@ void HueSaturationCardWidget::resizeEvent(QResizeEvent* event) {
 
 void HueSaturationCardWidget::place() {
     const int w = width();
-    const int labels = std::max(hue_->labelWidthHint(), saturation_->labelWidthHint());
+    const int labels = std::max({hue_->labelWidthHint(), saturation_->labelWidthHint(),
+                                 vibrance_->labelWidthHint()});
     hue_->setLabelWidth(labels);
     saturation_->setLabelWidth(labels);
+    vibrance_->setLabelWidth(labels);
     hue_->setGeometry(0, 0, w, hue_->heightHint());
     int y = control() + small();
     strip_->setGeometry(0, y, w, control());
     y += control() + small();
     saturation_->setGeometry(0, y, w, saturation_->heightHint());
+    y += saturation_->heightHint() + small();
+    vibrance_->setGeometry(0, y, w, vibrance_->heightHint());
 }
 
 void HueSaturationCardWidget::refresh() {
@@ -372,6 +394,7 @@ void HueSaturationCardWidget::refresh() {
     const bool locked = composition == nullptr || composition->nodeLocked(node_);
     hue_->refresh(locked);
     saturation_->refresh(locked);
+    vibrance_->refresh(locked);
     const auto id = strip_->parameter();
     strip_->setEnabled(!locked && id && scalarEditable(session_, *id));
     strip_->update();

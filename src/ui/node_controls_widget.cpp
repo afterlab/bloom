@@ -4,6 +4,7 @@
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
 
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -472,6 +473,8 @@ struct Controls final {
                             true}};
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move");
         controls.angles.push_back(angle("rotation", "bloom.transform-2d.rotation", false, false));
+        // The skew axis, clockwise from screen right.
+        controls.angles.push_back(angle("skewAxis", "bloom.transform-2d.skew-axis", true, false));
         // #484: its motion blur's shutter, shown while the motion blur is on.
         controls.angles.push_back(
             angle("shutterAngle", "bloom.transform-2d.shutterAngle", false, false));
@@ -507,6 +510,17 @@ struct Controls final {
         controls.connected = true;
         controls.nodeSizedFrame = true;
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move Gradient");
+    } else if (typeId == document::kFourColorGradientNodeType) {
+        // The four points, in field units (pixels from the centre, +y up), moved on one pad.
+        const auto point = [](std::string role, QString label) {
+            return PointPadRow::Point{std::move(role), std::move(label), true, true};
+        };
+        controls.points = {point("point1", QCoreApplication::translate("NodeControls", "Point 1")),
+                           point("point2", QCoreApplication::translate("NodeControls", "Point 2")),
+                           point("point3", QCoreApplication::translate("NodeControls", "Point 3")),
+                           point("point4", QCoreApplication::translate("NodeControls", "Point 4"))};
+        controls.nodeSizedFrame = true;
+        controls.padLabel = QCoreApplication::translate("NodeControls", "Move Points");
     } else if (typeId == "bloom.luma-key") {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,

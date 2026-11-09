@@ -8,6 +8,7 @@
 #include "row_inline_controls.hpp"
 #include "font_picker.hpp"
 #include "value_presentation.hpp"
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
@@ -120,6 +121,15 @@ document::ShapeKind nodeShapeKind(const document::Composition& composition,
         Label{"bloom.field-pattern.waveform", "Profile"},
         Label{"bloom.field-pattern.speed", "Speed (cycles a second)"},
         Label{"bloom.field-pattern.softness", "Edge softness"},
+        Label{"bloom.four-color-gradient.point1", "Point 1"},
+        Label{"bloom.four-color-gradient.color1", "Color 1"},
+        Label{"bloom.four-color-gradient.point2", "Point 2"},
+        Label{"bloom.four-color-gradient.color2", "Color 2"},
+        Label{"bloom.four-color-gradient.point3", "Point 3"},
+        Label{"bloom.four-color-gradient.color3", "Color 3"},
+        Label{"bloom.four-color-gradient.point4", "Point 4"},
+        Label{"bloom.four-color-gradient.color4", "Color 4"},
+        Label{"bloom.four-color-gradient.blend", "Blend (sharpness)"},
         Label{"bloom.field-gradient.repeat", "Outside the ramp"},
         Label{"bloom.field-gradient.cycle", "Phase (cycles)"},
         Label{"bloom.field-shape-distance.source", "Shape from"},
@@ -267,6 +277,18 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == "bloom.rotate-90.quarter-turns" ? QObject::tr("Quarter turns (clockwise)")
         : schemaKey == "bloom.blur.radius"             ? QObject::tr("Radius (pixels)")
         : schemaKey == "bloom.blur.edge"               ? QObject::tr("Edges")
+        : schemaKey == "bloom.blur.separate"           ? QObject::tr("Separate axes")
+        : schemaKey == "bloom.blur.radius-y"           ? QObject::tr("Vertical radius (pixels)")
+        : schemaKey == "bloom.blur.per-channel"        ? QObject::tr("Per-channel radius")
+        : schemaKey == "bloom.blur.red-scale"          ? QObject::tr("Red radius")
+        : schemaKey == "bloom.blur.green-scale"        ? QObject::tr("Green radius")
+        : schemaKey == "bloom.blur.blue-scale"         ? QObject::tr("Blue radius")
+        : schemaKey == "bloom.blur.alpha-scale"        ? QObject::tr("Alpha radius")
+        : schemaKey == "bloom.transform-2d.skew"       ? QObject::tr("Skew")
+        : schemaKey == "bloom.transform-2d.skew-axis"  ? QObject::tr("Skew axis")
+        : schemaKey == "bloom.transform-2d.opacity"    ? QObject::tr("Opacity")
+        : schemaKey == document::kHueSaturationVibranceSchemaKey ? QObject::tr("Vibrance")
+        : schemaKey == document::kHueSaturationColorizeSchemaKey ? QObject::tr("Colorize")
         : schemaKey == "bloom.luma-key.low"            ? QObject::tr("Low luma")
         : schemaKey == "bloom.luma-key.high"           ? QObject::tr("High luma")
         : schemaKey == "bloom.luma-key.invert"         ? QObject::tr("Invert key")
@@ -546,7 +568,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                                       "propertiesRegistryColorExpand",
                                       "propertiesRegistryColorFields", parameter_,
                                       // #347: the audio plots have two colors; the row names which.
-                                      document::isImagePixelColorSchemaKey(definition_.schemaKey)
+                                      // #524: so do the four colors of a Four-Color Gradient.
+                                      document::isImagePixelColorSchemaKey(definition_.schemaKey) ||
+                                              document::isFourColorGradientColorSchemaKey(
+                                                  definition_.schemaKey)
                                           ? label
                                           : QString());
         delete controls;

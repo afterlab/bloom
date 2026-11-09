@@ -508,7 +508,8 @@ ImageResult<LayerTransform> LayerTransform::create(const Authored authored,
                                                    const double proxyScaleY) noexcept {
     const std::array authoredValues{
         authored.translationX, authored.translationY, authored.anchorX,         authored.anchorY,
-        authored.scaleX,       authored.scaleY,       authored.rotationDegrees, authored.opacity};
+        authored.scaleX,       authored.scaleY,       authored.rotationDegrees, authored.opacity,
+        authored.skewDegrees,  authored.skewAxisDegrees};
     if (std::ranges::any_of(authoredValues,
                             [](const double value) { return !std::isfinite(value); }) ||
         !std::isfinite(proxyScaleX) || !std::isfinite(proxyScaleY)) {
@@ -519,7 +520,7 @@ ImageResult<LayerTransform> LayerTransform::create(const Authored authored,
             codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment));
     }
     if (authored.opacity < 0.0 || authored.opacity > 1.0 || proxyScaleX <= 0.0 ||
-        proxyScaleY <= 0.0) {
+        proxyScaleY <= 0.0 || std::abs(authored.skewDegrees) > 89.0) {
         return ImageResult<LayerTransform>::failure(codeError(ImageErrorCode::InvalidParameter));
     }
     // A zero scale factor collapses the layer onto a line or a point: there is no inverse to map an
@@ -537,8 +538,8 @@ ImageResult<LayerTransform> LayerTransform::create(const Authored authored,
     state.deviceTranslationY = authored.translationY * proxyScaleY;
 
     const auto rotation = rotationCosSin(authored.rotationDegrees);
-    state.translationOnly =
-        authored.scaleX == 1.0 && authored.scaleY == 1.0 && rotation.cosine == 1.0;
+    state.translationOnly = authored.scaleX == 1.0 && authored.scaleY == 1.0 &&
+                            rotation.cosine == 1.0 && authored.skewDegrees == 0.0;
     if (state.translationOnly) {
         // Deliberately leave the linear maps at their identity defaults and the anchor out of the
         // resolved state entirely: inverseMap() must not compute with the anchor on this path,
@@ -550,14 +551,46 @@ ImageResult<LayerTransform> LayerTransform::create(const Authored authored,
     // Forward linear map in full-resolution space, M = R(rotation) * S(scale), and its inverse
     // S^-1 * R(-rotation). Both are written out rather than inverted numerically: the closed form
     // keeps a quarter turn exact, which a general 2x2 inversion would not.
-    const auto fullForwardA = rotation.cosine * authored.scaleX;
-    const auto fullForwardB = -rotation.sine * authored.scaleY;
-    const auto fullForwardC = rotation.sine * authored.scaleX;
-    const auto fullForwardD = rotation.cosine * authored.scaleY;
-    const auto fullInverseA = rotation.cosine / authored.scaleX;
-    const auto fullInverseB = rotation.sine / authored.scaleX;
-    const auto fullInverseC = -rotation.sine / authored.scaleY;
-    const auto fullInverseD = rotation.cosine / authored.scaleY;
+    auto fullForwardA = rotation.cosine * authored.scaleX;
+    auto fullForwardB = -rotation.sine * authored.scaleY;
+    auto fullForwardC = rotation.sine * authored.scaleX;
+    auto fullForwardD = rotation.cosine * authored.scaleY;
+    auto fullInverseA = rotation.cosine / authored.scaleX;
+    auto fullInverseB = rotation.sine / authored.scaleX;
+    auto fullInverseC = -rotation.sine / authored.scaleY;
+    auto fullInverseD = rotation.cosine / authored.scaleY;
+    if (authored.skewDegrees != 0.0) {
+        // M = R * S * K with K the shear by tan(skew) along the skew axis,
+        // K = [[1 - t s c, t c^2], [-t s^2, 1 + t s c]] (unit determinant), K^-1 = K(-t).
+        const auto axis = rotationCosSin(authored.skewAxisDegrees);
+        // A shear of exactly one pixel a row (45 degrees) must not land a hair off the pixel grid.
+        const auto rawTangent = std::tan(authored.skewDegrees * (std::numbers::pi / 180.0));
+        const auto t = std::abs(rawTangent - std::round(rawTangent)) < 1.0e-12
+                           ? std::round(rawTangent)
+                           : rawTangent;
+        const auto k11 = 1.0 - t * axis.sine * axis.cosine;
+        const auto k12 = t * axis.cosine * axis.cosine;
+        const auto k21 = -t * axis.sine * axis.sine;
+        const auto k22 = 1.0 + t * axis.sine * axis.cosine;
+        // S * K, then R on the left.
+        const auto m11 = authored.scaleX * k11;
+        const auto m12 = authored.scaleX * k12;
+        const auto m21 = authored.scaleY * k21;
+        const auto m22 = authored.scaleY * k22;
+        fullForwardA = rotation.cosine * m11 - rotation.sine * m21;
+        fullForwardB = rotation.cosine * m12 - rotation.sine * m22;
+        fullForwardC = rotation.sine * m11 + rotation.cosine * m21;
+        fullForwardD = rotation.sine * m12 + rotation.cosine * m22;
+        // K^-1 * S^-1 * R(-rotation).
+        const auto i11 = (1.0 + t * axis.sine * axis.cosine) / authored.scaleX;
+        const auto i12 = (-t * axis.cosine * axis.cosine) / authored.scaleY;
+        const auto i21 = (t * axis.sine * axis.sine) / authored.scaleX;
+        const auto i22 = (1.0 - t * axis.sine * axis.cosine) / authored.scaleY;
+        fullInverseA = i11 * rotation.cosine - i12 * rotation.sine;
+        fullInverseB = i11 * rotation.sine + i12 * rotation.cosine;
+        fullInverseC = i21 * rotation.cosine - i22 * rotation.sine;
+        fullInverseD = i21 * rotation.sine + i22 * rotation.cosine;
+    }
 
     // Conjugation by the per-axis proxy factor: the off-diagonal terms carry the axis ratio, the
     // diagonal ones are unitless and carry nothing. With equal factors every ratio is exactly 1 and

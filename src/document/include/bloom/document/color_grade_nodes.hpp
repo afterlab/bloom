@@ -86,6 +86,12 @@ inline constexpr std::string_view kCurvesClampSchemaKey = "bloom.curves.clamp";
 inline constexpr std::string_view kHueSaturationHueSchemaKey = "bloom.hue-saturation.hue";
 inline constexpr std::string_view kHueSaturationSaturationSchemaKey =
     "bloom.hue-saturation.saturation";
+// Vibrance weights the saturation change toward low-chroma pixels; Colorize tints the luma with the
+// hue and saturation instead of rotating the input's hues. Both are optional additions: a document
+// saved without them reads as vibrance 0 and Colorize off.
+inline constexpr std::string_view kHueSaturationVibranceSchemaKey = "bloom.hue-saturation.vibrance";
+inline constexpr std::string_view kHueSaturationColorizeSchemaKey = "bloom.hue-saturation.colorize";
+inline constexpr double kMaximumVibrance = 1.0;
 
 // Levels black/white points and Curves coordinates are finite values bounded to +-1e6, so every
 // value the grade prepares stays a normal binary32 number on the CPU and GPU routes. Gamma is

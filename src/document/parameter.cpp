@@ -1,3 +1,4 @@
+#include <bloom/document/transform_2d_nodes.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/document/matte_nodes.hpp>
@@ -15,6 +16,7 @@
 #include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
+#include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
@@ -334,10 +336,26 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value != nullptr && std::isfinite(*value) &&
                isScalarWithinSchemaDomain(schemaKey, *value);
     }
-    if (schemaKey == "bloom.blur.radius") {
+    if (schemaKey == "bloom.blur.radius" || schemaKey == "bloom.blur.radius-y") {
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value) && *value >= 0.0 &&
                *value <= kMaximumBlurRadiusPixels;
+    }
+    if (schemaKey == "bloom.blur.separate" || schemaKey == "bloom.blur.per-channel")
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
+        schemaKey == "bloom.blur.blue-scale" || schemaKey == "bloom.blur.alpha-scale" ||
+        schemaKey == "bloom.transform-2d.opacity") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && *value >= 0.0 && *value <= 1.0;
+    }
+    if (schemaKey == "bloom.transform-2d.skew") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value) && std::abs(*value) <= kMaximumTransformSkew;
+    }
+    if (schemaKey == "bloom.transform-2d.skew-axis") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value);
     }
     if (schemaKey == "bloom.blur.edge") {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
@@ -380,13 +398,14 @@ constantMatchesSchema(const std::string_view schemaKey,
     }
     if (schemaKey == "bloom.flip.horizontal" || schemaKey == "bloom.flip.vertical" ||
         schemaKey == "bloom.luma-key.invert" || schemaKey == kLevelsClampSchemaKey ||
-        schemaKey == kCurvesClampSchemaKey)
+        schemaKey == kCurvesClampSchemaKey || schemaKey == kHueSaturationColorizeSchemaKey)
         return std::holds_alternative<bool>(constant.value);
     // #340: every Levels value, the hue and the saturation are finite within their schema domain.
     // #494: so is every Grade wheel value and primary.
     // #493: a Curves curve is a point list within its curve's domain (grade_curves.hpp).
     if (isLevelsValueSchemaKey(schemaKey) || schemaKey == kHueSaturationHueSchemaKey ||
-        schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey)) {
+        schemaKey == kHueSaturationSaturationSchemaKey ||
+        schemaKey == kHueSaturationVibranceSchemaKey || isGradeValueSchemaKey(schemaKey)) {
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value) &&
                isScalarWithinSchemaDomain(schemaKey, *value);
@@ -466,6 +485,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #587 Test Card: every parameter within its document domain.
     if (testCardParameterSpec(schemaKey) != nullptr)
         return isTestCardParameterValueValid(schemaKey, constant.value);
+    // Four-Color Gradient: every parameter within its document domain.
+    if (schemaKey.starts_with("bloom.four-color-gradient."))
+        return isFourColorGradientParameterValueValid(schemaKey, constant.value);
     // #508 Light Rays: every parameter within its document domain.
     if (schemaKey.starts_with("bloom.light-rays."))
         return isLightRaysParameterValueValid(schemaKey, constant.value);
@@ -735,7 +757,7 @@ bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
            schemaKey == kLensDistortionCenterSchemaKey ||
            schemaKey == kChromaticAberrationCenterSchemaKey ||
-           schemaKey == kLightRaysCenterSchemaKey ||
+           schemaKey == kLightRaysCenterSchemaKey || isFourColorGradientPointSchemaKey(schemaKey) ||
            schemaKey == kRollingShutterCameraOffsetSchemaKey ||
            isWarpPointSchemaKey(schemaKey) ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
@@ -761,10 +783,17 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
            schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
            schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
-           schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.luma-key.low" ||
+           schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.transform-2d.skew" ||
+           schemaKey == "bloom.transform-2d.skew-axis" ||
+           schemaKey == "bloom.transform-2d.opacity" || schemaKey == "bloom.blur.radius-y" ||
+           isFourColorGradientScalarSchemaKey(schemaKey) ||
+           schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
+           schemaKey == "bloom.blur.blue-scale" || schemaKey == "bloom.blur.alpha-scale" ||
+           schemaKey == "bloom.luma-key.low" ||
            schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
            schemaKey == kHueSaturationHueSchemaKey ||
-           schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
+           schemaKey == kHueSaturationSaturationSchemaKey ||
+           schemaKey == kHueSaturationVibranceSchemaKey || isGradeValueSchemaKey(schemaKey) ||
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
@@ -789,7 +818,8 @@ bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kTextColorParameterSchemaKey ||
            schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
            isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||
-           isLensFlareColorSchemaKey(schemaKey) || isImagePixelColorSchemaKey(schemaKey);
+           isLensFlareColorSchemaKey(schemaKey) || isImagePixelColorSchemaKey(schemaKey) ||
+           isFourColorGradientColorSchemaKey(schemaKey);
 }
 
 bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -802,8 +832,16 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept {
     if (isCanvasMarginSchemaKey(schemaKey))
         return value >= 0.0 && value <= 16777216.0;
-    if (schemaKey == "bloom.blur.radius")
+    if (schemaKey == "bloom.blur.radius" || schemaKey == "bloom.blur.radius-y")
         return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
+    if (schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
+        schemaKey == "bloom.blur.blue-scale" || schemaKey == "bloom.blur.alpha-scale" ||
+        schemaKey == "bloom.transform-2d.opacity")
+        return value >= 0.0 && value <= 1.0;
+    if (schemaKey == "bloom.transform-2d.skew")
+        return std::abs(value) <= kMaximumTransformSkew;
+    if (isFourColorGradientScalarSchemaKey(schemaKey))
+        return isFourColorGradientBlendWithinDomain(value);
     if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high")
         return value >= -kMaximumLumaKeyThreshold && value <= kMaximumLumaKeyThreshold;
     if (isLevelsGammaSchemaKey(schemaKey))
@@ -812,6 +850,8 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
         return value >= -kMaximumGradeValue && value <= kMaximumGradeValue;
     if (schemaKey == kHueSaturationSaturationSchemaKey)
         return value >= 0.0 && value <= kMaximumGradeSaturation;
+    if (schemaKey == kHueSaturationVibranceSchemaKey)
+        return value >= -kMaximumVibrance && value <= kMaximumVibrance;
     // #494 Grade: each wheel value and primary within its own domain (color_grade_nodes.hpp).
     if (const auto grade = gradeValueDomain(schemaKey))
         return value >= grade->minimum && value <= grade->maximum;

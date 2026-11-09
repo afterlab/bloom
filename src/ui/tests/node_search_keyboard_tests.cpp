@@ -594,7 +594,8 @@ void testSearchKeyboardAndMenus() {
         };
         hasGroup("Sources",
                  {"Audio", "Audio Auto Level", "Audio Compressor", "Audio Equalizer", "Audio Hiss",
-                  "Audio Mono", "Checker", "Composition", "Image", "Linear Gradient",
+                  "Audio Mono", "Checker", "Composition", "Four-Color Gradient", "Image",
+                  "Linear Gradient",
                   "Radial Gradient", "Solid", "Test Card", "Video"},
                  "Sources holds what makes an image, and the audio effects beside the Audio source");
         hasGroup("Compositing",

@@ -154,6 +154,88 @@ void testNearest() {
     }
 }
 
+// Skew and opacity against closed forms: opacity multiplies every premultiplied channel, a skew of
+// 45 degrees along the horizontal shifts each row sideways by its distance from the pivot row (rows
+// are whole pixels from it, so the copies are exact up to the binary64 tangent), the vertical skew
+// axis shifts columns, and a skew leaves the pivot row alone.
+void testSkewAndOpacity() {
+    const auto data = window(0, 0, 5, 3);
+    const auto input = source(data, data);
+    const auto near = [](const render::Rgba32f& a, const render::Rgba32f& b) {
+        for (std::size_t c = 0; c < 4; ++c)
+            if (std::abs(a.components()[c] - b.components()[c]) >
+                2e-6F * std::max(1.0F, std::abs(b.components()[c])))
+                return false;
+        return true;
+    };
+    // Opacity.
+    auto half = values({3, -1}, {1, 1}, 0.0, {}, {2.5, 1.5});
+    half.opacity = 0.5;
+    const auto faded = run(half, input);
+    expect(faded.image != nullptr, "an opacity produces an image");
+    if (faded.image) {
+        bool exact = true;
+        for (std::int64_t y = 0; y < 3; ++y)
+            for (std::int64_t x = 0; x < 5; ++x) {
+                const auto want = at(input, x, y);
+                const auto got = at(*faded.image, x + 3, y - 1);
+                for (std::size_t c = 0; c < 4; ++c)
+                    exact = exact && std::abs(got.components()[c] - 0.5F * want.components()[c]) <=
+                                         1e-6F;
+            }
+        expect(exact, "opacity multiplies every premultiplied channel");
+    }
+    auto invisible = half;
+    invisible.opacity = 0.0;
+    const auto gone = run(invisible, input);
+    expect(gone.image != nullptr && at(*gone.image, 3, -1) == render::Rgba32f::transparent(),
+           "an opacity of zero is transparent");
+    // Skew 45 degrees along the horizontal.
+    auto slanted = values({0, 0}, {1, 1}, 0.0, {}, {2.5, 1.5});
+    slanted.skew = 45.0;
+    const auto skewed = run(slanted, input);
+    expect(skewed.image != nullptr, "a skew produces an image");
+    if (skewed.image) {
+        bool rows = true;
+        for (std::int64_t x = 0; x < 5; ++x) {
+            rows = rows && near(at(*skewed.image, x, 1), at(input, x, 1));
+            rows = rows && near(at(*skewed.image, x + 1, 2), at(input, x, 2));
+            rows = rows && near(at(*skewed.image, x - 1, 0), at(input, x, 0));
+        }
+        expect(rows, "a 45 degree skew keeps the pivot row and shifts the rows by their distance");
+    }
+    // Skew axis 90: the same shear along the vertical shifts columns by their distance.
+    auto upright = slanted;
+    upright.skewAxis = 90.0;
+    const auto columns = run(upright, input);
+    expect(columns.image != nullptr, "a skew along a vertical axis produces an image");
+    if (columns.image) {
+        bool shifted = true;
+        for (std::int64_t y = 0; y < 3; ++y)
+            shifted = shifted && near(at(*columns.image, 2, y), at(input, 2, y)) &&
+                      near(at(*columns.image, 3, y - 1), at(input, 3, y)) &&
+                      near(at(*columns.image, 1, y + 1), at(input, 1, y));
+        expect(shifted, "the skew axis turns the shear: columns shift by their distance");
+    }
+    // The skewed support holds every pixel it moved (the output window comes from the same map).
+    expect(skewed.image && skewed.image->descriptor()->dataWindow().contains(-1, 0) &&
+               skewed.image->descriptor()->dataWindow().contains(5, 2),
+           "the transformed window grows to hold the skewed rows");
+    // Out-of-domain values refuse; the identity needs no skew and full opacity.
+    auto bad = values({0, 0}, {1, 1}, 0.0, {}, {2.5, 1.5});
+    bad.skew = 89.5;
+    expect(!runtime::detail::validTransform2DValues(bad), "a skew beyond the limit is refused");
+    bad.skew = 0.0;
+    bad.opacity = 1.5;
+    expect(!runtime::detail::validTransform2DValues(bad), "an opacity above one is refused");
+    auto identity = values({0, 0}, {1, 1}, 0.0, {}, {2.5, 1.5});
+    expect(PreparedTransform2D{Transform2DExtent::Transformed, 0, identity}.identity(),
+           "no skew and full opacity is the identity");
+    identity.opacity = 0.9;
+    expect(!PreparedTransform2D{Transform2DExtent::Transformed, 0, identity}.identity(),
+           "an opacity alone is not the identity");
+}
+
 void testResample() {
     const auto input = source();
     // Whole-pixel translation is an exact sample copy (zero bilinear weights).
@@ -407,6 +489,7 @@ int main() {
     try {
         testIdentityAndPrepare();
         testResample();
+        testSkewAndOpacity();
         testNearest();
         testDegenerateAndExtents();
         testProxy();

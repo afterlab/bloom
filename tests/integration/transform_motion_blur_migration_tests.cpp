@@ -105,7 +105,9 @@ struct Fixture {
         auto* target = draft.project().findComposition(composition);
         auto* node = target->graph().findNode(transform);
         std::erase_if(node->parameters, [&](const document::ParameterBinding& binding) {
-            if (!motionRole(binding.role))
+            // A document from before motion blur (#484) and before skew and opacity (#524).
+            if (!motionRole(binding.role) && binding.role != "skew" &&
+                binding.role != "skewAxis" && binding.role != "opacity")
                 return false;
             if (!target->parameters().erase(binding.parameterId))
                 throw std::logic_error("legacy record erases");

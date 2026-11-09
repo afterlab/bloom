@@ -64,6 +64,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 ## User Guides
 
 - [The Export panel](user-guide/exporting-video.md) — the render queue, outputs, destinations and replacing files.
+- [Four-Color Gradient](user-guide/four-color-gradient.md) — a source blending four colors anchored at four points.
+- [Gaussian Blur and Transform 2D extras](user-guide/blur-and-transform.md) — separate axes, per-channel blur, skew and opacity.
 - [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
 - [Interpret Footage](user-guide/interpret-footage.md) — frame rate, start timecode, alpha, fields,
   pixel aspect, loop, missing frames and input color for imported media.

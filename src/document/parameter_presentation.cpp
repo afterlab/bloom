@@ -1,3 +1,5 @@
+#include <bloom/document/transform_2d_nodes.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
@@ -131,6 +133,8 @@ const std::vector<Entry>& colorGradeTable() {
              number(-kMaximumGradeValue, kMaximumGradeValue, -180.0, 180.0, 1.0, 1, kDegrees)});
         generated.push_back({kHueSaturationSaturationSchemaKey,
                              number(0.0, kMaximumGradeSaturation, 0.0, 2.0, 0.01, 2, kTimes)});
+        generated.push_back({kHueSaturationVibranceSchemaKey,
+                             number(-kMaximumVibrance, kMaximumVibrance, -1.0, 1.0, 0.01, 2)});
         // #494 Grade: the hard range is the schema domain; the soft span is the comfortable one.
         for (std::size_t index = 0; index < gradeWheelKeys.size(); ++index) {
             const auto wheel = kGradeWheels[index / kGradeWheelComponentCount];
@@ -244,7 +248,12 @@ const std::vector<Entry>& table() {
         {"bloom.data.block", choice()},
         // Image effects.
         {"bloom.blur.radius", pixels(0.0, kMaximumBlurRadiusPixels, 64.0)},
+        {"bloom.blur.radius-y", pixels(0.0, kMaximumBlurRadiusPixels, 64.0)},
         {"bloom.blur.edge", choice()},
+        {"bloom.blur.red-scale", number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {"bloom.blur.green-scale", number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {"bloom.blur.blue-scale", number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {"bloom.blur.alpha-scale", number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {"bloom.luma-key.low",
          number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0, 1.0, 0.01, 3)},
         {"bloom.luma-key.high",
@@ -347,6 +356,10 @@ const std::vector<Entry>& table() {
         {"bloom.transform-2d.pivot", pixels(kLowest, kHighest, 4096.0)},
         {"bloom.transform-2d.scale", number(kLowest, kHighest, 0.0, 2.0, 1.0, 2, kPercent, 100.0)},
         {"bloom.transform-2d.rotation", number(kLowest, kHighest, -360.0, 360.0, 1.0, 2, kDegrees)},
+        {"bloom.transform-2d.skew",
+         number(-kMaximumTransformSkew, kMaximumTransformSkew, -45.0, 45.0, 0.5, 2, kDegrees)},
+        {"bloom.transform-2d.skew-axis", number(kLowest, kHighest, -360.0, 360.0, 1.0, 2, kDegrees)},
+        {"bloom.transform-2d.opacity", number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {"bloom.rotate-90.quarter-turns",
          whole(static_cast<double>(std::numeric_limits<std::int64_t>::min()),
                static_cast<double>(std::numeric_limits<std::int64_t>::max()), -3.0, 3.0)},
@@ -637,6 +650,18 @@ std::optional<ParameterPresentation> testCardPresentation(const std::string_view
     return std::nullopt;
 }
 
+// Four-Color Gradient: the points are pixel offsets, the blend a power.
+std::optional<ParameterPresentation> fourColorGradientPresentation(const std::string_view schemaKey) {
+    if (isFourColorGradientPointSchemaKey(schemaKey))
+        return pixels(-kMaximumFourColorGradientPoint, kMaximumFourColorGradientPoint, 4096.0);
+    if (isFourColorGradientColorSchemaKey(schemaKey))
+        return channel();
+    if (isFourColorGradientScalarSchemaKey(schemaKey))
+        return number(kMinimumFourColorGradientBlend, kMaximumFourColorGradientBlend,
+                      kMinimumFourColorGradientBlend, kMaximumFourColorGradientBlend, 0.05, 2);
+    return std::nullopt;
+}
+
 // #508 Light Rays: the length a percentage of the distance to the centre; the centre a pixel offset.
 std::optional<ParameterPresentation> lightRaysPresentation(const std::string_view schemaKey) {
     if (schemaKey == kLightRaysSourceSchemaKey)
@@ -723,6 +748,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *card;
     if (auto rays = lightRaysPresentation(schemaKey))
         return *rays;
+    if (auto gradient = fourColorGradientPresentation(schemaKey))
+        return *gradient;
     if (auto sharpen = sharpenPresentation(schemaKey))
         return *sharpen;
     for (const auto& entry : table())

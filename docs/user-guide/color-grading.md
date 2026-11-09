@@ -218,6 +218,12 @@ stay grey, and each colour keeps its brightness. Hue/Saturation uses the hue-rot
 filters of the web Filter Effects standard. It doesn't change alpha, and it works on HDR and
 negative values without limiting them.
 
+**Vibrance** (-1 to 1) is saturation weighted toward the dull colours: a positive value makes pale
+or muted colours more colourful and leaves strong colours and greys as they are, a negative value
+mutes the dull colours most. **Colorize** turns the image into a single tint that keeps its
+brightness: **Hue** then picks the tint's colour and **Saturation** (0 to 1) how strong it is. Both
+are below the Saturation row.
+
 On the card, the strip under **Hue** shows every input hue (**In**) above the colour it becomes
 (**Out**). Drag the strip to slide the output colours with the pointer; it wraps at 180 degrees.
 **Saturation** has a slider from grey to colour with a mark at 1. Double-click either to reset it.

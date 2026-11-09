@@ -26,6 +26,11 @@ struct Transform2DValues final {
     document::Vec2d scale{1.0, 1.0};
     double rotation = 0.0;
     document::Vec2d centre{};
+    // Skew in degrees (a shear along the axis at skewAxis, clockwise from the horizontal) and the
+    // opacity multiplier in [0, 1]; the defaults leave the transform as it was.
+    double skew = 0.0;
+    double skewAxis = 0.0;
+    double opacity = 1.0;
     friend bool operator==(const Transform2DValues&, const Transform2DValues&) = default;
 };
 
@@ -38,7 +43,8 @@ struct PreparedTransform2D final {
     [[nodiscard]] bool identity() const noexcept {
         return extent != Transform2DExtent::Display && values.translate.x == 0.0 &&
                values.translate.y == 0.0 && values.scale.x == 1.0 && values.scale.y == 1.0 &&
-               std::remainder(values.rotation, 360.0) == 0.0;
+               std::remainder(values.rotation, 360.0) == 0.0 && values.skew == 0.0 &&
+               values.opacity == 1.0;
     }
 };
 
@@ -53,7 +59,9 @@ struct PreparedTransform2D final {
            std::isfinite(values.pivot.x) && std::isfinite(values.pivot.y) &&
            std::isfinite(values.scale.x) && std::isfinite(values.scale.y) &&
            std::isfinite(values.rotation) && std::isfinite(values.centre.x) &&
-           std::isfinite(values.centre.y);
+           std::isfinite(values.centre.y) && std::isfinite(values.skew) &&
+           std::abs(values.skew) <= 89.0 && std::isfinite(values.skewAxis) &&
+           std::isfinite(values.opacity) && values.opacity >= 0.0 && values.opacity <= 1.0;
 }
 
 struct Transform2DGeometry final {
@@ -87,7 +95,7 @@ resolveTransform2DGeometry(const PreparedTransform2D& prepared,
     const document::Vec2d pivot{values.centre.x + values.pivot.x, values.centre.y + values.pivot.y};
     Transform2DGeometry geometry{
         LayerMatrix::authored({pivot.x + values.translate.x, pivot.y + values.translate.y}, pivot,
-                              values.scale, values.rotation),
+                              values.scale, values.rotation, values.skew, values.skewAxis),
         std::nullopt, std::nullopt};
     if (values.scale.x == 0.0 || values.scale.y == 0.0)
         return geometry;
@@ -106,7 +114,9 @@ resolveTransform2DGeometry(const PreparedTransform2D& prepared,
         .scaleX = values.scale.x,
         .scaleY = values.scale.y,
         .rotationDegrees = values.rotation,
-        .opacity = 1.0,
+        .opacity = values.opacity,
+        .skewDegrees = values.skew,
+        .skewAxisDegrees = values.skewAxis,
     };
     if (!std::isfinite(authored.translationX * proxyX) ||
         !std::isfinite(authored.translationY * proxyY))

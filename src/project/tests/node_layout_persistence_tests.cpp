@@ -1,5 +1,6 @@
 #include "zip_container_test_support.hpp"
 
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
@@ -372,6 +373,27 @@ void blurNodeReopen() {
                                  document::testCardParameterSpec(parameter.schemaKey)->maximum)}
                            : document::ParameterValue{static_cast<std::int64_t>(
                                  document::testCardParameterSpec(parameter.schemaKey)->value + 1.0)})
+                // #524 Four-Color Gradient: moved points, colors and blend.
+                : document::isFourColorGradientPointSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{document::Vec2d{17.5, -9.25}}
+                : document::isFourColorGradientColorSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{core::Color4d{1.5, 0.25, 0.5, 0.75}}
+                : document::isFourColorGradientScalarSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{3.5}
+                // #524 Gaussian Blur's separate axes and per-channel radii, Transform 2D's skew and
+                // opacity, Hue/Saturation's vibrance and colorize.
+                : parameter.schemaKey == "bloom.blur.separate" ||
+                        parameter.schemaKey == "bloom.blur.per-channel" ||
+                        parameter.schemaKey == "bloom.hue-saturation.colorize"
+                    ? document::ParameterValue{true}
+                : parameter.schemaKey.starts_with("bloom.blur.") &&
+                        parameter.valueKind == document::ParameterValueKind::Float64
+                    ? document::ParameterValue{0.5}
+                : parameter.schemaKey == "bloom.transform-2d.skew"
+                    ? document::ParameterValue{12.5}
+                : parameter.schemaKey == "bloom.transform-2d.opacity" ||
+                        parameter.schemaKey == "bloom.hue-saturation.vibrance"
+                    ? document::ParameterValue{0.5}
                 // #486 Sharpen: moved values.
                 : parameter.schemaKey.starts_with("bloom.sharpen.")
                     ? document::ParameterValue{0.625}

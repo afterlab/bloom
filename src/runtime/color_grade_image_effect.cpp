@@ -45,7 +45,7 @@ using document::kGradeChannelCount;
 
 constexpr std::size_t kLevelsChannelFloats = 8;
 constexpr std::size_t kLevelsFloats = 4 + kGradeChannelCount * kLevelsChannelFloats;
-constexpr std::size_t kHueSaturationFloats = 12;
+constexpr std::size_t kHueSaturationFloats = 16;
 constexpr std::size_t kGradeFloats = 20;
 constexpr std::size_t kRollOffFloats = 4;
 constexpr std::size_t kAlphaAssociationFloats = 8;
@@ -128,15 +128,42 @@ prepareLevels(const LevelsKernel& kernel, const std::span<const double> values) 
 }
 
 [[nodiscard]] std::optional<PreparedColorGrade>
-prepareHueSaturation(const std::span<const double> values) {
-    if (values.size() != 2 || !withinGradeDomain(values[0]) || !std::isfinite(values[1]) ||
-        values[1] < 0.0 || values[1] > document::kMaximumGradeSaturation)
+prepareHueSaturation(const HueSaturationKernel& kernel, const std::span<const double> values) {
+    // The operands are hue, saturation and (when the kernel supplies it) vibrance.
+    if ((values.size() != 2 && values.size() != 3) || !withinGradeDomain(values[0]) ||
+        !std::isfinite(values[1]) || values[1] < 0.0 ||
+        values[1] > document::kMaximumGradeSaturation)
         return std::nullopt;
     const double hue = values[0];
     const double s = values[1];
+    const double vibrance = values.size() == 3 ? values[2] : 0.0;
+    if (!std::isfinite(vibrance) || std::abs(vibrance) > document::kMaximumVibrance)
+        return std::nullopt;
     PreparedColorGrade grade{ColorGradeKind::HueSaturation,
                              std::vector<float>(kHueSaturationFloats, 0.0F),
-                             hue == 0.0 && s == 1.0};
+                             !kernel.colorize && hue == 0.0 && s == 1.0 && vibrance == 0.0};
+    grade.data[12] = static_cast<float>(vibrance);
+    if (kernel.colorize) {
+        // Colorize: every output is the input's luma (the weights below) times one tint, so the
+        // matrix has rank one. The tint is the hue at full chroma blended toward white by the
+        // saturation (1 is the full hue; above 1 is the same), scaled to a luma of one.
+        const double turns = std::fmod(hue, 360.0) / 60.0;
+        const double sector = turns < 0.0 ? turns + 6.0 : turns;
+        const auto ramp = [&](const double offset) {
+            return std::clamp(std::abs(std::fmod(sector + offset, 6.0) - 3.0) - 1.0, 0.0, 1.0);
+        };
+        const double amount = std::min(s, 1.0);
+        const std::array<double, 3> tint{1.0 + amount * (ramp(0.0) - 1.0),
+                                         1.0 + amount * (ramp(4.0) - 1.0),
+                                         1.0 + amount * (ramp(2.0) - 1.0)};
+        constexpr std::array<double, 3> weights{0.213, 0.715, 0.072};
+        const double luma = weights[0] * tint[0] + weights[1] * tint[1] + weights[2] * tint[2];
+        for (std::size_t row = 0; row < 3; ++row)
+            for (std::size_t column = 0; column < 3; ++column)
+                grade.data[4 * row + column] =
+                    static_cast<float>(tint[row] / luma * weights[column]);
+        return grade;
+    }
     // Filter Effects Module Level 1, feColorMatrix hueRotate and saturate (one definition, shared
     // with the Hue/Saturation card's spectrum).
     const auto matrix = hueSaturationMatrix(hue, s);
@@ -981,6 +1008,14 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             "  precise float y = fma(m.z, p.b, fma(m.y, p.g, m.x * p.r));\n"
             "  o[i] = y;\n"
             " }\n"
+            " float mx = max(p.r, max(p.g, p.b));\n"
+            " float mn = min(p.r, min(p.g, p.b));\n"
+            " float v = bloom_hue_saturation_data.values[3].x;\n"
+            " if (v != 0.0) {\n"
+            "  precise float y = fma(0.072, o.b, fma(0.715, o.g, 0.213 * o.r));\n"
+            "  precise float f = fma(v, 1.0 - clamp(mx - mn, 0.0, 1.0), 1.0);\n"
+            "  o = vec3(fma(f, o.r - y, y), fma(f, o.g - y, y), fma(f, o.b - y, y));\n"
+            " }\n"
             " return vec4(o, p.a);\n"
             "}\n";
         return text;
@@ -1143,8 +1178,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareLevels(*levels, values);
     if (const auto* curves = std::get_if<CurvesKernel>(&kernel))
         return prepareCurvesGrade(curves->clamp, values);
-    if (std::holds_alternative<HueSaturationKernel>(kernel))
-        return prepareHueSaturation(values);
+    if (const auto* hueSaturation = std::get_if<HueSaturationKernel>(&kernel))
+        return prepareHueSaturation(*hueSaturation, values);
     if (std::holds_alternative<GradeKernel>(kernel))
         return prepareGrade(values);
     if (std::holds_alternative<HighlightRollOffKernel>(kernel))
@@ -1195,6 +1230,19 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
             out[row] = std::fma(m[2], pixel[2], std::fma(m[1], pixel[1], m[0] * pixel[0]));
             if (!finite(out[row]))
                 return false;
+        }
+        const float vibrance = grade.data[12];
+        if (vibrance != 0.0F) {
+            const float chroma = std::clamp(std::max(pixel[0], std::max(pixel[1], pixel[2])) -
+                                                std::min(pixel[0], std::min(pixel[1], pixel[2])),
+                                            0.0F, 1.0F);
+            const float y = std::fma(0.072F, out[2], std::fma(0.715F, out[1], 0.213F * out[0]));
+            const float f = std::fma(vibrance, 1.0F - chroma, 1.0F);
+            for (auto& channel : out) {
+                channel = std::fma(f, channel - y, y);
+                if (!finite(channel))
+                    return false;
+            }
         }
         pixel = {out[0], out[1], out[2], pixel[3]};
         return true;
@@ -1381,7 +1429,7 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
     case ColorGradeKind::HueSaturation:
         program.functionName = "bloom_hue_saturation";
         program.resourcePrefix = "bloom_hue_saturation_";
-        program.semanticsId = "bloom.render.hue-saturation.v1";
+        program.semanticsId = "bloom.render.hue-saturation.v2";
         break;
     case ColorGradeKind::Grade:
         program.functionName = "bloom_grade";

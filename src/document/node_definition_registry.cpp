@@ -1,3 +1,4 @@
+#include <bloom/document/transform_2d_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -15,6 +16,7 @@
 #include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
+#include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
@@ -326,12 +328,17 @@ template <typename Definition>
             NodeLoweringKind::ImageEffect,
             {{"input", SocketValueKind::Image},
              {"hue", SocketValueKind::Scalar, false},
-             {"saturation", SocketValueKind::Scalar, false}},
+             {"saturation", SocketValueKind::Scalar, false},
+             {"vibrance", SocketValueKind::Scalar, false}},
             {{"image", SocketValueKind::Image}},
             {{"hue", std::string(kHueSaturationHueSchemaKey), ParameterValueKind::Float64, true,
               true, 0.0},
              {"saturation", std::string(kHueSaturationSaturationSchemaKey),
-              ParameterValueKind::Float64, true, true, 1.0}},
+              ParameterValueKind::Float64, true, true, 1.0},
+             {"vibrance", std::string(kHueSaturationVibranceSchemaKey), ParameterValueKind::Float64,
+              false, true, 0.0},
+             {"colorize", std::string(kHueSaturationColorizeSchemaKey),
+              ParameterValueKind::Boolean, false, false, false}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Grade};
@@ -506,6 +513,9 @@ template <typename Definition>
 
 [[nodiscard]] NodeDefinition adjustmentDefinition();
 
+[[nodiscard]] NodeDefinition blurDefinition(const char* typeId);
+[[nodiscard]] std::vector<ParameterDefinition> transform2DSkewOpacityParameters();
+
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
@@ -524,8 +534,9 @@ template <typename Definition>
         return field != nullptr && definition == fieldNodeDefinition(*field);
     }
     case NodeLoweringKind::ImageEffect:
-        if (definition.key.typeId == "bloom.gaussian-blur" ||
-            definition.key.typeId == "bloom.box-blur") {
+        if (definition.key.typeId == "bloom.gaussian-blur")
+            return definition == blurDefinition("bloom.gaussian-blur");
+        if (definition.key.typeId == "bloom.box-blur") {
             return definition.key.schemaVersion == 1 &&
                    definition.inputs ==
                        std::vector<InputPortDefinition>{
@@ -652,12 +663,21 @@ template <typename Definition>
             definition.key.typeId == kEdgeExtendNodeType)
             return definition == recipeDefinition(definition.key.typeId);
         if (definition.key.typeId == "bloom.transform-2d") {
-            return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
+            const auto motion = bloom::document::transformMotionBlurParameterDefinitions();
+            const auto extra = transform2DSkewOpacityParameters();
+            return definition.key.schemaVersion == 1 && definition.inputs.size() == 8 &&
                    hasLeadingImageInput(definition, "input") &&
-                   definition.parameters.size() ==
-                       6 + bloom::document::transformMotionBlurParameterDefinitions().size() &&
-                   std::equal(definition.parameters.begin() + 6, definition.parameters.end(),
-                              bloom::document::transformMotionBlurParameterDefinitions().begin()) &&
+                   definition.parameters.size() == 6 + motion.size() + extra.size() &&
+                   std::equal(motion.begin(), motion.end(), definition.parameters.begin() + 6) &&
+                   std::equal(extra.begin(), extra.end(),
+                              definition.parameters.end() -
+                                  static_cast<std::ptrdiff_t>(extra.size())) &&
+                   definition.inputs[5] ==
+                       InputPortDefinition{"skew", SocketValueKind::Scalar, false} &&
+                   definition.inputs[6] ==
+                       InputPortDefinition{"skewAxis", SocketValueKind::Scalar, false} &&
+                   definition.inputs[7] ==
+                       InputPortDefinition{"opacity", SocketValueKind::Scalar, false} &&
                    hasParameter(definition, 0, "translate", "bloom.transform-2d.translate",
                                 ParameterValueKind::Vec2d, true) &&
                    hasParameter(definition, 1, "pivot", "bloom.transform-2d.pivot",
@@ -739,6 +759,9 @@ template <typename Definition>
     // #587 Test Card: the exact generated shape.
     case NodeLoweringKind::TestCard:
         return definition == testCardDefinition();
+    // Four-Color Gradient: the exact generated shape.
+    case NodeLoweringKind::FourColorGradient:
+        return definition == fourColorGradientDefinition();
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -1302,6 +1325,14 @@ template <typename Definition>
     return definition;
 }
 
+[[nodiscard]] std::vector<ParameterDefinition> transform2DSkewOpacityParameters() {
+    return {{"skew", "bloom.transform-2d.skew", ParameterValueKind::Float64, false, true, 0.0},
+            {"skewAxis", "bloom.transform-2d.skew-axis", ParameterValueKind::Float64, false, true,
+             0.0},
+            {"opacity", "bloom.transform-2d.opacity", ParameterValueKind::Float64, false, true,
+             1.0}};
+}
+
 // #336 standalone Transform 2D. The four transform values are animatable and each has an operand
 // socket; extent and filter are inline selectors with no socket (they choose the output window
 // and resampler at compile time).
@@ -1333,6 +1364,13 @@ template <typename Definition>
             NodeCategory::Transform};
     for (auto& parameter : bloom::document::transformMotionBlurParameterDefinitions())
         definition.parameters.push_back(std::move(parameter));
+    // Skew and opacity are optional additions after the motion blur's: a node saved without them
+    // reads as no skew at full opacity.
+    for (auto& parameter : transform2DSkewOpacityParameters())
+        definition.parameters.push_back(std::move(parameter));
+    definition.inputs.push_back({"skew", SocketValueKind::Scalar, false});
+    definition.inputs.push_back({"skewAxis", SocketValueKind::Scalar, false});
+    definition.inputs.push_back({"opacity", SocketValueKind::Scalar, false});
     return definition;
 }
 
@@ -1449,8 +1487,11 @@ template <typename Definition>
     return definition;
 }
 
+// Gaussian Blur also has separate horizontal and vertical radii (the radius is then the horizontal
+// one) and a radius per channel, each channel's scale of the radius; both are optional additions
+// after the radius and edge, so a node saved before them reads as a plain blur.
 [[nodiscard]] NodeDefinition blurDefinition(const char* typeId) {
-    return {
+    NodeDefinition definition{
         {typeId, 1},
         NodeLoweringKind::ImageEffect,
         {{"input", SocketValueKind::Image}, {"radius", SocketValueKind::Scalar, false}},
@@ -1460,6 +1501,21 @@ template <typename Definition>
         std::nullopt,
         NodeCardinality::Many,
         NodeCategory::Filters};
+    if (std::string_view(typeId) == "bloom.gaussian-blur") {
+        definition.inputs.push_back({"radiusY", SocketValueKind::Scalar, false});
+        definition.parameters.push_back({"separate", "bloom.blur.separate",
+                                         ParameterValueKind::Boolean, false, false, false});
+        definition.parameters.push_back({"radiusY", "bloom.blur.radius-y",
+                                         ParameterValueKind::Float64, false, true, 0.0});
+        definition.parameters.push_back({"perChannel", "bloom.blur.per-channel",
+                                         ParameterValueKind::Boolean, false, false, false});
+        for (const auto* channel : {"red", "green", "blue", "alpha"}) {
+            const std::string name(channel);
+            definition.parameters.push_back({name + "Scale", "bloom.blur." + name + "-scale",
+                                             ParameterValueKind::Float64, false, true, 1.0});
+        }
+    }
+    return definition;
 }
 
 // #337 Matte Blur: the Gaussian Blur controls over Mask coverage. The input is required, like
@@ -1766,6 +1822,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         stabilizeDefinition(),
         displaceDefinition(),
         testCardDefinition(),
+        fourColorGradientDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),
         colorCleanupDefinition(kToneMapNodeType),

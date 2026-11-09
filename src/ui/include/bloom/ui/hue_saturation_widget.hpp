@@ -6,8 +6,9 @@
 // colour the node turns it into (the node's own matrix, runtime::hueSaturationMatrix), so the shift
 // is seen rather than read. Dragging the strip slides the output spectrum with the pointer and
 // turns the hue, wrapping at +-180 degrees. The Saturation row sits over its slider, grey at 0,
-// the colour as it is at 1 (ticked, with a detent) and more vivid toward 2. Both follow the shared
-// grading rules (grading_controls.hpp): relative drags, Ctrl a tenth and Shift ten times the
+// the colour as it is at 1 (ticked, with a detent) and more vivid toward 2. The Vibrance row below
+// has a slider from -1 to 1 with a detent at 0; Colorize is a plain switch row the card leaves to
+// the generic rows. All follow the shared grading rules (grading_controls.hpp): relative drags, Ctrl a tenth and Shift ten times the
 // speed, a double-click resets, the right-click menu offers Reset and the value's key.
 
 #include <bloom/document/ids.hpp>
@@ -90,6 +91,7 @@ class HueSaturationCardWidget final : public NodeCardWidget {
 
     [[nodiscard]] GradingValueRow* hueRow() const noexcept { return hue_; }
     [[nodiscard]] GradingValueRow* saturationRow() const noexcept { return saturation_; }
+    [[nodiscard]] GradingValueRow* vibranceRow() const noexcept { return vibrance_; }
     [[nodiscard]] HueShiftStrip* strip() const noexcept { return strip_; }
     void refresh();
 
@@ -103,6 +105,7 @@ class HueSaturationCardWidget final : public NodeCardWidget {
     GradingValueRow* hue_ = nullptr;
     HueShiftStrip* strip_ = nullptr;
     GradingValueRow* saturation_ = nullptr;
+    GradingValueRow* vibrance_ = nullptr;
 };
 
 } // namespace bloom::ui

@@ -169,6 +169,20 @@ struct SharpenOperands final {
 [[nodiscard]] OperationIndex appendSharpen(RecipeEmitter& emitter, OperationIndex input,
                                            const SharpenOperands& operands);
 
+// Gaussian Blur with a radius per channel: each of red, green, blue and alpha is the associated
+// channel of the input blurred by `radius` times its own scale (and `radiusY` times it, with
+// separate axes). A blur at the widest radius owns the output window, then each channel is
+// combined over it from its own blur.
+struct ChannelBlurOperands final {
+    CompiledScalarParameter radius;
+    CompiledScalarParameter radiusY;
+    bool separate = false;
+    BlurEdgeMode edge = BlurEdgeMode::Transparent;
+    std::array<CompiledScalarParameter, 4> scales; // red, green, blue, alpha; each in [0, 1]
+};
+[[nodiscard]] OperationIndex appendChannelBlur(RecipeEmitter& emitter, OperationIndex input,
+                                               const ChannelBlurOperands& operands);
+
 // A plan's value operations and output count, for callers (tests, fixtures) that build a plan
 // definition directly: the sink appends to `definition`.
 [[nodiscard]] RecipeEmitter::ValueSink

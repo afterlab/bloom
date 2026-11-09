@@ -33,6 +33,49 @@ render::Rgba32fImage source() {
     auto image = std::move(*builder.value()).freeze();
     return std::move(*image.value());
 }
+// Gaussian Blur's separate vertical radius: the horizontal radius 0 leaves the columns alone and
+// the vertical one spreads the impulse by the normalized Gaussian taps (the independent closed
+// form), the halo grows on the blurred axis only, and each radius has its own domain.
+void separateAxesTests() {
+    const auto input = source();
+    const auto k = kernel(runtime::SeparableBlurKind::Gaussian, runtime::BlurEdgeMode::Transparent);
+    const auto blur = runtime::detail::prepareSeparableBlur(k, 0.0, 1.0, 1.0, 1.0);
+    require(blur && blur->horizontal.size() == 1 && blur->vertical.size() == 3 &&
+                !blur->identity(),
+            "a zero horizontal and a unit vertical radius blur the vertical axis alone");
+    const auto result = runtime::detail::applySeparableBlur(*blur, input, 65536, {},
+                                                            runtime::OperationIndex::fromRaw(0), {});
+    require(result.image && !result.diagnostic, "separate blur publishes");
+    const auto window = result.image->descriptor()->dataWindow();
+    require(window.originX() == -3 && window.extent().width() == 3 && window.originY() == 4 &&
+                window.extent().height() == 4,
+            "the halo grows on the blurred axis only");
+    const double side = std::exp(-4.5);
+    const double total = 1.0 + 2.0 * side;
+    const auto at = [&](const std::int64_t x, const std::int64_t y) {
+        const auto pixel = result.image->read(x, y);
+        require(pixel.hasValue(), "separate blur pixel reads");
+        return *pixel.value();
+    };
+    const auto near = [](const float actual, const double expected) {
+        return std::abs(static_cast<double>(actual) - expected) <=
+               2e-6 * std::max(1.0, std::abs(expected));
+    };
+    require(near(at(-2, 5).green(), 2.0 / total) && near(at(-2, 4).green(), 2.0 * side / total) &&
+                near(at(-2, 6).green(), 2.0 * side / total) && near(at(-2, 5).alpha(), 0.5 / total) &&
+                near(at(-3, 5).green(), 0.0) && near(at(-1, 5).green(), 0.0),
+            "the vertical taps are the normalized Gaussian and the columns do not mix");
+    require(runtime::detail::prepareSeparableBlur(k, 0.0, 1.0, 1.0, 0.0)->identity() &&
+                !runtime::detail::prepareSeparableBlur(k, 1.0, 1.0, 1.0, -1.0) &&
+                !runtime::detail::prepareSeparableBlur(k, 1.0, 1.0, 1.0, 257.0) &&
+                !runtime::detail::prepareSeparableBlur(
+                    k, 1.0, 1.0, 1.0, std::numeric_limits<double>::quiet_NaN()),
+            "two zero radii are the identity and the vertical radius has the same domain");
+    // A proxy scales each axis by its own factor.
+    const auto proxy = runtime::detail::prepareSeparableBlur(k, 4.0, 0.5, 0.25, 8.0);
+    require(proxy && proxy->horizontal.size() == 5 && proxy->vertical.size() == 5,
+            "a proxy scales the horizontal and vertical radii by their own factors");
+}
 void referenceTests() {
     const auto input = source();
     for (const auto kind :
@@ -536,6 +579,7 @@ void cancellationTest(const runtime::BlurChannels channels,
 int main() {
     try {
         referenceTests();
+        separateAxesTests();
         subnormalCoverageTest();
         coverageTests();
         cancellationTest(runtime::BlurChannels::Rgba);

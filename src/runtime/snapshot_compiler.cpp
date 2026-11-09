@@ -36,6 +36,7 @@
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
@@ -1165,6 +1166,7 @@ class CompilePass final {
 #include "snapshot_compiler_fields.ipp"
 #include "snapshot_compiler_warp.ipp"
 #include "snapshot_compiler_test_card.ipp"
+#include "snapshot_compiler_four_color_gradient.ipp"
 #include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_depth.ipp"
 #include "snapshot_compiler_motion.ipp"

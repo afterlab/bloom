@@ -24,6 +24,7 @@ target_sources(
         warp_nodes.cpp
         chromatic_aberration_nodes.cpp
         test_card_nodes.cpp
+        four_color_gradient_nodes.cpp
         light_rays_nodes.cpp
         motion_blur_nodes.cpp
         sharpen_nodes.cpp

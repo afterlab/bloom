@@ -650,10 +650,14 @@ enum class ScalarDomain : std::uint8_t {
                         hasValidVec2CurveReference(transform->translate, plan, index, failure) &&
                         hasValidVec2CurveReference(transform->pivot, plan, index, failure) &&
                         hasValidVec2CurveReference(transform->scale, plan, index, failure) &&
-                        hasValidScalarCurveReference(transform->rotation, plan, index, failure);
+                        hasValidScalarCurveReference(transform->rotation, plan, index, failure) &&
+                        hasValidScalarCurveReference(transform->skew, plan, index, failure) &&
+                        hasValidScalarCurveReference(transform->skewAxis, plan, index, failure) &&
+                        hasValidScalarCurveReference(transform->opacity, plan, index, failure);
                 if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
                     validKernel = detail::validSeparableBlurKernelShape(*blur) &&
-                                  hasValidScalarCurveReference(blur->radius, plan, index, failure);
+                                  hasValidScalarCurveReference(blur->radius, plan, index, failure) &&
+                                  hasValidScalarCurveReference(blur->radiusY, plan, index, failure);
                 if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
                     validKernel = hasValidScalarCurveReference(key->low, plan, index, failure) &&
                                   hasValidScalarCurveReference(key->high, plan, index, failure);
@@ -1411,9 +1415,14 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                                      ScalarDomain::Unbounded, operationSubject));
                 },
                 [&](const CompiledImageEffect& effect) {
-                    if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
+                    if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
                         static_cast<void>(registerScalar(
                             blur->radius, "radius", ScalarDomain::BlurRadius, operationSubject));
+                        if (blur->separate)
+                            static_cast<void>(registerScalar(blur->radiusY, "radiusY",
+                                                             ScalarDomain::BlurRadius,
+                                                             operationSubject));
+                    }
                     if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
                         static_cast<void>(
                             registerScalar(key->low, "low", ScalarDomain::LumaKeyThreshold,
@@ -1453,7 +1462,13 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                             registerVec2(transform->pivot, "pivot", operationSubject) &&
                             registerVec2(transform->scale, "scale", operationSubject) &&
                             registerScalar(transform->rotation, "rotation",
-                                           ScalarDomain::Unbounded, operationSubject));
+                                           ScalarDomain::Unbounded, operationSubject) &&
+                            registerScalar(transform->skew, "skew", ScalarDomain::Unbounded,
+                                           operationSubject) &&
+                            registerScalar(transform->skewAxis, "skewAxis",
+                                           ScalarDomain::Unbounded, operationSubject) &&
+                            registerScalar(transform->opacity, "opacity", ScalarDomain::Unit,
+                                           operationSubject));
                     if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
                         constexpr std::array<std::string_view, 4> fields{"left", "top", "right",
                                                                          "bottom"};
@@ -2639,10 +2654,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             sampledChannel = *channel;
                     }
                 }
+                std::optional<double> blurVerticalRadius;
                 if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect->kernel)) {
                     const auto sampled = detail::resolveParameter(blur->radius, *plan, resolved);
                     if (sampled)
                         pointwiseAmount = sampled->value;
+                    if (blur->separate) {
+                        const auto vertical =
+                            detail::resolveParameter(blur->radiusY, *plan, resolved);
+                        if (vertical)
+                            blurVerticalRadius = vertical->value;
+                    }
                 }
                 std::optional<detail::Transform2DValues> transform2D;
                 if (const auto* transform = std::get_if<Transform2DKernel>(&effect->kernel)) {
@@ -2652,10 +2674,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     const auto scale = detail::resolveParameter(transform->scale, *plan, resolved);
                     const auto rotation =
                         detail::resolveParameter(transform->rotation, *plan, resolved);
-                    if (translate && pivot && scale && rotation)
+                    const auto skew = detail::resolveParameter(transform->skew, *plan, resolved);
+                    const auto skewAxis =
+                        detail::resolveParameter(transform->skewAxis, *plan, resolved);
+                    const auto opacity =
+                        detail::resolveParameter(transform->opacity, *plan, resolved);
+                    if (translate && pivot && scale && rotation && skew && skewAxis && opacity)
                         transform2D = detail::Transform2DValues{
                             translate->value, pivot->value, scale->value, rotation->value,
-                            bounds[effect->input.value()].output.centre()};
+                            bounds[effect->input.value()].output.centre(), skew->value,
+                            skewAxis->value, opacity->value};
                 }
                 std::optional<std::array<double, 2>> lumaKeyRange;
                 if (const auto* key = std::get_if<LumaKeyKernel>(&effect->kernel)) {
@@ -2719,7 +2747,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                               pointwiseAmount, canvasMargins, resolved.horizontalScale,
                               resolved.verticalScale, sampledChannel, std::move(layerMasks),
                               transform2D, lumaKeyRange, std::move(gradeValues),
-                              directionalValues);
+                              directionalValues, blurVerticalRadius);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
@@ -3081,6 +3109,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 if (blur->channels == BlurChannels::Coverage)
                                     key.add(std::string{"coverage"});
                                 parameter(blur->radius);
+                                if (blur->separate) {
+                                    key.add(std::string{"separate"});
+                                    parameter(blur->radiusY);
+                                }
                             }
                             if (const auto* luma = std::get_if<LumaKeyKernel>(&step.kernel)) {
                                 key.add(std::string{"luma-key-v1"});
@@ -3138,6 +3170,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 parameter(transform->pivot);
                                 parameter(transform->scale);
                                 parameter(transform->rotation);
+                                // Appended only when set, so earlier transforms keep their key.
+                                if (!transform->plainSkewOpacity()) {
+                                    key.add(std::string{"skew-opacity"});
+                                    parameter(transform->skew);
+                                    parameter(transform->skewAxis);
+                                    parameter(transform->opacity);
+                                }
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);

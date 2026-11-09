@@ -97,6 +97,21 @@ to 1 are kept, which the PLUGE and HDR cards need). Time (the stepping Patch, th
 Bar, the Countdown) arrives as host-resolved scalars, so a still card is not time dependent. The Zone Plate and
 the Siemens Star run 16 sub-samples a pixel, the other cards 4.
 
+### Four-Color Gradient
+
+The Four-Color Gradient source (`user-guide/four-color-gradient.md`, #524) lowers to a field raster built only
+from the existing field vocabulary, so it adds no instruction and no shader. Over a transparent
+composition-sized canvas, each of the four points becomes a Transform translation of the coordinate (the
+field position minus the point, pixels from the center, +y up), its squared length (a dot product, so no
+square root, which a device may round differently from the CPU) in units of the squared frame diagonal and
+padded by a quarter pixel squared so a point's own pixel stays finite, raised to the power `-blend / 2`.
+Each weight multiplies its color (a four-lane Constant of the color parameter, alpha included); the straight
+color is the weighted sum over the weight sum, premultiplied once by the swizzle `(a, a, a, 1)`. The
+unit-diagonal measure keeps a weight a normal binary32 number for the document's point and blend domains.
+Points and colors are animatable operands, so moving or keying them changes data, never the program. The
+coverage fixture `node.bloom.four-color-gradient` holds the CPU reference and the device to the same program
+at a soft, the default and a sharp blend, full frame and region of interest.
+
 ### Lens Warp
 
 Lens Distortion (`image-filters.md`; Chromatic Aberration lowers to the same instruction) lowers to field rasters, and adds one instruction and two small

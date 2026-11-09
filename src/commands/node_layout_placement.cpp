@@ -3,6 +3,7 @@
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
@@ -123,6 +124,8 @@ struct NodeControlsEstimate final {
         return {1, 0, true};
     if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
         return {0, 0, true, 1};
+    if (typeId == "bloom.four-color-gradient")
+        return {0, 0, true};
     if (typeId == "bloom.glow")
         return {1, 0, false, 1};
     if (typeId == "bloom.drop-shadow" || typeId == "bloom.layer-output" ||
@@ -387,6 +390,13 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #513: the Stabilize card's pad, its Track button and a status line.
     if (node->typeId == document::kStabilizeNodeType)
         thumbnail = kPadMaxHeight + kPadding + kControl + 3.0 * kSmall;
+    // #524: the Hue/Saturation card's Vibrance row, a value over a slider, beside the rows the
+    // generic count already makes.
+    if (node->typeId == document::kHueSaturationNodeType)
+        thumbnail = 2.0 * (kControl + kSmall);
+    // #524: the Four-Color Gradient card's pad is drawn with the colors' disclosure rows beneath.
+    if (node->typeId == document::kFourColorGradientNodeType)
+        thumbnail = 3.0 * kPadding;
     // #563: the Codec Degrade card's two slider rows, each a value over a slider.
     if (node->typeId == document::kCodecDegradeNodeType)
         thumbnail = 2.0 * (kControl + kSmall) + kPadding;

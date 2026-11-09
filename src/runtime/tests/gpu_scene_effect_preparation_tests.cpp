@@ -621,7 +621,7 @@ void testRealColorGrades(Expectations& expectations) {
           Case{hue(30.0), hue(-80.0),
                bloom::runtime::HueSaturationKernel{{ParameterId::fromRaw(8450), 0.0},
                                                    {ParameterId::fromRaw(8451), 1.0}},
-               "bloom.render.hue-saturation.v1"},
+               "bloom.render.hue-saturation.v2"},
           // #479 Channel Select (Separate Channels' outputs, Combine Channels' base): a changed
           // mapping is new data for the same program; the red, green, blue, alpha mapping
           // without premultiply aliases its input.

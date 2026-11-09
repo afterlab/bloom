@@ -509,6 +509,12 @@ lower(const std::vector<document::NodeId>& order) {
                 return {};
             continue;
         }
+        // Four-Color Gradient: a canvas and one field raster of four weighted colors.
+        if (node->typeId == document::kFourColorGradientNodeType) {
+            if (!lowerFourColorGradient(*node, operations, indices))
+                return {};
+            continue;
+        }
         // #486 Lens Distortion: the warped image and the ST map, each its own field raster. Muting
         // is the identity warp, so it is handled here and not as a bypass of the image alone.
         if (node->typeId == document::kLensDistortionNodeType) {
@@ -743,6 +749,18 @@ lower(const std::vector<document::NodeId>& order) {
                 return {};
             indices.emplace(nodeId, *masked);
             continue;
+        }
+        // Gaussian Blur with a radius per channel: a chain of blurs and channel combines.
+        if (node->typeId == "bloom.gaussian-blur") {
+            const auto* perChannel =
+                parameterConstant<bool>(findParameterBinding(*node, "perChannel"));
+            if (perChannel != nullptr && *perChannel) {
+                const auto lowered = lowerChannelBlur(*node, operations, indices);
+                if (!lowered)
+                    return {};
+                indices.emplace(nodeId, *lowered);
+                continue;
+            }
         }
         // #486 Sharpen: its input's blur and the unsharp mask, then the effect mask.
         if (node->typeId == document::kSharpenNodeType) {
@@ -1531,6 +1549,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Matte: // #383, lowered in the main loop (lowerMatteNode())
     case NodeLoweringKind::Adjustment: // lowered in the main loop: the stack below its entry
     case NodeLoweringKind::TestCard: // #587, lowered in the main loop (lowerTestCard())
+    case NodeLoweringKind::FourColorGradient: // lowered in the main loop
     // ADR 0026: channel nodes are lowered in the main loop (a Shuffle's image output is a
     // CompiledChannelShuffle; channel algebra compiles into its expression).
     case NodeLoweringKind::Channel:
@@ -1878,13 +1897,26 @@ lowerImageEffect(const document::NodeRecord& node,
     if (node.typeId == "bloom.gaussian-blur" || node.typeId == "bloom.box-blur") {
         const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
         const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
-        if (radius && edge && *edge >= 0 && *edge <= 1)
-            return runtime::CompiledImageEffect{
-                node.id, *input,
-                runtime::SeparableBlurKernel{node.typeId == "bloom.gaussian-blur"
-                                                 ? runtime::SeparableBlurKind::Gaussian
-                                                 : runtime::SeparableBlurKind::Box,
-                                             *radius, static_cast<runtime::BlurEdgeMode>(*edge)}};
+        if (radius && edge && *edge >= 0 && *edge <= 1) {
+            runtime::SeparableBlurKernel kernel{
+                node.typeId == "bloom.gaussian-blur" ? runtime::SeparableBlurKind::Gaussian
+                                                     : runtime::SeparableBlurKind::Box,
+                *radius, static_cast<runtime::BlurEdgeMode>(*edge)};
+            // Separate axes are a later addition (Gaussian Blur only): a node saved without them
+            // blurs both axes by the radius.
+            const auto* separate = parameterConstant<bool>(findParameterBinding(node, "separate"));
+            if (separate != nullptr && *separate) {
+                if (const auto radiusY =
+                        compiledScalarParameter(findParameterBinding(node, "radiusY"))) {
+                    kernel.separate = true;
+                    kernel.radiusY = *radiusY;
+                } else {
+                    addTopologyFailure(node.id, "Blur parameters could not be lowered.");
+                    return std::nullopt;
+                }
+            }
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        }
     }
     // #337 Matte Blur: the Gaussian kernel over the Mask's coverage alone. #338 Matte Erode and
     // Matte Dilate: the same separable neighborhood reduced by minimum or maximum.
@@ -2328,9 +2360,25 @@ lowerImageEffect(const document::NodeRecord& node,
     if (node.typeId == document::kHueSaturationNodeType) {
         const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
         const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));
-        if (hue && saturation)
-            return runtime::CompiledImageEffect{node.id, *input,
-                                                runtime::HueSaturationKernel{*hue, *saturation}};
+        // Vibrance and Colorize are later additions: a node saved without them reads as off.
+        runtime::HueSaturationKernel kernel{};
+        bool optionalLowered = true;
+        if (const auto* binding = findParameterBinding(node, "vibrance")) {
+            const auto vibrance = compiledScalarParameter(binding);
+            optionalLowered = vibrance.has_value();
+            if (vibrance)
+                kernel.vibrance = *vibrance;
+        }
+        if (const auto* binding = findParameterBinding(node, "colorize")) {
+            const auto* colorize = parameterConstant<bool>(binding);
+            optionalLowered = optionalLowered && colorize != nullptr;
+            kernel.colorize = colorize != nullptr && *colorize;
+        }
+        if (hue && saturation && optionalLowered) {
+            kernel.hue = *hue;
+            kernel.saturation = *saturation;
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        }
         addTopologyFailure(node.id, "Hue/Saturation parameters could not be lowered.");
         return std::nullopt;
     }
@@ -2407,9 +2455,39 @@ lowerImageEffect(const document::NodeRecord& node,
             runtime::Transform2DKernel transform{*translate, *pivot, *scale, *rotation,
                                                  static_cast<runtime::Transform2DExtent>(*extent),
                                                  *filter};
+            // Skew and Opacity are later additions: a node saved without them reads as none.
+            bool optionalLowered = true;
+            for (const auto& [role, target] :
+                 {std::pair<const char*, runtime::CompiledScalarParameter*>{"skew",
+                                                                            &transform.skew},
+                  {"skewAxis", &transform.skewAxis},
+                  {"opacity", &transform.opacity}}) {
+                if (const auto* binding = findParameterBinding(node, role)) {
+                    const auto lowered = compiledScalarParameter(binding);
+                    optionalLowered = optionalLowered && lowered.has_value();
+                    // A constant at its default is the plan a node without the parameter has, so
+                    // a document opened from before the parameter compiles to what it did.
+                    if (lowered) {
+                        const auto* constant = std::get_if<double>(&lowered->source);
+                        if (constant == nullptr || *constant != std::get<double>(target->source))
+                            *target = *lowered;
+                    }
+                }
+            }
+            if (!optionalLowered) {
+                addTopologyFailure(node.id, "Transform 2D parameters could not be lowered.");
+                return std::nullopt;
+            }
             // #484: with motion blur on, the transform resampled at each sub-frame.
-            if (auto blurred = transformMotionBlurKernel(node, transform))
+            if (auto blurred = transformMotionBlurKernel(node, transform)) {
+                // The shutter samples carry translate, pivot, scale and rotation only.
+                if (!transform.plainSkewOpacity()) {
+                    addTopologyFailure(node.id,
+                                       "Transform 2D skew and opacity need motion blur off.");
+                    return std::nullopt;
+                }
                 return runtime::CompiledImageEffect{node.id, *input, std::move(*blurred)};
+            }
             return runtime::CompiledImageEffect{node.id, *input, std::move(transform)};
         }
         addTopologyFailure(node.id, "Transform 2D parameters could not be lowered.");

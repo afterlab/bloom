@@ -399,6 +399,25 @@ void hueSaturationCard() {
     expect(card->hueRow()->field()->paintedText() == QStringLiteral("+0.0 \u00b0") &&
                card->saturationRow()->field()->paintedText() == QStringLiteral("1.00 \u00d7"),
            "Hue reads in signed degrees and Saturation as a multiplier");
+    expect(card->vibranceRow() != nullptr && !card->vibranceRow()->field()->paintedText().isEmpty(),
+           "Hue/Saturation draws a Vibrance row");
+    if (card->vibranceRow() != nullptr) {
+        const auto before = fixture.stack.size();
+        expect(fixture.session.setParameterValue(
+                   *ui::nodeRoleParameter(fixture.session, fixture.node, "vibrance"), 0.5,
+                   QStringLiteral("Set Vibrance")),
+               "Vibrance is set");
+        QApplication::processEvents();
+        expect(fixture.stack.size() == before + 1 &&
+                   stored(fixture.session, fixture.node, "vibrance") == 0.5 &&
+                   card->vibranceRow()->field()->paintedText().contains(QStringLiteral("0.5")),
+               "the Vibrance row follows its node's value");
+        expect(fixture.session.setParameterValue(
+                   *ui::nodeRoleParameter(fixture.session, fixture.node, "vibrance"), 0.0,
+                   QStringLiteral("Reset Vibrance")),
+               "Vibrance resets");
+        QApplication::processEvents();
+    }
     auto& strip = *card->strip();
     const auto commands = fixture.stack.size();
     const auto band = strip.outputBand();

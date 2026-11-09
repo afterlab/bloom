@@ -48,16 +48,21 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
 std::optional<PreparedSeparableBlur> prepareSeparableBlur(const SeparableBlurKernel& kernel,
                                                           const std::optional<double> radius,
                                                           const double horizontalScale,
-                                                          const double verticalScale) {
+                                                          const double verticalScale,
+                                                          const std::optional<double> verticalRadius) {
+    // A separate vertical radius is the same domain as the horizontal one.
+    const double vertical = verticalRadius ? *verticalRadius : radius.value_or(0.0);
     if (!radius || !std::isfinite(*radius) || *radius < 0.0 ||
-        *radius > document::kMaximumBlurRadiusPixels || !std::isfinite(horizontalScale) ||
-        !std::isfinite(verticalScale) || horizontalScale <= 0.0 || verticalScale <= 0.0 ||
+        *radius > document::kMaximumBlurRadiusPixels || !std::isfinite(vertical) ||
+        vertical < 0.0 || vertical > document::kMaximumBlurRadiusPixels ||
+        !std::isfinite(horizontalScale) || !std::isfinite(verticalScale) ||
+        horizontalScale <= 0.0 || verticalScale <= 0.0 ||
         *radius * horizontalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
-        *radius * verticalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
+        vertical * verticalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
         !validSeparableBlurKernelShape(kernel))
         return {};
     return PreparedSeparableBlur{weights(kernel.kind, *radius * horizontalScale),
-                                 weights(kernel.kind, *radius * verticalScale), kernel.edge,
+                                 weights(kernel.kind, vertical * verticalScale), kernel.edge,
                                  kernel.channels, kernel.kind};
 }
 std::optional<render::ImageWindow> blurOutputWindow(const PreparedSeparableBlur& blur,

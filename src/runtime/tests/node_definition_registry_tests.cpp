@@ -158,8 +158,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend.
-    expectations.expect(registry.definitions().size() == 237,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #524 adds Four-Color Gradient.
+    expectations.expect(registry.definitions().size() == 238,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -647,12 +647,23 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             curves->parameters[9].schemaKey == "bloom.curves.clamp" &&
             !curves->parameters[9].supportsAnimation,
         "#493: Curves exposes identity channel curves, empty hue curves and an unset clamp");
-    expectations.expect(hueSaturation && hueSaturation->inputs.size() == 3 &&
-                            hueSaturation->parameters.size() == 2 &&
+    expectations.expect(hueSaturation && hueSaturation->inputs.size() == 4 &&
+                            hueSaturation->parameters.size() == 4 &&
                             hueSaturation->parameters[0].schemaKey == "bloom.hue-saturation.hue" &&
                             hueSaturation->parameters[1].defaultValue ==
                                 document::ParameterValue{1.0},
                         "#340: Hue/Saturation exposes an animatable hue and saturation");
+    expectations.expect(
+        hueSaturation && hueSaturation->parameters.size() == 4 &&
+            hueSaturation->parameters[2].schemaKey == "bloom.hue-saturation.vibrance" &&
+            hueSaturation->parameters[2].supportsAnimation &&
+            !hueSaturation->parameters[2].required &&
+            hueSaturation->parameters[2].defaultValue == document::ParameterValue{0.0} &&
+            hueSaturation->parameters[3].schemaKey == "bloom.hue-saturation.colorize" &&
+            !hueSaturation->parameters[3].supportsAnimation &&
+            !hueSaturation->parameters[3].required &&
+            hueSaturation->parameters[3].defaultValue == document::ParameterValue{false},
+        "#524: Hue/Saturation adds an optional animatable vibrance and a Colorize switch");
     // #494: Grade has the four wheels (master, red, green, blue each) then the six primaries,
     // every one an animatable Scalar with its own socket.
     const auto gradeUnmasked = withoutMask(registry.find("bloom.grade", 1));

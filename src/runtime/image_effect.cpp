@@ -125,7 +125,8 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
     const std::optional<ParentedLayerTransform> affine =
         nearestFilter || !geometry->transform->isTranslationOnly()
             ? std::optional{ParentedLayerTransform{geometry->matrix, inputDescriptor.dataWindow(),
-                                                   horizontalScale, verticalScale, 1.0F,
+                                                   horizontalScale, verticalScale,
+                                                   static_cast<float>(prepared.values.opacity),
                                                    nearestFilter}}
             : std::nullopt;
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
@@ -170,7 +171,8 @@ PreparedImageEffect ImageEffectContext::prepare(
     const std::optional<Transform2DValues> transform2D,
     const std::optional<std::array<double, 2>> lumaKeyRange,
     const std::optional<std::vector<double>> gradeValues,
-    const std::optional<std::array<double, 2>> directionalValues) {
+    const std::optional<std::array<double, 2>> directionalValues,
+    const std::optional<double> sampledVerticalRadius) {
     // #484: a time sample's pixels are its input's (evaluated on its own clock).
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel) ||
         std::holds_alternative<TimeSampleKernel>(effect.kernel))
@@ -279,6 +281,10 @@ PreparedImageEffect ImageEffectContext::prepare(
              {values.translate.x, values.translate.y, values.pivot.x, values.pivot.y,
               values.scale.x, values.scale.y, values.rotation, values.centre.x, values.centre.y})
             key.add(value);
+        // Appended only when set, so every earlier transform keeps its exact key bytes.
+        if (values.skew != 0.0 || values.opacity != 1.0)
+            for (const double value : {values.skew, values.skewAxis, values.opacity})
+                key.add(value);
         prepared.cacheIdentity = key.bytes();
         return prepared;
     }
@@ -370,7 +376,8 @@ PreparedImageEffect ImageEffectContext::prepare(
     }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
         prepared.blur =
-            prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale);
+            prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale,
+                                 blur->separate ? sampledVerticalRadius : std::nullopt);
         if (!prepared.blur) {
             prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
                                           "Blur radius or scale is out of domain");

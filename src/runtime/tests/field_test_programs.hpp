@@ -8,7 +8,9 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <initializer_list>
 #include <string_view>
@@ -113,6 +115,76 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const auto c = b.add(FieldOp::Coordinate);
     addTestCard(b, c, card, 16.0, 12.0, variant, option, label);
     return b.finish(b.last().output, FieldResultKind::Premultiplied);
+}
+
+// #524 Four-Color Gradient: the program its lowering builds over the 16 x 12 test composition,
+// mirroring snapshot_compiler_four_color_gradient.ipp (the snapshot compiler test holds the two to
+// the same instruction sequence). Four colors at four points, weights d^-blend.
+[[nodiscard]] inline FieldProgram fourColorGradientProgram(const std::uint64_t idBase,
+                                                           const double blend,
+                                                           const std::array<Vec2d, 4>& points,
+                                                           const std::array<std::array<double, 4>, 4>& colors) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto math = [&](const std::int64_t op, const int a, const int x) {
+        return b.add(FieldOp::Math, {a, x}, {op}, {0.1, 0.0});
+    };
+    const double squared = 16.0 * 16.0 + 12.0 * 12.0;
+    const auto inverse = b.add(FieldOp::Constant, {}, {}, {1.0 / squared, 1.0 / squared, 1.0 / squared, 1.0 / squared});
+    const auto half = b.add(FieldOp::Constant, {}, {}, {0.25 / squared, 0.25 / squared, 0.25 / squared, 0.25 / squared});
+    const auto once = b.add(FieldOp::Constant, {}, {}, {blend, 0.0, 0.0, 0.0});
+    const auto negative = b.add(FieldOp::Swizzle, {once}, {0, 0, 0, 0}, {-0.5, -0.5, -0.5, -0.5});
+    int weightSum = -1;
+    int colorSum = -1;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto offset = b.add(FieldOp::Transform, {c}, {0, 6}, {0.0, 0.0}, {points[i]});
+        const auto distance = math(13, offset, offset);
+        const auto scaled = math(2, distance, inverse);
+        const auto padded = math(0, scaled, half);
+        const auto weight = math(6, padded, negative);
+        const auto lanes = b.add(FieldOp::Swizzle, {weight}, {0, 0, 0, 0}, {1.0, 1.0, 1.0, 1.0});
+        const auto color = b.add(FieldOp::Constant, {}, {}, {colors[i][0], colors[i][1], colors[i][2], colors[i][3]});
+        const auto weighted = math(2, color, lanes);
+        weightSum = weightSum < 0 ? lanes : math(0, weightSum, lanes);
+        colorSum = colorSum < 0 ? weighted : math(0, colorSum, weighted);
+    }
+    const auto straight = math(3, colorSum, weightSum);
+    const auto alpha = b.add(FieldOp::Swizzle, {straight}, {3, 3, 3, 5}, {1.0, 1.0, 1.0, 1.0});
+    auto program = b.finish(math(2, straight, alpha), FieldResultKind::Premultiplied);
+    // The lowering's register allocation: a register is free after its last read, so the sixteen
+    // registers of a program suffice.
+    auto& steps = program.instructions;
+    std::vector<std::size_t> lastUse(64, 0);
+    for (std::size_t i = 0; i < steps.size(); ++i) {
+        lastUse[static_cast<std::size_t>(steps[i].output)] =
+            std::max(lastUse[static_cast<std::size_t>(steps[i].output)], i);
+        for (const auto input : steps[i].inputs)
+            if (input >= 0)
+                lastUse[static_cast<std::size_t>(input)] = i;
+    }
+    lastUse[program.result] = steps.size();
+    std::vector<int> physical(64, -1);
+    std::vector<bool> busy(16, false);
+    for (std::size_t i = 0; i < steps.size(); ++i) {
+        const auto virtualOutput = static_cast<std::size_t>(steps[i].output);
+        const auto inputs = steps[i].inputs;
+        for (auto& input : steps[i].inputs)
+            input = input < 0 ? std::int8_t{-1}
+                              : static_cast<std::int8_t>(physical[static_cast<std::size_t>(input)]);
+        for (const auto input : inputs)
+            if (input >= 0 && lastUse[static_cast<std::size_t>(input)] == i &&
+                physical[static_cast<std::size_t>(input)] >= 0)
+                busy[static_cast<std::size_t>(physical[static_cast<std::size_t>(input)])] = false;
+        const auto free = std::find(busy.begin(), busy.end(), false);
+        *free = true;
+        const auto reg = static_cast<int>(free - busy.begin());
+        physical[virtualOutput] = reg;
+        steps[i].output = static_cast<std::int8_t>(reg);
+        if (lastUse[virtualOutput] <= i)
+            *free = false;
+    }
+    program.result = static_cast<std::uint8_t>(physical[program.result]);
+    return program;
 }
 
 [[nodiscard]] inline document::PathValue curvePoints(std::initializer_list<Vec2d> points) {

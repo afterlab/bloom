@@ -310,6 +310,149 @@ void testBlurLowering(Expectations& expectations) {
     }
 }
 
+// Gaussian Blur's separate axes and per-channel radii: the kernel keeps the vertical radius, and a
+// per-channel blur lowers to five blurs and four channel combines over the input.
+void testBlurExtensionLowering(Expectations& expectations) {
+    using namespace document;
+    const auto* definition = builtInNodeDefinitions().find("bloom.gaussian-blur", 1);
+    // Radius and edge, then separate axes, the vertical radius, per-channel and the four channel
+    // radii, then the effect mask's channel every effect carries.
+    require(definition != nullptr && definition->parameters.size() == 10,
+            "Gaussian Blur has its radius, edge, separate axes, vertical radius, per-channel and "
+            "four channel radii");
+    for (int scenario = 0; scenario != 3; ++scenario) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto node = NodeId::fromRaw(960);
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 960;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            auto value = parameter.defaultValue;
+            if (parameter.role == "radius")
+                value = 6.0;
+            if (parameter.role == "radiusY")
+                value = 2.0;
+            if (parameter.role == "separate")
+                value = scenario == 1;
+            if (parameter.role == "perChannel")
+                value = scenario == 2;
+            if (parameter.role == "redScale")
+                value = 0.5;
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{value}}),
+                    "blur parameter is valid");
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({node, "bloom.gaussian-blur", std::move(bindings), 1}),
+                "blur node adds");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge removed");
+        require(graph.addEdge(
+                    {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{node, "input"}}),
+                "image enters blur");
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(960),
+                     {node, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "blur enters Layer");
+        expectations.expect(project.validate().ok(), "extended blur document validates");
+        runtime::NodeDefinitionRegistry registry;
+        require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+        registry.freeze();
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "extended blur graph compiles");
+        if (!result.plan)
+            continue;
+        std::size_t blurs = 0;
+        std::size_t combines = 0;
+        const runtime::SeparableBlurKernel* first = nullptr;
+        for (const auto& operation : result.plan->operations()) {
+            const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+            if (effect == nullptr)
+                continue;
+            if (const auto* blur = std::get_if<runtime::SeparableBlurKernel>(&effect->kernel)) {
+                ++blurs;
+                first = first != nullptr ? first : blur;
+            }
+            combines += std::holds_alternative<runtime::ChannelCombineKernel>(effect->kernel);
+        }
+        if (scenario == 2) {
+            expectations.expect(blurs == 5 && combines == 4,
+                                "a per-channel blur is five blurs and four channel combines");
+        } else {
+            expectations.expect(blurs == 1 && combines == 0 && first != nullptr &&
+                                    first->separate == (scenario == 1),
+                                "a blur is one operation, separate only when asked");
+            const auto* vertical =
+                first != nullptr ? std::get_if<double>(&first->radiusY.source) : nullptr;
+            expectations.expect(scenario != 1 || (vertical != nullptr && *vertical == 2.0 &&
+                                                  first->radiusY.id == ParameterId::fromRaw(963)),
+                                "separate axes keep the vertical radius and its identity");
+        }
+    }
+}
+
+// Hue/Saturation's vibrance and Colorize reach the kernel; a node saved without them lowers to none.
+void testHueSaturationExtensionLowering(Expectations& expectations) {
+    using namespace document;
+    const auto* definition = builtInNodeDefinitions().find("bloom.hue-saturation", 1);
+    // Then the effect mask's channel every effect carries.
+    require(definition != nullptr && definition->parameters.size() == 5,
+            "Hue/Saturation has hue, saturation, vibrance and Colorize");
+    for (int scenario = 0; scenario != 2; ++scenario) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto node = NodeId::fromRaw(960);
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 960;
+        for (const auto& parameter : definition->parameters) {
+            if (scenario == 1 && (parameter.role == "vibrance" || parameter.role == "colorize"))
+                continue; // a document saved before these existed
+            const auto id = ParameterId::fromRaw(next++);
+            auto value = parameter.defaultValue;
+            if (parameter.role == "vibrance")
+                value = 0.75;
+            if (parameter.role == "colorize")
+                value = true;
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{value}}),
+                    "Hue/Saturation parameter is valid");
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({node, "bloom.hue-saturation", std::move(bindings), 1}),
+                "Hue/Saturation node adds");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge removed");
+        require(graph.addEdge(
+                    {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{node, "input"}}),
+                "image enters Hue/Saturation");
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(960),
+                     {node, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "Hue/Saturation enters Layer");
+        expectations.expect(project.validate().ok(), "Hue/Saturation document validates");
+        runtime::NodeDefinitionRegistry registry;
+        require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+        registry.freeze();
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "Hue/Saturation graph compiles");
+        if (!result.plan)
+            continue;
+        const runtime::HueSaturationKernel* kernel = nullptr;
+        for (const auto& operation : result.plan->operations())
+            if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation))
+                if (const auto* found = std::get_if<runtime::HueSaturationKernel>(&effect->kernel))
+                    kernel = found;
+        require(kernel != nullptr, "Hue/Saturation lowers to its kernel");
+        const auto* vibrance = std::get_if<double>(&kernel->vibrance.source);
+        expectations.expect(scenario == 0 ? (kernel->colorize && vibrance && *vibrance == 0.75)
+                                          : (!kernel->colorize && vibrance && *vibrance == 0.0),
+                            "vibrance and Colorize lower, and default to off when not saved");
+    }
+}
+
 void testImageCombineChannelLowering(Expectations& expectations) {
     using namespace document;
     runtime::NodeDefinitionRegistry registry;
@@ -419,11 +562,11 @@ void testTransform2DLowering(Expectations& expectations) {
     auto& graph = composition->graph();
     const auto effectId = NodeId::fromRaw(970);
     const auto* definition = builtInNodeDefinitions().find("bloom.transform-2d", 1);
-    // Its six transform parameters, then (#484) its optional motion blur's.
+    // Its six transform parameters, then (#484) its optional motion blur's, then skew and opacity.
     require(definition != nullptr &&
                 definition->parameters.size() ==
-                    6 + document::transformMotionBlurParameterDefinitions().size(),
-            "Transform 2D definition has six parameters and its motion blur's");
+                    6 + document::transformMotionBlurParameterDefinitions().size() + 3,
+            "Transform 2D definition has six parameters, its motion blur's, then skew and opacity");
     std::vector<ParameterBinding> bindings;
     std::uint64_t next = 970;
     for (const auto& parameter : definition->parameters) {
@@ -435,6 +578,12 @@ void testTransform2DLowering(Expectations& expectations) {
             value = 30.0;
         if (parameter.role == "extent")
             value = std::int64_t{2};
+        if (parameter.role == "skew")
+            value = 20.0;
+        if (parameter.role == "skewAxis")
+            value = 15.0;
+        if (parameter.role == "opacity")
+            value = 0.5;
         require(composition->parameters().insert({id, parameter.schemaKey, ConstantValueSource{value}}),
                 "Transform 2D parameter is valid");
         bindings.push_back({parameter.role, id});
@@ -469,6 +618,13 @@ void testTransform2DLowering(Expectations& expectations) {
                             kernel->extent == runtime::Transform2DExtent::Display &&
                             kernel->filter == 0,
                         "Transform 2D lowering retains identities, values, extent and filter");
+    const auto* skew = kernel ? std::get_if<double>(&kernel->skew.source) : nullptr;
+    const auto* skewAxis = kernel ? std::get_if<double>(&kernel->skewAxis.source) : nullptr;
+    const auto* opacity = kernel ? std::get_if<double>(&kernel->opacity.source) : nullptr;
+    expectations.expect(skew && *skew == 20.0 && skewAxis && *skewAxis == 15.0 && opacity &&
+                            *opacity == 0.5 && kernel->skew.id.value() != 0 &&
+                            !kernel->plainSkewOpacity(),
+                        "Transform 2D lowering retains skew, skew axis and opacity");
     const auto effectIndex =
         static_cast<std::size_t>(std::distance(result.plan->operations().begin(), effect));
     expectations.expect(
@@ -931,9 +1087,9 @@ void testColorGradeLowering(Expectations& expectations) {
             runtime::forEachColorGradeOperand(kernel,
                                               [&](const auto& operand) { ids.push_back(operand.id); });
             // #383: the effect mask's channel selector is the last parameter, never an operand.
-            bool ordered = ids.size() + (type == kHueSaturationNodeType || type == kGradeNodeType
-                                             ? 0U
-                                             : 1U) + 1U ==
+            // Levels and Curves have a clamp switch, and Hue/Saturation its Colorize switch, that
+            // are not operands.
+            bool ordered = ids.size() + (type == kGradeNodeType ? 0U : 1U) + 1U ==
                            definition->parameters.size();
             for (std::size_t i = 0; ordered && i < ids.size(); ++i)
                 ordered = ids[i] == ParameterId::fromRaw(2000 + i);

@@ -501,6 +501,35 @@ OperationIndex appendSharpen(RecipeEmitter& emitter, const OperationIndex input,
     return sharpened;
 }
 
+OperationIndex appendChannelBlur(RecipeEmitter& emitter, const OperationIndex input,
+                                 const ChannelBlurOperands& operands) {
+    const auto blurAt = [&](const CompiledScalarParameter& scale) {
+        SeparableBlurKernel kernel{SeparableBlurKind::Gaussian,
+                                   emitter.scalar(core::primitives::ScalarPrimitive::Multiply,
+                                                  {operands.radius, scale}),
+                                   operands.edge, BlurChannels::Rgba};
+        if (operands.separate) {
+            kernel.separate = true;
+            kernel.radiusY = emitter.scalar(core::primitives::ScalarPrimitive::Multiply,
+                                            {operands.radiusY, scale});
+        }
+        return kernel;
+    };
+    auto widest = operands.scales[0];
+    for (std::size_t channel = 1; channel < operands.scales.size(); ++channel)
+        widest = emitter.scalar(core::primitives::ScalarPrimitive::Maximum,
+                                {widest, operands.scales[channel]});
+    auto result = emitter.effect(input, blurAt(widest));
+    constexpr std::array sources{ImageChannelSource::Red, ImageChannelSource::Green,
+                                 ImageChannelSource::Blue, ImageChannelSource::Alpha};
+    for (std::uint8_t channel = 0; channel < 4; ++channel) {
+        const auto blurred = emitter.effect(input, blurAt(operands.scales[channel]));
+        result = emitter.effect(result, ChannelCombineKernel{channel, sources[channel], false},
+                                blurred);
+    }
+    return result;
+}
+
 RecipeEmitter::ValueSink definitionValueSink(CompiledCompositionPlanDefinition& definition) {
     return [&definition](CompiledValueKernel kernel, const std::uint8_t outputCount) {
         const auto first = ValueOutputIndex::fromRaw(definition.valueOutputCount);

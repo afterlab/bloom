@@ -43,6 +43,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.checker-source", "CheckerBoard|Checkerboard"},
     {"bloom.linear-gradient", "Ramp|Gradient Ramp"},
     {"bloom.radial-gradient", "Radial|Gradient Ramp"},
+    {"bloom.four-color-gradient", "Four Point Gradient|Mesh Gradient|Corner Gradient"},
     // Compositing
     {"bloom.layer-stack", "Merge|Merge2|Over|Composite"},
     {"bloom.adjustment", "Adjustment Layer"},

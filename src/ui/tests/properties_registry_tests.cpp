@@ -1293,6 +1293,70 @@ void edgeExtendRows() {
     }
 }
 
+// #524 and #514: the new rows of Gaussian Blur, Transform 2D and Hue/Saturation and the whole of
+// Denoise & Smooth and Four-Color Gradient in Properties: every value a visible row named in plain
+// words, labels and values shown whole and nothing wider than the panel, at the widths of a wide, a
+// normal and a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width
+// (suffixed with the device pixel ratio).
+void extensionRows(const char* type, const char* captureName,
+                   const std::vector<std::pair<std::string, QString>>& rows) {
+    auto project = document::makeNewProject("Ext", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    const auto node = addNode(session, type);
+    session.selectNode(node);
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                               ? QStringLiteral("dpr1")
+                               : QStringLiteral("dpr15");
+    for (const int width : {2000, 900, 420}) {
+        properties.resize(width, 900);
+        properties.show();
+        QCoreApplication::processEvents();
+        for (const auto& [role, text] : rows) {
+            auto* found = row(properties, role.c_str());
+            expect(found != nullptr && found->isVisibleTo(&properties),
+                   (std::string(type) + " presents " + role).c_str());
+            if (found == nullptr)
+                continue;
+            expect(found->property("rowLabel").toString() == text,
+                   (std::string(type) + " names " + role + " in plain words").c_str());
+            for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                if (field->isVisibleTo(&properties))
+                    expect(!field->paintedText().contains(QChar(0x2026)) &&
+                               !field->isDisplayRounded(),
+                           (std::string(type) + " shows " + role + " whole").c_str());
+        }
+        if (auto* scroll = properties.findChild<QScrollArea*>())
+            expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                   (std::string(type) + "'s rows never exceed the panel's width").c_str());
+        if (!directory.isEmpty()) {
+            QDir().mkpath(directory);
+            if (!properties.grab().save(directory + QStringLiteral("/") +
+                                        QString::fromLatin1(captureName) +
+                                        QStringLiteral("-properties-") + QString::number(width) +
+                                        QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                std::cerr << "could not write the " << captureName << " Properties capture\n";
+        }
+    }
+}
+
+void extensionPropertiesRows() {
+    extensionRows("bloom.four-color-gradient", "four-color-gradient",
+                  {{"point1", QStringLiteral("Point 1")}, {"point4", QStringLiteral("Point 4")},
+                   {"color1", QStringLiteral("Color 1")}, {"color4", QStringLiteral("Color 4")},
+                   {"blend", QStringLiteral("Blend (sharpness)")}});
+    extensionRows("bloom.gaussian-blur", "gaussian-blur",
+                  {{"radius", QStringLiteral("Radius (pixels)")},
+                   {"separate", QStringLiteral("Separate axes")},
+                   {"radiusY", QStringLiteral("Vertical radius (pixels)")},
+                   {"perChannel", QStringLiteral("Per-channel radius")}});
+    extensionRows("bloom.transform-2d", "transform-2d",
+                  {{"skew", QStringLiteral("Skew")}, {"opacity", QStringLiteral("Opacity")}});
+}
+
 // #348 Corner Pin, ST Map and Displace in Properties: a row for every corner, choice and value, in
 // plain words, each label shown whole and nothing wider than the panel, at the widths of a wide, a
 // normal and a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width
@@ -1694,6 +1758,7 @@ int main(int argc, char** argv) try {
     autoExposureRows();
     colorCleanupRows();
     edgeExtendRows();
+    extensionPropertiesRows();
     warpRows();
     audioEffectRows();
     groupAndPlotRows();

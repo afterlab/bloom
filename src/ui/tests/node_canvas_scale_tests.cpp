@@ -38,7 +38,8 @@ Graph populate(Fixture& f, const int count) {
         for (int index = 0; index < count; ++index)
             transaction.emplace<commands::AddNode>(
                 f.session.compositionId(), "bloom.gaussian-blur",
-                document::Vec2d{1000.0 + (index % 25) * 400.0, (index / 25) * 400.0});
+                // Rows apart by more than the tallest blur card (Gaussian Blur has ten rows of values).
+                document::Vec2d{1000.0 + (index % 25) * 400.0, (index / 25) * 700.0});
         expect(f.scene()->submit(std::move(transaction)).succeeded(), "the cards are added");
     }
     Graph graph;
