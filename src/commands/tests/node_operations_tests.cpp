@@ -1274,6 +1274,17 @@ void testRecipeCommands(TestContext& test) {
 
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
+    // #344 #530 #509 #349: the path processing and analysis nodes are among the definitions this
+    // loop adds, lays out and checks.
+    for (const auto* type :
+         {"bloom.transform-path", "bloom.trim-path", "bloom.offset-path", "bloom.round-corners",
+          "bloom.boolean-paths", "bloom.merge-paths", "bloom.path-stroke", "bloom.histogram",
+          "bloom.image-compare", "bloom.image-statistics"})
+        test.expect(std::ranges::any_of(builtInNodeDefinitions().definitions(),
+                                        [&](const auto& definition) {
+                                            return definition.key.typeId == type;
+                                        }),
+                    "the generic AddNode loop covers the path and analysis nodes");
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
         // Task S1, item 5: a OnePerComposition type is refused once the composition already holds
         // one. The fixture's composition carries a Layer Stack from the start, so that one refuses

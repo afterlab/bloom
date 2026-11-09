@@ -389,6 +389,13 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_svg_artwork_test)
     bloom_add_test(NAME bloom.project.svg-artwork COMMAND bloom_project_svg_artwork_test LABELS unit persistence)
 
+    # #344 #530 #509 #349: the path and analysis nodes, built from commands.
+    add_executable(bloom_project_path_node_test
+        ${PROJECT_SOURCE_DIR}/tests/integration/path_node_persistence_tests.cpp)
+    target_link_libraries(bloom_project_path_node_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_path_node_test)
+    bloom_add_test(NAME bloom.project.path-nodes COMMAND bloom_project_path_node_test LABELS unit persistence)
+
     # #502: built from commands, so it lives under tests/integration.
     add_executable(bloom_project_entry_layer_test
         ${PROJECT_SOURCE_DIR}/tests/integration/entry_layer_persistence_tests.cpp)
