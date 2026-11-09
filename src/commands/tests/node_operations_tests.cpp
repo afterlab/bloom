@@ -1204,7 +1204,9 @@ void testAddAndLayout(TestContext& test) {
             // constant.
             if ((parameter.schemaKey == "bloom.camera-shake.seed" ||
                  parameter.schemaKey == "bloom.frame-rate-hold.seed" ||
-                 (definition.key.typeId == "bloom.light-flicker" && parameter.role == "seed")) &&
+                 ((definition.key.typeId == "bloom.light-flicker" ||
+                  definition.key.typeId == "bloom.wiggle") &&
+                 parameter.role == "seed")) &&
                 record) {
                 const auto* constant = std::get_if<ConstantValueSource>(&record->source);
                 const auto* seed =

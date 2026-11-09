@@ -360,7 +360,7 @@ void testSearchKeyboardAndMenus() {
              {"Keylight", "bloom.luma-key"},
              {"Primatte", "bloom.luma-key"},
              {"CornerPin2D", "bloom.transform-2d"},
-             {"Arithmetic", "bloom.multiply"},
+             {"Arithmetic", "bloom.image-math"},
              {"Fill", document::kColorizeNodeType},
              {"Tint", document::kColorizeNodeType},
          })) {
@@ -602,8 +602,9 @@ void testSearchKeyboardAndMenus() {
                   "Multiply Alpha", "Set Alpha"},
                  "Layers merged into Compositing");
         hasGroup("Channels",
-                 {"Channel Copy", "Combine Channels", "Image to Channel Set", "Pass",
-                  "Select Channels", "Separate Channels", "Shuffle"},
+                 {"Channel Copy", "Combine Channels", "Image Clamp", "Image Map Range", "Image Math",
+                  "Image to Channel Set", "Pass", "Select Channels", "Separate Channels",
+                  "Shuffle"},
                  "Channels holds the channel nodes");
         hasGroup("Keying & Mattes",
                  {"Cryptomatte", "Image to Mask", "Luma Key", "Mask", "Mask Combine", "Matte Blur",
