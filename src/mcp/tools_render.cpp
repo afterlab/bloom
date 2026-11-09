@@ -154,6 +154,32 @@ void reportFileRoute(Json& out, yyjson_mut_val* value, const McpCall& call,
                          "on it."));
 }
 
+// A live render, export or capture says which route the export queue recorded for its frames, in
+// the same vocabulary. What the queue did not record reads null; it is never guessed.
+void reportJobRoute(Json& out, yyjson_mut_val* value, const TransientResult& job,
+                    const bool withProvenance = true) {
+    if (!job.routeKnown) {
+        out.set(value, "gpuFrames", out.null());
+        out.set(value, "cpuReferenceFrames", out.null());
+        if (withProvenance)
+            out.set(value, "provenance", out.null());
+        return;
+    }
+    const auto total = job.gpuFrames + job.cpuReferenceFrames;
+    out.set(value, "gpuFrames", out.number(job.gpuFrames));
+    out.set(value, "cpuReferenceFrames", out.number(job.cpuReferenceFrames));
+    if (withProvenance)
+        out.set(value, "provenance",
+                out.text(job.cpuReferenceFrames == 0 && job.gpuFrames > 0 ? "gpu"
+                                                                          : "cpu-reference"));
+    if (job.cpuReferenceFrames > 0)
+        out.set(value, "routeNote",
+                out.text(std::to_string(job.cpuReferenceFrames) + " of " + std::to_string(total) +
+                         " frames were evaluated on the CPU reference path: the export queue "
+                         "could not admit them to a GPU generation (no device, or a generation "
+                         "that was replaced and failed)."));
+}
+
 yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& call,
                                yyjson_val* arguments, const bool compositionExport) {
     auto& scheduler = core.dependencies.scheduler;
@@ -469,6 +495,7 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         out.set(value, "loudness", loudnessValue(out, *result.loudness));
     out.set(value, "job", out.text(std::to_string(result.job)));
     out.set(value, "log", logEntries(out, result.log));
+    reportJobRoute(out, value, result);
     auto* files = out.array();
     for (const auto& path : result.files) {
         auto* file = out.object();
@@ -553,6 +580,96 @@ yyjson_mut_val* statisticsJson(Json& out, const FrameStatistics& statistics) {
     return value;
 }
 
+// A scratch folder that is removed with it, however the call ends.
+struct ScratchFolder final {
+    std::filesystem::path folder;
+    ScratchFolder() = default;
+    explicit ScratchFolder(std::filesystem::path path) : folder(std::move(path)) {}
+    ScratchFolder(const ScratchFolder&) = delete;
+    ScratchFolder& operator=(const ScratchFolder&) = delete;
+    ScratchFolder(ScratchFolder&& other) noexcept : folder(std::move(other.folder)) {
+        other.folder.clear();
+    }
+    ScratchFolder& operator=(ScratchFolder&& other) noexcept {
+        if (this != &other) {
+            std::swap(folder, other.folder);
+        }
+        return *this;
+    }
+    ~ScratchFolder() {
+        if (folder.empty())
+            return;
+        std::error_code error;
+        std::filesystem::remove_all(folder, error);
+    }
+};
+
+// The frames rendered to a scratch OpenEXR sequence through the production still route (the
+// working colour space, written without a display transform): a live host submits a transient
+// export job, the stdio host runs the scripting render. Nothing is left behind and nothing joins
+// the project or the export queue's saved jobs.
+struct ScratchFrames final {
+    ScratchFolder cleanup;
+    std::filesystem::path destination;
+    std::optional<TransientResult> transient;
+    std::string provenance = "cpu-reference";
+    std::uint64_t routeFrames = 0;
+    std::uint64_t routeGpuFrames = 0;
+    std::string workingColorSpace;
+};
+
+ScratchFrames renderScratchFrames(McpServerCore::State& core, McpCall& call,
+                                  const document::Composition& composition,
+                                  const std::uint64_t first, const std::uint64_t last,
+                                  const std::string& jobName) {
+    const auto source = call.session.renderSourceSnapshot();
+    const auto colorIntent = scripting::captureRenderColorIntent(source, composition);
+    if (!colorIntent)
+        throw std::runtime_error("Project color settings are unavailable");
+    ScratchFrames frames;
+    frames.cleanup = ScratchFolder(nextCapturePath(core).replace_extension(""));
+    frames.workingColorSpace = std::string(colorIntent->workingColorSpaceId);
+    std::error_code error;
+    std::filesystem::create_directories(frames.cleanup.folder, error);
+    frames.destination = frames.cleanup.folder / "stats.exr";
+    const bool range = last != first;
+    if (call.live != nullptr) {
+        auto preset = host::builtInExportPreset("builtin:exr-sequence");
+        if (!preset)
+            throw std::runtime_error("The OpenEXR preset is not available");
+        host::ExportTransientJobRequest request;
+        request.composition = composition.id();
+        request.range = range ? document::ExportRange{document::ExportRangeKind::Custom, first, last}
+                              : document::ExportRange{document::ExportRangeKind::Frame, first, first};
+        request.settings = preset->settings;
+        request.presetId = preset->id;
+        request.name = jobName;
+        request.destination = transientDestination(frames.destination.string(), nullptr);
+        frames.transient = runTransientJob(core, call, std::move(request));
+        frames.provenance = "export-queue";
+    } else {
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto& stop = call.control.stop;
+        const auto result = scripting::Render::run(
+            call.session, core.dependencies.scheduler, compiler,
+            {.composition = composition.id(),
+             .frame = range ? std::nullopt : std::optional(first),
+             .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
+             .preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+             .destination = frames.destination,
+             .cancelled = [stop] { return stop.stop_requested(); }},
+            {}, call.gpuProvider);
+        if (!result.succeeded)
+            throw std::runtime_error(result.diagnostic);
+        frames.routeFrames = result.publishedFrames;
+        frames.routeGpuFrames = result.gpuEvaluatedFrames;
+        if (call.fileSession && frames.routeGpuFrames >= frames.routeFrames &&
+            frames.routeGpuFrames > 0)
+            frames.provenance = "gpu";
+    }
+    return frames;
+}
+
 // Renders the frames to a scratch Flat OpenEXR sequence through the production still route (the
 // working colour space, written without a display transform), reads them back and measures them.
 yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall& call,
@@ -585,60 +702,15 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
             throw InvalidInput("region must be inside the " + std::to_string(width) + " x " +
                                std::to_string(height) + " frame and not empty");
     }
-    const auto source = call.session.renderSourceSnapshot();
-    const auto colorIntent = scripting::captureRenderColorIntent(source, composition);
-    if (!colorIntent)
-        throw std::runtime_error("Project color settings are unavailable");
-
-    const auto scratch = nextCapturePath(core).replace_extension("");
-    struct Scratch final {
-        std::filesystem::path folder;
-        ~Scratch() {
-            std::error_code error;
-            std::filesystem::remove_all(folder, error);
-        }
-    } cleanup{scratch};
-    std::error_code error;
-    std::filesystem::create_directories(scratch, error);
-    const auto destination = scratch / "stats.exr";
+    const auto scratch = renderScratchFrames(core, call, composition, first, last,
+                                             "MCP capture statistics");
+    const auto& destination = scratch.destination;
     const bool range = last != first;
-    std::optional<TransientResult> transient;
-    std::string provenance = "cpu-reference";
-    std::uint64_t routeFrames = 0;
-    std::uint64_t routeGpuFrames = 0;
-    if (call.live != nullptr) {
-        auto preset = host::builtInExportPreset("builtin:exr-sequence");
-        if (!preset)
-            throw std::runtime_error("The OpenEXR preset is not available");
-        host::ExportTransientJobRequest request;
-        request.composition = composition.id();
-        request.range = range ? document::ExportRange{document::ExportRangeKind::Custom, first, last}
-                              : document::ExportRange{document::ExportRangeKind::Frame, first, first};
-        request.settings = preset->settings;
-        request.presetId = preset->id;
-        request.name = "MCP capture statistics";
-        request.destination = transientDestination(destination.string(), nullptr);
-        transient = runTransientJob(core, call, std::move(request));
-        provenance = "export-queue";
-    } else {
-        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-        const auto& stop = call.control.stop;
-        const auto result = scripting::Render::run(
-            call.session, core.dependencies.scheduler, compiler,
-            {.composition = composition.id(),
-             .frame = range ? std::nullopt : std::optional(first),
-             .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
-             .preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
-             .destination = destination,
-             .cancelled = [stop] { return stop.stop_requested(); }},
-            {}, call.gpuProvider);
-        if (!result.succeeded)
-            throw std::runtime_error(result.diagnostic);
-        routeFrames = result.publishedFrames;
-        routeGpuFrames = result.gpuEvaluatedFrames;
-        if (call.fileSession && routeGpuFrames >= routeFrames && routeGpuFrames > 0)
-            provenance = "gpu";
-    }
+    const auto& transient = scratch.transient;
+    const auto& provenance = scratch.provenance;
+    const auto routeFrames = scratch.routeFrames;
+    const auto routeGpuFrames = scratch.routeGpuFrames;
+    const auto& workingColorSpace = scratch.workingColorSpace;
     StatisticsAccumulator all(bins);
     auto* frames = out.array();
     for (auto index = first;; ++index) {
@@ -679,12 +751,14 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
     for (const auto item : {regionX, regionY, regionWidth, regionHeight})
         out.append(regionJson, out.number(item));
     out.set(value, "region", regionJson);
-    out.set(value, "colorSpace", out.text(std::string(colorIntent->workingColorSpaceId)));
+    out.set(value, "colorSpace", out.text(workingColorSpace));
     out.set(value, "luma", out.text("Rec.709 weights (0.2126, 0.7152, 0.0722) of the working-space "
                                     "red, green and blue"));
     out.set(value, "route", out.text("production still export to a scratch OpenEXR, working space"));
     out.set(value, "provenance", out.text(provenance));
     reportFileRoute(out, value, call, routeFrames, routeGpuFrames, false);
+    if (transient)
+        reportJobRoute(out, value, *transient, false);
     out.set(value, "statistics", statisticsJson(out, all.result()));
     if (range)
         out.set(value, "frames", frames);
@@ -777,6 +851,8 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
     out.set(value, "bytes", out.number(bytes));
     out.set(value, "digest", out.text(digestFile(path)));
     reportFileRoute(out, value, call, routeFrames, routeGpuFrames);
+    if (transient)
+        reportJobRoute(out, value, *transient);
     out.set(value, "width", out.number(composition->format().width()));
     out.set(value, "height", out.number(composition->format().height()));
     if (transient) {
@@ -814,6 +890,129 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
         call.notice = McpToolErrorCode::CaptureTooLargeForInline;
     }
     return value;
+}
+
+} // namespace bloom::mcp
+
+namespace bloom::mcp {
+
+// The most pixels one pixels query returns: a point, or a small rectangle such as 16 by 16.
+constexpr std::uint64_t kMaxPixelReadCount = 256;
+
+// Pixel values of one frame at a time, read back from the production still route (#390). The
+// frame is rendered exactly as a still export renders it, to a scratch OpenEXR in the working
+// colour space that is deleted before the call returns; the values are read from that file as
+// stored, so they match what an export writes. The work runs on the request's worker, never the
+// UI thread, and stops with the request.
+yyjson_mut_val* pixelsQuery(McpServerCore::State& core, Json& out, McpCall& call,
+                            yyjson_val* arguments) {
+    members(arguments, {"kind", "composition", "time", "region"}, {"kind", "region"});
+    const auto snapshot = call.session.snapshot();
+    const auto compositionId = member(arguments, "composition")
+                                   ? integer(member(arguments, "composition"))
+                                   : call.context.composition.value_or(0);
+    const auto* composition =
+        snapshot.project().findComposition(document::CompositionId::fromRaw(compositionId));
+    if (composition == nullptr)
+        throw InvalidInput("Composition " + std::to_string(compositionId) +
+                           " does not exist; query kind=compositions lists them");
+    core::RationalTime time = call.context.time.value_or(core::RationalTime::fromInteger(0));
+    if (auto* requested = member(arguments, "time"))
+        time = frameOrSecondsArgument(requested, snapshot, compositionId);
+    if (time < core::RationalTime::fromInteger(0) || !(time < composition->duration()))
+        throw InvalidInput("time is outside the composition; it runs from 0 up to its duration");
+    const auto rate = composition->format().frameRate();
+    const auto mapping =
+        core::FrameTimeMapping::create(composition->duration(), rate.numerator(), rate.denominator());
+    if (!mapping)
+        throw std::runtime_error("The composition's frame grid is unavailable");
+    const auto frame = mapping.value()->nearestFrameIndex(time);
+
+    const auto width = composition->format().width();
+    const auto height = composition->format().height();
+    auto* region = member(arguments, "region");
+    if (!yyjson_is_arr(region) || yyjson_arr_size(region) != 4)
+        throw InvalidInput("region is [x, y, width, height] in pixels from the top-left; a point "
+                           "is [x, y, 1, 1]");
+    std::array<std::uint64_t, 4> values{};
+    for (std::size_t index = 0; index < 4; ++index)
+        values[index] = integer(yyjson_arr_get(region, index));
+    const auto [regionX, regionY, regionWidth, regionHeight] = values;
+    if (regionWidth == 0 || regionHeight == 0 || regionX >= width || regionY >= height ||
+        regionWidth > width - regionX || regionHeight > height - regionY)
+        throw InvalidInput("region must be inside the " + std::to_string(width) + " x " +
+                           std::to_string(height) + " frame and not empty");
+    if (regionWidth * regionHeight > kMaxPixelReadCount)
+        throw InvalidInput("region holds " + std::to_string(regionWidth * regionHeight) +
+                           " pixels; at most " + std::to_string(kMaxPixelReadCount) +
+                           " can be read at once (for example 16 by 16). For a larger area use "
+                           "capture with statistics.");
+
+    const auto scratch = renderScratchFrames(core, call, *composition, frame, frame,
+                                             "MCP pixel read");
+    auto* rows = out.array();
+    const auto readback = output::visitExportedFrame(
+        scratch.destination, {regionX, regionY, regionWidth, regionHeight},
+        [&](const float red, const float green, const float blue, const float alpha) {
+            auto* pixel = out.array();
+            out.append(pixel, out.real(static_cast<double>(red)));
+            out.append(pixel, out.real(static_cast<double>(green)));
+            out.append(pixel, out.real(static_cast<double>(blue)));
+            out.append(pixel, out.real(static_cast<double>(alpha)));
+            out.append(rows, pixel);
+        });
+    if (!readback.succeeded)
+        throw std::runtime_error("Frame " + std::to_string(frame) +
+                                 " could not be read back: " + readback.diagnostic);
+
+    call.summary = "pixels of composition " + std::to_string(compositionId) + " frame " +
+                   std::to_string(frame);
+    auto* result = out.object();
+    out.set(result, "revision", out.number(snapshot.revision().value()));
+    out.set(result, "composition", out.number(compositionId));
+    auto* timeValue = out.array();
+    out.append(timeValue, out.signedNumber(time.numerator()));
+    out.append(timeValue, out.signedNumber(time.denominator()));
+    out.set(result, "time", timeValue);
+    out.set(result, "frame", out.number(frame));
+    auto* regionJson = out.array();
+    for (const auto item : values)
+        out.append(regionJson, out.number(item));
+    out.set(result, "region", regionJson);
+    out.set(result, "colorSpace", out.text(scratch.workingColorSpace));
+    out.set(result, "encoding",
+            out.text("Scene-linear floating point in the colorSpace above, no display transform, "
+                     "no clamping: values can be negative or above 1. Red, green and blue are "
+                     "premultiplied by alpha, the way an OpenEXR export stores them."));
+    out.set(result, "order",
+            out.text("pixels are [red, green, blue, alpha], row by row from the region's top-left "
+                     "corner: width values per row, height rows."));
+    out.set(result, "route",
+            out.text("production still export to a scratch OpenEXR, deleted before this answer"));
+    if (scratch.transient) {
+        reportJobRoute(out, result, *scratch.transient);
+    } else {
+        // The stdio host: the scripting render reports how many of the frame's evaluations ran on
+        // the GPU. A session with no GPU provider ran the CPU reference path.
+        const auto gpu = std::min<std::uint64_t>(scratch.routeGpuFrames, scratch.routeFrames);
+        out.set(result, "gpuFrames", out.number(gpu));
+        out.set(result, "cpuReferenceFrames", out.number(scratch.routeFrames - gpu));
+        out.set(result, "provenance",
+                out.text(scratch.routeFrames > 0 && gpu == scratch.routeFrames ? "gpu"
+                                                                                : "cpu-reference"));
+        if (gpu < scratch.routeFrames)
+            out.set(result, "routeNote",
+                    out.text("The frame was rendered on the CPU reference path: no GPU device was "
+                             "available to this server, or the scene could not run on it."));
+    }
+    out.set(result, "width", out.number(regionWidth));
+    out.set(result, "height", out.number(regionHeight));
+    out.set(result, "pixels", rows);
+    if (scratch.transient) {
+        out.set(result, "job", out.text(std::to_string(scratch.transient->job)));
+        out.set(result, "log", logEntries(out, scratch.transient->log));
+    }
+    return result;
 }
 
 } // namespace bloom::mcp

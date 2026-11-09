@@ -294,6 +294,15 @@ struct McpJob final {
     bool cancellationRequested = false;
     // Set for an export run's row: export.stop stops it (export.reveal shows it).
     std::optional<document::ExportJobId> exportJob;
+    // The part of Bloom that owns the job, as a stable token: application, project, composition,
+    // panel-request or export. Empty when the row does not say.
+    std::string kind;
+    // The task's state as a stable token: queued, running, succeeded, cancelled or failed. `state`
+    // above is the Jobs panel's own, translated, word.
+    std::string stateToken;
+    // Why a failed job failed (its first error diagnostic); empty when it did not fail or the job
+    // recorded no reason.
+    std::string failure;
 };
 
 // ---- Composition presets (composition.presets, composition.save-preset, ...)
@@ -364,6 +373,32 @@ struct McpPreviewCacheState final {
     std::optional<McpPreviewStop> stopReason;
 };
 
+// Which route produced the Viewer's displayed frame, as the frame itself recorded it (query kind
+// render-route). Every field the frame does not record stays empty: an unknown is never guessed.
+enum class McpRouteKind : std::uint8_t { Cpu = 0, Gpu = 1 };
+
+struct McpViewerRoute final {
+    // False when no Viewer is showing.
+    bool available = false;
+    // False while the Viewer has no frame to describe.
+    bool hasFrame = false;
+    // The scene (composition evaluation) and the display transform, each on the GPU or the CPU.
+    std::optional<McpRouteKind> scene;
+    std::optional<McpRouteKind> display;
+    // The display provider by name: cpu-reference, cpu-ocio, gpu-neutral, gpu-resident or
+    // gpu-prepared-packed.
+    std::string provider;
+    // current, stale or none: whether the frame is for the playhead's time.
+    std::string freshness;
+    // The displayed frame's time, composition seconds.
+    std::optional<core::RationalTime> time;
+    // The Viewer's colour-state sentence (the status bar's words).
+    std::string label;
+    // What the frame itself records about why part of it ran on the CPU; empty when it records
+    // nothing.
+    std::string note;
+};
+
 struct McpLiveUiPort final {
     // editor.reveal: show the composition in the Viewer (making it active) and, when given, move
     // the playhead to `time` (seconds). False when the composition or time cannot be shown.
@@ -426,6 +461,8 @@ struct McpLiveUiPort final {
     std::function<McpUndoHistory()> undoHistory;
     std::function<McpViewerState()> viewerState;
     std::function<McpPreviewCacheState()> previewCache;
+    // query kind render-route: which route produced the Viewer's displayed frame.
+    std::function<McpViewerRoute()> viewerRoute;
 };
 
 } // namespace bloom::mcp

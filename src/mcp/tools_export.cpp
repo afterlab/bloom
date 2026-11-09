@@ -615,6 +615,12 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 if (!output.verification)
                     continue;
                 result.frames += output.verification->artifacts.publishedArtifacts;
+                result.gpuFrames += output.verification->provenance.gpuFrames;
+                result.cpuReferenceFrames += output.verification->provenance.cpuReferenceFrames;
+                result.routeKnown =
+                    result.routeKnown || output.verification->provenance.gpuFrames +
+                                                 output.verification->provenance.cpuReferenceFrames >
+                                             0;
                 if (output.verification->workerMemory)
                     result.workerMemory = output.verification->workerMemory;
                 if (output.verification->loudness)

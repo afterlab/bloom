@@ -551,7 +551,7 @@ void parityTools(std::vector<ReferenceEntry>& out) {
            "An export run's row names its export job.", {.readOnly = true, .liveOnly = true}, {},
            "{succeeded, jobs:[{id, name, phase, state, completed, total, canCancel, "
            "cancellationRequested, exportJob}]}",
-           R"({"name":"jobs.list","arguments":{}})", notLive, {"jobs.cancel"});
+           R"({"name":"jobs.list","arguments":{}})", notLive, {"jobs.cancel", "query:jobs"});
 
     simple("jobs.cancel", "application",
            "The Jobs panel's Cancel for one job: cooperative cancellation of a queued or running "

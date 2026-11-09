@@ -334,6 +334,74 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "fillRate (frames per second)|null, budgetBytes|null, heldBytes|null, "
          "stopReason (complete|budget|cancelled|failed)|null}",
          {}, R"({"name":"query","arguments":{"kind":"preview-cache"}})");
+    kind("jobs", "Background jobs that are not exports: kind, state, progress and failure reason.",
+         "Desktop application only. The Jobs panel's rows without the export runs (export.status "
+         "reads those): imports, previews, thumbnails, cache purges and other background work, "
+         "newest first, including the ones that have finished. `kind` is the part of Bloom that "
+         "owns the job: application, project, composition or panel-request. `state` is queued, "
+         "running, succeeded, cancelled or failed. `progress.completed` and `progress.total` read "
+         "null while the job reports none (an indeterminate job). `failure` is the reason a "
+         "failed job recorded and is null for every other job, and for a failed job that "
+         "recorded none. jobs.cancel cancels a job by its id.",
+         "{revision, jobs:[{id, name, kind|null, state|null, progress:{phase, completed|null, "
+         "total|null}, failure|null, canCancel, cancellationRequested}]}",
+         {}, R"({"name":"query","arguments":{"kind":"jobs"}})");
+    kind("pixels", "Pixel values of a frame at a time, read from the production render.",
+         "Renders the frame exactly as a still export renders it, to a scratch OpenEXR in the "
+         "working color space that is deleted before the answer returns, and reads the numbers "
+         "from it: they match what an export writes. Nothing is exported, saved or kept, and the "
+         "project is untouched. It evaluates the whole frame (heavy), on the request's worker "
+         "and not on the application's interface, and it stops when the request is cancelled. "
+         "`pixels` is [red, green, blue, alpha] per pixel, row by row from the region's top-left "
+         "corner. The values are scene-linear in the `colorSpace` the answer names, with no "
+         "display transform and no clamping (they can be negative or above 1), and red, green "
+         "and blue are premultiplied by alpha. At most 256 pixels per call (a point is "
+         "[x, y, 1, 1]; 16 by 16 is the largest square); for a larger area use capture with "
+         "statistics. `gpuFrames`, `cpuReferenceFrames` and `provenance` say which route "
+         "rendered it; `routeNote` says why when it ran on the CPU reference path. They read "
+         "null when the render recorded no route.",
+         "{revision, composition, time:[n, d] (seconds), frame, region:[x, y, width, height], "
+         "colorSpace, encoding, order, route, gpuFrames|null, cpuReferenceFrames|null, "
+         "provenance (gpu|cpu-reference)|null, routeNote?, width, height, pixels:[[r, g, b, a] "
+         "x width*height], job?, log?}",
+         {{.name = "composition",
+           .type = "integer",
+           .summary = "The composition.",
+           .unit = "composition id (query:compositions)",
+           .range = ">= 1",
+           .defaultValue = "the current composition"},
+          {.name = "time",
+           .type = "integer or [numerator, denominator]",
+           .summary = "An integer is a whole frame of the composition at its frame rate; "
+                      "[numerator, denominator] is exact seconds (concept:time). The frame "
+                      "nearest to it is read. A time outside the composition is refused.",
+           .unit = "composition time",
+           .defaultValue = "the playhead (frame 0 headless)"},
+          {.name = "region",
+           .type = "array of 4 integers",
+           .required = true,
+           .summary = "[x, y, width, height]: the pixels to read.",
+           .unit = "composition pixels from the frame's top-left corner",
+           .range = "inside the frame; width * height at most 256"}},
+         R"({"name":"query","arguments":{"kind":"pixels","time":24,"region":[960,540,1,1]}})");
+    kind("render-route", "Which route produced the Viewer's frame: GPU or CPU, and why.",
+         "Desktop application only. Reads what the displayed frame itself recorded: `scene` is "
+         "where the composition was evaluated and `display` where the display transform ran, "
+         "each gpu or cpu. A frame is never reported as GPU unless it recorded a GPU route, and "
+         "what it did not record reads null. `provider` names the display arm (cpu-reference, "
+         "cpu-ocio, gpu-neutral, gpu-resident or gpu-prepared-packed). `why` is the reason the "
+         "frame itself recorded for running part of it on the CPU, and null when it recorded "
+         "none. `cpuFallbacks` counts every preview request since the application started that "
+         "took the CPU path, by the reason the GPU preview service recorded (gpu-unavailable, "
+         "non-neutral-request, not-worthwhile, ineligible, unsupported-gpu-subset, "
+         "native-failure, native-timeout); it is a running total, not this frame's reason, and "
+         "reads null without a GPU preview service. Renders, exports and captures report their "
+         "own route: render, export and capture carry `gpuFrames`, `cpuReferenceFrames`, "
+         "`provenance` and `routeNote`.",
+         "{revision, available, hasFrame, freshness (current|stale|none), time:[n, d]|null, "
+         "scene (gpu|cpu)|null, display (gpu|cpu)|null, provider|null, label|null, why|null, "
+         "cpuFallbacks:{total, byReason:{reason: count|null}}|null}",
+         {}, R"({"name":"query","arguments":{"kind":"render-route"}})");
     kind("context", "The editor context omitted contextual arguments fall back to.",
          "In the desktop application: the Viewer's composition, the playhead, the selection and "
          "the Viewer's display and view. On stdio: the session defaults (concept:context).",

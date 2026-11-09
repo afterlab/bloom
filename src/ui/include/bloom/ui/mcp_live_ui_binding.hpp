@@ -106,6 +106,7 @@ class McpLiveUiBinding final : public QObject {
     [[nodiscard]] mcp::McpUndoHistory undoHistory() const;
     [[nodiscard]] mcp::McpViewerState viewerState();
     [[nodiscard]] mcp::McpPreviewCacheState previewCache() const;
+    [[nodiscard]] mcp::McpViewerRoute viewerRoute();
 
   private:
     struct Pending;

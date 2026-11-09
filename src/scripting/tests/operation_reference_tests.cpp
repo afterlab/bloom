@@ -345,8 +345,33 @@ void outputsAndSideEffectsAreDeclared() {
 
     // The new query kinds, the origin and the export script's format are in the reference.
     for (const auto* name : {"query:text-metrics", "query:layer-bounds", "query:history",
-                             "query:viewer", "query:preview-cache"})
+                             "query:viewer", "query:preview-cache", "query:jobs", "query:pixels",
+                             "query:render-route"})
         expect(reference.find(name) != nullptr, std::string(name) + " is in the reference");
+    // #390: an unsaved project's import is documented, and the new readings state their limits.
+    const auto* import = reference.find("bloom.asset.import");
+    bool unsavedNoted = false;
+    bool refusalListed = false;
+    if (import != nullptr) {
+        for (const auto& note : import->sideEffects)
+            unsavedNoted = unsavedNoted ||
+                           (contains(note, "never been saved") && contains(note, "external locators"));
+        for (const auto& error : import->errors)
+            refusalListed = refusalListed || contains(error.when, "never been saved");
+    }
+    expect(unsavedNoted, "asset.import documents the unsaved project");
+    expect(refusalListed, "asset.import lists the relative-path refusal in an unsaved project");
+    const auto* pixels = reference.find("query:pixels");
+    expect(pixels != nullptr && contains(pixels->description, "256") &&
+               contains(pixels->description, "scene-linear") &&
+               contains(pixels->description, "stops when the request is cancelled"),
+           "query:pixels documents its limit, color space and cancellation");
+    const auto* route = reference.find("query:render-route");
+    expect(route != nullptr && contains(route->description, "never reported as GPU"),
+           "query:render-route documents that a CPU frame is never labeled GPU");
+    const auto* jobs = reference.find("query:jobs");
+    expect(jobs != nullptr && contains(jobs->description, "failure"),
+           "query:jobs documents the failure reason");
     const auto* events = reference.find("events");
     expect(events != nullptr && contains(events->description, "origin"),
            "events documents the edit origin");

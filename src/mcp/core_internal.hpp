@@ -232,6 +232,11 @@ struct TransientResult final {
     std::uint64_t frames = 0;
     std::vector<std::filesystem::path> files;
     std::string report;
+    // What the export queue recorded about the route the frames took (the outputs' device
+    // provenance). `routeKnown` is false when no output reported any; the counts are then unused.
+    bool routeKnown = false;
+    std::uint64_t gpuFrames = 0;
+    std::uint64_t cpuReferenceFrames = 0;
 };
 // Submits a transient job on the export queue's owner thread, waits on the request worker
 // (reporting progress), stops the job when the request is cancelled, and acknowledges the result.
@@ -273,6 +278,10 @@ struct TransientResult final {
 [[nodiscard]] bool isInspectionQuery(std::string_view kind) noexcept;
 [[nodiscard]] yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& call,
                                               yyjson_val* arguments, std::string_view kind);
+// query kind=pixels (tools_render.cpp): pixel values of a frame read back from the production
+// still route.
+[[nodiscard]] yyjson_mut_val* pixelsQuery(McpServerCore::State& core, Json& out, McpCall& call,
+                                          yyjson_val* arguments);
 // An integer is a whole frame of the composition at its frame rate; [numerator, denominator] is
 // exact seconds.
 [[nodiscard]] core::RationalTime frameOrSecondsArgument(yyjson_val* value,

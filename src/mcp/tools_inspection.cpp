@@ -1,6 +1,7 @@
 // The read-back queries that answer a fact an agent would otherwise have to render or provoke an
-// error to learn (#390): text-metrics, layer-bounds, history, viewer and preview-cache. They hold
-// no project truth and change nothing. A state the application does not know is reported as null,
+// error to learn (#390): text-metrics, layer-bounds, history, viewer, preview-cache, jobs and
+// render-route (pixels lives with the render code, tools_render.cpp). They hold no project truth
+// and change nothing. A state the application does not know is reported as null,
 // never as a made-up value.
 #include "core_internal.hpp"
 
@@ -366,11 +367,119 @@ yyjson_mut_val* previewCacheQuery(McpServerCore::State& core, Json& out, McpCall
     return result;
 }
 
+// The Jobs panel's rows that are not export runs: imports, previews, thumbnails, purges and other
+// background work, with a stable kind and state and, for a failed job, the reason it recorded.
+yyjson_mut_val* jobsQuery(McpServerCore::State& core, Json& out, McpCall& call,
+                          yyjson_val* arguments) {
+    members(arguments, {"kind"}, {"kind"});
+    const auto& ui = core.dependencies.ui;
+    if (core.liveHost() == nullptr || !ui.jobs)
+        return notLive(out, "jobs");
+    std::vector<McpJob> rows;
+    if (!core.dependencies.exports.run(
+            [&](host::ExportQueueService*, std::uint64_t) { rows = ui.jobs(); },
+            call.control.stop))
+        throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+    auto* result = out.object();
+    out.set(result, "revision", out.number(call.session.snapshot().revision().value()));
+    auto* jobs = out.array();
+    for (const auto& job : rows) {
+        // An export run is read with export.status.
+        if (job.exportJob || job.kind == "export")
+            continue;
+        auto* row = out.object();
+        out.set(row, "id", out.number(job.id));
+        out.set(row, "name", out.text(job.name));
+        out.set(row, "kind", job.kind.empty() ? out.null() : out.text(job.kind));
+        out.set(row, "state", job.stateToken.empty() ? out.null() : out.text(job.stateToken));
+        auto* progress = out.object();
+        out.set(progress, "phase", out.text(job.phase));
+        out.set(progress, "completed", job.completed ? out.number(*job.completed) : out.null());
+        out.set(progress, "total", job.total ? out.number(*job.total) : out.null());
+        out.set(row, "progress", progress);
+        out.set(row, "failure", job.failure.empty() ? out.null() : out.text(job.failure));
+        out.set(row, "canCancel", out.boolean(job.canCancel));
+        out.set(row, "cancellationRequested", out.boolean(job.cancellationRequested));
+        out.append(jobs, row);
+    }
+    out.set(result, "jobs", jobs);
+    return result;
+}
+
+yyjson_mut_val* routeText(Json& out, const std::optional<McpRouteKind> route) {
+    return route ? out.text(*route == McpRouteKind::Gpu ? "gpu" : "cpu") : out.null();
+}
+
+// Which route produced the Viewer's displayed frame, exactly as the frame recorded it, and the
+// preview service's running count of frames that fell back to the CPU, by reason.
+yyjson_mut_val* renderRouteQuery(McpServerCore::State& core, Json& out, McpCall& call,
+                                 yyjson_val* arguments) {
+    members(arguments, {"kind"}, {"kind"});
+    const auto& ui = core.dependencies.ui;
+    if (core.liveHost() == nullptr || !ui.viewerRoute)
+        return notLive(out, "render-route");
+    McpViewerRoute route;
+    auto sample = std::make_unique<runtime::ProfilerSnapshot>();
+    bool sampled = false;
+    if (!core.dependencies.exports.run(
+            [&](host::ExportQueueService*, std::uint64_t) {
+                route = ui.viewerRoute();
+                if (core.dependencies.profilerSnapshot)
+                    sampled = core.dependencies.profilerSnapshot(*sample);
+            },
+            call.control.stop))
+        throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+    auto* result = out.object();
+    out.set(result, "revision", out.number(call.session.snapshot().revision().value()));
+    out.set(result, "available", out.boolean(route.available));
+    if (!route.available)
+        return result;
+    out.set(result, "hasFrame", out.boolean(route.hasFrame));
+    out.set(result, "freshness", out.text(route.freshness));
+    if (route.hasFrame) {
+        yyjson_mut_val* time = out.null();
+        if (route.time) {
+            time = out.array();
+            out.append(time, out.signedNumber(route.time->numerator()));
+            out.append(time, out.signedNumber(route.time->denominator()));
+        }
+        out.set(result, "time", time);
+        out.set(result, "scene", routeText(out, route.scene));
+        out.set(result, "display", routeText(out, route.display));
+        out.set(result, "provider", out.text(route.provider));
+        out.set(result, "label", out.text(route.label));
+        out.set(result, "why", route.note.empty() ? out.null() : out.text(route.note));
+    } else {
+        for (const auto* name : {"time", "scene", "display", "provider", "label", "why"})
+            out.set(result, name, out.null());
+    }
+    // Cumulative since the application started, not per frame: the service counts every request
+    // that took the CPU path against the one reason it recorded.
+    yyjson_mut_val* fallbacks = out.null();
+    if (sampled && sample->viewer.cpuFallbacks.present) {
+        constexpr std::array<std::string_view, runtime::kProfilerCpuFallbackReasonCount> names{
+            "gpu-unavailable",        "non-neutral-request", "not-worthwhile", "ineligible",
+            "unsupported-gpu-subset", "native-failure",      "native-timeout"};
+        fallbacks = out.object();
+        out.set(fallbacks, "total", out.number(sample->viewer.cpuFallbacks.value));
+        auto* reasons = out.object();
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto& count = sample->viewer.cpuFallbacksByReason[index];
+            out.set(reasons, names[index],
+                    count.present ? out.number(count.value) : out.null());
+        }
+        out.set(fallbacks, "byReason", reasons);
+    }
+    out.set(result, "cpuFallbacks", fallbacks);
+    return result;
+}
+
 } // namespace
 
 bool isInspectionQuery(const std::string_view kind) noexcept {
     return kind == "text-metrics" || kind == "layer-bounds" || kind == "history" ||
-           kind == "viewer" || kind == "preview-cache";
+           kind == "viewer" || kind == "preview-cache" || kind == "jobs" ||
+           kind == "render-route" || kind == "pixels";
 }
 
 yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& call,
@@ -383,6 +492,12 @@ yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& 
         return historyQuery(core, out, call, arguments);
     if (kind == "viewer")
         return viewerQuery(core, out, call, arguments);
+    if (kind == "jobs")
+        return jobsQuery(core, out, call, arguments);
+    if (kind == "render-route")
+        return renderRouteQuery(core, out, call, arguments);
+    if (kind == "pixels")
+        return pixelsQuery(core, out, call, arguments);
     return previewCacheQuery(core, out, call, arguments);
 }
 

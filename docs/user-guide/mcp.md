@@ -504,7 +504,10 @@ events cursor that reports `resetRequired` as void.
 `"16"`). A Font, video, image or audio asset parameter holds the asset's id as text, and
 `bloom.parameter.set-source` accepts the integer `query` reports for the asset as well.
 `bloom.asset.import` needs `projectDirectory` only when a path is relative; with absolute paths it
-uses the saved project's folder, and an unsaved project keeps external locators.
+uses the saved project's folder. A project that has never been saved is supported: an absolute path
+imports, the asset keeps an external locator (the file's absolute location, not copied), and it
+stays valid after Save As. A relative path in that project is refused, with nothing imported, unless
+`projectDirectory` is given.
 
 **Export destinations.** An output's destination is a path below the project folder
 (`portability` `project-relative`) or an absolute local path such as `/exports/shot.mov`, which is
@@ -533,6 +536,26 @@ through the same route (`help` lists them with their arguments):
 - `kind:"viewer"` and `kind:"preview-cache"` read the Viewer state and the RAM preview (filled
   range, fill rate, budget, stop reason; what is not known reads `null`). They answer
   `bloom.mcp.not-live` on stdio.
+- `kind:"jobs"` lists the background jobs that are not exports (imports, previews, thumbnails,
+  cache purges): `id`, `name`, `kind` (the part of Bloom that owns the job), `state` (`queued`,
+  `running`, `succeeded`, `cancelled` or `failed`), `progress` (`phase`, `completed`, `total`; the
+  counts read `null` for a job that reports none) and `failure`, the reason a failed job recorded
+  (`null` otherwise). Export runs are read with `export.status`. It answers `bloom.mcp.not-live`
+  on stdio.
+- `kind:"pixels"` with `region` `[x, y, width, height]` (a point is `[x, y, 1, 1]`, at most 256
+  pixels), and optional `composition` and `time`, returns pixel values at a time without exporting
+  a file. The frame is rendered as a still export renders it, to a scratch OpenEXR that is deleted
+  before the answer returns, and the numbers are read from it, so they match what an export
+  writes. It evaluates the whole frame, off the application's interface, and stops when the call
+  is cancelled. `colorSpace` names the space of the values: they are scene-linear in the project's
+  working space, with no display transform and no clamping, and red, green and blue are
+  premultiplied by alpha. The answer also reports the route that rendered the frame (see below).
+- `kind:"render-route"` says which route produced the Viewer's displayed frame: `scene` and
+  `display` are each `gpu` or `cpu` as the frame itself recorded, `provider` names the display
+  arm, `why` is the reason the frame recorded for running part of it on the CPU, and
+  `cpuFallbacks` is the running count of preview requests that took the CPU path, by the reason
+  the GPU preview service recorded. What was not recorded reads `null`; a CPU frame is never
+  reported as GPU. It answers `bloom.mcp.not-live` on stdio.
 
 An operations record also lists `outputs` (the ids the result carries, by name and kind) and
 `sideEffects` (for example that connecting a node replaces the existing edge, or that repeated ids
@@ -596,7 +619,9 @@ once. In the desktop application their renders use the application's own final-r
 only for these calls; the open project keeps rendering through the export queue. A render, export
 or capture of a project file reports `gpuFrames`, `cpuReferenceFrames` and `provenance` (`gpu` or
 `cpu-reference`); when frames ran on the CPU reference path, because no GPU device was available
-or the scene could not run on it, `routeNote` says so.
+or the scene could not run on it, `routeNote` says so. In the desktop application the render,
+export, capture and `pixels` of the open project report the same fields from what the export
+queue recorded for the job, and read `null` when it recorded none.
 
 **Dialogs.** While a modal dialog is open in the application, the calls that need the window
 answer `bloom.mcp.busy` and name the dialog: its title, its text and its buttons, with the

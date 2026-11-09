@@ -15,6 +15,7 @@
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QAbstractButton>
@@ -27,6 +28,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <ranges>
 #include <set>
@@ -157,6 +159,7 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
         .undoHistory = [this] { return undoHistory(); },
         .viewerState = [this] { return viewerState(); },
         .previewCache = [this] { return previewCache(); },
+        .viewerRoute = [this] { return viewerRoute(); },
     };
 }
 
@@ -455,6 +458,58 @@ mcp::McpPreviewCacheState McpLiveUiBinding::previewCache() const {
         }
     }
     return state;
+}
+
+mcp::McpViewerRoute McpLiveUiBinding::viewerRoute() {
+    mcp::McpViewerRoute route;
+    auto* viewer = window_ ? window_->displayedViewer() : nullptr;
+    if (viewer == nullptr)
+        return route;
+    route.available = true;
+    const auto preview = viewer->displayedPreviewState();
+    constexpr std::array<const char*, 3> freshness{"none", "current", "stale"};
+    route.freshness = freshness.at(static_cast<std::size_t>(preview.freshness));
+    if (preview.frame == nullptr)
+        return route;
+    route.hasFrame = true;
+    route.time = preview.frame->desiredIdentity().time;
+    route.label = previewColorState(preview).text.toStdString();
+    using Provider = runtime::PreviewDisplayProvider;
+    using mcp::McpRouteKind;
+    switch (preview.frame->provenance().provider) {
+    case Provider::CpuReference:
+        route.provider = "cpu-reference";
+        route.scene = McpRouteKind::Cpu;
+        route.display = McpRouteKind::Cpu;
+        break;
+    case Provider::CpuOcio:
+        route.provider = "cpu-ocio";
+        route.scene = McpRouteKind::Cpu;
+        route.display = McpRouteKind::Cpu;
+        break;
+    case Provider::GpuNeutral: {
+        route.provider = "gpu-neutral";
+        route.display = McpRouteKind::Gpu;
+        const bool gpuScene = preview.frame->processIdentity().provider ==
+                              runtime::EvaluationProvider::GpuResident;
+        route.scene = gpuScene ? McpRouteKind::Gpu : McpRouteKind::Cpu;
+        if (!gpuScene)
+            route.note = "The scene was evaluated on the CPU; only the display transform ran on "
+                         "the GPU.";
+        break;
+    }
+    case Provider::GpuResident:
+        route.provider = "gpu-resident";
+        route.scene = McpRouteKind::Gpu;
+        route.display = McpRouteKind::Gpu;
+        break;
+    case Provider::GpuPreparedPacked:
+        route.provider = "gpu-prepared-packed";
+        route.scene = McpRouteKind::Gpu;
+        route.display = McpRouteKind::Gpu;
+        break;
+    }
+    return route;
 }
 
 // ---- project.set-color-settings ----------------------------------------------------------------

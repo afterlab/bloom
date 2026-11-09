@@ -430,6 +430,22 @@ std::vector<mcp::McpJob> McpLiveUiBinding::jobs() const {
                     .toULongLong();
             exportJob != 0)
             job.exportJob = document::ExportJobId::fromRaw(exportJob);
+        if (const auto* task = model.snapshotForIndex(at(TaskMonitorModel::JobColumn))) {
+            constexpr std::array<std::string_view, 5> owners{
+                "application", "project", "composition", "panel-request", "export"};
+            constexpr std::array<std::string_view, 5> states{"queued", "running", "succeeded",
+                                                             "cancelled", "failed"};
+            job.kind = std::string(owners.at(static_cast<std::size_t>(task->owner.kind)));
+            job.stateToken = std::string(states.at(static_cast<std::size_t>(task->state)));
+            if (task->state == runtime::TaskState::Failed) {
+                const auto error = std::ranges::find(task->diagnostics,
+                                                     runtime::DiagnosticSeverity::Error,
+                                                     &runtime::TaskDiagnostic::severity);
+                if (error != task->diagnostics.end())
+                    job.failure = error->detail.empty() ? error->summary
+                                                        : error->summary + " " + error->detail;
+            }
+        }
         rows.push_back(std::move(job));
     }
     return rows;

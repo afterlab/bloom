@@ -316,6 +316,12 @@ void testApplication() {
     const auto rows = port.jobs();
     expect(std::ranges::all_of(rows, [](const mcp::McpJob& job) { return job.id != 0; }),
            "every Jobs row has its task id");
+    expect(std::ranges::all_of(rows,
+                               [](const mcp::McpJob& job) {
+                                   return !job.kind.empty() && !job.stateToken.empty() &&
+                                          (job.stateToken == "failed" || job.failure.empty());
+                               }),
+           "every Jobs row names its owner and state, and only a failed job carries a reason");
     expect(port.cancelJob(987654).refusal == McpUiRefusal::UnknownTarget,
            "jobs.cancel of an unknown job -> UnknownTarget");
     expect(port.cancelOpen().refusal == McpUiRefusal::InvalidArgument,

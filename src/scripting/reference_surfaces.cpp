@@ -195,11 +195,16 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                {"history", "The undo history: labels and position"},
                                {"viewer", "The Viewer's display settings (desktop only)"},
                                {"preview-cache", "RAM Preview: filled range, fill rate, budget, "
-                                                 "stop reason (desktop only)"}}},
+                                                 "stop reason (desktop only)"},
+                               {"jobs", "Background jobs that are not exports (desktop only)"},
+                               {"pixels", "Pixel values of a frame, read from the production "
+                                          "render"},
+                               {"render-route", "Which route produced the Viewer's frame "
+                                                "(desktop only)"}}},
                   {.name = "composition",
                    .type = "integer",
                    .summary = "The composition, for layers, nodes, parameters, parameter, "
-                              "parameter-value and keyframes.",
+                              "parameter-value, keyframes and pixels.",
                    .unit = "composition id (query:compositions)",
                    .range = ">= 1"},
                   {.name = "parameter",
@@ -278,11 +283,17 @@ void addTools(std::vector<ReferenceEntry>& out) {
                    .range = "above 0 to 4096"},
                   {.name = "time",
                    .type = "integer or [numerator, denominator]",
-                   .summary = "For layer-bounds: the time to evaluate at. An integer is a whole "
+                   .summary = "For layer-bounds and pixels: the time to evaluate at. An integer is a whole "
                               "frame of the composition at its frame rate; [numerator, "
                               "denominator] is exact seconds (concept:time).",
                    .unit = "composition time",
                    .defaultValue = "the playhead (frame 0 headless)"},
+                  {.name = "region",
+                   .type = "array of 4 integers",
+                   .summary = "For pixels: [x, y, width, height], the pixels to read. A point is "
+                              "[x, y, 1, 1].",
+                   .unit = "composition pixels from the frame's top-left corner",
+                   .range = "inside the frame; width * height at most 256"},
                   {.name = "fields",
                    .type = "array of strings",
                    .summary = "For the kinds that return records: keep only these members of "
@@ -302,7 +313,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
     addRelated(query, {"query:context", "query:compositions", "query:layers", "query:nodes",
                        "query:keyframes", "query:node-types", "query:text-metrics",
                        "query:layer-bounds", "query:history", "query:viewer",
-                       "query:preview-cache"});
+                       "query:preview-cache", "query:jobs", "query:pixels",
+                       "query:render-route"});
     out.push_back(std::move(query));
 
     auto transact = makeEntry(
@@ -491,8 +503,11 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .choices = {{"ask", "Fail and name the existing file"},
                       {"replace", "Replace existing files"},
                       {"refuse", "Fail when a file exists"}}}});
-    render.result = "{publishedFrames, preservationReport, files:[{path, "
-                    "digest:\"sha256:<hex>\"}]}";
+    render.result = "{publishedFrames, preservationReport, gpuFrames|null, "
+                    "cpuReferenceFrames|null, provenance (gpu|cpu-reference)|null, routeNote?, "
+                    "files:[{path, digest:\"sha256:<hex>\"}]}. The route fields say which route "
+                    "evaluated the frames and read null when none was recorded; query:render-route "
+                    "reads the Viewer's frame.";
     render.errors = {
         makeError("bloom.mcp.export-unavailable",
                   "the destination exists and overwrite is not replace (ask and refuse both stop)",
@@ -611,7 +626,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
                         "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
                         "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
                         "finalMeasured, finalLufs, finalTruePeakDbtp, limiterReductionDb} (with "
-                        "loudnessLufs), files:[{path, "
+                        "loudnessLufs), gpuFrames|null, cpuReferenceFrames|null, provenance "
+                        "(gpu|cpu-reference)|null, routeNote? (which route evaluated the frames; "
+                        "null when none was recorded), files:[{path, "
                         "digest:\"sha256:<hex>\"}]}";
     exportTool.errors = renderErrors;
     addExamples(
@@ -671,7 +688,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
                             .range = "2..256",
                             .defaultValue = "32"}});
     capture.result = "MCP image content (image/png, or a resource_link when too large) plus "
-                     "{composition, frame, path, bytes, digest, width, height, inline}. With "
+                     "{composition, frame, path, bytes, digest, gpuFrames|null, cpuReferenceFrames|null, "
+                     "provenance|null, routeNote?, width, height, inline}. With "
                      "statistics: {composition, first, last, region, colorSpace, luma, route, "
                      "provenance, statistics {pixels, luma, red, green, blue, alphaMean}, frames}.";
     capture.errors = renderErrors;

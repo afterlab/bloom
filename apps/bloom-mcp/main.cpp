@@ -260,7 +260,8 @@ int serve(scripting::Session& session) {
                     .cancelScript = {},
                     .undoHistory = {},
                     .viewerState = {},
-                    .previewCache = {}},
+                    .previewCache = {},
+                    .viewerRoute = {}},
              .profilerSnapshot =
                  [&profiler](runtime::ProfilerSnapshot& out) {
                      static_cast<void>(profiler.sampleNow());

@@ -16,6 +16,7 @@
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/scripting/session.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -339,15 +340,15 @@ void parityTools() {
         return mcp::McpUiResult{.refusal = mcp::McpUiRefusal::Busy, .message = "running"};
     };
     port.jobs = [] {
-        return std::vector<mcp::McpJob>{{.id = 7,
-                                         .name = "Import media",
-                                         .phase = "Importing media",
-                                         .state = "Running",
-                                         .completed = 2,
-                                         .total = 5,
-                                         .canCancel = true,
-                                         .cancellationRequested = false,
-                                         .exportJob = std::nullopt}};
+        mcp::McpJob job;
+        job.id = 7;
+        job.name = "Import media";
+        job.phase = "Importing media";
+        job.state = "Running";
+        job.completed = 2;
+        job.total = 5;
+        job.canCancel = true;
+        return std::vector<mcp::McpJob>{job};
     };
     port.cancelJob = [&](const std::uint64_t job) {
         cancelledJob = job;
@@ -581,7 +582,8 @@ void liveSeams() {
         .cancelScript = {},
         .undoHistory = {},
         .viewerState = {},
-        .previewCache = {}};
+        .previewCache = {},
+        .viewerRoute = {}};
     Live server(std::move(port));
     expect(contains(server.call("dialog.answer", R"({"button":"Cancel"})"), R"("succeeded":true)") &&
                answered == "Cancel",
@@ -856,6 +858,9 @@ void retiredTransientJobs() {
     expect(contains(server.call("export.log", R"({"job":)" + std::to_string(captureJob) + "}"),
                     R"("entries":[{)"),
            "export.log reads the capture's retired job");
+    expect(contains(capture, R"("gpuFrames":1)") && contains(capture, R"("cpuReferenceFrames":0)") &&
+               contains(capture, R"("provenance":"gpu")"),
+           "a live capture reports the route the export queue recorded: " + capture);
 
     // 33 more retire the oldest: the ring keeps the newest 32.
     for (int index = 0; index < 33; ++index) {
@@ -1042,7 +1047,7 @@ void inspectionQueries() {
                "events name the agent as the origin: " + events);
 
         // The window-only kinds answer not-live on stdio.
-        for (const auto* kind : {"viewer", "preview-cache"}) {
+        for (const auto* kind : {"viewer", "preview-cache", "jobs", "render-route"}) {
             const auto answer = server.call("query", std::string(R"({"kind":")") + kind + R"("})");
             expect(contains(answer, "bloom.mcp.not-live"), std::string(kind) + " is not-live on stdio: " + answer);
         }
@@ -1085,6 +1090,48 @@ void inspectionQueries() {
             state.regionOfInterest = mcp::McpViewerRegion{.x = 1, .y = 2, .width = 3, .height = 4};
             return state;
         };
+        port.jobs = [] {
+            const auto row = [](const std::uint64_t id, std::string name, std::string kind,
+                                std::string state) {
+                mcp::McpJob job;
+                job.id = id;
+                job.name = std::move(name);
+                job.kind = std::move(kind);
+                job.stateToken = std::move(state);
+                return job;
+            };
+            auto running = row(4, "Import media", "project", "running");
+            running.phase = "Importing";
+            running.state = "Running";
+            running.completed = 2;
+            running.total = 5;
+            running.canCancel = true;
+            auto failed = row(5, "Thumbnails", "application", "failed");
+            failed.failure = "Disk full";
+            auto exportRun = row(6, "Export run", "export", "running");
+            exportRun.exportJob = document::ExportJobId::fromRaw(1);
+            return std::vector<mcp::McpJob>{running, failed, exportRun, row(8, "Mystery", "", "")};
+        };
+        int routeMode = 0;
+        port.viewerRoute = [&routeMode] {
+            mcp::McpViewerRoute route;
+            if (routeMode == 3)
+                return route;
+            route.available = true;
+            route.freshness = "current";
+            if (routeMode == 2)
+                return route;
+            route.hasFrame = true;
+            route.time = core::RationalTime::create(1, 24);
+            route.label = "label";
+            route.provider = routeMode == 0 ? "gpu-neutral" : "gpu-resident";
+            route.scene = routeMode == 0 ? mcp::McpRouteKind::Cpu : mcp::McpRouteKind::Gpu;
+            route.display = mcp::McpRouteKind::Gpu;
+            if (routeMode == 0)
+                route.note = "The scene was evaluated on the CPU; only the display transform ran "
+                             "on the GPU.";
+            return route;
+        };
         bool known = false;
         port.previewCache = [&known] {
             mcp::McpPreviewCacheState state;
@@ -1112,6 +1159,46 @@ void inspectionQueries() {
                    contains(cache, R"("fillRate":null)") && contains(cache, R"("budgetBytes":null)") &&
                    contains(cache, R"("stopReason":null)") && contains(cache, R"("filledRange":null)"),
                "what the application does not know reads null, never a made-up value: " + cache);
+        // Jobs that are not exports: kind, state, progress and the reason a failed job recorded.
+        const auto jobs = server.call("query", R"({"kind":"jobs"})");
+        expect(contains(jobs, R"("id":4,"name":"Import media","kind":"project","state":"running")") &&
+                   contains(jobs, R"("progress":{"phase":"Importing","completed":2,"total":5})") &&
+                   contains(jobs, R"("failure":null)"),
+               "jobs lists a running import with its progress: " + jobs);
+        expect(contains(jobs, R"("id":5,"name":"Thumbnails","kind":"application","state":"failed")") &&
+                   contains(jobs, R"("progress":{"phase":"","completed":null,"total":null})") &&
+                   contains(jobs, R"("failure":"Disk full")"),
+               "jobs gives a failed job's reason and an indeterminate job's null progress: " + jobs);
+        expect(!contains(jobs, "Export run") && !contains(jobs, R"("id":6)"),
+               "jobs leaves export runs to export.status: " + jobs);
+        expect(contains(jobs, R"("kind":null,"state":null)"),
+               "a row that does not say reads null, never a made-up word: " + jobs);
+        const auto jobsWithArgument = server.call("query", R"({"kind":"jobs","composition":1})");
+        expect(contains(jobsWithArgument, "Unknown member: composition"),
+               "jobs takes no other argument: " + jobsWithArgument);
+
+        // The route of the Viewer's frame, as the frame recorded it.
+        auto route = server.call("query", R"({"kind":"render-route"})");
+        expect(contains(route, R"("available":true)") && contains(route, R"("scene":"cpu")") &&
+                   contains(route, R"("display":"gpu")") &&
+                   contains(route, R"("provider":"gpu-neutral")") &&
+                   contains(route, R"("why":"The scene was evaluated on the CPU;)") &&
+                   contains(route, R"("time":[1,24])") && contains(route, R"("cpuFallbacks":null)"),
+               "render-route reports a CPU scene with a GPU display, and why: " + route);
+        routeMode = 1;
+        route = server.call("query", R"({"kind":"render-route"})");
+        expect(contains(route, R"("scene":"gpu")") && contains(route, R"("display":"gpu")") &&
+                   contains(route, R"("why":null)"),
+               "a GPU frame says GPU and records no reason: " + route);
+        routeMode = 2;
+        route = server.call("query", R"({"kind":"render-route"})");
+        expect(contains(route, R"("hasFrame":false)") && contains(route, R"("scene":null)") &&
+                   contains(route, R"("display":null)") && contains(route, R"("provider":null)"),
+               "with no frame nothing is reported, and an unknown reads null: " + route);
+        routeMode = 3;
+        route = server.call("query", R"({"kind":"render-route"})");
+        expect(contains(route, R"("available":false)") && !contains(route, R"("scene")"),
+               "with no Viewer there is no route to report: " + route);
         known = true;
         cache = server.call("query", R"({"kind":"preview-cache"})");
         expect(contains(cache, R"("state":"idle")") && contains(cache, R"("cachedFrames":12)") &&
@@ -1835,6 +1922,40 @@ void mcpFold() {
         expect(contains(outside, "region must be inside"), "a region outside the frame is refused: " + outside);
         const auto stray = server.call("capture", R"({"composition":1,"frame":0,"region":[0,0,1,1]})");
         expect(contains(stray, "need statistics=true"), "region needs statistics: " + stray);
+
+        // Pixel values at a time, read through the production still route.
+        const auto folderContents = [&] {
+            std::error_code listing;
+            std::vector<std::string> names;
+            for (const auto& entry : std::filesystem::directory_iterator(captures, listing))
+                names.push_back(entry.path().filename().string());
+            std::ranges::sort(names);
+            return names;
+        };
+        const auto before = folderContents();
+        const auto pixels = server.call(
+            "query", R"({"kind":"pixels","composition":1,"time":12,"region":[10,10,2,1]})");
+        expect(contains(pixels, R"("isError":false)"), "pixels read: " + pixels);
+        const auto first = firstMatch(pixels, R"re("pixels":\[\[([0-9.eE+-]+),([0-9.eE+-]+),([0-9.eE+-]+),([0-9.eE+-]+)\])re");
+        expect(!first.empty() && std::abs(std::stod(first) - 0.25) < 0.01,
+               "the first pixel's red matches the solid: " + pixels);
+        expect(contains(pixels, R"("colorSpace":")") && contains(pixels, R"("frame":12)") &&
+                   contains(pixels, R"("region":[10,10,2,1])") && contains(pixels, R"("width":2)") &&
+                   contains(pixels, R"("height":1)") && contains(pixels, "premultiplied"),
+               "the answer names the space, the frame and the layout of the numbers: " + pixels);
+        expect(contains(pixels, R"("provenance":"cpu-reference")") &&
+                   contains(pixels, R"("gpuFrames":0)") && contains(pixels, "CPU reference path"),
+               "a read with no GPU device says it ran on the CPU reference path: " + pixels);
+        expect(folderContents() == before, "pixels leaves nothing on disk");
+        const auto many = server.call("query", R"({"kind":"pixels","composition":1,"time":0,"region":[0,0,17,16]})");
+        expect(contains(many, "-32602") && contains(many, "at most 256"),
+               "a region over the hard limit is refused: " + many);
+        const auto beyond = server.call("query", R"({"kind":"pixels","composition":1,"time":0,"region":[0,0,99999,1]})");
+        expect(contains(beyond, "region must be inside"), "a region outside the frame is refused: " + beyond);
+        const auto late = server.call("query", R"({"kind":"pixels","composition":1,"time":999999,"region":[0,0,1,1]})");
+        expect(contains(late, "time is outside the composition"), "a time outside the composition is refused: " + late);
+        const auto noRegion = server.call("query", R"({"kind":"pixels","composition":1})");
+        expect(contains(noRegion, "Missing member: region"), "pixels needs a region: " + noRegion);
     }
     std::error_code ignored;
     std::filesystem::remove_all(captures, ignored);
