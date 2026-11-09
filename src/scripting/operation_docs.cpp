@@ -124,13 +124,26 @@ constexpr std::array kNotes{
         "every other parameter; keys outside the layer's range succeed with a warning naming "
         "the range.",
         "animationCurve (when created), keyframe (one per key, in the order given)",
-        "bloom.animation.set-keyframe-at-time-for-parameter bloom.animation.convert-to-constant "
-        "query:keyframes",
+        "bloom.animation.set-key-columns bloom.animation.set-keyframe-at-time-for-parameter "
+        "bloom.animation.convert-to-constant query:keyframes",
         "[invalid-argument] A key is not [time, value, interpolation] => the message names the "
         "key index and the part to fix.\nTwo keys share a time => give each key its own time.\n"
         "The parameter is driven by a value node => give it a constant with "
         "bloom.parameter.set-source first.\nThe value does not fit the parameter => the message "
         "names the key index; query {kind:\"parameter\"} reports valueKind and range."},
+    OperationNotes{"bloom.animation.set-key-columns",
+        "Sets a parameter's keys from columns, in one undo step: `times`, `values` and "
+        "optionally `interpolations`, one entry per key, instead of set-keys' rows. It is the "
+        "same edit as set-keys with [time, value, interpolation] rows, for hundreds of keys. "
+        "Over MCP any column can be {\"fromFile\": \"<absolute .json path>\"}, so the numbers "
+        "never pass through the conversation, and transact's `response: \"summary\"` answers "
+        "with a count and a digest instead of every created id.",
+        "animationCurve (when created), keyframe (one per key, in the order given)",
+        "bloom.animation.set-keys bloom.animation.convert-to-constant query:keyframes",
+        "[invalid-argument] The columns differ in length => values has one entry per time, and "
+        "interpolations at most one.\nTwo keys share a time => give each key its own time.\n"
+        "The parameter is driven by a value node => give it a constant with "
+        "bloom.parameter.set-source first."},
     OperationNotes{"bloom.animation.set-keyframe-at-time-for-parameter",
         "Sets an animated parameter's value at `time`: updates the key there or inserts one. The "
         "parameter must already be animated; make a constant one animated first with "
@@ -397,7 +410,11 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.layer.set-label-color",
         "Sets or clears the layer's Timeline label colour.", "", "query:layers", ""},
     OperationNotes{"bloom.layer.set-parent",
-        "Parents a layer to another layer's transform, or clears the parent.", "", "query:layers",
+        "Parents a layer to another layer's transform, or clears the parent. The child's position, "
+        "anchor and rotation are then measured in the parent's space, whose origin is the "
+        "top-left corner of the parent's content (a nested composition's frame), and move, scale "
+        "and rotate with the parent.",
+        "", "query:layers",
         "The parent would form a cycle => choose a layer that is not a child of this one."},
     OperationNotes{"bloom.layer.set-range",
         "Trims a layer: sets the composition span it is visible in, without moving its content. "
@@ -444,7 +461,10 @@ constexpr std::array kNotes{
         "query:layers", ""},
     OperationNotes{"bloom.layer.rename-mask", "Renames a mask.", "", "query:layers", ""},
     OperationNotes{"bloom.layer.set-track-matte",
-        "Uses another layer of the same Merge as this layer's track matte.", "",
+        "Uses another layer of the same Merge as this layer's track matte. The matte layer stops "
+        "displaying in the composite and only shapes this layer; that is intended. The matte "
+        "layer may be a child of this layer.",
+        "",
         "bloom.layer.clear-track-matte query:layers", ""},
     OperationNotes{"bloom.layer.clear-track-matte", "Removes a layer's track matte.", "",
         "bloom.layer.set-track-matte bloom.layer.set-node-track-matte", ""},
@@ -843,6 +863,8 @@ void refine(const std::string& op, ArgumentSchema& argument) {
     } else if (name == "workingColorSpace") {
         argument.unit = "a scene-linear colour space name of the project's OCIO config; empty "
                         "follows the project";
+    } else if (name == "times" && op == "bloom.animation.set-key-columns") {
+        argument.unit = "list of times, one per value; in " + std::string(kKeyTimeUnit);
     } else if (name == "keys" && op == "bloom.animation.set-keys") {
         argument.unit = "list of [time, value, interpolation?]; times in " +
                         std::string(kKeyTimeUnit);

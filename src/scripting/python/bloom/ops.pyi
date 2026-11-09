@@ -670,6 +670,88 @@ class AnimationOps:
         Related: bloom.animation.set-keyframe-at-time-for-parameter, transact
         """
         ...
+    def set_key_columns(self, parameter: int | Proxy, times: tuple, values: tuple, interpolations: tuple = ..., replace: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.animation.set-key-columns  (operation, animation)
+        Sets a parameter's keys from columns, in one undo step: `times`, `values` and optionally
+        `interpolations`, one entry per key, instead of set-keys' rows. It is the same edit as set-keys
+        with [time, value, interpolation] rows, for hundreds of keys. Over MCP any column can be
+        {"fromFile": "<absolute .json path>"}, so the numbers never pass through the conversation, and
+        transact's `response: "summary"` answers with a count and a digest instead of every created id.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          parameter  id  required
+              The parameter to key.
+              Unit: parameter id (query:layers .parameters, query:nodes .parameters)
+              Range: >= 1
+          times  array  required
+              The key times as one column, in the unit of set-keys: layer time for a layer's own
+              parameters (the composition frame minus the layer's start), composition time for every
+              other parameter. A time is a whole frame or an exact [numerator, denominator] time in
+              seconds.
+              Unit: list of times, one per value; in frames at the composition's frame rate (an
+              integer), or exact seconds as [numerator, denominator], in the unit of the key's owner:
+              LAYER time for a layer's own parameters (query:layers .parameters: position, opacity,
+              blend mode, Time Remap), which is the composition time minus the layer's start, times its
+              speed (a layer starting at frame 48 shows its frame 0 at composition frame 48);
+              COMPOSITION time for every other parameter (a node's, a source's, an effect's). A layer
+              key outside the layer's range never plays; the edit succeeds and returns a warning naming
+              the range
+          values  array  required
+              The key values as one column, one per time, each with the parameter's own width (a number,
+              [x, y], [x, y, z] or [r, g, b, a]).
+          interpolations  array  optional
+              Optional column of the interpolation leaving each key, one per time or fewer: missing
+              entries are linear. The last key's is always linear.
+          replace  bool  optional
+              Clear the existing keys first, returning the parameter to the constant it was animated
+              from. Default false: keys at existing times are updated and the others added.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: animationCurve
+          (when created), keyframe (one per key, in the order given) (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The columns differ in length
+              Do: values has one entry per time, and interpolations at most one.
+          bloom.scripting.command-rejected
+              When: Two keys share a time
+              Do: give each key its own time.
+          bloom.scripting.command-rejected
+              When: The parameter is driven by a value node
+              Do: give it a constant with bloom.parameter.set-source first.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.animation.set-key-columns","args":{"parameter":1,"times":[0,12,24],"values":[0,0.5,1]}}]}}
+          Python:
+            bloom.ops.animation.set_key_columns(parameter=1, times=(0, 12, 24), values=(0, 0.5, 1))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.animation.set-key-columns","args":{"parameter":1,"times":[0,12,24],"values":[0,0.5,1]}}]
+
+        Related: bloom.animation.set-keys, bloom.animation.convert-to-constant, query:keyframes,
+        transact
+        """
+        ...
     def set_keyframe_at_time(self, curve: int | Proxy, value: Value, *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.animation.set-keyframe-at-time  (operation, animation)
         Sets a curve's value at `time`: updates the key there, or inserts one. The value has the curve's
@@ -1296,7 +1378,7 @@ class AnimationOps:
           CLI:
             bloom-cli run edits.json   # [{"op":"bloom.animation.set-keys","args":{"parameter":1,"keys":[[0,0,"linear"],[24,1]]}}]
 
-        Related: bloom.animation.set-keyframe-at-time-for-parameter,
+        Related: bloom.animation.set-key-columns, bloom.animation.set-keyframe-at-time-for-parameter,
         bloom.animation.convert-to-constant, query:keyframes, transact
         """
         ...
@@ -6304,7 +6386,9 @@ class LayerOps:
         ...
     def set_parent(self, parent: int | Proxy = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-parent  (operation, layer)
-        Parents a layer to another layer's transform, or clears the parent.
+        Parents a layer to another layer's transform, or clears the parent. The child's position, anchor
+        and rotation are then measured in the parent's space, whose origin is the top-left corner of the
+        parent's content (a nested composition's frame), and move, scale and rotate with the parent.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -6706,7 +6790,9 @@ class LayerOps:
         ...
     def set_track_matte(self, source: int | Proxy, channel: int, inverted: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-track-matte  (operation, layer)
-        Uses another layer of the same Merge as this layer's track matte.
+        Uses another layer of the same Merge as this layer's track matte. The matte layer stops
+        displaying in the composite and only shapes this layer; that is intended. The matte layer may be
+        a child of this layer.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)

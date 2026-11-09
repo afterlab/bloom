@@ -292,7 +292,15 @@ class CompilePass final {
         runtime::CompileDiagnostic diagnostic{code, runtime::DiagnosticSeverity::Warning,
                                               std::move(diagnosticSubject), std::move(summary),
                                               std::move(detail)};
-        diagnostics_.emplace(diagnosticKey(diagnostic), std::move(diagnostic));
+        // A warning is reported once per subject: a layer lowered more than once (its own slot, as
+        // a parent, as a matte source, for its audio) must not repeat what it already said.
+        const auto key = diagnosticKey(diagnostic);
+        const auto [first, last] = diagnostics_.equal_range(key);
+        if (std::any_of(first, last, [&](const auto& existing) {
+                return existing.second.summary == diagnostic.summary;
+            }))
+            return;
+        diagnostics_.emplace(key, std::move(diagnostic));
     }
 
 #include "snapshot_compiler_mute.ipp"

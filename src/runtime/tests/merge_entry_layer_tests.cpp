@@ -272,6 +272,71 @@ void entryLayerParentMatteAndMasksMatchLayerNodes() {
                "entry layers parent, matte and mask exactly as Layer nodes with the same values");
 }
 
+// #434 O7: parenting is a transform-only dependency, so a track matte whose source is a child of
+// the matted layer compiles and evaluates, as Layer nodes and as entry layers alike.
+void matteSourceMayBeChildOfTheMattedLayer() {
+    const auto build = [](const bool entryLayers, const bool parented) {
+        Builder builder;
+        const auto target = builder.solid(kBlue, 10.0, 8.0);
+        const auto matte = builder.solid(kRed, 6.0, 6.0);
+        const LayerValues targetValues{.position = {8.0, 6.0},
+                                       .pivot = document::LayerPivot::Content};
+        const LayerValues matteValues{.position = {3.0, 2.0}, .rotation = 20.0};
+        document::LayerId targetLayer, matteLayer;
+        if (entryLayers) {
+            const auto targetSlot = builder.slot(builder.root(), target);
+            const auto matteSlot = builder.slot(builder.root(), matte);
+            targetLayer = builder.entryLayer(builder.root(), targetSlot, targetValues);
+            matteLayer = builder.entryLayer(builder.root(), matteSlot, matteValues);
+        } else {
+            const auto [targetNode, t] = builder.layerNode(target, targetValues);
+            const auto [matteNode, m] = builder.layerNode(matte, matteValues);
+            targetLayer = t;
+            matteLayer = m;
+            builder.slot(builder.root(), targetNode, t);
+            builder.slot(builder.root(), matteNode, m);
+        }
+        if (parented)
+            builder.boundary(matteLayer).parent = targetLayer;
+        builder.boundary(targetLayer).trackMatte =
+            document::TrackMatte{matteLayer, document::TrackMatteChannel::Alpha, false};
+        return builder.project();
+    };
+    expectSame(build(true, true), build(false, true),
+               "a matte from the target's child evaluates the same on entry layers and nodes");
+    expect(visiblyDifferent(pixelsOf(build(false, true)), pixelsOf(build(false, false))),
+           "the child matte follows its parent's transform");
+}
+
+// #622: a layer whose content extent cannot be resolved is reported once, however many times the
+// compiler lowers it (its own slot, as a parent, as a matte source).
+void unresolvedExtentIsReportedOncePerLayer() {
+    Builder builder;
+    const auto parentSource = builder.solid(kBlue, 6.0, 4.0);
+    const auto childSource = builder.solid(kRed, 4.0, 4.0);
+    const auto [parentNode, parentLayer] = builder.layerNode(parentSource, {});
+    const auto [childNode, childLayer] = builder.layerNode(childSource, {});
+    builder.slot(builder.root(), parentNode, parentLayer);
+    builder.slot(builder.root(), childNode, childLayer);
+    builder.boundary(childLayer).parent = parentLayer;
+    builder.boundary(parentLayer).trackMatte =
+        document::TrackMatte{childLayer, document::TrackMatteChannel::Alpha, false};
+    for (const auto& [layer, source] : {std::pair{parentLayer, parentSource},
+                                        std::pair{childLayer, childSource}}) {
+        auto& timing = builder.boundary(layer).timing;
+        timing.startTime = core::RationalTime::create(1, 2).value();
+        timing.contentExtent = document::SourceLayerExtent{source};
+    }
+    const auto compiled = compile(builder.project());
+    for (const auto layer : {parentLayer, childLayer}) {
+        const auto count = std::ranges::count_if(compiled.diagnostics, [&](const auto& diagnostic) {
+            return diagnostic.code == runtime::CompileDiagnosticCode::LayerExtentUnresolved &&
+                   diagnostic.subject.layerId == layer;
+        });
+        expect(count == 1, "an unresolved extent is reported once, got " + std::to_string(count));
+    }
+}
+
 void adjustmentDiagnosticsAndEmptyCases() {
     // An Adjustment whose chain reaches two entries: a node-addressed warning, it draws nothing.
     {
@@ -646,6 +711,8 @@ int main() {
         entryLayerLowersToItsOwnLayerOutput();
         chainLayerGivesTheEntryItsBlendEnableAndSolo();
         entryLayerParentMatteAndMasksMatchLayerNodes();
+        matteSourceMayBeChildOfTheMattedLayer();
+        unresolvedExtentIsReportedOncePerLayer();
         adjustmentDiagnosticsAndEmptyCases();
         adjustmentEqualsCurvesAfterTheStack();
         adjustmentOpacityMixesTheAdjustedStack();

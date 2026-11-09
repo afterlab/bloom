@@ -363,7 +363,11 @@ class ConnectionWorker final {
         if (busy_) {
             busy_ = false;
             reject(McpHttpRejection::Busy, client);
-            send(rejectionReply(McpHttpRejection::Busy, "Too many requests from this client",
+            send(rejectionReply(McpHttpRejection::Busy,
+                                "Too many requests from this client: at most " +
+                                    std::to_string(limits.inFlightPerClient) +
+                                    " may be in progress at once. Wait for one to finish, then "
+                                    "send the rest.",
                                 McpProtocolError::ServerBusy),
                  stop);
             return false;
