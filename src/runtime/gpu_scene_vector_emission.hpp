@@ -55,9 +55,9 @@ resolveVectorLeafWindow(const CompiledOperation& operation, const CompiledCompos
             local = boundsForWindow(*window, hScale, vScale);
             // The window was resolved from this same alignment; the evaluator's text arm publishes
             // the same pivot with the same helper.
-            if (const auto alignment = resolveParameter(text->layout.alignmentId,
-                                                        text->layout.alignment,
-                                                        text->layout.drivenAlignment, resolved)) {
+            if (const auto alignment =
+                    resolveParameter(text->layout.alignmentId, text->layout.alignment,
+                                     text->layout.drivenAlignment, resolved)) {
                 local.pivotX = textBlockPivotX(text->layout, alignment->value);
             }
         }
@@ -115,25 +115,38 @@ publishVectorLeafBounds(const CompiledOperation& operation, const CompiledCompos
     return std::nullopt;
 }
 
-// True when a reachable text or shape leaf was consumed by no prepared layer.
-[[nodiscard]] inline bool hasUnconsumedVectorLeaf(const CompiledCompositionPlan& plan,
-                                                  const std::vector<bool>& reachable,
-                                                  const std::vector<bool>& textConsumed,
-                                                  const std::vector<bool>& shapeConsumed) {
+// Names the first reachable text or shape leaf that no prepared layer consumed, or nothing when
+// every one is accounted for. The text names the leaf node and the layer carrying it, so a fallback
+// to the CPU route points at its cause.
+[[nodiscard]] inline std::optional<std::string> describeUnconsumedVectorLeaf(
+    const CompiledCompositionPlan& plan, const std::vector<bool>& reachable,
+    const std::vector<bool>& textConsumed, const std::vector<bool>& shapeConsumed) {
     for (std::size_t index = 0; index < plan.operations().size(); ++index) {
         if (!reachable[index]) {
             continue;
         }
-        const bool unconsumedText =
-            std::holds_alternative<CompiledText>(plan.operations()[index]) && !textConsumed[index];
-        const bool unconsumedShape =
-            std::holds_alternative<CompiledShape>(plan.operations()[index]) &&
-            !shapeConsumed[index];
-        if (unconsumedText || unconsumedShape) {
-            return true;
+        const auto& operation = plan.operations()[index];
+        const auto* text = std::get_if<CompiledText>(&operation);
+        const auto* shape = std::get_if<CompiledShape>(&operation);
+        if ((text == nullptr || textConsumed[index]) &&
+            (shape == nullptr || shapeConsumed[index])) {
+            continue;
         }
+        std::string description = text != nullptr ? "Text source node " : "Shape source node ";
+        description +=
+            std::to_string((text != nullptr ? text->sourceNodeId : shape->sourceNodeId).value());
+        for (const auto& candidate : plan.operations()) {
+            const auto* layer = std::get_if<CompiledLayerOutput>(&candidate);
+            if (layer != nullptr && layer->input.value() == index) {
+                description += " on layer " + std::to_string(layer->layerId.value()) +
+                               " (layer output node " +
+                               std::to_string(layer->sourceNodeId.value()) + ")";
+                break;
+            }
+        }
+        return description + " is not consumed by a prepared layer, so it is not prepared";
     }
-    return false;
+    return std::nullopt;
 }
 
 template <typename Emit, typename Charge, typename ChargeCoverage>

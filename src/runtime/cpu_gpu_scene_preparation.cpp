@@ -481,8 +481,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const auto fullDescriptor = render::Rgba32fImageDescriptor::create(
-        frameResolved.imageDescriptor.displayWindow(), frameResolved.imageDescriptor.displayWindow(),
-        frameResolved.imageDescriptor.pixelAspect());
+        frameResolved.imageDescriptor.displayWindow(),
+        frameResolved.imageDescriptor.displayWindow(), frameResolved.imageDescriptor.pixelAspect());
     if (!fullDescriptor) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "Composition descriptor is invalid");
@@ -669,8 +669,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto operandClock = plan->operationClock(operationIndex);
         const auto& resolved = detail::resolvedForClock(frameResolved, operandClock);
         const auto operandTime = detail::timeForClock(frameResolved, request.time, operandClock);
-        const auto placementTime = detail::timeForClock(frameResolved, request.time,
-                                                        plan->placementClock(operationIndex));
+        const auto placementTime =
+            detail::timeForClock(frameResolved, request.time, plan->placementClock(operationIndex));
         if (!operandTime || !placementTime)
             continue;
         auto clockRequest = request;
@@ -679,9 +679,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* solid = std::get_if<CompiledSolid>(&operation)) {
             if (const auto error = detail::emitSolidCommand(
                     *solid, *plan, resolved, *operandTime, index, operationIndex, fullWindow,
-                    fullDisplayWindow,
-                    fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
-                    keyOf, outputWindowOf, bounds, vectors)) {
+                    fullDisplayWindow, fullPixelAspect, hScale, vScale, emit, chargeTransient,
+                    commandForOperation, keyOf, outputWindowOf, bounds, vectors)) {
                 return fail(error->code, error->message);
             }
             continue;
@@ -690,8 +689,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* checker = std::get_if<CompiledChecker>(&operation)) {
             if (const auto error = detail::emitCheckerCommand(
                     *checker, *plan, resolved, index, operationIndex, fullDisplayWindow,
-                    fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation, keyOf,
-                    outputWindowOf, bounds)) {
+                    fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
+                    keyOf, outputWindowOf, bounds)) {
                 return fail(error->code, error->message);
             }
             continue;
@@ -741,8 +740,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 operation, operationIndex, clockRequest, *plan, resolved, media, ocioContext_,
                 remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
                 mediaStatistics, emit, mediaCommands, outputWindowOf[index],
-                commandForOperation[index],
-                keyOf[index], leaf);
+                commandForOperation[index], keyOf[index], leaf);
             if (error) {
                 // PixelStorageBudgetExceeded names the request's own byte budget. When the
                 // admitted phase source envelope, not the request, bounded this leaf, the request
@@ -802,8 +800,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto sourceBytesBefore = sourceBackings->chargedBytes;
             const auto error = detail::prepareNestedComposition(
-                *source, *plan, clockRequest, resolved, hScale, vScale, detail::nestedCompositionDepth(),
-                allowance, retainedBytes, cancellation,
+                *source, *plan, clockRequest, resolved, hScale, vScale,
+                detail::nestedCompositionDepth(), allowance, retainedBytes, cancellation,
                 [this, &media, &phaseLease, &sourceBackings, sourceAllowance, coverageAllowance,
                  coverageBytes, foregroundLimit = request.pixelStorageByteLimit](
                     const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
@@ -871,12 +869,28 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // shape) published them when it was reached; a merge or another layer published its own
             // raster command and bounds. A parent chain is resolved through the parent matrix.
             const auto& inputVec = vectors[inputIndexValue];
+            // A layer that publishes no image (zero scale, outside its range, empty or degenerate
+            // bounds, a non-invertible matrix) still accounts for the vector leaf it carries: the
+            // leaf is invisible by design, not unrepresented. Without this the unconsumed-leaf
+            // check below sent the whole frame to the CPU route.
+            const auto accountForInvisibleLeaf = [&] {
+                if (!inputVec.has_value()) {
+                    return;
+                }
+                const auto source = inputVec->source;
+                if (std::holds_alternative<CompiledText>(plan->operations()[source])) {
+                    textConsumed[source] = true;
+                } else if (std::holds_alternative<CompiledShape>(plan->operations()[source])) {
+                    shapeConsumed[source] = true;
+                }
+            };
             const GpuSceneCommandIndex inputIndex = commandForOperation[inputIndexValue];
             std::optional<render::ImageWindow> sourceWindowHolder;
             ContentBounds inputLocal;
             if (inputVec.has_value()) {
                 const auto& leafWindow = outputWindowOf[inputIndexValue];
                 if (!leafWindow) {
+                    accountForInvisibleLeaf();
                     continue;
                 }
                 sourceWindowHolder = *leafWindow;
@@ -897,9 +911,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto centre =
                 layer->framePivot
                     ? decltype(inputLocal.pivot()){static_cast<double>(plan->format().width()) /
-                                                        2.0,
-                                                    static_cast<double>(plan->format().height()) /
-                                                        2.0}
+                                                       2.0,
+                                                   static_cast<double>(plan->format().height()) /
+                                                       2.0}
                     : inputLocal.pivot();
             const auto authoredMatrix = detail::LayerMatrix::authored(
                 position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
@@ -941,14 +955,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // The CPU Layer Output stage publishes no image and no bounds outside its active range.
             if (*placementTime < layer->inPoint ||
                 (layer->outPoint.has_value() && *placementTime >= *layer->outPoint)) {
+                accountForInvisibleLeaf();
                 continue;
             }
-            if (scale->value.x == 0.0 || scale->value.y == 0.0 || inputLocal.empty()) {
-                continue;
-            }
+            // Like the CPU evaluator, a layer that collapses to no area still publishes its layer
+            // id and local bounds; it publishes no output bounds and no image.
             auto& geometry = bounds[index];
             geometry.layerId = layer->layerId;
             geometry.local = inputLocal;
+            if (scale->value.x == 0.0 || scale->value.y == 0.0 || inputLocal.empty()) {
+                accountForInvisibleLeaf();
+                continue;
+            }
             const auto sourceWindow = *sourceWindowHolder;
             const auto bufferCentre =
                 detail::boundsForWindow(sourceWindow, hScale, vScale).centre();
@@ -984,6 +1002,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                 "Parented transform exceeds the supported numeric range");
                 }
                 if (!parented->invertible()) {
+                    accountForInvisibleLeaf();
                     continue;
                 }
             }
@@ -993,6 +1012,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                          ? parented->supportBounds(*workingWindow.value())
                                          : transform.value()->supportBounds(*workingWindow.value());
             if (!layerWindow) {
+                accountForInvisibleLeaf();
                 continue;
             }
             const auto& transformValue = *transform.value();
@@ -1166,9 +1186,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
 
     // A reachable vector leaf that no prepared layer consumed has no representation in this subset;
     // fail closed rather than publish a scene whose output silently omits it.
-    if (detail::hasUnconsumedVectorLeaf(*plan, reachable, textConsumed, shapeConsumed)) {
-        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                    "A vector source not consumed by a prepared layer is not prepared");
+    if (auto unconsumed =
+            detail::describeUnconsumedVectorLeaf(*plan, reachable, textConsumed, shapeConsumed)) {
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation, std::move(*unconsumed));
     }
 
     ProcessFrameIdentity identity{
