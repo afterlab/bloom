@@ -266,7 +266,7 @@ inline constexpr std::array kHistogramParameters{
 inline constexpr std::array kImageStatisticsParameters{
     choice("channel", kStatisticsChannels, kStatisticsLuminance, "Measure"),
     choice("space", kSpaces, kImagePixelStraight, "Operate on"),
-    choice("pixels", kStatisticsPixels, kStatisticsAllPixels, "Count"),
+    choice("pixels", kStatisticsPixels, kStatisticsAllPixels, "Pixels counted"),
 };
 
 inline constexpr std::array kAudioAmplitudeParameters{

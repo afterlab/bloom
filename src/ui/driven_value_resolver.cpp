@@ -71,7 +71,15 @@ readoutOutputKeys(const document::Snapshot& snapshot, const document::Compositio
     const auto* composition = snapshot.project().findComposition(compositionId);
     if (composition == nullptr)
         return keys;
-    for (const auto id : nodes) {
+    // The selected nodes, and every Layer Bounds and Camera Shake node whatever is selected: node
+    // cards show those two nodes' readouts, so each of their outputs gets a value or a reason.
+    std::vector<document::NodeId> asked = nodes;
+    for (const auto& node : composition->graph().nodes())
+        if ((node.typeId == document::kLayerBoundsNodeType ||
+             node.typeId == document::kCameraShakeNodeType) &&
+            std::ranges::find(asked, node.id) == asked.end())
+            asked.push_back(node.id);
+    for (const auto id : asked) {
         const auto* node = composition->graph().findNode(id);
         const auto* definition =
             node ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)

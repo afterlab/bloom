@@ -764,7 +764,15 @@ one rule (`src/ui/properties_value_outputs.hpp`: every output that is not an ima
 channel set, on a node that is not a Node Group or its boundaries), so a node that shows a readout is
 always a node that is asked for it. A row shows the value, or the reason there is none ("Unavailable",
 the first compile diagnostic, or "Image Statistics are not ready"); an empty text reads "(empty)";
-no row waits on "Resolving…" for good. One node that cannot be inspected does not stop the driven
+no row waits on "Resolving…" for good. Integer and Boolean outputs read like the rest (the probe
+reads an Integer through an Integer to Scalar conversion and a Boolean through the Shape Source's
+fill switch). Within one section no two rows share a label: an output that carries the name of one
+of the node's own controls reads "<name> (result)" (a Trim Path's "Path (result)"), a Path operand
+shows its own summary ("4 anchors · Closed") whole, a node's two colors are named (Fill Color and
+Stroke Color, Color A and Color B), and Image Statistics' pixel selector reads "Pixels counted", so
+its "Count" is the measurement. A node card that shows readouts (Layer Bounds, Camera Shake) asks
+for them itself and follows the playhead, so it shows a value or the reason there is none even with
+the Properties panel closed. One node that cannot be inspected does not stop the driven
 values of the others. The evaluation runs on the resolver's worker, is cancelled by a newer request
 and never runs on the interface thread. Collapsed section state
 is a UI preference; searching temporarily exposes matches without changing that preference.

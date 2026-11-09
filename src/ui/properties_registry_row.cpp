@@ -583,16 +583,15 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                                       {fields_[0], fields_[1], fields_[2], fields_[3]},
                                       "propertiesRegistryColorExpand",
                                       "propertiesRegistryColorFields", parameter_,
-                                      // #347: the audio plots have two colors; the row names which.
-                                      // #524: so do the four colors of a Four-Color Gradient.
-                                      document::isImagePixelColorSchemaKey(definition_.schemaKey) ||
-                                              document::isFourColorGradientColorSchemaKey(
-                                                  definition_.schemaKey)
-                                          ? label
-                                          : QString());
+                                      // #347, #524: a node with several colors (audio plots, a Four-Color
+                                      // Gradient's corners, Shape Source's fill
+                                      // and stroke, a Checker's two cells) names which each is.
+                                      label);
         delete controls;
     } else {
-        if (!text_ && !multiline_ && !checklist_) {
+        // A Path's summary is filled in after the row is built, so its width is not known here.
+        if (!text_ && !multiline_ && !checklist_ &&
+            definition_.valueKind != document::ParameterValueKind::Path) {
             const int preferred = controls->sizeHint().width();
             controls->setMaximumWidth(preferred);
         }

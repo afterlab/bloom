@@ -45,6 +45,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -694,6 +695,35 @@ void everyBuiltInLabelIsShownWhole() {
                                            (scale.isEmpty() ? QString()
                                                             : QStringLiteral("-dpr") + scale) +
                                            QStringLiteral(".png"));
+                }
+            }
+            // Two rows in one section never share a label: an artist must be able to tell them
+            // apart. A section is the nearest KSection above the label.
+            if (width == 2000) {
+                std::map<std::pair<const QWidget*, QString>, int> seen;
+                std::map<std::pair<const QWidget*, QString>, QString> where;
+                for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel")) {
+                    const QWidget* section = label->parentWidget();
+                    while (section != nullptr && qobject_cast<const ui::kit::KSection*>(section) == nullptr)
+                        section = section->parentWidget();
+                    if (label->isVisibleTo(&properties) && !label->text().isEmpty())
+                        ++seen[{section, label->text()}];
+                    if (label->isVisibleTo(&properties)) {
+                        const QWidget* owner = label->parentWidget();
+                        while (owner != nullptr && owner != section && !owner->property("role").isValid() &&
+                               !owner->property("valueOutputPort").isValid())
+                            owner = owner->parentWidget();
+                        where[{section, label->text()}] +=
+                            QStringLiteral(" [") +
+                            (owner && owner != section ? owner->property("role").toString() : QStringLiteral("output/other")) +
+                            QLatin1Char(']');
+                    }
+                }
+                for (const auto& [key, count] : seen) {
+                    const auto& text = key.second;
+                    expect(count == 1, (std::string("two Properties rows share the label \"") +
+                                        text.toStdString() + "\" in " + typeId + where[key].toStdString())
+                                           .c_str());
                 }
             }
             for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel")) {
@@ -1913,6 +1943,15 @@ void pathReadoutsResolve() {
                         path->second == QStringLiteral("1 contours, 4 anchors")),
                    "Transform Path of a square reads 1 contours, 4 anchors");
         }
+        // The operand's own summary reads whole ("4 anchors · Closed"), not cut to its first word.
+        for (auto* summary : fixture.properties.findChildren<QLabel*>("propertiesPathSummary"))
+            if (summary->isVisibleTo(&fixture.properties)) {
+                expect(summary->text() == QStringLiteral("4 anchors · Closed") ||
+                           summary->text() == QStringLiteral("4 anchors · Open"),
+                       ("the path operand summary reads whole: " + summary->text().toStdString()).c_str());
+                expect(summary->width() >= summary->sizeHint().width(),
+                       ("the path operand summary is not cut: " + std::string(type)).c_str());
+            }
         if (type == document::kTrimPathNodeType) {
             saveReadoutCapture(fixture.properties, "properties-trim-path");
             // A new input updates the readout.
@@ -2014,6 +2053,136 @@ void timeUpdatesReadout() {
     expect(text == QStringLiteral("72"), ("Frame Number follows the playhead: " + text.toStdString()).c_str());
 }
 
+// An Integer or Boolean output is read like every other: each node of that kind shows its actual value,
+// and no such output of any built-in node says "Unavailable" when its inputs are the defaults.
+void integerAndBooleanReadouts() {
+    const auto single = [](std::string_view type, const std::function<void(ReadoutFixture&, document::NodeId)>& prepare,
+                           const char* port, const QString& expected, const char* what) {
+        ReadoutFixture fixture;
+        const auto node = addNode(fixture.session, type);
+        fixture.session.selectNode(node);
+        prepare(fixture, node);
+        QElapsedTimer wait;
+        wait.start();
+        QString text;
+        while (wait.elapsed() < 15000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(5);
+            const auto texts = readoutTexts(fixture.properties);
+            text = texts.contains(QString::fromLatin1(port)) ? texts.at(QString::fromLatin1(port))
+                                                             : QString();
+            if (text == expected)
+                break;
+        }
+        expect(text == expected, (std::string(what) + ": expected " + expected.toStdString() +
+                                  ", read " + text.toStdString())
+                                     .c_str());
+    };
+    single(document::kIntegerValueNodeType,
+           [](ReadoutFixture& f, document::NodeId n) { setNodeValue(f.session, n, "value", std::int64_t{7}); },
+           "value", QStringLiteral("7"), "Integer value node reads its integer");
+    single(document::kBooleanValueNodeType,
+           [](ReadoutFixture& f, document::NodeId n) { setNodeValue(f.session, n, "value", true); },
+           "value", QStringLiteral("True"), "Boolean value node reads True");
+    single(document::kBooleanValueNodeType, [](ReadoutFixture&, document::NodeId) {}, "value",
+           QStringLiteral("False"), "Boolean value node reads False by default");
+    single(document::kIntegerSwitchNodeType,
+           [](ReadoutFixture& f, document::NodeId n) {
+               setNodeValue(f.session, n, "condition", true);
+               setNodeValue(f.session, n, "ifFalse", std::int64_t{3});
+               setNodeValue(f.session, n, "ifTrue", std::int64_t{9});
+           },
+           "result", QStringLiteral("9"), "Integer Switch reads the branch its condition picks");
+    single(document::kBooleanSwitchNodeType,
+           [](ReadoutFixture& f, document::NodeId n) {
+               setNodeValue(f.session, n, "condition", false);
+               setNodeValue(f.session, n, "ifFalse", true);
+               setNodeValue(f.session, n, "ifTrue", false);
+           },
+           "result", QStringLiteral("True"), "Boolean Switch reads the false branch");
+    single(document::kCompareNodeType,
+           [](ReadoutFixture& f, document::NodeId n) {
+               setNodeValue(f.session, n, "a", 1.0);
+               setNodeValue(f.session, n, "b", 2.0);
+               setNodeValue(f.session, n, "operation",
+                            document::compareOperationStoredValue(document::CompareOperation::Less));
+           },
+           "result", QStringLiteral("True"), "Compare 1 < 2 reads True");
+    single(document::kCompareNodeType,
+           [](ReadoutFixture& f, document::NodeId n) {
+               setNodeValue(f.session, n, "a", 3.0);
+               setNodeValue(f.session, n, "b", 2.0);
+               setNodeValue(f.session, n, "operation",
+                            document::compareOperationStoredValue(document::CompareOperation::Less));
+           },
+           "result", QStringLiteral("False"), "Compare 3 < 2 reads False");
+    int checked = 0;
+    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+        const bool integerOrBoolean = std::ranges::any_of(definition.outputs, [](const auto& output) {
+            return output.valueKind == document::SocketValueKind::Integer ||
+                   output.valueKind == document::SocketValueKind::Boolean;
+        });
+        if (!integerOrBoolean || definition.lowering == document::NodeLoweringKind::NodeGroup ||
+            definition.lowering == document::NodeLoweringKind::GroupBoundary)
+            continue;
+        ReadoutFixture fixture;
+        const auto node = addNode(fixture.session, definition.key.typeId);
+        if (!node.isValid())
+            continue;
+        fixture.session.selectNode(node);
+        const auto texts = resolvedReadouts(fixture.properties);
+        for (const auto& output : definition.outputs) {
+            if (output.valueKind != document::SocketValueKind::Integer &&
+                output.valueKind != document::SocketValueKind::Boolean)
+                continue;
+            ++checked;
+            const auto found = texts.find(QString::fromStdString(output.name));
+            expect(found != texts.end() && found->second != QStringLiteral("Unavailable") &&
+                       found->second != QStringLiteral("Resolving…") && !found->second.isEmpty(),
+                   ("an Integer/Boolean output shows a value: " + definition.key.typeId + " " +
+                    output.name + " = " +
+                    (found == texts.end() ? std::string("<missing>") : found->second.toStdString()))
+                       .c_str());
+        }
+    }
+    expect(checked >= 10, "the Integer/Boolean audit visits the nodes that have such outputs");
+}
+
+// `--capture-readouts`: Properties pictures of nodes whose readouts have resolved, cropped to their
+// content so every row is in the picture (BLOOM_LABEL_CAPTURE_DIR names the folder,
+// BLOOM_LABEL_CAPTURE_SCALE the device pixel ratio the run was started with).
+void captureResolvedProperties() {
+    const auto directory = qEnvironmentVariable("BLOOM_LABEL_CAPTURE_DIR");
+    if (directory.isEmpty())
+        return;
+    QDir().mkpath(directory);
+    const auto scale = qEnvironmentVariable("BLOOM_LABEL_CAPTURE_SCALE");
+    for (const auto type : {document::kCameraShakeNodeType, document::kTransform2DNodeType}) {
+        ReadoutFixture fixture;
+        fixture.properties.resize(900, 2600);
+        const auto node = addNode(fixture.session, type);
+        fixture.session.selectNode(node);
+        const auto texts = resolvedReadouts(fixture.properties);
+        if (std::string_view(type) == document::kCameraShakeNodeType)
+            for (const auto& [port, text] : texts)
+                expect(text != QStringLiteral("Resolving…") && !text.isEmpty(),
+                       ("Camera Shake readout resolved before its capture: " + port.toStdString()).c_str());
+        QCoreApplication::processEvents();
+        auto image = fixture.properties.grab().toImage();
+        const auto background = image.pixel(image.width() - 1, image.height() - 1);
+        int last = 0;
+        for (int y = image.height() - 1; y >= 0 && last == 0; --y)
+            for (int x = 0; x < image.width(); ++x)
+                if (image.pixel(x, y) != background) {
+                    last = y;
+                    break;
+                }
+        image = image.copy(0, 0, image.width(), std::min(image.height(), last + 16));
+        image.save(directory + QLatin1Char('/') + QString::fromLatin1(type.data(), static_cast<int>(type.size())) +
+                   QStringLiteral("-900-dpr") + scale + QStringLiteral("-resolved.png"));
+    }
+}
+
 // Every node that shows a value-output row resolves it: the request comes from the predicate that draws
 // the rows, so no built-in can be left on the placeholder.
 void everyValueOutputResolves() {
@@ -2088,6 +2257,12 @@ int main(int argc, char** argv) try {
         pathReadoutsResolve();
         imageStatisticsReadoutsResolve();
         timeUpdatesReadout();
+        integerAndBooleanReadouts();
+        QSettings().clear();
+        return failures ? 1 : 0;
+    }
+    if (argc > 1 && std::string_view(argv[1]) == "--capture-readouts") {
+        captureResolvedProperties();
         QSettings().clear();
         return failures ? 1 : 0;
     }
@@ -2130,6 +2305,7 @@ int main(int argc, char** argv) try {
     pathReadoutsResolve();
     imageStatisticsReadoutsResolve();
     timeUpdatesReadout();
+    integerAndBooleanReadouts();
     everyValueOutputResolves();
     QSettings().clear();
     return failures ? 1 : 0;

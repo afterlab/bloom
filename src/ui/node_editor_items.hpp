@@ -448,6 +448,10 @@ class NodeItem final : public QGraphicsObject {
                            .arg(id_.value()));
         }
         ensureFields(node, registry);
+        // A card that shows readouts follows the resolver's answers (and so the playhead) as a card
+        // with an animated parameter does.
+        if (!readOnlyLabels_.empty())
+            timeVarying_ = true;
         buildSockets(node, composition, links, registry);
         refreshValues(node, composition);
         relayout();
@@ -2017,6 +2021,11 @@ class NodeItem final : public QGraphicsObject {
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
         if (session_) {
+            // A card that shows readouts asks for them itself: without the Properties panel (or a
+            // timeline row) open, nothing else would, and the rows would wait for ever. The request
+            // is idempotent, so asking from every refresh starts nothing new.
+            if (!readOnlyLabels_.empty())
+                session_->refreshDrivenValues();
             for (auto* label : readOnlyLabels_) {
                 const auto port = label->property("valueOutputPort").toString();
                 if (port.isEmpty())

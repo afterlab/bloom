@@ -302,7 +302,13 @@ void PropertiesEditor::configureRegistryRows() {
                 if (!nodeShowsValueOutputs(*definition) || !isReadableValueOutput(output))
                     continue;
                 hasValueOutputs = true;
-                const auto label = node_editor::displayTypeName(output.name);
+                // An output that carries the name of one of the node's own controls (Trim Path's
+                // Path, a value node's Value) says it is the result, so the two rows differ.
+                auto label = node_editor::displayTypeName(output.name);
+                if (std::ranges::any_of(definition->parameters, [&](const auto& declared) {
+                        return parameterRowLabel(declared.schemaKey, declared.role) == label;
+                    }))
+                    label = tr("%1 (result)").arg(label);
                 auto* rowLabel = kit::makePropertyRowLabel(label, section->body());
                 auto* readout = new kit::KLabel(QString{}, section->body(), kit::TypeRole::Value);
                 readout->setTone(kit::Color::Foreground);

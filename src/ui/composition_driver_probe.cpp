@@ -5,6 +5,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include "properties_value_outputs.hpp"
 #include <vector>
 
@@ -35,7 +36,11 @@ class DriverProbe final {
                  : nullptr;
         if (definition)
             for (const auto& parameter : definition->parameters)
-                if (parameter.valueKind == kind)
+                // Only a parameter with an input port of the same name can be linked to.
+                if (parameter.valueKind == kind &&
+                    std::ranges::any_of(definition->inputs, [&](const auto& input) {
+                        return input.name == parameter.role;
+                    }))
                     return parameter.role;
         return {};
     }
@@ -122,6 +127,24 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
         if (*kind == document::SocketValueKind::Path) {
             type = document::kShapeSourceNodeType;
             valueKind = document::ParameterValueKind::Path;
+        }
+        // An Integer output is read through an Integer to Scalar conversion into the same sink a
+        // Scalar uses (the Solid has no Integer operand to link), and a Boolean one by the Shape
+        // Source's fill switch. Both sinks are muted, so only the value is inspected.
+        if (*kind == document::SocketValueKind::Integer) {
+            const auto convert = probe.add(document::kIntegerToScalarNodeType);
+            if (!probe.connect(output, document::NodeInputRef{
+                                           convert, probe.operand(convert,
+                                                                  document::ParameterValueKind::Integer)})) {
+                if (optional)
+                    continue;
+                return {};
+            }
+            output = {convert, std::string(document::kResultPortName)};
+        }
+        if (*kind == document::SocketValueKind::Boolean) {
+            type = document::kShapeSourceNodeType;
+            valueKind = document::ParameterValueKind::Boolean;
         }
         if (*kind == document::SocketValueKind::Vector2) {
             type = document::kLayerOutputNodeType;

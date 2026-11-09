@@ -13,6 +13,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
@@ -30,6 +31,7 @@
 #include <QGraphicsItem>
 #include <QGraphicsProxyWidget>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QList>
 #include <QMenu>
 #include <QMouseEvent>
@@ -1012,6 +1014,89 @@ void testApplyApplicationPreferencesReachesTheScene(Expectations& expectations) 
                         "a second apply turns grid snap back off");
 }
 
+// #344 #530 #349: a node card shows a value readout for one node only (Layer Bounds). Prove it over
+// every built-in node, and that once the resolver has answered, no card is left on "Resolving…".
+void testNoNodeCardStaysOnResolving(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Card Readout Test"));
+    int added = 0;
+    for (const auto& definition : document::builtInNodeDefinitions().definitions()) {
+        commands::Transaction transaction("Add node", fixture.session.snapshot().revision());
+        transaction.emplace<commands::AddNode>(fixture.session.compositionId(),
+                                               definition.key.typeId,
+                                               document::Vec2d{64.0 * (added % 12), 80.0 * (added / 12)});
+        if (fixture.scene()->submit(std::move(transaction)).succeeded())
+            ++added;
+    }
+    expectations.expect(added > 100, "the canvas adds every built-in node");
+    const auto readouts = [&fixture] {
+        struct Found final {
+            int readoutLabels = 0;
+            int resolving = 0;
+            int bounds = 0;
+        } found;
+        for (auto* item : fixture.scene()->items()) {
+            auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item);
+            if (proxy == nullptr || proxy->widget() == nullptr)
+                continue;
+            for (auto* label : proxy->widget()->findChildren<QLabel*>()) {
+                if (label->property("valueOutputPort").isValid()) {
+                    ++found.readoutLabels;
+                    ++found.bounds;
+                }
+                if (label->text() == QStringLiteral("Resolving…"))
+                    ++found.resolving;
+            }
+        }
+        return found;
+    };
+    QElapsedTimer wait;
+    wait.start();
+    auto found = readouts();
+    while (wait.elapsed() < 20000 && (found.readoutLabels == 0 || found.resolving != 0)) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+        found = readouts();
+    }
+    expectations.expect(found.readoutLabels == 4,
+                        "only the Layer Bounds card carries value readouts (its four outputs): " +
+                            std::to_string(found.readoutLabels));
+    expectations.expect(found.resolving == 0,
+                        "no node card shows \"Resolving…\" once its readouts resolve");
+    // The same in a clean composition holding only a Layer Bounds node: its four rows resolve to
+    // text (a value, or the reason there is none).
+    GraphFixture clean(makeProject("Card Readout Clean Test"));
+    commands::Transaction transaction("Add node", clean.session.snapshot().revision());
+    transaction.emplace<commands::AddNode>(clean.session.compositionId(),
+                                           std::string(document::kLayerBoundsNodeType),
+                                           document::Vec2d{64.0, 64.0});
+    expectations.expect(clean.scene()->submit(std::move(transaction)).succeeded(),
+                        "the canvas adds a Layer Bounds node");
+    QElapsedTimer waitClean;
+    waitClean.start();
+    const auto cleanTexts = [&clean] {
+        QStringList texts;
+        for (auto* item : clean.scene()->items())
+            if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item);
+                proxy != nullptr && proxy->widget() != nullptr)
+                for (auto* label : proxy->widget()->findChildren<QLabel*>())
+                    if (label->property("valueOutputPort").isValid())
+                        texts << label->text();
+        return texts;
+    };
+    auto texts = cleanTexts();
+    while (waitClean.elapsed() < 20000 &&
+           (texts.size() != 4 || texts.contains(QStringLiteral("Resolving…")))) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+        texts = cleanTexts();
+    }
+    if (std::getenv("BLOOM_CARD_DEBUG") != nullptr)
+        std::cerr << "clean texts: " << texts.join(" | ").toStdString() << '\n';
+    expectations.expect(texts.size() == 4 && !texts.contains(QStringLiteral("Resolving…")),
+                        "a Layer Bounds card's four readouts leave the placeholder");
+}
+
+
 int runAll() {
     Expectations expectations;
     testZoomAboutCursorHoldsTheScenePointUnderTheCursor(expectations);
@@ -1032,9 +1117,9 @@ int runAll() {
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);
     testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(expectations);
     testApplyApplicationPreferencesReachesTheScene(expectations);
+    testNoNodeCardStaysOnResolving(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
-
 } // namespace
 
 int main(int argc, char** argv) {
