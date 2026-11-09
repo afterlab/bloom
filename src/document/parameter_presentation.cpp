@@ -285,6 +285,8 @@ const std::vector<Entry>& table() {
         {kGlowRollOffSchemaKey, number(0.0, kMaximumGlowRollOff, 0.0, 2.0, 0.01, 3)},
         {kLightWrapRadiusSchemaKey, pixels(0.0, kMaximumBlurRadiusPixels, 64.0)},
         {kLightWrapAmountSchemaKey, factor()},
+        {kEdgeExtendDistanceSchemaKey, pixels(0.0, kMaximumBlurRadiusPixels, 32.0)},
+        {kEdgeExtendAmountSchemaKey, factor()},
         {"bloom.exposure.stops", number(kLowest, kHighest, -4.0, 4.0, 0.1, 2, kStops)},
         {"bloom.offset.amount", number(kLowest, kHighest, -1.0, 1.0, 0.01, 3)},
         {"bloom.multiply.factor", number(kLowest, kHighest, 0.0, 2.0, 0.01, 2, kTimes)},

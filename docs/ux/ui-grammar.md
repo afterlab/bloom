@@ -1143,7 +1143,7 @@ group is waiting for:
 | Group | Nodes |
 | --- | --- |
 | Sources | Image, Video, Audio, Composition, Solid, Checker, Linear Gradient, Radial Gradient (+ both become one Gradient), Test Card |
-| Compositing | Merge (Layer Stack), Adjustment, Layer (Layer Output), Image Mix, Set Alpha, Multiply Alpha, Alpha Association, + Image Switch, + Edge Extend |
+| Compositing | Merge (Layer Stack), Adjustment, Layer (Layer Output), Image Mix, Set Alpha, Multiply Alpha, Alpha Association, Edge Extend, + Image Switch |
 | Channels | Channel Copy, Pass, Select Channels, Shuffle, Separate Channels, Combine Channels, Image to Channel Set, + Image Math, + Image Map Range, + Image Clamp |
 | Keying & Mattes | Luma Key, Cryptomatte, Mask, Mask Combine, Image to Mask, Matte Blur, Matte Dilate, Matte Erode, + Channel Key, + Chroma Key, + Despill, + Matte Refine, + HSL Qualifier, + Transition/Wipe Matte |
 | Transform | Transform 2D, Crop, Pad, Fit, Resize, Flip, Rotate 90, Stabilize, + Camera Shake, + Tile & Mirror |

@@ -158,14 +158,14 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier.
-    expectations.expect(registry.definitions().size() == 236,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare; #342 adds Group Input, Group Output and Node Group; #590 adds Function; #595 adds Function Plot; #596 adds Axes and Axis Tick; #347 adds Audio Amplitude, Audio Waveform and Audio Spectrum; #349 adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend.
+    expectations.expect(registry.definitions().size() == 237,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
           "bloom.resize", "bloom.fit", "bloom.transform-2d", "bloom.gaussian-blur",
           "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate",
-          "bloom.luma-key", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"})
+          "bloom.luma-key", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.edge-extend"})
         // #541: the gradient generators and Glow are at schema 2.
         expectations.expect(registry.find(type, std::string_view(type) == "bloom.glow" ||
                                                         std::string_view(type).ends_with("-gradient")
@@ -175,7 +175,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // #339: the recipes are Image effects whose first input is the required Image; Glow's key and
     // Light Wrap's background are optional Images, Glow's mask an optional Mask; every animatable
     // value has its socket and the switches and Glow's octaves are constants.
-    for (const auto* type : {"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"}) {
+    for (const auto* type :
+         {"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.edge-extend"}) {
         const auto* recipe = registry.find(type, std::string_view(type) == "bloom.glow" ? 2 : 1);
         bool sockets = recipe != nullptr;
         // #541: a gradient value animates as a whole and has no socket kind.
@@ -567,7 +568,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectations.expect(autoExposureShaped,
                         "#566: Auto Exposure has a look-back constant and a socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
-                    "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
+                    "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association",
+                    "bloom.edge-extend"},
                    document::NodeCategory::Compositing);
     // #503 Alpha Association: an Image in and out, a constant mode (Unmult by default) and white
     // switch with no socket, and an animatable background colour with a Color socket.

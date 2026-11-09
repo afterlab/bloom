@@ -36,7 +36,7 @@ recipeOptionalInput(const document::NodeId nodeId, const std::string_view port,
 
 [[nodiscard]] static bool isRecipeNodeType(const std::string_view typeId) noexcept {
     return typeId == document::kDropShadowNodeType || typeId == document::kGlowNodeType ||
-           typeId == document::kLightWrapNodeType;
+           typeId == document::kLightWrapNodeType || typeId == document::kEdgeExtendNodeType;
 }
 
 // #486 Sharpen: its input's blur and the unsharp mask over the two.
@@ -303,6 +303,15 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
                 {*shadowColor, *opacity, *direction, *distance, *softness, *shadowOnly});
         addTopologyFailure(node.id, "Drop Shadow parameters could not be lowered.");
         return std::nullopt;
+    }
+    if (node.typeId == document::kEdgeExtendNodeType) {
+        auto distance = scalar("distance");
+        auto amount = scalar("amount");
+        if (!distance || !amount) {
+            addTopologyFailure(node.id, "Edge Extend parameters could not be lowered.");
+            return std::nullopt;
+        }
+        return runtime::detail::appendEdgeExtend(emitter, *input, {*distance, *amount});
     }
     if (node.typeId == document::kGlowNodeType) {
         const auto key = recipeOptionalInput(node.id, "key", operations, indices);

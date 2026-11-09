@@ -1,7 +1,7 @@
 #ifndef BLOOM_RUNTIME_TESTS_COMPOSITING_RECIPE_TEST_SUPPORT_HPP
 #define BLOOM_RUNTIME_TESTS_COMPOSITING_RECIPE_TEST_SUPPORT_HPP
 
-// #339: plans that run Drop Shadow, Glow and Light Wrap through the PRODUCTION recipe chains
+// #339: plans that run Drop Shadow, Glow, Light Wrap (and #516 Edge Extend) through the PRODUCTION recipe chains
 // (compositing_recipes.hpp, the functions the snapshot compiler lowers with; #506 adds the Glow
 // modes and shared controls) over an HDR, partial-alpha gradient, so the CPU reference tests, the GPU coverage fixtures and the native
 // parity harness all exercise exactly what an authored node evaluates.
@@ -25,7 +25,7 @@ using runtime::CompiledColorParameter;
 using runtime::CompiledScalarParameter;
 using runtime::OperationIndex;
 
-enum class Recipe : std::uint8_t { DropShadow, Glow, LightWrap };
+enum class Recipe : std::uint8_t { DropShadow, Glow, LightWrap, EdgeExtend };
 
 // Which image the plan's Composition Output publishes: the recipe, or one of the images it reads
 // (an evaluation request may only name the terminal output).
@@ -72,6 +72,9 @@ struct RecipeValues final {
     double radius = 3.0;
     double amount = 0.75;
     bool wrapOnly = false;
+    // #516 Edge Extend
+    double extendDistance = 4.0;
+    double extendAmount = 1.0;
     // An animated Drop Shadow distance (0 at t = 0 to `distance` at t = 1) or Glow intensity.
     bool animated = false;
     // The input is an HDR, partial-alpha solid instead of the gradient. Luma Key's coverage is a
@@ -234,6 +237,12 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                 detail::appendLightWrap(emitter, result.input, result.background,
                                         {scalar(idBase + 41, values.radius),
                                          scalar(idBase + 42, values.amount), values.wrapOnly});
+            break;
+        case Recipe::EdgeExtend:
+            result.recipe =
+                detail::appendEdgeExtend(emitter, result.input,
+                                         {scalar(idBase + 71, values.extendDistance),
+                                          scalar(idBase + 72, values.extendAmount)});
             break;
         }
     }

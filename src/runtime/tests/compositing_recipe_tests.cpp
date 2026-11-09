@@ -459,6 +459,33 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
     return composite(wrap, input, values.wrapOnly ? Composite::In : Composite::Atop);
 }
 
+// Edge Extend: the input weighted by its alpha, blurred, divided by its blurred alpha (the straight
+// colour of the nearby pixels, solid ones counting for most), put back under the input's alpha, and
+// mixed in by amount * (1 - alpha). Alpha itself never changes.
+[[nodiscard]] Image edgeExtendReference(const Image& input, const double distance,
+                                        const double amount) {
+    auto weighted = input;
+    for (auto& pixel : weighted.pixels) {
+        const double a = pixel[3];
+        for (auto& component : pixel)
+            component *= a;
+    }
+    const auto spread = blur(weighted, distance, false, false);
+    auto out = input;
+    for (auto y = out.y0; y < out.y0 + out.height; ++y)
+        for (auto x = out.x0; x < out.x0 + out.width; ++x) {
+            const auto p = input.at(x, y);
+            const auto s = spread.at(x, y);
+            const double divisor = s[3] > 0x1p-20 ? s[3] : 1.0;
+            const double t = amount * (1.0 - p[3]);
+            for (std::size_t c = 0; c < 3; ++c) {
+                const double extended = s[c] / divisor * p[3];
+                out(x, y)[c] = p[c] + t * (extended - p[c]);
+            }
+        }
+    return out;
+}
+
 [[nodiscard]] Image reference(const runtime::CpuCompositionEvaluator& evaluator,
                               const Recipe recipe, const RecipeValues& values) {
     using recipe_test::Published;
@@ -476,6 +503,8 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
     case Recipe::LightWrap:
         return lightWrapReference(
             input, evaluated(evaluator, recipe, values, Published::Background), values);
+    case Recipe::EdgeExtend:
+        return edgeExtendReference(input, values.extendDistance, values.extendAmount);
     }
     return {};
 }
@@ -517,7 +546,8 @@ void testCacheAndRoi() {
                                    faded.frame()->processImage().pixels()),
            "a changed opacity re-runs only Levels, the recipe's Merge and the output's Merge and "
            "Composition Output");
-    for (const auto recipe : {Recipe::DropShadow, Recipe::Glow, Recipe::LightWrap}) {
+    for (const auto recipe :
+         {Recipe::DropShadow, Recipe::Glow, Recipe::LightWrap, Recipe::EdgeExtend}) {
         const auto roiPlan = recipe_test::recipePlan(recipe, {});
         const auto full = evaluator.evaluate(roiPlan.plan, request(roiPlan.plan->output()), {});
         auto roiRequest = request(roiPlan.plan->output());
@@ -562,6 +592,85 @@ void testAnimation() {
                    !std::ranges::equal(start.frame()->processImage().pixels(),
                                        end.frame()->processImage().pixels()),
                "the animated recipe equals the constant one at its key: " + detail);
+    }
+}
+
+// #516 Edge Extend. The known answers: a pixel of alpha 1 is exactly the input; alpha is never
+// changed; amount 0 is the input; a uniform straight colour is a fixed point; the colour under a
+// soft edge moves towards the solid pixels beside it (here by the reference above, which the
+// recipe test already matched). The same checks run at a reduced render scale (a proxy half the
+// composition's size), where the blur reaches half as many pixels.
+[[nodiscard]] Image evaluatedAt(const runtime::CpuCompositionEvaluator& evaluator,
+                                const RecipeValues& values, const bool edgeExtend,
+                                const runtime::EvaluationResolution resolution) {
+    const auto plan = recipe_test::recipePlan(Recipe::EdgeExtend, values, 3900,
+                                              edgeExtend ? recipe_test::Published::Recipe
+                                                         : recipe_test::Published::Input)
+                          .plan;
+    auto value = request(plan->output());
+    value.resolution = resolution;
+    const auto result = evaluator.evaluate(plan, value, {});
+    if (!result.frame())
+        throw std::logic_error("Edge Extend fixture does not evaluate");
+    return imageOf(result.frame()->processImage());
+}
+
+void testEdgeExtend() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto halfExtent = render::ImageExtent::create(recipe_test::kRecipeWidth / 2,
+                                                        recipe_test::kRecipeHeight / 2);
+    if (!halfExtent)
+        throw std::logic_error("the proxy extent is valid");
+    for (const auto& [resolution, label] :
+         {std::pair<runtime::EvaluationResolution, const char*>{
+              runtime::CompositionFormatResolution{}, "full scale"},
+          std::pair<runtime::EvaluationResolution, const char*>{
+              runtime::ProxyResolution{*halfExtent.value()}, "half scale"}}) {
+        const std::string where = std::string("Edge Extend at ") + label + ": ";
+        RecipeValues values;
+        const auto source = evaluatedAt(evaluator, values, false, resolution);
+        const auto extended = evaluatedAt(evaluator, values, true, resolution);
+        bool alphaKept = true;
+        bool solidKept = true;
+        bool softMoved = false;
+        for (auto y = source.y0; y < source.y0 + source.height; ++y)
+            for (auto x = source.x0; x < source.x0 + source.width; ++x) {
+                const auto a = source.at(x, y);
+                const auto b = extended.at(x, y);
+                alphaKept = alphaKept && std::abs(a[3] - b[3]) <= 1e-6;
+                if (a[3] == 1.0)
+                    solidKept = solidKept && a == b;
+                else if (std::abs(a[0] - b[0]) > 1e-4)
+                    softMoved = true;
+            }
+        expect(alphaKept, where + "alpha is never changed");
+        expect(solidKept, where + "a solid pixel is exactly the input");
+        expect(softMoved, where + "the colour under a soft edge changes");
+        // The gradient's straight colour grows with x while its alpha is below one, so the pixels
+        // beside a soft one are brighter and Edge Extend lifts it.
+        const auto at = [&](const Image& image) { return image.at(source.x0 + 3, source.y0 + 3); };
+        expect(at(extended)[0] > at(source)[0], where + "a soft pixel takes the brighter colour near it");
+        values.extendAmount = 0.0;
+        const auto off = evaluatedAt(evaluator, values, true, resolution);
+        expect(off.pixels == source.pixels, where + "amount 0 is the input");
+        values.extendAmount = 1.0;
+        values.extendDistance = 0.0;
+        const auto none = evaluatedAt(evaluator, values, true, resolution);
+        bool same = true;
+        for (std::size_t i = 0; i < none.pixels.size(); ++i)
+            for (std::size_t c = 0; c < 4; ++c)
+                same = same && std::abs(none.pixels[i][c] - source.pixels[i][c]) <= 1e-6;
+        expect(same, where + "distance 0 is the input");
+        RecipeValues uniform;
+        uniform.solidInput = true;
+        const auto flat = evaluatedAt(evaluator, uniform, false, resolution);
+        const auto flatExtended = evaluatedAt(evaluator, uniform, true, resolution);
+        bool fixedPoint = true;
+        for (std::size_t i = 0; i < flat.pixels.size(); ++i)
+            for (std::size_t c = 0; c < 4; ++c)
+                fixedPoint = fixedPoint &&
+                             std::abs(flat.pixels[i][c] - flatExtended.pixels[i][c]) <= 1e-5;
+        expect(fixedPoint, where + "one uniform colour is a fixed point");
     }
 }
 
@@ -783,6 +892,12 @@ int main() {
         testReference(Recipe::LightWrap, values, "Light Wrap");
         values.wrapOnly = true;
         testReference(Recipe::LightWrap, values, "Light Wrap (wrap only)");
+        values = {};
+        testReference(Recipe::EdgeExtend, values, "Edge Extend");
+        values.extendDistance = 2.5;
+        values.extendAmount = 0.6;
+        testReference(Recipe::EdgeExtend, values, "Edge Extend (a part of the way, fractional reach)");
+        testEdgeExtend();
         testModes();
         testPhysicalEnergy();
         testCacheAndRoi();

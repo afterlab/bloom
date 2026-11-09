@@ -2,6 +2,7 @@
 
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
@@ -154,6 +155,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kSeparateChannelsNodeType ||
         typeId == document::kCombineChannelsNodeType)
         return QStringLiteral("RGB RGBA channel split pass");
+    // #516.
+    if (typeId == document::kEdgeExtendNodeType)
+        return QStringLiteral("edge fringe halo dark edge bright edge matte color bleed spread "
+                              "extend dilate rgb under alpha despill clean");
     // #518.
     if (typeId == document::kToneMapNodeType)
         return QStringLiteral("soft clip highlight compression roll off shoulder knee hdr limiter "

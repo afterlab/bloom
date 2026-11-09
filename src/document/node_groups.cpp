@@ -18,10 +18,10 @@ constexpr std::array<std::string_view, 14> kSources{
     "bloom.linear-gradient",    "bloom.radial-gradient", "bloom.test-card",
     "bloom.audio-equalizer",    "bloom.audio-compressor", "bloom.audio-auto-level",
     "bloom.audio-mono",         "bloom.audio-hiss"};
-// Planned: Image Switch, Edge Extend.
-constexpr std::array<std::string_view, 7> kCompositing{
+// Planned: Image Switch.
+constexpr std::array<std::string_view, 8> kCompositing{
     "bloom.layer-stack", "bloom.adjustment",     "bloom.layer-output",     "bloom.image-mix",
-    "bloom.set-alpha",   "bloom.multiply-alpha", "bloom.alpha-association"};
+    "bloom.set-alpha",   "bloom.multiply-alpha", "bloom.alpha-association", "bloom.edge-extend"};
 constexpr std::array<std::string_view, 10> kChannels{
     "bloom.channel-copy",        "bloom.channel-pass",      "bloom.channel-remove",
     "bloom.channel-shuffle",     "bloom.separate-channels", "bloom.combine-channels",

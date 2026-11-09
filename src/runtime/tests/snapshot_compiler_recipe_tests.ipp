@@ -571,10 +571,64 @@ void testLightWrapLowering(Expectations& expectations) {
                         "with no background the foreground passes through");
 }
 
+// #516 Edge Extend: Multiply Alpha by the input's own alpha, a transparent-edge Rgba blur by the
+// distance, Unpremultiply, a Channel Combine of the input's alpha with re-association, a white
+// held out by the inverted alpha (the mask), then an Image Mix by the amount through that mask.
+void testEdgeExtendLowering(Expectations& expectations) {
+    using namespace document;
+    auto fixture = recipeFixture(kEdgeExtendNodeType, {{"distance", 6.0}, {"amount", 0.5}});
+    const auto node = fixture.node;
+    const auto distanceId = fixture.parameters.at("distance");
+    const auto amountId = fixture.parameters.at("amount");
+    auto result = compileRecipe(std::move(fixture.project));
+    expectations.expect(result.plan != nullptr, "Edge Extend compiles");
+    if (!result.plan)
+        return;
+    const auto& plan = *result.plan;
+    const auto ops = recipeOperations(plan, node);
+    require(ops.size() == 7, "Edge Extend lowers to seven primitives");
+    const auto* weighted = recipeKernel<runtime::ImageCombineKernel>(plan, ops[0]);
+    const auto* spread = recipeKernel<runtime::SeparableBlurKernel>(plan, ops[1]);
+    const auto* straight = recipeKernel<runtime::AlphaAssociationKernel>(plan, ops[2]);
+    const auto* combine = recipeKernel<runtime::ChannelCombineKernel>(plan, ops[3]);
+    const auto* white = recipeKernel<runtime::ChannelSelectKernel>(plan, ops[4]);
+    const auto* held = recipeKernel<runtime::ImageCombineKernel>(plan, ops[5]);
+    const auto* mix = recipeKernel<runtime::ImageCombineKernel>(plan, ops[6]);
+    expectations.expect(weighted && weighted->mode == runtime::ImageCombineMode::MultiplyAlpha &&
+                            !weighted->invert,
+                        "the input is scaled by its own alpha");
+    const auto* radius = spread ? std::get_if<double>(&spread->radius.source) : nullptr;
+    expectations.expect(spread && spread->channels == runtime::BlurChannels::Rgba &&
+                            spread->edge == runtime::BlurEdgeMode::Transparent && radius &&
+                            *radius == 6.0 && spread->radius.id == distanceId,
+                        "the weighted input blurs by the distance with a transparent edge");
+    expectations.expect(straight && straight->mode == runtime::AlphaAssociationMode::Unpremultiply,
+                        "the blur is divided by its alpha");
+    expectations.expect(combine && combine->slot == 3 &&
+                            combine->source == runtime::ImageChannelSource::Alpha &&
+                            combine->premultiply,
+                        "the input's alpha is put back and the colour re-associated");
+    expectations.expect(white && white->sources[3] == runtime::ImageChannelSource::One &&
+                            held && held->mode == runtime::ImageCombineMode::MultiplyAlpha &&
+                            held->invert,
+                        "the mask is white held out by the input's inverted alpha");
+    const auto* factor = mix && mix->factor ? std::get_if<double>(&mix->factor->source) : nullptr;
+    const auto* mixEffect = std::get_if<runtime::CompiledImageEffect>(&plan.operations()[ops[6]]);
+    expectations.expect(mix && mix->mode == runtime::ImageCombineMode::Mix && factor &&
+                            *factor == 0.5 && mix->factor->id == amountId && mixEffect &&
+                            mixEffect->maskInput.has_value() &&
+                            mixEffect->maskInput->value() == ops[5] &&
+                            mixEffect->secondaryInput.has_value() &&
+                            mixEffect->secondaryInput->value() == ops[3],
+                        "Image Mix moves the input towards the extended colour by the amount "
+                        "through the transparency mask");
+}
+
 // A muted recipe passes its input through, like every image effect.
 void testRecipeMute(Expectations& expectations) {
     using namespace document;
-    for (const auto type : {kDropShadowNodeType, kGlowNodeType, kLightWrapNodeType}) {
+    for (const auto type :
+         {kDropShadowNodeType, kGlowNodeType, kLightWrapNodeType, kEdgeExtendNodeType}) {
         auto fixture = recipeFixture(type, {}, type == kLightWrapNodeType
                                                    ? std::vector<std::string>{"background"}
                                                    : std::vector<std::string>{});

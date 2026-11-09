@@ -598,7 +598,7 @@ void testSearchKeyboardAndMenus() {
                   "Radial Gradient", "Solid", "Test Card", "Video"},
                  "Sources holds what makes an image, and the audio effects beside the Audio source");
         hasGroup("Compositing",
-                 {"Adjustment", "Alpha Association", "Image Mix", "Layer", "Merge",
+                 {"Adjustment", "Alpha Association", "Edge Extend", "Image Mix", "Layer", "Merge",
                   "Multiply Alpha", "Set Alpha"},
                  "Layers merged into Compositing");
         hasGroup("Channels",

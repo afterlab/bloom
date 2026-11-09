@@ -104,7 +104,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   with an attack and a release, so a light that dims or flares makes the picture hunt like a phone camera.
 - [Color tools](user-guide/color-tools.md) — Tone Map: highlight roll-off, shadow recovery and gamut
   compression for HDR scene-linear color; Color Matrix: a channel mixer and color-model conversion; HSL Qualifier: a Mask of a
-  hue, saturation and luma range.
+  hue, saturation and luma range; Edge Extend: solid color pushed under a soft alpha edge.
 - [Audio Effects](user-guide/audio-effects.md) — Equalizer, Compressor, Auto Level, Mono and Hiss for an
   audio layer, heard the same in playback and export.
 - [Audio Amplitude, Waveform and Spectrum](user-guide/audio-analysis.md) — a loudness value and two

@@ -3082,6 +3082,20 @@ displayProofRunner(const bool customView) {
                               "foreground, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #516 Edge Extend: the production chain (alpha-weighted blur, unpremultiply, re-association
+    // and a masked mix) over the HDR, partial-alpha gradient at two reaches and amounts.
+    add(
+        "node.bloom.edge-extend", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues partial;
+            partial.extendDistance = 2.5;
+            partial.extendAmount = 0.6;
+            return runRecipes(bloom::recipe_test::Recipe::EdgeExtend, {{}, partial}, 169900,
+                              "production Edge Extend: the alpha-weighted colour of the nearby "
+                              "solid pixels mixed under a soft edge, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #506 Glow modes and their two primitives. The primitives run over the HDR, signed,
     // partial-alpha gradient (full frame and ROI); the modes run the production recipe chains.
     add(

@@ -17,6 +17,7 @@ namespace bloom::document {
 inline constexpr std::string_view kDropShadowNodeType = "bloom.drop-shadow";
 inline constexpr std::string_view kGlowNodeType = "bloom.glow";
 inline constexpr std::string_view kLightWrapNodeType = "bloom.light-wrap";
+inline constexpr std::string_view kEdgeExtendNodeType = "bloom.edge-extend";
 // #541: Glow schema 2 tints its octaves through a gradient value (`tintGradient`) in place of
 // schema 1's outer tint; Drop Shadow and Light Wrap stay at schema 1.
 inline constexpr std::uint32_t kGlowNodeSchemaVersion = 2;
@@ -96,6 +97,12 @@ inline constexpr std::string_view kLightWrapRadiusSchemaKey = "bloom.light-wrap.
 inline constexpr std::string_view kLightWrapAmountSchemaKey = "bloom.light-wrap.amount";
 inline constexpr std::string_view kLightWrapWrapOnlySchemaKey = "bloom.light-wrap.wrap-only";
 
+// #516 Edge Extend. The straight colour of the pixels under a soft alpha edge is replaced by the
+// colour of the solid pixels within `distance` of them (an average weighted by alpha squared), by
+// `amount` times the pixel's transparency; alpha is never changed.
+inline constexpr std::string_view kEdgeExtendDistanceSchemaKey = "bloom.edge-extend.distance";
+inline constexpr std::string_view kEdgeExtendAmountSchemaKey = "bloom.edge-extend.amount";
+
 // The radii are the blur radii, so they share kMaximumBlurRadiusPixels (parameter.hpp).
 inline constexpr double kMaximumRecipeBlurRadius = 256.0;
 inline constexpr double kMaximumDropShadowDistance = 16384.0;
@@ -150,6 +157,10 @@ recipeScalarDomain(const std::string_view schemaKey) noexcept {
         return RecipeScalarDomain{0.0, kMaximumRecipeBlurRadius, 16.0};
     if (schemaKey == kLightWrapAmountSchemaKey)
         return RecipeScalarDomain{0.0, 1.0, 0.75};
+    if (schemaKey == kEdgeExtendDistanceSchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumRecipeBlurRadius, 4.0};
+    if (schemaKey == kEdgeExtendAmountSchemaKey)
+        return RecipeScalarDomain{0.0, 1.0, 1.0};
     return std::nullopt;
 }
 

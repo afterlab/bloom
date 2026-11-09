@@ -453,6 +453,43 @@ OperationIndex appendLightWrap(RecipeEmitter& emitter, const OperationIndex inpu
                           {input, core::BlendMode::Normal}});
 }
 
+// Edge Extend. With premultiplied colour p = a c and alpha a, the input scaled by its own alpha
+// (Multiply Alpha) is a c a over a a; its Gaussian blur by `distance` (transparent edge) divided by
+// its alpha (Unpremultiply) is the straight colour of the nearby pixels weighted by alpha squared,
+// so solid pixels count for much more than the soft ones that carry the fringe. A Channel Combine
+// puts the input's alpha back and re-associates it: x = a c_ext, alpha a. Image Mix then moves each
+// pixel towards x by `amount` times its transparency (1 - a), the mask being white held out by the
+// input's inverted alpha, so a solid pixel is exactly the input and a pixel of alpha a keeps its
+// alpha: p' = p + amount (1 - a) (x - p).
+OperationIndex appendEdgeExtend(RecipeEmitter& emitter, const OperationIndex input,
+                                const EdgeExtendOperands& operands) {
+    const auto weighted = emitter.effect(
+        input,
+        ImageCombineKernel{ImageCombineMode::MultiplyAlpha, RecipeEmitter::constant(1.0),
+                           render::ImageCoverageChannel::Alpha},
+        input);
+    const auto spread = emitter.effect(
+        weighted, SeparableBlurKernel{SeparableBlurKind::Gaussian, operands.distance,
+                                      BlurEdgeMode::Transparent, BlurChannels::Rgba});
+    const auto straight = emitter.effect(
+        spread, AlphaAssociationKernel{AlphaAssociationMode::Unpremultiply, false});
+    const auto extended = emitter.effect(
+        straight, ChannelCombineKernel{3, ImageChannelSource::Alpha, true}, input);
+    const auto white = emitter.effect(
+        input, ChannelSelectKernel{{ImageChannelSource::One, ImageChannelSource::One,
+                                    ImageChannelSource::One, ImageChannelSource::One},
+                                   false});
+    const auto transparency = emitter.effect(
+        white,
+        ImageCombineKernel{ImageCombineMode::MultiplyAlpha, RecipeEmitter::constant(1.0),
+                           render::ImageCoverageChannel::Alpha, std::nullopt, true},
+        input);
+    return emitter.effect(input,
+                          ImageCombineKernel{ImageCombineMode::Mix, operands.amount,
+                                             render::ImageCoverageChannel::Alpha},
+                          extended, transparency);
+}
+
 OperationIndex appendSharpen(RecipeEmitter& emitter, const OperationIndex input,
                              const SharpenOperands& operands) {
     const auto blurred =

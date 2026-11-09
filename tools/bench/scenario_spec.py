@@ -439,6 +439,19 @@ SCENARIOS["color-matrix-2k"] = {
     ],
 }
 
+# #516: Edge Extend over a plate: a keyed distance, so every frame is new and the cost is the wide
+# blur and the five pixel passes around it. Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["edge-extend-2k"] = {
+    "description": "A PNG16 plate through Edge Extend with a keyed distance.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.edge-extend", {"amount": 1.0},
+                      {"keys": {"distance": [[0, 2.0], [23, 24.0]]}}]]},
+    ],
+}
+
 # #523: HSL Qualifier over a plate: a keyed hue window limits a Grade through its mask input, so
 # every frame is new and the cost is the qualifier's pass and the masked grade. Written, not run: it
 # has no recorded numbers and no budget.

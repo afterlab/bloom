@@ -1885,6 +1885,47 @@ hard edges, gray, HDR white, invert, alpha) and the domain. `node.bloom.hsl-qual
 through the production builder, and the native harness holds three variants to the CPU oracle.
 [Benchmarks](../development/benchmarks.md) lists `hsl-qualifier-2k`, written and not yet run.
 
+## Edge Extend
+
+`bloom.edge-extend`, schema 1 (#516), is a compositing recipe like Light Wrap, listed under
+Compositing in the Add menu. It has a required Image input, `input`, and an Image output, `image`,
+takes no effect mask, and has no pixel kernel of its own: the compiler lowers it to a chain of
+existing primitives (`appendEdgeExtend`), so each keeps its own CPU reference, resident GPU command,
+cache identity, ROI, budget, cancellation and retirement. Parameters: `distance` 4 pixels in
+`[0, 256]` (a blur radius in full-resolution pixels, so it scales with the render scale) and
+`amount` 1 in `[0, 1]`, both animatable.
+
+A soft edge of a keyed or antialiased element stores a straight color polluted by what was behind
+it, which shows as a dark or bright fringe once the element is placed on another background. Edge
+Extend replaces the color under the soft part of the alpha with the color of the solid pixels near
+it and never changes alpha. With premultiplied `p = a c` and alpha `a`:
+
+1. Multiply Alpha scales the input by its own alpha: `a p` (so the blur below weighs each pixel by
+   `a^2` times its straight color).
+2. A Gaussian Blur by `distance` (transparent edge, RGBA) gives `B`.
+3. Unpremultiply divides it by its own alpha (above `2^-20`): `c_x`, the straight color of the nearby
+   pixels weighted by alpha squared, so solid pixels count for much more than the soft ones.
+4. A Channel Combine puts the input's alpha back and premultiplies: `x = a c_x`, alpha `a`.
+5. A white image held out by the input's inverted alpha (Channel Select of ones, Multiply Alpha with
+   the invert switch) is the Mask `1 - a`.
+6. Image Mix of the input with `x` by `amount`, through that Mask: `p' = p + amount (1 - a) (x - p)`.
+
+A solid pixel (`a = 1`) is exactly the input, the alpha of every pixel is unchanged, amount 0 and
+distance 0 are the input, and a region of one straight color is a fixed point. Because stored color
+is premultiplied, a pixel of alpha 0 cannot hold color: Edge Extend changes the color of partly
+transparent pixels only, which is what removes the fringe under later blurs, scales and
+resamplings. The data window is the input's. The wide blur is the cost: two separable passes whose
+support grows with `distance`; the other five operations are single pixel passes. A muted node passes
+its input through.
+
+**Evidence.** The direct recipe test compares the chain with an independent double-precision
+reference (a direct two-dimensional Gaussian, the alpha weighting, the division and the mix) at
+1e-4, and checks the alpha, the solid pixels, amount 0, distance 0 and a uniform color, at full and
+at half render scale. The compiler test reads the seven operations and the parameter identities
+they use. `node.bloom.edge-extend` prepares through the production builder (full frame and ROI),
+and the native harness holds two variants to the CPU oracle with warm reuse and a changed amount.
+[Benchmarks](../development/benchmarks.md) lists `edge-extend-2k`, written and not yet run.
+
 ## Histogram
 
 `bloom.histogram`, schema 1, under Tracking & Analysis (issue #349), has one Image in, `input`, and one

@@ -135,6 +135,12 @@ struct LightWrapOperands final {
     bool wrapOnly = false;
 };
 
+// #516 Edge Extend: the colour under a soft alpha edge, taken from the solid pixels near it.
+struct EdgeExtendOperands final {
+    CompiledScalarParameter distance; // blur radius, full-resolution pixels
+    CompiledScalarParameter amount;   // [0, 1]
+};
+
 // #486 Sharpen, which unlike the recipes above has one pixel kernel of its own over the blur.
 struct SharpenOperands final {
     CompiledScalarParameter amount;
@@ -155,6 +161,8 @@ struct SharpenOperands final {
 [[nodiscard]] OperationIndex appendLightWrap(RecipeEmitter& emitter, OperationIndex input,
                                              OperationIndex background,
                                              const LightWrapOperands& operands);
+[[nodiscard]] OperationIndex appendEdgeExtend(RecipeEmitter& emitter, OperationIndex input,
+                                              const EdgeExtendOperands& operands);
 
 // The input's Gaussian blur with the frame edge clamped, so the edge of the image is not an edge of
 // the picture, then the unsharp mask over the two.

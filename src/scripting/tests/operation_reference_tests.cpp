@@ -252,7 +252,9 @@ void everyNodeGroupIsNamed() {
     pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},
            "light-shadow");
     pinned({"bloom.echo", "bloom.frame-rate-hold"}, "time");
-    pinned({"bloom.alpha-association", "bloom.layer-stack", "bloom.layer-output"}, "compositing");
+    pinned({"bloom.alpha-association", "bloom.layer-stack", "bloom.layer-output",
+            "bloom.edge-extend"},
+           "compositing");
     pinned({"bloom.frame-number"}, "time-values");
     // The node reference resource is headed by the same names the Add menu shows.
     const auto reference = nodeReferenceMarkdown();

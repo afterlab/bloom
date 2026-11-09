@@ -25,6 +25,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
@@ -1069,6 +1070,8 @@ void recipeRows() {
                     "points", "angle", "length", "chromatic", "dirtAmount", "rollOff"},
                    "glowOnly"},
           Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"},
+          // #516: two values and no switch.
+          Expected{"bloom.edge-extend", {"distance", "amount"}, nullptr},
           // #503: not a recipe, but the same shape: a mode, a colour and a switch.
           Expected{"bloom.alpha-association", {"mode", "background"}, "white"}}) {
         const auto node = addNode(session, type);
@@ -1084,6 +1087,8 @@ void recipeRows() {
             expect(properties.findChild<QWidget*>(QStringLiteral("glowTintGradientEditor")) !=
                        nullptr,
                    "Properties edits Glow's tint gradient on a gradient editor");
+        if (flag == nullptr)
+            continue;
         auto* toggleRow = row(properties, flag);
         auto* toggle = toggleRow ? toggleRow->findChild<ui::kit::KSwitch*>() : nullptr;
         expect(toggle != nullptr && !toggle->isChecked(), "a recipe presents an unset switch");
@@ -1229,6 +1234,61 @@ void colorCleanupRows() {
                                             QStringLiteral(".png")))
                     std::cerr << "could not write the " << type << " Properties capture\n";
             }
+        }
+    }
+}
+
+// #516 Edge Extend in Properties: a row for Distance and Amount, in plain words, each label shown
+// whole, nothing wider than the panel, at the widths of a wide, a normal and a narrow panel. With
+// BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device pixel
+// ratio).
+void edgeExtendRows() {
+    auto project = document::makeNewProject("Edge", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    const auto node = addNode(session, document::kEdgeExtendNodeType);
+    session.selectNode(node);
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                               ? QStringLiteral("dpr1")
+                               : QStringLiteral("dpr15");
+    for (const int width : {2000, 900, 420}) {
+        properties.resize(width, 900);
+        properties.show();
+        QCoreApplication::processEvents();
+        for (const auto& [role, text] : {std::pair{"distance", QStringLiteral("Distance")},
+                                         std::pair{"amount", QStringLiteral("Amount")}}) {
+            auto* found = row(properties, role);
+            expect(found != nullptr && found->isVisibleTo(&properties),
+                   "Edge Extend presents every value");
+            if (found == nullptr)
+                continue;
+            expect(found->property("rowLabel").toString() == text,
+                   "Edge Extend names a row in plain words");
+            QLabel* label = nullptr;
+            for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                if (candidate->text() == text && candidate->isVisibleTo(&properties))
+                    label = candidate;
+            expect(label != nullptr &&
+                       label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                   "Edge Extend shows a row label whole");
+            for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                if (field->isVisibleTo(&properties))
+                    expect(!field->paintedText().contains(QChar(0x2026)) &&
+                               !field->isDisplayRounded(),
+                           "Edge Extend shows a value whole");
+        }
+        if (auto* scroll = properties.findChild<QScrollArea*>())
+            expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                   "Edge Extend's rows never exceed the panel's width");
+        if (!directory.isEmpty()) {
+            QDir().mkpath(directory);
+            if (!properties.grab().save(directory + QStringLiteral("/bloom.edge-extend-properties-") +
+                                        QString::number(width) + QLatin1Char('-') + suffix +
+                                        QStringLiteral(".png")))
+                std::cerr << "could not write the Edge Extend Properties capture\n";
         }
     }
 }
@@ -1633,6 +1693,7 @@ int main(int argc, char** argv) try {
     frameRateHoldRows();
     autoExposureRows();
     colorCleanupRows();
+    edgeExtendRows();
     warpRows();
     audioEffectRows();
     groupAndPlotRows();

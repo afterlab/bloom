@@ -28,6 +28,19 @@ on the straight color of scene-linear values and never changes alpha.
 Every value can be keyed or driven through its socket. Connect a Mask to **Mask** to limit the node
 to part of the image.
 
+## Edge Extend
+
+**Edge Extend** removes dark or bright fringes from the soft edge of a keyed or antialiased element
+before you composite it. Find it under **Compositing** in the Add menu. It replaces the color under
+the soft part of the alpha with the color of the solid pixels near it and never changes alpha. The
+formulas are in [Image filters](../architecture/image-filters.md#edge-extend).
+
+- **Distance** is how far, in pixels, the solid color is taken from. Use the width of the fringe, or
+  a little more.
+- **Amount** is how much of the replacement to use, from none (0) to all of it (1).
+- Fully opaque pixels are never touched. A pixel that is fully transparent holds no color, so only
+  partly transparent pixels change.
+
 ## HSL Qualifier
 
 **HSL Qualifier** turns an image into a Mask of the pixels in a range of hue, saturation and

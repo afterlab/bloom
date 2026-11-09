@@ -610,6 +610,14 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.color-matrix")
         self.assertIn("rg", effect[2]["keys"], "every frame is new")
 
+    def test_edge_extend_scenario_keys_a_distance_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["edge-extend-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.edge-extend")
+        self.assertIn("distance", effect[2]["keys"], "every frame is new")
+
     def test_hsl_qualifier_scenario_keys_a_hue_window_limiting_a_grade(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["hsl-qualifier-2k"]

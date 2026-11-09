@@ -447,6 +447,9 @@ template <typename Definition>
         scalar("dirtAmount", kGlowDirtAmountSchemaKey, false);
         scalar("rollOff", kGlowRollOffSchemaKey, false);
         flag("glowOnly", kGlowGlowOnlySchemaKey);
+    } else if (typeId == kEdgeExtendNodeType) {
+        scalar("distance", kEdgeExtendDistanceSchemaKey);
+        scalar("amount", kEdgeExtendAmountSchemaKey);
     } else {
         scalar("radius", kLightWrapRadiusSchemaKey);
         scalar("amount", kLightWrapAmountSchemaKey);
@@ -645,7 +648,8 @@ template <typename Definition>
         if (definition.key.typeId == kCombineChannelsNodeType)
             return definition == combineChannelsDefinition();
         if (definition.key.typeId == kDropShadowNodeType ||
-            definition.key.typeId == kGlowNodeType || definition.key.typeId == kLightWrapNodeType)
+            definition.key.typeId == kGlowNodeType || definition.key.typeId == kLightWrapNodeType ||
+            definition.key.typeId == kEdgeExtendNodeType)
             return definition == recipeDefinition(definition.key.typeId);
         if (definition.key.typeId == "bloom.transform-2d") {
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
@@ -1785,6 +1789,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         recipeDefinition(kDropShadowNodeType),
         recipeDefinition(kGlowNodeType),
         recipeDefinition(kLightWrapNodeType),
+        recipeDefinition(kEdgeExtendNodeType),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

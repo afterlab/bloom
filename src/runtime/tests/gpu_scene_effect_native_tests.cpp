@@ -1939,6 +1939,19 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         onlyChanged.amount = 0.5;
         cases.push_back({Recipe::LightWrap, only, onlyChanged, 1, "light wrap only"});
     }
+    {
+        // #516 Edge Extend: a changed amount re-runs only the mix, a blend dispatch (the OCIO
+        // programs before it stay cached).
+        RecipeValues changed;
+        changed.extendAmount = 0.4;
+        cases.push_back({Recipe::EdgeExtend, {}, changed, 0, "edge extend"});
+        RecipeValues far;
+        far.extendDistance = 2.5;
+        far.extendAmount = 0.6;
+        RecipeValues farChanged = far;
+        farChanged.extendAmount = 0.3;
+        cases.push_back({Recipe::EdgeExtend, far, farChanged, 0, "edge extend, fractional reach"});
+    }
     std::uint64_t id = 9600;
     for (const auto& item : cases) {
         cache.clear();
