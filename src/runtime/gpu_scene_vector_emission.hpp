@@ -86,11 +86,12 @@ publishVectorLeafBounds(const CompiledOperation& operation, const CompiledCompos
                                                    vScale, cancellation, leafWindow, leafLocal)) {
         return error;
     }
-    if (leafWindow) {
+    if (leafWindow)
         outputWindowOf[index] = *leafWindow;
-        bounds[index].local = leafLocal;
-        bounds[index].output = leafLocal;
-    }
+    // A leaf that encloses no area (a straight line, a path trimmed down to one) has no window but
+    // still has bounds, and the CPU evaluator publishes them: both routes agree on the pivot.
+    bounds[index].local = leafLocal;
+    bounds[index].output = leafLocal;
     return std::nullopt;
 }
 

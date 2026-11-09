@@ -29,8 +29,32 @@ none adds an image lowering to the GPU coverage contract and none needs an excep
 A non-finite operand, a coordinate beyond the bound, a tolerance outside its range, a result with a
 contour over the anchor cap (raise the tolerance), or a path too detailed to flatten fails the
 evaluation with a diagnostic and answers the empty path. Nothing is clamped silently except the miter
-limit (1 to 100). Work is bounded by the Path value's caps, so one evaluation is bounded work; the
-evaluation of a value graph is where cancellation is observed, between operations.
+limit (1 to 100). Work is bounded by the Path value's caps, so one evaluation is bounded work.
+
+Cancellation is observed inside every kernel as well as between operations: each kernel polls the
+evaluation's cancellation token per contour, segment, anchor, dash, dot, sample and vertex, and between
+calls into the polygon library. The polygon library's own calls cannot be interrupted; the Path caps
+bound each of them, and the kernel polls immediately before and after. A cancelled kernel answers
+shaped empty paths with a cancelled outcome, and the evaluator stores nothing in the memoization cache
+for it, so a later evaluation recomputes. `ValueUtilityLimits::pollObserver` is a test seam that
+counts or triggers cancellation at a chosen poll.
+
+## Evidence
+
+- CPU: `bloom.runtime.path_processing` covers cancellation at the first, a middle and the last polls of
+  all seven kernels (and that at most a few polls follow a request) and the exact budget diagnostics.
+- Persistence: `bloom.project.path-nodes` saves and reopens all ten path and analysis nodes byte
+  identically and undoes and redoes operand edits.
+- Device: `bloom.runtime.gpu_path_processing_native` renders each kernel through the production GPU
+  scene path against the CPU reference, cold and warm, with operand-edit invalidation, unrelated-edit
+  no-ops, a keyed Trim Path end, HDR and alpha, a data window, and a region of interest. It exits 77
+  (skipped) with no device; a skip is not a pass. It found and fixed a CPU/GPU disagreement: a
+  zero-area shape leaf (a trimmed straight line) now publishes its bounds on the GPU as on the CPU.
+- Known gap: a Glow recipe over any Shape Source loses its halo on the device (it matches over a
+  frame-sized Solid). The Glow chain's device half is gated behind `BLOOM_PATH_TEST_GLOW_CHAIN` until
+  that shared GPU code is fixed; it is not claimed as passing.
+- Not covered: the interactive viewer route and RAM preview for path nodes have no dedicated route
+  evidence yet.
 
 ## Transform Path
 

@@ -79,11 +79,14 @@ resolveShapeLeafWindow(const CompiledShape& shape, const CompiledCompositionPlan
                     "Shape geometry could not be rasterized");
     }
     const auto extent = raster.value()->bounds(fillEnabled, strokeEnabled);
+    // The local bounds are published even when they enclose no area (a straight line, a trimmed
+    // path that is only a line), exactly as the CPU evaluator publishes them, so both routes agree
+    // on where the layer's pivot is.
+    local = {extent.left, extent.top, extent.right, extent.bottom};
     if (!(extent.right > extent.left) || !(extent.bottom > extent.top)) {
         window = std::nullopt;
         return std::nullopt;
     }
-    local = {extent.left, extent.top, extent.right, extent.bottom};
     const auto left = std::floor(extent.left * hScale);
     const auto top = std::floor(extent.top * vScale);
     const auto right = std::ceil(extent.right * hScale);
