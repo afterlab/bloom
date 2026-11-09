@@ -36,6 +36,19 @@ inline constexpr std::string_view kNodeGroupNodeType = "bloom.node-group";
 inline constexpr std::string_view kFunctionNodeType = "bloom.function";
 inline constexpr std::string_view kFunctionArgumentRole = "x";
 inline constexpr std::string_view kFunctionResultPort = "y";
+// #595: the same function sampled over a range of arguments into a Path value.
+inline constexpr std::string_view kFunctionPlotNodeType = "bloom.function-plot";
+inline constexpr std::string_view kFunctionPlotStartRole = "start";
+inline constexpr std::string_view kFunctionPlotEndRole = "end";
+inline constexpr std::string_view kFunctionPlotSamplesRole = "samples";
+inline constexpr std::string_view kFunctionPlotOriginRole = "origin";
+inline constexpr std::string_view kFunctionPlotScaleRole = "scale";
+inline constexpr std::string_view kFunctionPlotSmoothRole = "smooth";
+inline constexpr std::string_view kFunctionPlotPathPort = "path";
+inline constexpr std::int64_t kMinimumFunctionPlotSamples = 2;
+// One contour holds at most kMaximumPathAnchors, so a plot of this many samples is one contour.
+inline constexpr std::int64_t kMaximumFunctionPlotSamples = 4096;
+inline constexpr std::int64_t kDefaultFunctionPlotSamples = 256;
 inline constexpr std::uint32_t kNodeGroupNodeSchemaVersion = 1;
 
 // The parameter on an instance (and on Function Plot) that names the definition.

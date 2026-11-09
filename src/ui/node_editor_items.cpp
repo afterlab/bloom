@@ -301,6 +301,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kNodeGroupNodeType, "Node Group"},
         // #590
         LibraryName{document::kFunctionNodeType, "Function"},
+        // #595
+        LibraryName{document::kFunctionPlotNodeType, "Function Plot"},
         // #525 Fields. "Random Field" and "Gradient Field" say so beside the Random value and the
         // gradient generators.
         LibraryName{document::kFieldNoiseNodeType, "Noise"},

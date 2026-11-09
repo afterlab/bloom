@@ -2060,6 +2060,7 @@ int main() {
         testNodeGroupRefusals(expectations);
         testFunctionGroups(expectations);
         testFunctionSharesGroupWithInstance(expectations);
+        testFunctionPlot(expectations);
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);

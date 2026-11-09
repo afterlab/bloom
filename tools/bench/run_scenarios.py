@@ -597,6 +597,16 @@ class Builder:
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort="value")
+        if "plotNode" in layer:
+            plot = layer["plotNode"]
+            group = self.function_group(plot["function"])
+            driver = self.transact("bloom.node.add", composition=self.composition,
+                                   nodeType="bloom.function-plot")["node"]
+            self.set_values(driver, "bloom.function-plot", {"group": group, **plot["values"]})
+            self.set_keys(driver, plot.get("keys") or {})
+            self.transact("bloom.parameter.set-source", composition=self.composition,
+                          parameter=self.parameter_id(source, "path"), driverNode=driver,
+                          driverPort="path")
         port = layer.get("port", "image")
         last = self.chain(source, port, layer.get("effects") or ())
         holder = self.transact("bloom.node.add-fed-by", composition=self.composition,
@@ -607,6 +617,36 @@ class Builder:
         self.layers[layer["name"]] = {"source": source, "output": holder}
         self.layer_controls(holder, layer)
         return holder
+
+    def function_group(self, name):
+        """#590: a group definition made of Math nodes (scenario_spec.FUNCTION_GROUPS[name]) between a
+        Group Input and a Group Output; answers the new composition's id."""
+        host = self.composition
+        group = self.transact("bloom.composition.add", name=name, width=64, height=64, duration=1,
+                              frameRateNumerator=bench.spec.FPS, frameRateDenominator=1)["composition"]
+        self.composition = group
+        try:
+            entry = self.transact("bloom.node.add", composition=group,
+                                  nodeType="bloom.group-input")["node"]
+            leave = self.transact("bloom.node.add", composition=group,
+                                  nodeType="bloom.group-output")["node"]
+            made = {}
+            for step, operation, wiring in scenario_spec.FUNCTION_GROUPS[name]:
+                node = self.transact("bloom.node.add", composition=group,
+                                     nodeType="bloom.math")["node"]
+                self.set_values(node, "bloom.math", {"operation": operation})
+                made[step] = node
+                for role, source in wiring.items():
+                    driver, port = (entry, "scalar1") if source == "x" else (made[source], "result")
+                    self.transact("bloom.parameter.set-source", composition=group,
+                                  parameter=self.parameter_id(node, role), driverNode=driver,
+                                  driverPort=port)
+            self.transact("bloom.parameter.set-source", composition=group,
+                          parameter=self.parameter_id(leave, "scalar1"), driverNode=node,
+                          driverPort="result")
+        finally:
+            self.composition = host
+        return group
 
     def audio(self, layer):
         """#569: a generated stereo tone with seeded noise as an audio layer, fed through the layer's

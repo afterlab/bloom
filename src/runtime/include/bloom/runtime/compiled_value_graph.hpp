@@ -379,6 +379,20 @@ struct CompiledValueFunction final {
     friend bool operator==(const CompiledValueFunction&, const CompiledValueFunction&);
 };
 
+// #595: Function Plot. The body is sampled at `samples` arguments from `start` to `end` and the
+// answers become the anchors of a Path (in pixels: origin + (x * scale.x, -y * scale.y)).
+struct CompiledValueFunctionPlot final {
+    std::shared_ptr<const CompiledFunctionBody> body;
+    CompiledValueOperand start;
+    CompiledValueOperand end;
+    CompiledValueOperand samples;
+    CompiledValueOperand origin;
+    CompiledValueOperand scale;
+    CompiledValueOperand smooth;
+
+    friend bool operator==(const CompiledValueFunctionPlot&, const CompiledValueFunctionPlot&);
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
@@ -386,7 +400,8 @@ using CompiledValueKernel =
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
-                 CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction>;
+                 CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
+                 CompiledValueFunctionPlot>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -416,6 +431,13 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 visit(step.smoothing);
             } else if constexpr (std::is_same_v<Step, CompiledValueFunction>) {
                 visit(step.argument);
+            } else if constexpr (std::is_same_v<Step, CompiledValueFunctionPlot>) {
+                visit(step.start);
+                visit(step.end);
+                visit(step.samples);
+                visit(step.origin);
+                visit(step.scale);
+                visit(step.smooth);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {
@@ -501,10 +523,20 @@ struct CompiledFunctionBody final {
     friend bool operator==(const CompiledFunctionBody&, const CompiledFunctionBody&) = default;
 };
 
+[[nodiscard]] inline bool sameFunctionBody(const std::shared_ptr<const CompiledFunctionBody>& left,
+                                           const std::shared_ptr<const CompiledFunctionBody>& right) {
+    return left == right || (left != nullptr && right != nullptr && *left == *right);
+}
+
+inline bool operator==(const CompiledValueFunctionPlot& left,
+                       const CompiledValueFunctionPlot& right) {
+    return sameFunctionBody(left.body, right.body) && left.start == right.start &&
+           left.end == right.end && left.samples == right.samples && left.origin == right.origin &&
+           left.scale == right.scale && left.smooth == right.smooth;
+}
+
 inline bool operator==(const CompiledValueFunction& left, const CompiledValueFunction& right) {
-    return left.argument == right.argument &&
-           (left.body == right.body ||
-            (left.body != nullptr && right.body != nullptr && *left.body == *right.body));
+    return left.argument == right.argument && sameFunctionBody(left.body, right.body);
 }
 
 } // namespace bloom::runtime

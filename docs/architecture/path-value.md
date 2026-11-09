@@ -107,6 +107,9 @@ The **Path** node (`bloom.value-path`, in Values) is the producer: it holds a wh
 constant or keyed. It generates nothing and exists to prove and use the plumbing. Generators arrive
 with their own issues and output this same socket.
 
+**Function Plot** (`bloom.function-plot`, in Text & Paths) is the first generator: it samples a group's
+function into one open contour per run of valid samples (value-node-library.md, **Function Plot**).
+
 ## Keys on groups of contours
 
 A `document::PathGroup` is a key, a run of contours (`firstContour`, `contourCount`) and optional

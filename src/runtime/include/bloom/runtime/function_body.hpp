@@ -40,6 +40,7 @@ class FunctionEvaluator final {
     [[nodiscard]] std::span<const ValueGraphDiagnostic> diagnostics() const noexcept {
         return diagnostics_;
     }
+    void clearDiagnostics() noexcept { diagnostics_.clear(); }
 
   private:
     const CompiledFunctionBody& body_;

@@ -1546,9 +1546,13 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                 vec3CurveReferences[vector3->value()] = 1;
             }
         });
-        if (const auto* function = std::get_if<CompiledValueFunction>(&kernel);
-            function != nullptr && function->body != nullptr)
-            for (const auto& inner : function->body->operations)
+        const CompiledFunctionBody* body = nullptr;
+        if (const auto* function = std::get_if<CompiledValueFunction>(&kernel))
+            body = function->body.get();
+        else if (const auto* plot = std::get_if<CompiledValueFunctionPlot>(&kernel))
+            body = plot->body.get();
+        if (body != nullptr)
+            for (const auto& inner : body->operations)
                 self(self, inner.kernel);
     };
     for (const auto& operation : plan->valueOperations()) {

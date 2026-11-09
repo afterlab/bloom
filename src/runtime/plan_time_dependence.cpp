@@ -18,6 +18,7 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
         const auto* utility = std::get_if<CompiledValueUtility>(&operation.kernel);
         const auto* sample = std::get_if<CompiledValueGradientSample>(&operation.kernel);
         const auto* function = std::get_if<CompiledValueFunction>(&operation.kernel);
+        const auto* plot = std::get_if<CompiledValueFunctionPlot>(&operation.kernel);
         // #525: a Field Sample whose field reads the clock or a keyed curve.
         const auto* field = std::get_if<CompiledValueFieldSample>(&operation.kernel);
         bool fieldAnimated = field != nullptr && field->program != nullptr &&
@@ -38,6 +39,7 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
             std::holds_alternative<CompiledValuePathCurve>(operation.kernel) ||
             // #590: a Function is as time-dependent as the body it runs.
             (function != nullptr && (function->body == nullptr || function->body->timeDependent)) ||
+            (plot != nullptr && (plot->body == nullptr || plot->body->timeDependent)) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
               utility->operation == document::ValueUtilityKernel::LightFlicker ||

@@ -86,9 +86,42 @@ namespace {
     return definition;
 }
 
+[[nodiscard]] NodeDefinition functionPlotDefinition() {
+    NodeDefinition definition{{std::string(kFunctionPlotNodeType), kNodeGroupNodeSchemaVersion},
+                              NodeLoweringKind::ValueFunction,
+                              {},
+                              {{std::string(kFunctionPlotPathPort), SocketValueKind::Path}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Values};
+    definition.parameters.push_back({std::string(kNodeGroupReferenceRole),
+                                     std::string(kNodeGroupReferenceSchemaKey),
+                                     ParameterValueKind::Integer, true, false, std::int64_t{0}});
+    // Every other parameter is an operand: a socket that a wire can drive, so the range, the
+    // resolution and the placement can follow other values.
+    const auto operand = [&](const std::string_view role, const SocketValueKind kind,
+                             ParameterValue value) {
+        const auto key = operandSchemaKeyOf(kind);
+        definition.inputs.push_back({std::string(role), kind, false});
+        definition.parameters.push_back({std::string(role), std::string(key),
+                                         parameterKindOf(kind), true, isAnimatableSchemaKey(key),
+                                         std::move(value)});
+    };
+    operand(kFunctionPlotStartRole, SocketValueKind::Scalar, -5.0);
+    operand(kFunctionPlotEndRole, SocketValueKind::Scalar, 5.0);
+    operand(kFunctionPlotSamplesRole, SocketValueKind::Integer, kDefaultFunctionPlotSamples);
+    operand(kFunctionPlotOriginRole, SocketValueKind::Vector2, Vec2d{0.0, 0.0});
+    operand(kFunctionPlotScaleRole, SocketValueKind::Vector2, Vec2d{100.0, 100.0});
+    operand(kFunctionPlotSmoothRole, SocketValueKind::Boolean, true);
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition generatedDefinition(const std::string_view typeId) {
     if (typeId == kFunctionNodeType)
         return functionDefinition();
+    if (typeId == kFunctionPlotNodeType)
+        return functionPlotDefinition();
     NodeDefinition definition{{std::string(typeId), kNodeGroupNodeSchemaVersion},
                               typeId == kNodeGroupNodeType ? NodeLoweringKind::NodeGroup
                                                            : NodeLoweringKind::GroupBoundary,
@@ -447,7 +480,7 @@ bool isNodeGroupBoundaryType(const std::string_view typeId) noexcept {
 }
 
 bool isFunctionConsumerType(const std::string_view typeId) noexcept {
-    return typeId == kFunctionNodeType;
+    return typeId == kFunctionNodeType || typeId == kFunctionPlotNodeType;
 }
 
 bool usesGroupReference(const std::string_view typeId) noexcept {
@@ -456,7 +489,8 @@ bool usesGroupReference(const std::string_view typeId) noexcept {
 
 std::vector<NodeDefinition> nodeGroupNodeDefinitions() {
     return {generatedDefinition(kGroupInputNodeType), generatedDefinition(kGroupOutputNodeType),
-            generatedDefinition(kNodeGroupNodeType), generatedDefinition(kFunctionNodeType)};
+            generatedDefinition(kNodeGroupNodeType), generatedDefinition(kFunctionNodeType),
+            generatedDefinition(kFunctionPlotNodeType)};
 }
 
 bool hasValidNodeGroupShape(const NodeDefinition& definition) {

@@ -514,3 +514,195 @@ void testFunctionSharesGroupWithInstance(Expectations& expectations) {
                             std::ranges::count(published, 0.75) == 1,
                         "the Function answers what the instance publishes at the same argument");
 }
+
+// ---------------------------------------------------------------------------------------------
+// #595 Function Plot: the function sampled into a Path.
+
+constexpr auto kReciprocalComposition = document::CompositionId::fromRaw(8);
+constexpr auto kPlotNode = document::NodeId::fromRaw(6501);
+constexpr auto kPlotShape = document::NodeId::fromRaw(6502);
+
+// y = 1 / x, which has no answer at zero.
+[[nodiscard]] document::Composition makeReciprocalGroup() {
+    using namespace document;
+    using core::primitives::ScalarPrimitive;
+    auto group = makeStackedComposition(kReciprocalComposition, "Reciprocal", 6700);
+    std::uint64_t next = 6800;
+    addDefaultedNode(group, NodeId::fromRaw(6801), kGroupInputNodeType, next);
+    addDefaultedNode(group, NodeId::fromRaw(6802), kGroupOutputNodeType, next);
+    addDefaultedNode(group, NodeId::fromRaw(6803), kScalarMathNodeType, next,
+                     {{"operation", scalarOperationStoredValue(ScalarPrimitive::Divide)}, {"a", 1.0}});
+    connectDriver(group, NodeId::fromRaw(6803), "b", NodeId::fromRaw(6801), "scalar1");
+    connectDriver(group, NodeId::fromRaw(6802), "scalar1", NodeId::fromRaw(6803));
+    return group;
+}
+
+struct PlotSettings final {
+    document::CompositionId group = kDecayComposition;
+    double start = -3.0;
+    double end = 3.0;
+    std::int64_t samples = 65;
+    document::Vec2d origin{10.0, 20.0};
+    document::Vec2d scale{100.0, 50.0};
+    bool smooth = true;
+};
+
+// The main composition with a Shape Source (kind Path) in place of the first layer's solid. Its
+// path is driven by a Function Plot, or holds `constant` when one is given.
+[[nodiscard]] document::Project makePlotProject(const PlotSettings& plot,
+                                                const std::optional<document::PathValue>& constant) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    require(project.addComposition(makeDecayGroup(core::primitives::ScalarPrimitive::Multiply)) &&
+                project.addComposition(makeReciprocalGroup()),
+            "the plotted groups are added");
+    auto* composition = project.findComposition(kCompositionId);
+    std::uint64_t next = 6900;
+    require(composition->graph().eraseEdge(kFirstSourceEdge), "the solid is disconnected");
+    addDefaultedNode(*composition, kPlotShape, kShapeSourceNodeType, next,
+                     {{"kind", static_cast<std::int64_t>(ShapeKind::Path)}});
+    require(composition->graph().addEdge({EdgeId::fromRaw(7101),
+                                          {kPlotShape, "image"},
+                                          NodeInputRef{kFirstLayerNode,
+                                                       std::string(kLayerOutputContentInputPort)}}),
+            "the shape feeds the layer");
+    const auto pathParameter = parameterOf(*composition, kPlotShape, "path");
+    if (constant) {
+        require(composition->parameters().setSource(pathParameter, ConstantValueSource{*constant}),
+                "the shape holds the sampled path");
+    } else {
+        addDefaultedNode(*composition, kPlotNode, kFunctionPlotNodeType, next,
+                         {{"group", static_cast<std::int64_t>(plot.group.value())},
+                          {"start", plot.start},
+                          {"end", plot.end},
+                          {"samples", plot.samples},
+                          {"origin", plot.origin},
+                          {"scale", plot.scale},
+                          {"smooth", plot.smooth}});
+        require(composition->parameters().setSource(pathParameter,
+                                                    DriverBindingSource{kPlotNode, "path"}),
+                "the shape reads the plot");
+    }
+    const auto validation = project.validate();
+    for (const auto& issue : validation.issues())
+        std::cerr << "plot fixture: " << issue.path << ": " << issue.message << '\n';
+    require(validation.ok(), "the plot fixture is valid document truth");
+    return project;
+}
+
+[[nodiscard]] std::shared_ptr<const document::PathValue>
+evaluatePlot(const runtime::CompiledCompositionPlan& plan, std::size_t* diagnostics = nullptr) {
+    const runtime::CompiledValueOperation* found = nullptr;
+    for (const auto& operation : plan.valueOperations())
+        if (std::holds_alternative<runtime::CompiledValueFunctionPlot>(operation.kernel))
+            found = &operation;
+    require(found != nullptr, "the plan holds the plot");
+    const auto evaluation =
+        runtime::evaluateValueGraph(plan.valueOperations(), plan.valueOutputCount(),
+                                    core::RationalTime::fromInteger(0), plan.format().frameRate());
+    if (diagnostics != nullptr)
+        *diagnostics = evaluation.diagnostics.size();
+    const auto* path = std::get_if<runtime::CompiledPathValue>(
+        &evaluation.outputs.at(found->firstOutput.value()));
+    return path == nullptr ? nullptr : path->value;
+}
+
+void testFunctionPlot(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    const PlotSettings settings;
+    const auto driven = compile(makePlotProject(settings, std::nullopt), registry);
+    expectations.expect(driven.plan != nullptr, "a Function Plot driving a shape compiles");
+    if (!driven.plan)
+        return;
+    std::size_t diagnostics = 0;
+    const auto path = evaluatePlot(*driven.plan, &diagnostics);
+    expectations.expect(path != nullptr && diagnostics == 0 && path->contours.size() == 1 &&
+                            path->contours[0].anchors.size() == 65 && !path->contours[0].closed,
+                        "a plot of 65 samples is one open contour of 65 anchors");
+    if (path == nullptr || path->contours.size() != 1)
+        return;
+
+    // Every anchor against the known answer, computed independently with the standard library.
+    PathValue expected;
+    PathContour contour;
+    bool anchorsMatch = path->contours[0].anchors.size() == 65;
+    for (std::size_t index = 0; index < 65; ++index) {
+        const double x = index == 64 ? settings.end
+                                     : settings.start + (settings.end - settings.start) *
+                                                            static_cast<double>(index) / 64.0;
+        const double y = std::sin(x) * std::exp(-x);
+        const Vec2d point{settings.origin.x + x * settings.scale.x,
+                          settings.origin.y - y * settings.scale.y};
+        contour.anchors.push_back({point, std::nullopt, std::nullopt, PathAnchorMode::Auto});
+        if (index < path->contours[0].anchors.size()) {
+            const auto& anchor = path->contours[0].anchors[index];
+            anchorsMatch = anchorsMatch && std::abs(anchor.point.x - point.x) < 1e-9 &&
+                           std::abs(anchor.point.y - point.y) < 1e-9 &&
+                           anchor.mode == PathAnchorMode::Auto && !anchor.inHandle &&
+                           !anchor.outHandle;
+        }
+    }
+    expected.contours.push_back(std::move(contour));
+    expectations.expect(anchorsMatch,
+                        "every anchor is origin + (x * scale.x, -y * scale.y) for y = sin(x) * exp(-x)");
+
+    // The shape the plot drives draws the same pixels as a shape that holds those anchors.
+    const auto constant = compile(makePlotProject(settings, expected), registry);
+    expectations.expect(constant.plan != nullptr, "the shape holding the sampled path compiles");
+    if (constant.plan) {
+        const auto drivenPixels = renderReference(driven.plan);
+        expectations.expect(!drivenPixels.empty() && drivenPixels == renderReference(constant.plan),
+                            "a plot-driven shape renders what a shape holding its anchors renders");
+    }
+
+    // Corner anchors when smoothing is off.
+    PlotSettings polyline = settings;
+    polyline.smooth = false;
+    const auto corner = compile(makePlotProject(polyline, std::nullopt), registry);
+    const auto cornerPath = corner.plan ? evaluatePlot(*corner.plan) : nullptr;
+    expectations.expect(cornerPath && cornerPath->contours.size() == 1 &&
+                            std::ranges::all_of(cornerPath->contours[0].anchors,
+                                                [](const PathAnchor& anchor) {
+                                                    return anchor.mode == PathAnchorMode::Corner;
+                                                }),
+                        "a plot with smoothing off holds Corner anchors");
+
+    // The sample count is held to what one contour holds: at least two, at most 4096.
+    for (const auto& [asked, held] : {std::pair{std::int64_t{1}, std::size_t{2}},
+                                      std::pair{std::int64_t{100000}, std::size_t{4096}}}) {
+        PlotSettings clamped = settings;
+        clamped.samples = asked;
+        const auto result = compile(makePlotProject(clamped, std::nullopt), registry);
+        const auto clampedPath = result.plan ? evaluatePlot(*result.plan) : nullptr;
+        expectations.expect(clampedPath && clampedPath->contours.size() == 1 &&
+                                clampedPath->contours[0].anchors.size() == held,
+                            "a sample count of " + std::to_string(asked) + " is held to " +
+                                std::to_string(held));
+    }
+
+    // A sample with no answer ends the contour: 1 / x over [-1, 1] in nine samples has no value at
+    // zero, so two contours of four anchors, and no line drawn across the pole.
+    PlotSettings pole = settings;
+    pole.group = kReciprocalComposition;
+    pole.start = -1.0;
+    pole.end = 1.0;
+    pole.samples = 9;
+    pole.smooth = false;
+    const auto gap = compile(makePlotProject(pole, std::nullopt), registry);
+    const auto gapPath = gap.plan ? evaluatePlot(*gap.plan) : nullptr;
+    bool gapKnown = gapPath && gapPath->contours.size() == 2 &&
+                    gapPath->contours[0].anchors.size() == 4 && gapPath->contours[1].anchors.size() == 4;
+    if (gapKnown)
+        for (std::size_t half = 0; half < 2; ++half)
+            for (std::size_t index = 0; index < 4; ++index) {
+                const double x = -1.0 + 0.25 * static_cast<double>(half * 5 + index);
+                const auto& anchor = gapPath->contours[half].anchors[index];
+                gapKnown = gapKnown && std::abs(anchor.point.x - (pole.origin.x + x * pole.scale.x)) < 1e-9 &&
+                           std::abs(anchor.point.y - (pole.origin.y - (1.0 / x) * pole.scale.y)) < 1e-9;
+            }
+    expectations.expect(gapKnown, "1 / x leaves a gap at zero: two contours of four known anchors");
+}

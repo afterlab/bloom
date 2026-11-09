@@ -1,3 +1,4 @@
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/function_body.hpp>
@@ -502,6 +503,8 @@ class Evaluator final {
                                const runtime::CompiledValueGroupBoundary& kernel);
     void evaluateFunction(const runtime::CompiledValueOperation& operation,
                           const runtime::CompiledValueFunction& kernel);
+    void evaluateFunctionPlot(const runtime::CompiledValueOperation& operation,
+                              const runtime::CompiledValueFunctionPlot& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -564,6 +567,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateGroupBoundary(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFunction>) {
                 evaluateFunction(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFunctionPlot>) {
+                evaluateFunctionPlot(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -741,6 +746,85 @@ void Evaluator::evaluateFunction(const runtime::CompiledValueOperation& operatio
         return;
     }
     write(operation, 0, *answer);
+}
+
+// #595: the body sampled over [start, end] into one open contour, in pixels with Y up on the plot
+// (so Y is subtracted from the origin). A sample that fails or is not finite ends the contour, so a
+// pole or a domain edge is a gap rather than a line drawn across it.
+void Evaluator::evaluateFunctionPlot(const runtime::CompiledValueOperation& operation,
+                                     const runtime::CompiledValueFunctionPlot& kernel) {
+    const auto scalar = [&](const runtime::CompiledValueOperand& operand) {
+        const auto* value = operandOf(operand);
+        return value == nullptr ? nullptr : std::get_if<double>(value);
+    };
+    const auto vector = [&](const runtime::CompiledValueOperand& operand) {
+        const auto* value = operandOf(operand);
+        return value == nullptr ? nullptr : std::get_if<document::Vec2d>(value);
+    };
+    const auto* start = scalar(kernel.start);
+    const auto* end = scalar(kernel.end);
+    const auto* samples = [&] {
+        const auto* value = operandOf(kernel.samples);
+        return value == nullptr ? nullptr : std::get_if<std::int64_t>(value);
+    }();
+    const auto* origin = vector(kernel.origin);
+    const auto* scale = vector(kernel.scale);
+    const auto* smooth = [&] {
+        const auto* value = operandOf(kernel.smooth);
+        return value == nullptr ? nullptr : std::get_if<bool>(value);
+    }();
+    const auto empty = [&] { write(operation, 0, runtime::CompiledPathValue{}); };
+    if (start == nullptr || end == nullptr || samples == nullptr || origin == nullptr ||
+        scale == nullptr || smooth == nullptr || kernel.body == nullptr) {
+        fail(operation, {}, "Function Plot input is unavailable",
+             "An input of the plot is not a value the value graph computed.");
+        empty();
+        return;
+    }
+    if (!std::isfinite(*start) || !std::isfinite(*end) || !std::isfinite(origin->x) ||
+        !std::isfinite(origin->y) || !std::isfinite(scale->x) || !std::isfinite(scale->y)) {
+        fail(operation, {}, "Function Plot range is not finite",
+             "The range, the origin and the scale must be finite numbers.");
+        empty();
+        return;
+    }
+    const auto count = static_cast<std::size_t>(
+        std::clamp(*samples, document::kMinimumFunctionPlotSamples,
+                   document::kMaximumFunctionPlotSamples));
+    runtime::FunctionEvaluator body(*kernel.body, time_, rate_, curves_, memoization_.cancellation);
+    document::PathValue value;
+    document::PathContour contour;
+    std::size_t valid = 0;
+    const auto flush = [&] {
+        if (contour.anchors.size() >= 2)
+            value.contours.push_back(std::move(contour));
+        contour = {};
+    };
+    const auto mode = *smooth ? document::PathAnchorMode::Auto : document::PathAnchorMode::Corner;
+    for (std::size_t index = 0; index < count; ++index) {
+        if (memoization_.cancellation && memoization_.cancellation->isCancellationRequested())
+            return;
+        const double x = index + 1 == count
+                             ? *end
+                             : *start + (*end - *start) * static_cast<double>(index) /
+                                            static_cast<double>(count - 1);
+        const auto y = body.at(x);
+        body.clearDiagnostics();
+        const double px = origin->x + x * scale->x;
+        const double py = y.has_value() ? origin->y - *y * scale->y : 0.0;
+        if (!y.has_value() || !std::isfinite(px) || !std::isfinite(py)) {
+            flush();
+            continue;
+        }
+        ++valid;
+        contour.anchors.push_back({document::Vec2d{px, py}, std::nullopt, std::nullopt, mode});
+    }
+    flush();
+    if (valid == 0)
+        fail(operation, {}, "Function Plot has no valid samples",
+             "The function gave no finite answer anywhere in the range.");
+    write(operation, 0,
+          runtime::CompiledPathValue{std::make_shared<document::PathValue>(std::move(value))});
 }
 
 void Evaluator::evaluateTime(const runtime::CompiledValueOperation& operation) {

@@ -513,6 +513,7 @@ them.
 | --- | --- |
 | Node Group | Expands in place; `scalar1` in, `scalar1` out, with the group's other slots beside it |
 | Function (`bloom.function`, Math) | `group` (Integer, a group's composition id), `x` (Scalar, 0) in; `y` (Scalar) out. The group is run as a function without an instance, so the card is one input and one output |
+| Function Plot (`bloom.function-plot`, Text & Paths) | The same function over a range, as a Path (below) |
 
 The compiler lowers exactly the operations the answer depends on into a small program of the
 consumer's own (`CompiledFunctionBody`), apart from the plan's main value program, so a function's
@@ -527,6 +528,39 @@ produces. It is evaluated with the request time of the consumer, so a Time node 
 it moves the answer from frame to frame, and the plan's time dependence reads through the consumer.
 A Function's answer is memoized like any value operation, keyed by its argument, the document
 revision and (when the body reads time) the request time; the body's own operations run uncached.
+
+### Function Plot
+
+Function Plot samples a group's function over a range and answers the curve as a Path value
+(`path-value.md`), so a Shape Source draws it, strokes it and animates it like any other path.
+
+| Parameter | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `group` | Integer | none | The group's composition id, chosen in Properties |
+| `start`, `end` | Scalar | -5, 5 | The arguments of the first and last sample |
+| `samples` | Integer | 256 | Samples taken, held to 2 through 4096 (the anchors one contour holds) |
+| `origin` | Vector 2 | 0, 0 | Where argument 0 with answer 0 lands, in pixels |
+| `scale` | Vector 2 | 100, 100 | Pixels per unit along X and Y |
+| `smooth` | Boolean | on | Auto anchors, whose handles are derived, so the curve is smooth; off gives Corner anchors, a polyline |
+
+Every parameter except `group` is an operand, so a wire can drive the range, the resolution and the
+placement. Sample `i` of `n` is at `x = start + (end - start) * i / (n - 1)`, and the last is exactly
+`end`. Its anchor is `origin + (x * scale.x, -y * scale.y)`: Y is up on the plot and down in the
+path's pixels, so a positive answer rises.
+
+A sample whose answer is missing or not finite ends the contour and the next one starts a new
+contour. A pole or a domain edge is therefore a gap and never a line drawn across it. A contour of
+one anchor draws nothing and is dropped. A plot with no valid sample at all reports the node. A
+range or scale that is not finite answers the empty path and reports the node.
+
+Cost, as read from the code: one run of the group's body per sample, so at most 4096 runs of at most
+512 operations per evaluation, plus one path of at most 4096 anchors that the path budget charges
+(`maxRetainedPathAnchors`). The evaluation checks for cancellation between samples. The answer is
+memoized like any value operation, keyed by its operands and the document revision, and by the
+request time only when the body reads time.
+
+The plot is a host value computation: it produces the same Path on every route, and the path's
+drawing is the shape's, with the parity `path-value.md` records for a driven path.
 
 ## Color Image Effects
 

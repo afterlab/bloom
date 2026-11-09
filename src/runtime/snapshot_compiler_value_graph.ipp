@@ -425,6 +425,53 @@ lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     return true;
 }
 
+// #590: the body a function consumer reads, finished: the value program its group's nodes were
+// lowered into, with the argument's operation and the answer's output found. Answers nothing, with
+// a diagnostic on the consumer when the group cannot be a function.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledFunctionBody>
+lowerFunctionBody(const document::NodeRecord& node) {
+    const auto body = expansion_.functionBodies.find(node.id);
+    const auto build = functionBuilds_.find(node.id);
+    if (body == expansion_.functionBodies.end() || build == functionBuilds_.end())
+        return nullptr;
+    auto compiled = std::make_shared<runtime::CompiledFunctionBody>();
+    compiled->operations = build->second.operations;
+    compiled->outputCount = build->second.outputCount;
+    if (compiled->operations.size() > runtime::kMaximumFunctionOperations) {
+        addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                   subject(node.id, "parameter.group"), "Function group is too large",
+                   "A function group may hold at most " +
+                       std::to_string(runtime::kMaximumFunctionOperations) +
+                       " value operations, because it runs once per argument.");
+        return nullptr;
+    }
+    for (std::size_t index = 0; index < compiled->operations.size(); ++index) {
+        const auto& operation = compiled->operations[index];
+        if (operation.requiresPostImage ||
+            std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel)) {
+            addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                       subject(node.id, "parameter.group"), "Function group reads an image",
+                       "A function group computes numbers from its argument and cannot read an "
+                       "image result.");
+            return nullptr;
+        }
+        if (operation.sourceNodeId == body->second.input)
+            compiled->inputOperation = index;
+    }
+    compiled->inputSlot = static_cast<std::size_t>(
+        std::ranges::find(document::kNodeGroupSlots, document::kFunctionInputSlot,
+                          &document::NodeGroupSlot::name) -
+        document::kNodeGroupSlots.begin());
+    const auto result = build->second.outputs.find(
+        ValueOutputKey{body->second.output, std::string(document::kFunctionOutputSlot)});
+    if (result == build->second.outputs.end())
+        return nullptr;
+    compiled->result = result->second;
+    compiled->timeDependent =
+        runtime::valueOperationsTimeDependent(compiled->operations, compiled->outputCount);
+    return compiled;
+}
+
 [[nodiscard]] std::optional<runtime::CompiledValueKernel>
 lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition& definition) {
     using namespace document;
@@ -696,48 +743,33 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         return runtime::CompiledValueKernel{std::move(boundary)};
     }
     case runtime::NodeLoweringKind::ValueFunction: {
-        // #590: the group's body, lowered into a program of its own, run for this node's argument.
-        const auto body = expansion_.functionBodies.find(node.id);
-        const auto build = functionBuilds_.find(node.id);
-        const auto argument = operandOf(document::kFunctionArgumentRole);
-        if (body == expansion_.functionBodies.end() || build == functionBuilds_.end() ||
-            !argument.has_value())
+        // #590, #595: the group's body, lowered into a program of its own, run for this node's
+        // argument (Function) or for a range of them (Function Plot).
+        auto compiled = lowerFunctionBody(node);
+        if (compiled == nullptr)
             return std::nullopt;
-        auto compiled = std::make_shared<runtime::CompiledFunctionBody>();
-        compiled->operations = build->second.operations;
-        compiled->outputCount = build->second.outputCount;
-        if (compiled->operations.size() > runtime::kMaximumFunctionOperations) {
-            addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
-                       subject(node.id, "parameter.group"), "Function group is too large",
-                       "A function group may hold at most " +
-                           std::to_string(runtime::kMaximumFunctionOperations) +
-                           " value operations, because it runs once per argument.");
-            return std::nullopt;
-        }
-        for (std::size_t index = 0; index < compiled->operations.size(); ++index) {
-            const auto& operation = compiled->operations[index];
-            if (operation.requiresPostImage ||
-                std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel)) {
-                addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
-                           subject(node.id, "parameter.group"), "Function group reads an image",
-                           "A function group computes numbers from its argument and cannot read "
-                           "an image result.");
+        if (node.typeId == document::kFunctionPlotNodeType) {
+            runtime::CompiledValueFunctionPlot plot;
+            plot.body = std::move(compiled);
+            auto start = operandOf(document::kFunctionPlotStartRole);
+            auto end = operandOf(document::kFunctionPlotEndRole);
+            auto samples = operandOf(document::kFunctionPlotSamplesRole);
+            auto origin = operandOf(document::kFunctionPlotOriginRole);
+            auto scale = operandOf(document::kFunctionPlotScaleRole);
+            auto smooth = operandOf(document::kFunctionPlotSmoothRole);
+            if (!start || !end || !samples || !origin || !scale || !smooth)
                 return std::nullopt;
-            }
-            if (operation.sourceNodeId == body->second.input)
-                compiled->inputOperation = index;
+            plot.start = *std::move(start);
+            plot.end = *std::move(end);
+            plot.samples = *std::move(samples);
+            plot.origin = *std::move(origin);
+            plot.scale = *std::move(scale);
+            plot.smooth = *std::move(smooth);
+            return runtime::CompiledValueKernel{std::move(plot)};
         }
-        compiled->inputSlot = static_cast<std::size_t>(
-            std::ranges::find(document::kNodeGroupSlots, document::kFunctionInputSlot,
-                              &document::NodeGroupSlot::name) -
-            document::kNodeGroupSlots.begin());
-        const auto result = build->second.outputs.find(
-            ValueOutputKey{body->second.output, std::string(document::kFunctionOutputSlot)});
-        if (result == build->second.outputs.end())
+        const auto argument = operandOf(document::kFunctionArgumentRole);
+        if (!argument.has_value())
             return std::nullopt;
-        compiled->result = result->second;
-        compiled->timeDependent =
-            runtime::valueOperationsTimeDependent(compiled->operations, compiled->outputCount);
         return runtime::CompiledValueKernel{
             runtime::CompiledValueFunction{*argument, std::move(compiled)}};
     }

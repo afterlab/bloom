@@ -20,7 +20,9 @@ area, and its layers from the bottom up. A layer is one of:
 - a procedural layer: {"name", "generator": [node type, {role: value}], "port": <its raster
   output, "image" by default>, "keys": {role: [[frame, value], ...]}, "transform", "blend",
   "effects": [...], "pathNode": {"keys": [[frame, path value], ...]}} (a generator node drawn as a
-  layer, with no media; "pathNode" drives its `path` from a keyed Path node, #589).
+  layer, with no media; "pathNode" drives its `path` from a keyed Path node, #589; "plotNode":
+  {"function": name in FUNCTION_GROUPS, "values": {role: value}, "keys": {role: [[frame, value],
+  ...]}} drives it from a Function Plot reading that group, #595).
 
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
@@ -578,6 +580,36 @@ SCENARIOS["path-value-compound-2k"] = {
          "pathNode": {"keys": [
              [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}],
              [24, {"contours": [_ring(i, 40) for i in range(64)], "fillRule": "evenOdd"}]]}},
+    ],
+}
+
+# #590, #595: group definitions a Function Plot can read, as Math nodes over Group Input's scalar1:
+# [[step, operation, {operand: "x" or an earlier step}], ...]; the last step is Group Output's scalar1.
+FUNCTION_GROUPS = {
+    "damped-sine": [
+        ["sine", "Sine", {"a": "x"}],
+        ["negate", "Negate", {"a": "x"}],
+        ["decay", "Exp", {"a": "negate"}],
+        ["product", "Multiply", {"a": "sine", "b": "decay"}],
+    ],
+}
+
+# #595: a Function Plot of sin(x) * exp(-x) at the node's largest sample count (4096), read by a Shape
+# Source, its range end keyed so that every frame samples a new range. The cost is the plot's: 4096
+# runs of a 6-operation body per frame, then the stroke and fill of one 4096-anchor contour. No media
+# is read. Written, not run.
+SCENARIOS["function-plot-2k"] = {
+    "description": "A Shape Source reading a 4096-sample damped sine from a Function Plot whose "
+                   "range grows over the shot.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plot",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "plotNode": {"function": "damped-sine",
+                      "values": {"start": -1.0, "end": 6.0, "samples": 4096,
+                                 "origin": [200.0, 700.0], "scale": [200.0, 300.0]},
+                      "keys": {"end": [[0, 2.0], [23, 6.0]]}}},
     ],
 }
 

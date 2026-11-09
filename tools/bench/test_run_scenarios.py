@@ -541,6 +541,22 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(len(keys[0][1]["contours"]), 64)
         self.assertNotEqual(keys[0][1], keys[1][1])
 
+    def test_function_plot_scenario_plots_a_group_into_a_shape(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["function-plot-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        layer = scenario["layers"][0]
+        self.assertEqual(layer["generator"][0], "bloom.shape-source")
+        plot = layer["plotNode"]
+        self.assertIn(plot["function"], spec.FUNCTION_GROUPS)
+        self.assertEqual(plot["values"]["samples"], 4096)
+        self.assertEqual([frame for frame, _ in plot["keys"]["end"]], [0, 23])
+        steps = spec.FUNCTION_GROUPS[plot["function"]]
+        seen = {"x"}
+        for step, _, wiring in steps:
+            self.assertTrue(set(wiring.values()) <= seen, "a step reads only x or an earlier step")
+            seen.add(step)
+
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["auto-exposure-2k"]
