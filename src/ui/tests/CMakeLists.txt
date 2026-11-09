@@ -2268,6 +2268,39 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     set_tests_properties(bloom.ui.gpu_viewer_route_proof
         PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
 
+    # #524 and #514: node-specific interactive-viewer evidence. Each scenario drives the production
+    # viewer chain over a composition using one new node and checks the resident frame against the
+    # CPU oracle; it writes no route proof, and skips (passes) without a Wayland platform and device.
+    add_executable(bloom_ui_gpu_node_viewer_evidence_test
+        gpu_node_viewer_evidence_tests.cpp
+        gpu_route_proof_harness_support.hpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_node_viewer_evidence_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/src/runtime"
+                ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_node_viewer_evidence_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    # The viewer's GPU scene builder needs the shared OCIO context (field programs, effects); it
+    # consumes the real packaged tools staged beside this executable, as the application does.
+    target_compile_definitions(bloom_ui_gpu_node_viewer_evidence_test PRIVATE
+        "BLOOM_NODE_EVIDENCE_EXECUTABLE=\"$<TARGET_FILE:bloom_ui_gpu_node_viewer_evidence_test>\"")
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_ui_gpu_node_viewer_evidence_test)
+    bloom_enable_warnings(bloom_ui_gpu_node_viewer_evidence_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_node_viewer_evidence_test)
+    foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
+                              blur-separate blur-per-channel transform-skew hue-vibrance
+                              hue-colorize)
+        bloom_add_test(
+            NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
+            COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args}
+            LABELS ui gpu viewer node-evidence
+            TIMEOUT 300
+        )
+    endforeach()
+
     add_executable(bloom_ui_gpu_ram_preview_route_proof_test
         gpu_ram_preview_route_proof_tests.cpp
         gpu_route_proof_harness_support.hpp

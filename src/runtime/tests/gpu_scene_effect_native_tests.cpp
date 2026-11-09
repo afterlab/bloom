@@ -2148,6 +2148,39 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         farChanged.extendAmount = 0.3;
         cases.push_back({Recipe::EdgeExtend, far, farChanged, 0, "edge extend, fractional reach"});
     }
+    {
+        // #514 Denoise & Smooth Median over an HDR gradient whose coverage ramps (a soft alpha edge
+        // everywhere): the straight-color rule against the CPU reference, at no threshold and at a
+        // threshold that keeps some pixels. A changed strength re-runs the one neighborhood pass.
+        RecipeValues plain;
+        plain.denoiseStrength = 0.0;
+        RecipeValues plainChanged = plain;
+        plainChanged.denoiseStrength = 0.3;
+        cases.push_back({Recipe::Denoise, plain, plainChanged, 1, "median at a soft alpha edge"});
+        RecipeValues kept;
+        kept.denoiseStrength = 0.6;
+        RecipeValues keptChanged = kept;
+        keptChanged.denoiseStrength = 0.05;
+        cases.push_back(
+            {Recipe::Denoise, kept, keptChanged, 1, "median with a threshold at a soft edge"});
+    }
+    {
+        // #524 Gaussian Blur with a radius per channel: five blurs and four channel combines over
+        // an HDR, partly transparent input, with and without separate axes. A changed share
+        // re-runs the blurs it scales (with a zero vertical radius, one horizontal pass).
+        RecipeValues channels;
+        RecipeValues changed = channels;
+        changed.channelScale = {1.0, 0.4, 0.0, 0.2};
+        // The changed share re-runs that channel's blur (a horizontal and a vertical pass).
+        cases.push_back({Recipe::ChannelBlur, channels, changed, 2, "per-channel blur"});
+        RecipeValues separate;
+        separate.blurSeparate = true;
+        separate.blurRadiusY = 0.0;
+        RecipeValues separateChanged = separate;
+        separateChanged.channelScale = {0.5, 0.4, 0.0, 0.7};
+        cases.push_back(
+            {Recipe::ChannelBlur, separate, separateChanged, 1, "per-channel blur, separate axes"});
+    }
     std::uint64_t id = 9600;
     for (const auto& item : cases) {
         cache.clear();
@@ -2207,7 +2240,11 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
                        item.alphaGate) &&
                 executor.executor->counters().ocioEffectDispatches ==
                     coldCounters.ocioEffectDispatches + item.changedOcioDispatches,
-            name + "a changed value re-runs only the chain after it, with CPU parity: " + detail);
+            name + "a changed value re-runs only the chain after it, with CPU parity: " + detail +
+                " (re-ran " +
+                std::to_string(executor.executor->counters().ocioEffectDispatches -
+                               coldCounters.ocioEffectDispatches) +
+                " OCIO dispatches, expected " + std::to_string(item.changedOcioDispatches) + ")");
     }
 }
 
@@ -2303,6 +2340,19 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                  1U});
         id += 100;
     }
+    // #524 Four-Color Gradient with every point far from the frame at the sharpest blend: the weights
+    // are normalized by the nearest point's, so the device, which flushes binary32 denormals, keeps
+    // the CPU's picture instead of 0 / 0.
+    kernels.emplace_back("four-color gradient far points",
+                         bloom::runtime::FieldRasterKernel{
+                             bloom::field_test_programs::fourColorGradientProgram(
+                                 id, 8.0,
+                                 {bloom::document::Vec2d{-1.0e6, 1.0e6}, bloom::document::Vec2d{1.0e6, 1.0e6},
+                                  bloom::document::Vec2d{-1.0e6, -1.0e6}, bloom::document::Vec2d{9.0e5, -1.0e6}},
+                                 {{{1.5, 0.0, 0.0, 1.0}, {0.0, 1.0, 0.25, 1.0},
+                                   {0.0, 0.25, 1.0, 0.5}, {1.0, 1.0, 0.0, 1.0}}}),
+                             1U});
+    id += 100;
     // #348 Corner Pin, ST Map and Displace: the programs their lowerings build, each filter.
     for (const std::int64_t filter : {0, 1, 2}) {
         kernels.emplace_back("corner pin filter " + std::to_string(filter),
@@ -3687,6 +3737,9 @@ void runMotionBlur(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         {{.scene = Scene::Zoom, .quality = draft, .jitter = true}, "zoom jittered"},
         {{.scene = Scene::TransformBlur, .quality = draft}, "transform shutter"},
         {{.scene = Scene::TransformBlur, .curve = doc::kShutterCurveCustom}, "transform custom curve"},
+        {{.scene = Scene::TransformBlur, .quality = draft, .skew = 25.0, .skewAxis = 10.0,
+          .fadeOpacity = true},
+         "transform shutter, skew and fading opacity"},
         {{.scene = Scene::SubFrame, .quality = draft}, "sub-frame"},
         {{.scene = Scene::SubFrame, .quality = draft, .curve = doc::kShutterCurveTriangle,
           .offset = doc::kShutterOffsetEnd},
