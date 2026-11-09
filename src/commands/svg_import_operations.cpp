@@ -681,25 +681,29 @@ class Importer final {
             const double ky = std::max((*ellipse)[1] * scale * gradient.userRadius / kLocalRadius, 1e-9);
             (*ellipse)[0] = kx;
             (*ellipse)[1] = ky;
-            double reach = 1.0;
+            // #343: each axis reaches only as far as that box needs, so a flat shape's gradient is
+            // not drawn in a square window as tall as it is wide.
+            double reachX = 1.0, reachY = 1.0;
             for (const double x : {box[0] - margin, box[2] + margin})
                 for (const double y : {box[1] - margin, box[3] + margin}) {
                     const double vx = x - centreWorld.x, vy = y - centreWorld.y;
                     // R(-u) v, then divide by the scales.
                     const double wx = cosine * vx + sine * vy, wy = -sine * vx + cosine * vy;
-                    reach = std::max({reach, std::fabs(wx / std::max((*ellipse)[0], 1e-6)),
-                                      std::fabs(wy / std::max((*ellipse)[1], 1e-6))});
+                    reachX = std::max(reachX, std::fabs(wx / std::max((*ellipse)[0], 1e-6)));
+                    reachY = std::max(reachY, std::fabs(wy / std::max((*ellipse)[1], 1e-6)));
                 }
-            reach += 2.0;
-            if (reach * 2.0 > 8192.0) {
+            reachX += 2.0;
+            reachY += 2.0;
+            if (reachX * 2.0 > 8192.0 || reachY * 2.0 > 8192.0) {
                 note(shape.name + ": an extreme elliptical gradient is drawn within an 8192 pixel window");
-                reach = 4096.0;
+                reachX = std::min(reachX, 4096.0);
+                reachY = std::min(reachY, 4096.0);
             }
-            localCentre = {reach, reach};
+            localCentre = {reachX, reachY};
             gradientOverrides["start"] = constant(localCentre);
             gradientOverrides["end"] = constant(document::Vec2d{localCentre.x + kLocalRadius, localCentre.y});
-            gradientOverrides["width"] = constant(reach * 2.0);
-            gradientOverrides["height"] = constant(reach * 2.0);
+            gradientOverrides["width"] = constant(reachX * 2.0);
+            gradientOverrides["height"] = constant(reachY * 2.0);
         }
         const auto gradientNode = addNode(std::string(gradient.radial ? document::kRadialGradientNodeType : document::kLinearGradientNodeType),
                                           gradientOverrides, cell());
