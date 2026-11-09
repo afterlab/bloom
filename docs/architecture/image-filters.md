@@ -2332,6 +2332,9 @@ node track matte on the bench EXR.
 
 ## Corner Pin, ST Map and Displace
 
+Stabilize (#513) is a fourth user of the same inverse mapping and is specified in
+`point-tracking.md`.
+
 Three nodes under **Distort** (#348) that move a picture by reading it somewhere else. Each is an
 inverse mapping: for every output pixel a position of the input is chosen and read. They differ only in
 where the position comes from. All three lower to one field raster (`fields.md`), so the CPU reference

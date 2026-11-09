@@ -105,6 +105,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   audio layer, heard the same in playback and export.
 - [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
   smearing: quality, block size, GOP length and P-frame persistence.
+- [Stabilize](user-guide/stabilize.md) — follow a feature through a shot and hold the picture still, or
+  carry an element along with it.
 - [Corner Pin, ST Map and Displace](user-guide/warp-nodes.md) — pin a picture to four corners with
   perspective, or move it by a map: absolute positions (ST Map) or offsets (Displace).
 - [Lens Distortion](user-guide/lens-distortion.md) — undistort or redistort a picture with the standard

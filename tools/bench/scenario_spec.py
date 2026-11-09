@@ -458,6 +458,19 @@ SCENARIOS["corner-pin-2k"] = {
     ],
 }
 
+# #513: Stabilize over a plate, its tracked position keyed so every frame is new (the render of the node; the
+# tracking job that normally writes those keys is started from the UI and is not in this suite).
+SCENARIOS["stabilize-2k"] = {
+    "description": "A PNG16 plate under Stabilize, its tracked position keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.stabilize", {},
+                      {"keys": {"tracked": [[0, [0, 0]], [23, [60, -24]]]}}]]},
+    ],
+}
+
 # #486: Lens Distortion in Redistort mode (the inverse solved per pixel) over a plate, its radial
 # coefficient keyed so every frame is new. Only the warped image is read, so the ST map is not built.
 SCENARIOS["lens-distortion-2k"] = {

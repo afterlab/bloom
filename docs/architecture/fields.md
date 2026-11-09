@@ -125,6 +125,11 @@ outside any image, which reads as transparent. The sampler returns transparent f
 a billion pixels, so a huge map value cannot overflow the sample arithmetic. These change no existing
 operation, so `kFieldProgramSemanticsVersion` stays.
 
+Homography has a second mode, **translation** (choices `[1, direction]`, vectors `[held point, tracked
+position]`), used by Stabilize (`point-tracking.md`): the similarity map with the offset between the
+two points (no turn, no scale, no window), `direction` 0 holding the picture still and 1 carrying it
+along. It is encoded by the same `similarityHomography` and `encodeHomography` as the quad mode.
+
 ### Rays
 
 Light Rays (`image-filters.md`) lowers to a field raster and adds one instruction to the vocabulary

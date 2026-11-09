@@ -466,6 +466,14 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.corner-pin")
         self.assertIn("topRight", effect[2]["keys"])
 
+    def test_stabilize_scenario_keys_its_tracked(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["stabilize-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.stabilize")
+        self.assertIn("tracked", effect[2]["keys"])
+
     def test_lens_distortion_scenario_keys_its_radial_coefficient(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["lens-distortion-2k"]
