@@ -20,7 +20,9 @@ void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& c
     // A running Profiler also wants the driver's heap budget (#423): the same bounded 1 Hz
     // owner-thread query, published to the process-wide telemetry counters.
     const bool timing = core->queueTimingRequested();
-    if (!timing && !telemetry::profilerActive())
+    // #427: so does a one-off request, from a snapshot taken with no sampler running.
+    const bool heapWanted = telemetry::profilerActive() || telemetry::gpuHeapBudgetRequested();
+    if (!timing && !heapWanted)
         return;
     const auto now = std::chrono::steady_clock::now();
     // This helper is owner-only. Published sample fields are read under stateMutex by clients.
@@ -40,6 +42,9 @@ void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& c
             budget, usage,
             std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
     }
+    // Answered, with a figure or with the extension's absence (the figure then stays absent).
+    if (sampleMemory)
+        telemetry::clearGpuHeapBudgetRequest();
     if (!timing) {
         if (sampleMemory) {
             const std::lock_guard lock(core->stateMutex);

@@ -147,6 +147,14 @@ The Profiler reads Bloom's runtime sampler. These values are live now:
   running.
 - **Pressure**: admission waits and refusals, and the memory caches gave back by reason.
 
+With the Profiler panel closed, `profiler.snapshot` has no running sampler, so the GPU heap
+figures are as old as the last query. The snapshot asks for a fresh one, which the next snapshot
+carries, with the age of the query beside it.
+
+**Admission claims** are estimates that can overlap staging Bloom also measures, so **unattributed**
+memory can undercount by up to the size of the claims. The Profiler's snapshot is read through
+`bloom-mcp` (`profiler.snapshot`, on stdio and HTTP); `bloom-cli` has no Profiler command.
+
 **GPU utilization** reads Unavailable: Vulkan has no portable way to ask how busy the GPU is, and
 Bloom does not link a vendor library (such as NVIDIA's) to ask the driver. On macOS and Windows,
 anonymous, file-backed and shared memory, unattributed memory and Bloom's memory in swap also read

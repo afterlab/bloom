@@ -171,6 +171,13 @@ void addEvictedBytes(std::uint64_t bytes) noexcept;
 void setProfilerActive(bool active) noexcept;
 [[nodiscard]] bool profilerActive() noexcept;
 
+// #427: a snapshot taken while no sampler runs (the Profiler panel closed, an MCP request) asks
+// for the GPU heap budget once. The owner of the query answers at its next poll, within about a
+// second; the figure then carries its own age. Asking again is harmless.
+void requestGpuHeapBudget() noexcept;
+[[nodiscard]] bool gpuHeapBudgetRequested() noexcept;
+void clearGpuHeapBudgetRequest() noexcept;
+
 // ---- Helper processes -----------------------------------------------------------------------
 
 inline constexpr std::size_t kHelperProcessSlots = 8;

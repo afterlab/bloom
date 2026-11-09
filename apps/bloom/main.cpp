@@ -4,6 +4,7 @@
 #include "sequence_export_process_teardown.hpp"
 
 #include <algorithm>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/host/export_queue.hpp>
@@ -720,6 +721,10 @@ int main(int argc, char* argv[]) try {
         .profilerSnapshot =
             [&profilerSampler, feed = profilerFeed.get()](bloom::runtime::ProfilerSnapshot& out) {
                 feed->publishUiInputs();
+                // With no sampler running, the GPU heap figures are as old as the last query; ask
+                // for a fresh one, which this snapshot's next successor carries (#427).
+                if (!profilerSampler.running())
+                    bloom::core::telemetry::requestGpuHeapBudget();
                 static_cast<void>(profilerSampler.sampleNow());
                 return profilerSampler.readLatest(out, 0);
             },

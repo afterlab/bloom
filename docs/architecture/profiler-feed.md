@@ -74,7 +74,7 @@ Sources, each read at the sampler rate unless noted:
 | Unattributed, idle baseline | computed from what is present; the baseline is the unattributed gap at the first sample that has the pool rows while Bloom is idle (`profilerSampleIdle()`: no queued or running task, and the hook reports no playback, RAM Preview fill or export); absent until then |
 | GPU live/retiring bytes, refusals, reclaims | the render module's process-wide `GpuImageReclamationStats`, read-only, through an injected function pointer (`runtime::readProfilerGpuDevice`; absent in a build without a GPU device) |
 | GPU upload and readback bytes, submits | the telemetry counters, reported only in a process whose GPU reader found a device |
-| GPU heap budget and usage | the telemetry counters: the preview display service's owner thread queries `VK_EXT_memory_budget` (summed over device-local heaps) at most once a second while a sampler runs; `gpuBudgetQueryAgeNs` is its age; absent on a device without the extension or before the first query |
+| GPU heap budget and usage | the telemetry counters: the preview display service's owner thread queries `VK_EXT_memory_budget` (summed over device-local heaps) at most once a second while a sampler runs, and once when a snapshot taken with no sampler running asks for it (`requestGpuHeapBudget()`; the figure arrives with the next snapshot); `gpuBudgetQueryAgeNs` is its age; absent on a device without the extension or before the first query |
 | GPU utilization | absent on every platform: Vulkan has no portable query and Bloom links no vendor library (NVML, ADLX, Level Zero); Linux sysfs busy counters exist only for some kernel drivers (amdgpu `gpu_busy_percent`), not for the proprietary NVIDIA driver, and would need a Vulkan-device-to-DRM-node mapping |
 | Process CPU time | `getrusage` (Linux, macOS), `GetProcessTimes` (Windows) |
 | Tasks and executor pools | `TaskScheduler::copyProfilerTasks()`: counts and the top 16 tasks copied into the snapshot's fixed slots under the scheduler lock, names truncated, no allocation or formatting under the lock; per executor pool (CPU, Blocking I/O, GPU submit, and Row bands when the scheduler has a row-band pool) its workers, queue depth and busy time |
@@ -159,7 +159,7 @@ a stage. Nothing there allocates, locks or formats.
   `MediaWorkerPool::workerProcessIds()` is the pool's read-only view of its own entries.
 - **Admission and eviction causes:** relaxed adds where admission answers a reservation and where
   a pool evicts or a purge clears (above).
-- **Profiler active:** set while a sampler thread runs; the GPU heap-budget query runs only then.
+- **Profiler active:** set while a sampler thread runs; the GPU heap-budget query runs only then, or once when a snapshot with no sampler asks for it.
 
 **The ledger adapter.** `readProfilerLedger()` (`profiler_ledger_adapter.hpp`) is the one place
 that reads the ledger, through existing const accessors only: `state()`, `reusableHolding()`,
@@ -216,7 +216,7 @@ ages. The application does not use it.
 
 The always-on cost is the counters above: relaxed atomic adds and the stage clock reads, measured
 at a few nanoseconds each (`bloom.core.telemetry_counters` prints them). With no Profiler shown
-nothing samples, no sampler thread exists and the GPU heap-budget query does not run. One sample
+nothing samples, no sampler thread exists and the GPU heap-budget query does not run (a snapshot requested by an agent asks for one query). One sample
 costs a few microseconds on Linux, takes no lock while it copies or formats, and allocates nothing
 (tested over 10,000 samples, with a helper process and staging bytes present).
 

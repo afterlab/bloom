@@ -38,6 +38,7 @@ struct Counters final {
     std::atomic<std::uint64_t> admissionRefusals{0};
     std::array<std::atomic<std::uint64_t>, kEvictionCauseCount> evictedBytes{};
     alignas(64) std::atomic<bool> profilerActive{false};
+    std::atomic<bool> heapBudgetRequested{false};
     std::array<HelperSlot, kHelperProcessSlots> helpers{};
 };
 
@@ -201,6 +202,9 @@ void setProfilerActive(const bool active) noexcept {
     counters().profilerActive.store(active, relaxed);
 }
 bool profilerActive() noexcept { return counters().profilerActive.load(relaxed); }
+void requestGpuHeapBudget() noexcept { counters().heapBudgetRequested.store(true, relaxed); }
+bool gpuHeapBudgetRequested() noexcept { return counters().heapBudgetRequested.load(relaxed); }
+void clearGpuHeapBudgetRequest() noexcept { counters().heapBudgetRequested.store(false, relaxed); }
 
 HelperProcessRegistration::HelperProcessRegistration(const std::int64_t pid, const char* name,
                                                      const void* owner) noexcept {
