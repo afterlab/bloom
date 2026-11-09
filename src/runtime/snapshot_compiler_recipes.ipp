@@ -122,6 +122,49 @@ lowerAutoExposure(const document::NodeRecord& node,
     return lowered;
 }
 
+// #349 Histogram: the tile counts, their sum and the plot.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerHistogram(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+               std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    const auto integer = [&](const std::string_view role, const std::int64_t high,
+                             std::int64_t& target) {
+        const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+        if (value == nullptr || *value < 0 || *value > high)
+            return false;
+        target = *value;
+        return true;
+    };
+    runtime::detail::HistogramOperands operands;
+    std::int64_t space = 0;
+    std::int64_t scale = 0;
+    std::int64_t bins = 0;
+    std::int64_t height = 0;
+    const auto rangeMin = compiledScalarParameter(findParameterBinding(node, "rangeMin"));
+    const auto rangeMax = compiledScalarParameter(findParameterBinding(node, "rangeMax"));
+    const bool valid =
+        integer("channels", document::kHistogramAlpha, operands.channels) &&
+        integer("space", document::kImagePixelStored, space) &&
+        integer("scale", document::kHistogramLogarithmic, scale) &&
+        integer("bins", document::kHistogramBins.size() - 1, bins) &&
+        integer("height", document::kHistogramHeights.size() - 1, height) && rangeMin && rangeMax;
+    if (!valid) {
+        addTopologyFailure(node.id, "Histogram parameters could not be lowered.");
+        return std::nullopt;
+    }
+    operands.straight = space == document::kImagePixelStraight;
+    operands.logarithmic = scale == document::kHistogramLogarithmic;
+    operands.bins = document::kHistogramBins[static_cast<std::size_t>(bins)];
+    operands.height = document::kHistogramHeights[static_cast<std::size_t>(height)];
+    operands.values = {*rangeMin, *rangeMax};
+    runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
+    return runtime::detail::appendHistogram(emitter, *input, operands);
+}
+
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
             std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {

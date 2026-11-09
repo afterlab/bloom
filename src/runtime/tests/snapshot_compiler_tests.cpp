@@ -1973,6 +1973,7 @@ int main() {
         testColorizeLowering(expectations);
         testVignetteLowering(expectations);
         testPixelMathLowering(expectations);
+        testHistogramCompareLowering(expectations);
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);

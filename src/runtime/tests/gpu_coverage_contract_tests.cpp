@@ -38,6 +38,7 @@
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
+#include "histogram_test_support.hpp"
 #include "pixel_math_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
@@ -1948,19 +1949,30 @@ displayProofRunner(const bool customView) {
                 pm::clampKernel(482100, {0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0}, true),
                 pm::clampKernel(482200, {-0.5, 0.5, 0.25, 2.0, 1.0, 0.0, 0.1, 0.9}, false)};
         };
+        // #349 Image Compare: each mode, and the split at an angle, over the second image.
+        const auto compareKernels = [] {
+            return std::vector<bloom::runtime::PixelMathKernel>{
+                pm::compare(349000, doc::kImageCompareDifference, 3.0, 0.5, 0.0, 4.0),
+                pm::compare(349100, doc::kImageCompareSplit, 1.0, 0.35, 25.0, 4.0),
+                pm::compare(349200, doc::kImageCompareSplit, 1.0, 0.8, -140.0, 4.0),
+                pm::compare(349300, doc::kImageCompareCheckerboard, 1.0, 0.5, 0.0, 3.0)};
+        };
         add(
             "effect.PixelMathKernel", GpuCoverageFixtureCriterion::Prepared,
             "src/runtime pixel math tests",
-            [runPixelMath, mathKernels, rangeKernels, clampKernels] {
+            [runPixelMath, mathKernels, rangeKernels, clampKernels, compareKernels] {
                 auto kernels = mathKernels();
                 for (auto& kernel : rangeKernels())
                     kernels.push_back(std::move(kernel));
                 for (auto& kernel : clampKernels())
                     kernels.push_back(std::move(kernel));
+                for (auto& kernel : compareKernels())
+                    kernels.push_back(std::move(kernel));
                 return runPixelMath(kernels, 481000,
-                                    "production Image Math, Map Range and Clamp: every operation, "
-                                    "straight and stored values, each channel choice and a second "
-                                    "image over HDR and signed values, full frame and ROI");
+                                    "production Image Math, Map Range, Clamp and Compare: every "
+                                    "operation, straight and stored values, each channel choice "
+                                    "and a second image over HDR and signed values, full frame and "
+                                    "ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
         add(
@@ -1989,6 +2001,83 @@ displayProofRunner(const bool customView) {
                 return runPixelMath(clampKernels(), 485000,
                                     "production Image Clamp node: the unit range and per-channel "
                                     "limits, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    {
+        namespace pm = bloom::pixel_math_test;
+        namespace doc = bloom::document;
+        add(
+            "node.bloom.image-compare", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime histogram and compare tests",
+            [runPixelMath] {
+                return runPixelMath(
+                    {pm::compare(349400, doc::kImageCompareDifference, 3.0, 0.5, 0.0, 4.0),
+                     pm::compare(349500, doc::kImageCompareSplit, 1.0, 0.35, 25.0, 4.0),
+                     pm::compare(349600, doc::kImageCompareCheckerboard, 1.0, 0.5, 0.0, 3.0)},
+                    349400,
+                    "production Image Compare node: the difference, a split at an angle and the "
+                    "checkerboard of two images, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #349 Histogram: the tile counts, their sums and the plot through the production chain over
+    // the HDR, signed, partial-alpha gradient, full frame and through an ROI.
+    {
+        namespace ht = bloom::histogram_test;
+        namespace doc = bloom::document;
+        const auto runHistogram = [](const std::vector<ht::HistogramValues>& variants,
+                                     std::uint64_t idBase, std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& values : variants) {
+                const auto plan = ht::histogramPlan(values, idBase);
+                idBase += 200;
+                auto request = requestFor(*plan);
+                auto run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(10, 6, 30, 40);
+                request.roi = *roiWindow.value();
+                run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+        ht::HistogramValues stored;
+        stored.straight = false;
+        stored.channels = doc::kHistogramRgb;
+        ht::HistogramValues luma;
+        luma.channels = doc::kHistogramLuminance;
+        luma.logarithmic = true;
+        ht::HistogramValues alpha;
+        alpha.channels = doc::kHistogramAlpha;
+        ht::HistogramValues hdr;
+        hdr.channels = doc::kHistogramRed;
+        hdr.rangeMin = -1.0;
+        hdr.rangeMax = 4.0;
+        hdr.bins = 128;
+        add(
+            "effect.HistogramKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime histogram and compare tests",
+            [runHistogram, stored, luma, alpha, hdr] {
+                return runHistogram({ht::HistogramValues{}, stored, luma, alpha, hdr}, 349700,
+                                    "production Histogram: every channel choice, straight and "
+                                    "stored values, linear and logarithmic graphs and an HDR "
+                                    "range over HDR and partial-alpha values, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.histogram", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime histogram and compare tests",
+            [runHistogram] {
+                return runHistogram({ht::HistogramValues{}}, 349900,
+                                    "production Histogram node: the defaults over the gradient, "
+                                    "full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }

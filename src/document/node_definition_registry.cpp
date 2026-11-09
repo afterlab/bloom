@@ -1714,6 +1714,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         imagePixelDefinition(kImageMathNodeType),
         imagePixelDefinition(kImageMapRangeNodeType),
         imagePixelDefinition(kImageClampNodeType),
+        imagePixelDefinition(kImageCompareNodeType),
+        imagePixelDefinition(kHistogramNodeType),
         audioEffectDefinition(kAudioEqualizerNodeType),
         audioEffectDefinition(kAudioCompressorNodeType),
         audioEffectDefinition(kAudioAutoLevelNodeType),

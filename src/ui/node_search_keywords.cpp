@@ -57,6 +57,9 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.image-math", "Arithmetic|Expression|Add|Subtract|Multiply|Divide|Power|Min|Max|Abs"},
     {"bloom.image-map-range", "Remap|Normalize|Normalise|Range|Z Normalize|Mist Normalize"},
     {"bloom.image-clamp", "Limit|Min Max|HDR Clamp|Clip"},
+    // Tracking & Analysis
+    {"bloom.histogram", "Scope|Levels Scope|Distribution|Analyze"},
+    {"bloom.image-compare", "Difference|Diff|Wipe|Split|Checkerboard|Before After|A B"},
     // Keying & Mattes
     {"bloom.luma-key", "Keyer|Extract|Linear Color Key|Keylight|Primatte"},
     {"bloom.mask", "Roto|RotoPaint|Rotoscope|Bezier"},

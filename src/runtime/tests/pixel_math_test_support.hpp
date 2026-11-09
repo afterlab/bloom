@@ -63,4 +63,21 @@ using bloom::runtime::PixelMathOperation;
     return kernel;
 }
 
+// #349 Image Compare (the second image is required): a mode (document::kImageCompareDifference ...),
+// the difference gain, the split position and angle in degrees and the checkerboard cell in pixels.
+[[nodiscard]] inline PixelMathKernel compare(const std::uint64_t idBase, const std::int64_t mode,
+                                             const double gain, const double position,
+                                             const double angle, const double cell) {
+    PixelMathKernel kernel;
+    kernel.operation = PixelMathOperation::Compare;
+    kernel.straight = false;
+    kernel.second = true;
+    kernel.compareMode = mode;
+    kernel.values[0] = scalar(idBase + 60, gain);
+    kernel.values[1] = scalar(idBase + 61, position);
+    kernel.values[2] = scalar(idBase + 62, angle);
+    kernel.values[3] = scalar(idBase + 63, cell);
+    return kernel;
+}
+
 } // namespace bloom::pixel_math_test

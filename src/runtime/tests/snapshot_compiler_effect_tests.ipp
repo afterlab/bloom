@@ -1586,6 +1586,145 @@ void testPixelMathLowering(Expectations& expectations) {
     }
 }
 
+// #349 Image Compare lowers to one pixel math kernel that reads its second image, and Histogram to
+// the three passes of its chain (Bin, Sum, Plot) with the graph's choices; neither takes an effect
+// mask, a muted node passes its Image through, and Image Compare without its second image does not
+// compile.
+void testHistogramCompareLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    for (const auto type : {kImageCompareNodeType, kHistogramNodeType}) {
+        const auto* definition = builtInNodeDefinitions().find(type, 1);
+        require(definition != nullptr, "the analysis definition exists");
+        expectations.expect(std::ranges::none_of(definition->inputs,
+                                                 [](const auto& input) {
+                                                     return input.name == "mask";
+                                                 }),
+                            "an analysis node publishes its own image and takes no mask");
+        for (const bool muted : {false, true}) {
+            for (const bool second : {true, false}) {
+                if (type == kHistogramNodeType && second)
+                    continue;
+                const auto effectId = NodeId::fromRaw(997);
+                auto project = makeProject(singleLayerOptions());
+                auto* composition = project.findComposition(kCompositionId);
+                auto& graph = composition->graph();
+                std::vector<ParameterBinding> bindings;
+                std::map<std::string, ParameterId> ids;
+                std::uint64_t next = 2900;
+                for (const auto& parameter : definition->parameters) {
+                    auto value = parameter.defaultValue;
+                    if (parameter.role == "mode")
+                        value = kImageCompareSplit;
+                    if (parameter.role == "position")
+                        value = 0.25;
+                    if (parameter.role == "angle")
+                        value = 30.0;
+                    if (parameter.role == "cellSize")
+                        value = 12.0;
+                    if (parameter.role == "channels")
+                        value = kHistogramRgbLuminance;
+                    if (parameter.role == "space")
+                        value = kImagePixelStored;
+                    if (parameter.role == "rangeMax")
+                        value = 4.0;
+                    if (parameter.role == "bins")
+                        value = std::int64_t{1};
+                    if (parameter.role == "height")
+                        value = std::int64_t{3};
+                    if (parameter.role == "scale")
+                        value = kHistogramLogarithmic;
+                    const auto id = ParameterId::fromRaw(next++);
+                    require(composition->parameters().insert(
+                                {id, parameter.schemaKey, ConstantValueSource{value}}),
+                            "analysis parameter is valid");
+                    ids[parameter.role] = id;
+                    bindings.push_back({parameter.role, id});
+                }
+                require(graph.addNode({effectId, std::string(type), std::move(bindings), 1}),
+                        "analysis node is accepted");
+                require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+                require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                       NodeInputRef{effectId, "input"}}),
+                        "source feeds the analysis node");
+                if (second)
+                    require(graph.addEdge({EdgeId::fromRaw(997), {kFirstSolidNode, "image"},
+                                           NodeInputRef{effectId, "second"}}),
+                            "the source also feeds the second input");
+                require(graph.addEdge({EdgeId::fromRaw(998), {effectId, "image"},
+                                       NodeInputRef{kFirstLayerNode,
+                                                    std::string(kLayerOutputContentInputPort)}}),
+                        "the analysis node feeds Layer");
+                if (muted)
+                    composition->nodeLayout()[effectId].muted = true;
+                const auto result = compile(std::move(project), registry);
+                if (type == kImageCompareNodeType && !second && !muted) {
+                    expectations.expect(result.plan == nullptr,
+                                        "an Image Compare without its second image does not compile");
+                    continue;
+                }
+                expectations.expect(result.plan != nullptr,
+                                    std::string("the analysis graph compiles: ") +
+                                        std::string(type) + (second ? " with" : " without") +
+                                        " a second image" + (muted ? ", muted" : ""));
+                if (!result.plan)
+                    continue;
+                std::vector<const runtime::CompiledImageEffect*> effects;
+                for (const auto& operation : result.plan->operations())
+                    if (const auto* item = std::get_if<runtime::CompiledImageEffect>(&operation);
+                        item && item->sourceNodeId == effectId)
+                        effects.push_back(item);
+                if (muted) {
+                    expectations.expect(effects.empty(),
+                                        "a muted analysis node passes its Image through");
+                    continue;
+                }
+                if (type == kImageCompareNodeType) {
+                    require(effects.size() == 1, "Image Compare lowers to one image effect");
+                    const auto* kernel = std::get_if<runtime::PixelMathKernel>(&effects[0]->kernel);
+                    require(kernel != nullptr, "Image Compare lowers to a pixel math kernel");
+                    expectations.expect(
+                        kernel->operation == runtime::PixelMathOperation::Compare && kernel->second &&
+                            effects[0]->secondaryInput.has_value() &&
+                            kernel->compareMode == kImageCompareSplit &&
+                            kernel->values[0].id == ids.at("gain") &&
+                            kernel->values[1].id == ids.at("position") &&
+                            std::get<double>(kernel->values[1].source) == 0.25 &&
+                            kernel->values[2].id == ids.at("angle") &&
+                            std::get<double>(kernel->values[2].source) == 30.0 &&
+                            kernel->values[3].id == ids.at("cellSize") &&
+                            std::get<double>(kernel->values[3].source) == 12.0,
+                        "Image Compare lowers its mode, second image and four values");
+                    continue;
+                }
+                require(effects.size() == 3, "Histogram lowers to three passes");
+                std::array<const runtime::HistogramKernel*, 3> kernels{};
+                for (std::size_t pass = 0; pass < 3; ++pass) {
+                    kernels[pass] = std::get_if<runtime::HistogramKernel>(&effects[pass]->kernel);
+                    require(kernels[pass] != nullptr, "every Histogram pass is a histogram kernel");
+                }
+                expectations.expect(
+                    kernels[0]->role == runtime::HistogramRole::Bin &&
+                        kernels[1]->role == runtime::HistogramRole::Sum &&
+                        kernels[2]->role == runtime::HistogramRole::Plot &&
+                        effects[2]->input.value() == effects[1]->input.value() + 1 &&
+                        kernels[0]->values[1].id == ids.at("rangeMax") &&
+                        std::get<double>(kernels[0]->values[1].source) == 4.0 &&
+                        !kernels[1]->values[0].id.isValid() && !kernels[2]->values[1].id.isValid(),
+                    "only the counting pass holds the range");
+                for (const auto* kernel : kernels)
+                    expectations.expect(kernel->channels == kHistogramRgbLuminance &&
+                                            !kernel->straight && kernel->logarithmic &&
+                                            kernel->bins == kHistogramBins[1] &&
+                                            kernel->height == kHistogramHeights[3],
+                                        "every pass carries the graph's choices");
+            }
+        }
+    }
+}
+
 // #505 Vignette lowers to one vignette kernel with its constant shape and mode. The mode keeps the
 // identity of only the strength it reads (Multiply the amount, Exposure the stops); the other stays
 // the kernel's constant default without an identity. Every shared value and the centre keep theirs.

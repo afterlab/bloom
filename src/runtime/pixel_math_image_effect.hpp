@@ -33,11 +33,17 @@ struct ImageEffectResult;
 // where an arithmetic operation reads its operand in p0, a Map Range its input minimum, the scale
 // (the output span over the input span, 0 for an empty input range) and its output minimum in
 // p0..p2 and the ordered output range in low and high, and a Clamp its limits in low and high.
+// Image Compare (operation 10) keeps its operands in the first two channels' p0..p3: [mode, gain,
+// the split normal's x, y] and [split position, cell size in pixels, 0, 0].
 inline constexpr std::size_t kPixelMathFloats = 36;
 // With a second image, its geometry follows: the width of the output window, which is also the
 // offset in the dispatched atlas at which the second image's window begins (0: the second image has
 // no pixels).
 inline constexpr std::size_t kPixelMathProgramFloats = 40;
+// #349 Image Compare, which lays Split and Checkerboard on the display window, also carries where
+// the dispatch lies in it: the display-relative position of the dispatch window's first pixel (x
+// and y) and the display window's size.
+inline constexpr std::size_t kPixelMathCompareProgramFloats = 44;
 
 inline constexpr float kPixelMathStraight = 1.0F;
 inline constexpr float kPixelMathClampFlag = 2.0F;
@@ -49,13 +55,25 @@ inline constexpr float kPixelMathSecondFlag = 4.0F;
                                                                       std::span<const double> values);
 // Whether the table reads a second image.
 [[nodiscard]] bool pixelMathReadsSecond(const std::vector<float>& table) noexcept;
+// Where a pixel lies in the display window, for Image Compare: its display-relative position and the
+// display window's size. Other operations ignore it.
+struct PixelMathPlace final {
+    std::int64_t x = 0;
+    std::int64_t y = 0;
+    std::int64_t width = 1;
+    std::int64_t height = 1;
+};
 // One premultiplied pixel, in place; `second` is the second image's pixel (null: none, transparent
 // black) and is read only when the table reads one. Always succeeds for a finite pixel.
 [[nodiscard]] bool pixelMathPixel(const std::vector<float>& table, std::array<float, 4>& pixel,
-                                  const std::array<float, 4>* second) noexcept;
-// The table with the second image's atlas geometry appended.
-[[nodiscard]] std::optional<std::vector<float>> pixelMathProgramData(const PreparedColorGrade& grade,
-                                                                     std::int64_t outputWidth);
+                                  const std::array<float, 4>* second,
+                                  const PixelMathPlace* place = nullptr) noexcept;
+// The table with the second image's atlas geometry appended; `place` is the position of the dispatch
+// window's first pixel in the display window (width and height: the display window's size), which
+// an Image Compare needs and the other operations do not read.
+[[nodiscard]] std::optional<std::vector<float>>
+pixelMathProgramData(const PreparedColorGrade& grade, std::int64_t outputWidth,
+                     const PixelMathPlace* place = nullptr);
 [[nodiscard]] bool validPixelMathProgramData(const std::vector<float>& data) noexcept;
 [[nodiscard]] const std::string& pixelMathProgramText();
 

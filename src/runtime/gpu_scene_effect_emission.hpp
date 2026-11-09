@@ -31,6 +31,7 @@
 #include "codec_degrade_image_effect.hpp"
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
+#include "histogram_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -208,6 +209,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_codec_degrade_emission.ipp"
 #include "gpu_scene_auto_exposure_emission.ipp"
 #include "gpu_scene_pixel_math_emission.ipp"
+#include "gpu_scene_histogram_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -385,6 +387,19 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return emitAutoExposureCommand(effect, *grade, operationIndex, ctx, ocioContext,
                                        cancellation, emit, charge, chargeCoverage, result);
     }
+    // #349 Histogram: one pass of the tile counts, their sums or the plot.
+    if (std::holds_alternative<HistogramKernel>(effect.kernel)) {
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Histogram values are out of domain");
+        return emitHistogramCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
+                                    emit, charge, chargeCoverage, result);
+    }
     // #481 Image Math with a second image: one dispatch over an atlas of the input and the second.
     if (const auto* pixelMath = std::get_if<PixelMathKernel>(&effect.kernel);
         pixelMath != nullptr && pixelMath->second) {
@@ -395,7 +410,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
         if (!grade)
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                        "Image Math values are out of domain");
+                        "Image pixel math values are out of domain");
         return emitPixelMathSecondCommand(effect, *grade, operationIndex, ctx, ocioContext,
                                           cancellation, emit, charge, chargeCoverage, result);
     }

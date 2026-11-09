@@ -1,6 +1,7 @@
 #include <bloom/document/audio_effect_nodes.hpp>
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
+#include "histogram_image_effect.hpp"
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -2373,6 +2374,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<CodecDegradeKernel>(effect->kernel) ||
                                // #566 the mean of a frame is the whole frame's.
                                std::holds_alternative<AutoExposureKernel>(effect->kernel) ||
+                               // #349 a histogram counts the whole data window.
+                               std::holds_alternative<HistogramKernel>(effect->kernel) ||
                                // #486 a field raster that reads images (Lens Distortion's warp)
                                // reads them wherever the position field points.
                                (std::holds_alternative<FieldRasterKernel>(effect->kernel) &&
@@ -3665,6 +3668,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                   : nullptr,
                                               effectPixelBudget, cancellation, operationIndex,
                                               progress)
+                                    : gradeKind == detail::ColorGradeKind::Histogram
+                                        ? detail::applyHistogram(
+                                              *preparedEffect->colorGrade, slots[index].get(),
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
                                     : gradeKind == detail::ColorGradeKind::AutoExposure
                                         ? detail::applyAutoExposure(
                                               *preparedEffect->colorGrade, slots[index].get(),

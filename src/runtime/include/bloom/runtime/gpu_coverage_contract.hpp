@@ -183,9 +183,14 @@ BLOOM_GPU_REQUIRED_EFFECT(AutoExposureKernel,
                           "its exposure and white balance gain (#566)");
 
 BLOOM_GPU_REQUIRED_EFFECT(PixelMathKernel,
-                          "Image Math, Image Map Range and Image Clamp: per-pixel arithmetic, "
-                          "range mapping and limits of straight or stored channels with a number "
-                          "or a second image as the operand (#481)");
+                          "Image Math, Image Map Range, Image Clamp and Image Compare: per-pixel "
+                          "arithmetic, range mapping and limits of straight or stored channels "
+                          "with a number or a second image as the operand (#481), and the "
+                          "difference, split and checkerboard of two images (#349)");
+
+BLOOM_GPU_REQUIRED_EFFECT(HistogramKernel,
+                          "Histogram: the per-tile counts of a frame's values in equal bins, "
+                          "their sums and the bar graph of the sums (#349)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

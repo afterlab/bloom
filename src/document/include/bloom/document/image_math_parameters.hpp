@@ -15,6 +15,25 @@
 //   Image Clamp      limits each channel to its own minimum and maximum (the alpha channel to
 //                    [0, 1]); a minimum above the maximum is the maximum.
 //
+// #349 Image Compare (`bloom.image-compare`) takes two Images, `input` (A) and `second` (B), and gives
+// the Image `image` over A's data window, with B transparent black where it has no pixels. `mode` is
+// Difference (|A - B| of the stored values times `gain`, with the larger alpha), Split (A on one side
+// of a line, B on the other: `position` runs the line across the display window from B's side to A's
+// and `angle` turns it) or Checkerboard (A and B alternate in squares of `cellSize` pixels from the
+// display window's corner). Split and Checkerboard are laid on the display window, so the same pixel
+// shows the same image whatever region or data window is rendered. A result that is not finite is 0.
+//
+// #349 Histogram (`bloom.histogram`) takes an Image on `input` and gives an Image on `image`: a
+// `bins` by `height` bar graph of how many pixels of the input's data window have each value, in
+// `bins` equal bins of the range `rangeMin`..`rangeMax`. `channels` is the value counted (the red,
+// green and blue channels in their own colors with the luminance, Rec. 709 weights on the color,
+// beside them, the luminance alone, one color channel or alpha), `space` how premultiplication is
+// treated (the color is divided by alpha, and a pixel without alpha counts nowhere in a color
+// channel, or the stored values are counted as they are), and `scale` the bars' height against the
+// tallest bin: linear, or logarithmic in one plus the count. A value outside the range or not
+// finite is not counted. The graph does not depend on a region of interest: the whole data window
+// is counted.
+//
 // Every node declares which channels it changes and how premultiplication is treated:
 //   channels  Color (red, green and blue; the default and alpha is passed through), Red, Green,
 //             Blue, Alpha, or Color and alpha. A channel that is not changed keeps its stored value.
@@ -42,6 +61,8 @@ namespace bloom::document {
 inline constexpr std::string_view kImageMathNodeType = "bloom.image-math";
 inline constexpr std::string_view kImageMapRangeNodeType = "bloom.image-map-range";
 inline constexpr std::string_view kImageClampNodeType = "bloom.image-clamp";
+inline constexpr std::string_view kImageCompareNodeType = "bloom.image-compare";
+inline constexpr std::string_view kHistogramNodeType = "bloom.histogram";
 inline constexpr std::uint32_t kImagePixelNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kImagePixelInputPort = "input";
@@ -57,6 +78,28 @@ inline constexpr std::int64_t kImageMathPower = 4;
 inline constexpr std::int64_t kImageMathMinimum = 5;
 inline constexpr std::int64_t kImageMathMaximum = 6;
 inline constexpr std::int64_t kImageMathAbsolute = 7;
+
+// Stored values of Image Compare's mode.
+inline constexpr std::int64_t kImageCompareDifference = 0;
+inline constexpr std::int64_t kImageCompareSplit = 1;
+inline constexpr std::int64_t kImageCompareCheckerboard = 2;
+inline constexpr double kMaximumImageCompareCell = 4096.0;
+
+// Stored values of Histogram's channels, scale, bins and height.
+inline constexpr std::int64_t kHistogramRgb = 0;
+inline constexpr std::int64_t kHistogramLuminance = 1;
+inline constexpr std::int64_t kHistogramRgbLuminance = 2;
+inline constexpr std::int64_t kHistogramRed = 3;
+inline constexpr std::int64_t kHistogramGreen = 4;
+inline constexpr std::int64_t kHistogramBlue = 5;
+inline constexpr std::int64_t kHistogramAlpha = 6;
+inline constexpr std::int64_t kHistogramLinear = 0;
+inline constexpr std::int64_t kHistogramLogarithmic = 1;
+// The bin counts and graph heights the node offers, in stored-value order.
+inline constexpr std::array<std::int64_t, 4> kHistogramBins{64, 128, 256, 512};
+inline constexpr std::array<std::int64_t, 4> kHistogramHeights{64, 128, 256, 512};
+inline constexpr std::int64_t kHistogramDefaultBins = 2;
+inline constexpr std::int64_t kHistogramDefaultHeight = 1;
 
 // Stored values of the channels each node changes.
 inline constexpr std::int64_t kImagePixelColor = 0;
@@ -82,6 +125,16 @@ inline constexpr std::array<std::string_view, 8> kOperations{
 inline constexpr std::array<std::string_view, 6> kChannels{
     "Color (RGB)", "Red", "Green", "Blue", "Alpha", "Color and alpha"};
 inline constexpr std::array<std::string_view, 2> kSpaces{"Straight color", "Stored values"};
+
+inline constexpr std::array<std::string_view, 3> kCompareModes{"Difference", "Split",
+                                                                 "Checkerboard"};
+
+inline constexpr std::array<std::string_view, 7> kHistogramChannels{
+    "Red, green and blue", "Luminance", "Red, green, blue and luminance", "Red",
+    "Green",               "Blue",      "Alpha"};
+inline constexpr std::array<std::string_view, 4> kHistogramBinLabels{"64", "128", "256", "512"};
+inline constexpr std::array<std::string_view, 4> kHistogramHeightLabels{"64", "128", "256", "512"};
+inline constexpr std::array<std::string_view, 2> kHistogramScales{"Linear", "Logarithmic"};
 
 inline constexpr double kV = kMaximumImagePixelValue;
 
@@ -114,11 +167,30 @@ inline constexpr std::array kImageClampParameters{
     choice("space", kSpaces, kImagePixelStraight, "Operate on"),
 };
 
+inline constexpr std::array kImageCompareParameters{
+    choice("mode", kCompareModes, kImageCompareDifference, "Mode"),
+    scalar("gain", 1.0, 0.0, kV, "Difference gain", 0.0, 16.0, 0.1, 2),
+    scalar("position", 0.5, 0.0, 1.0, "Split position", 0.0, 1.0, 0.01, 3),
+    scalar("angle", 0.0, -360.0, 360.0, "Split angle", -180.0, 180.0, 1.0, 1, "°"),
+    scalar("cellSize", 64.0, 1.0, kMaximumImageCompareCell, "Cell size", 1.0, 512.0, 1.0, 0, "px"),
+};
+
+inline constexpr std::array kHistogramParameters{
+    choice("channels", kHistogramChannels, kHistogramRgb, "Channels"),
+    choice("space", kSpaces, kImagePixelStraight, "Operate on"),
+    scalar("rangeMin", 0.0, -kV, kV, "Range minimum", -10.0, 10.0, 0.01, 3),
+    scalar("rangeMax", 1.0, -kV, kV, "Range maximum", -10.0, 10.0, 0.01, 3),
+    choice("bins", kHistogramBinLabels, kHistogramDefaultBins, "Bins"),
+    choice("height", kHistogramHeightLabels, kHistogramDefaultHeight, "Graph height"),
+    choice("scale", kHistogramScales, kHistogramLinear, "Scale"),
+};
+
 } // namespace image_pixel_parameters
 
 [[nodiscard]] constexpr bool isImagePixelNodeType(const std::string_view typeId) noexcept {
     return typeId == kImageMathNodeType || typeId == kImageMapRangeNodeType ||
-           typeId == kImageClampNodeType;
+           typeId == kImageClampNodeType || typeId == kImageCompareNodeType ||
+           typeId == kHistogramNodeType;
 }
 
 // The parameters of an image pixel node in definition order, or an empty span.
@@ -130,13 +202,18 @@ imagePixelParameters(const std::string_view typeId) noexcept {
         return image_pixel_parameters::kImageMapRangeParameters;
     if (typeId == kImageClampNodeType)
         return image_pixel_parameters::kImageClampParameters;
+    if (typeId == kImageCompareNodeType)
+        return image_pixel_parameters::kImageCompareParameters;
+    if (typeId == kHistogramNodeType)
+        return image_pixel_parameters::kHistogramParameters;
     return {};
 }
 
 // The spec of a "<type id>.<role>" schema key, or null.
 [[nodiscard]] constexpr const DepthParameterSpec*
 imagePixelParameterSpec(const std::string_view schemaKey) noexcept {
-    for (const auto type : {kImageMathNodeType, kImageMapRangeNodeType, kImageClampNodeType}) {
+    for (const auto type : {kImageMathNodeType, kImageMapRangeNodeType, kImageClampNodeType,
+                            kImageCompareNodeType, kHistogramNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

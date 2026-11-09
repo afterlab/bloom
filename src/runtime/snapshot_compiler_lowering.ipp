@@ -753,6 +753,15 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *masked);
             continue;
         }
+        // #349 Histogram: the tile counts, their sum and the plot. It publishes a graph, not a
+        // changed input, so it takes no effect mask.
+        if (node->typeId == document::kHistogramNodeType) {
+            const auto lowered = lowerHistogram(*node, operations, indices);
+            if (!lowered)
+                return {};
+            indices.emplace(nodeId, *lowered);
+            continue;
+        }
         // #483 Z Defocus and Depth Fog: a depth map and its gather or fog mix, then the effect
         // mask.
         if (document::isDepthEffectNodeType(node->typeId)) {
@@ -2061,7 +2070,8 @@ lowerImageEffect(const document::NodeRecord& node,
             return true;
         };
         std::int64_t space = 0;
-        bool lowered = integer("space", document::kImagePixelStored, space);
+        bool lowered = node.typeId == document::kImageCompareNodeType ||
+                       integer("space", document::kImagePixelStored, space);
         kernel.straight = space == document::kImagePixelStraight;
         const auto scalar = [&](const std::string_view role, const std::size_t slot) {
             const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
@@ -2069,7 +2079,17 @@ lowerImageEffect(const document::NodeRecord& node,
             if (parameter)
                 kernel.values[slot] = *parameter;
         };
-        if (node.typeId == document::kImageClampNodeType) {
+        if (node.typeId == document::kImageCompareNodeType) {
+            // #349: A against B, on the stored values; both images are required.
+            kernel.operation = runtime::PixelMathOperation::Compare;
+            kernel.straight = false;
+            kernel.second = true;
+            lowered = lowered && integer("mode", document::kImageCompareCheckerboard,
+                                         kernel.compareMode);
+            std::size_t slot = 0;
+            for (const auto role : {"gain", "position", "angle", "cellSize"})
+                scalar(role, slot++);
+        } else if (node.typeId == document::kImageClampNodeType) {
             kernel.operation = runtime::PixelMathOperation::Clamp;
             kernel.channels = document::kImagePixelColorAndAlpha;
             std::size_t slot = 0;
@@ -2103,7 +2123,7 @@ lowerImageEffect(const document::NodeRecord& node,
         if (std::get<runtime::PixelMathKernel>(effect.kernel).second) {
             const auto second = findInputOperation(node.id, document::kImagePixelSecondPort, indices);
             if (!second) {
-                addTopologyFailure(node.id, "Image Math second input could not be lowered.");
+                addTopologyFailure(node.id, "Image pixel math second input could not be lowered.");
                 return std::nullopt;
             }
             effect.secondaryInput = *second;

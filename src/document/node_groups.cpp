@@ -71,9 +71,10 @@ constexpr std::array<std::string_view, 2> kTextPaths{"bloom.text-source", "bloom
 // Planned: Point, Grid, Scatter, Points Along Path, Shape To Points, Text To Points, Clone To
 // Points, Draw Instances, Particle System.
 constexpr std::array<std::string_view, 0> kInstancesParticles{};
-// Planned: Tracker, Stabilize, Histogram, Image Statistics, Compare, Audio Amplitude, Audio
-// Waveform, Audio Spectrum.
-constexpr std::array<std::string_view, 0> kTrackingAnalysis{};
+// Planned: Tracker, Stabilize, Image Statistics, Audio Amplitude, Audio Waveform, Audio Spectrum.
+// Compare is "bloom.image-compare": "bloom.compare" is the Logic value node.
+constexpr std::array<std::string_view, 2> kTrackingAnalysis{"bloom.histogram",
+                                                            "bloom.image-compare"};
 constexpr std::array<std::string_view, 16> kFields{
     "bloom.field-combine",    "bloom.field-derivative",     "bloom.field-force",
     "bloom.field-from-image", "bloom.field-gradient",       "bloom.field-math",

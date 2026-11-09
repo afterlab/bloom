@@ -69,6 +69,7 @@ target_sources(
         codec_degrade_recipes.cpp
         look_back_recipes.cpp
         auto_exposure_recipes.cpp
+        histogram_recipes.cpp
         compositing_recipes.hpp
         plan_time_scopes.cpp
         motion_shutter.cpp
@@ -169,6 +170,7 @@ target_sources(
         codec_degrade_image_effect.cpp
         auto_exposure_image_effect.cpp
         pixel_math_image_effect.cpp
+        histogram_image_effect.cpp
         motion_blur_image_effect.cpp
         motion_blur_planner.cpp
         sharpen_image_effect.cpp

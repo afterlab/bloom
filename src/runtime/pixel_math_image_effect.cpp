@@ -92,6 +92,8 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
     case PixelMathOperation::Clamp:
         result = std::min(std::max(x, limits[0]), limits[1]);
         break;
+    case PixelMathOperation::Compare:
+        break; // Handled before the channels (comparePixel).
     }
     return finiteOrZero(result);
 }
@@ -119,13 +121,94 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
     return std::isfinite(value) && std::abs(value) <= document::kMaximumImagePixelValue;
 }
 
+// Image Compare: A against its required second image B. `values` are the gain, the split position
+// (0 puts the line at B's edge of the display window, 1 at A's), the split angle in degrees (0: a
+// vertical line with A on the left) and the checkerboard cell in pixels.
+[[nodiscard]] std::optional<PreparedColorGrade> prepareCompare(const PixelMathKernel& kernel,
+                                                               const std::span<const double> values) {
+    if (values.size() != 4 || !kernel.second || kernel.compareMode < 0 ||
+        kernel.compareMode > document::kImageCompareCheckerboard ||
+        !std::ranges::all_of(values, operand))
+        return std::nullopt;
+    const double gain = values[0];
+    const double position = values[1];
+    const double angle = values[2];
+    const double cell = values[3];
+    if (gain < 0.0 || position < 0.0 || position > 1.0 || angle < -360.0 || angle > 360.0 ||
+        cell < 1.0 || cell > document::kMaximumImageCompareCell)
+        return std::nullopt;
+    PreparedColorGrade grade{ColorGradeKind::PixelMath, std::vector<float>(kPixelMathFloats, 0.0F),
+                             false};
+    auto& d = grade.data;
+    constexpr double kPi = 3.14159265358979323846;
+    const double radians = angle * kPi / 180.0;
+    d[0] = static_cast<float>(static_cast<std::uint8_t>(PixelMathOperation::Compare));
+    d[1] = kPixelMathSecondFlag;
+    d[kChannelBase] = static_cast<float>(kernel.compareMode);
+    d[kChannelBase + 1] = static_cast<float>(gain);
+    d[kChannelBase + 2] = static_cast<float>(std::cos(radians));
+    d[kChannelBase + 3] = static_cast<float>(std::sin(radians));
+    d[kChannelBase + kChannelFloats] = static_cast<float>(position);
+    d[kChannelBase + kChannelFloats + 1] = static_cast<float>(std::lround(cell));
+    return grade;
+}
+
+// Image Compare for one pixel of A (`a`) and of B (`b`); `x` and `y` are display-relative.
+[[nodiscard]] std::array<float, 4> comparePixel(const std::vector<float>& table,
+                                                const std::array<float, 4>& a,
+                                                const std::array<float, 4>& b,
+                                                const PixelMathPlace& place) noexcept {
+    const int mode = static_cast<int>(table[kChannelBase]);
+    if (mode == document::kImageCompareDifference) {
+        const float gain = table[kChannelBase + 1];
+        std::array<float, 4> out{};
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            const float difference = a[channel] - b[channel];
+            const float scaled = std::abs(difference) * gain;
+            out[channel] = finiteOrZero(scaled);
+        }
+        out[3] = std::max(a[3], b[3]);
+        return out;
+    }
+    if (mode == document::kImageCompareSplit) {
+        const float nx = table[kChannelBase + 2];
+        const float ny = table[kChannelBase + 3];
+        const float position = table[kChannelBase + kChannelFloats];
+        const float width = static_cast<float>(place.width);
+        const float height = static_cast<float>(place.height);
+        const float spanX = std::abs(nx) * width;
+        const float spanY = std::abs(ny) * height;
+        const float extent = spanX + spanY;
+        const float centerX = 0.5F * width * nx;
+        const float centerY = 0.5F * height * ny;
+        const float center = centerX + centerY;
+        const float offset = (position - 0.5F) * extent;
+        const float line = center + offset;
+        const float px = static_cast<float>(place.x) + 0.5F;
+        const float py = static_cast<float>(place.y) + 0.5F;
+        const float tx = px * nx;
+        const float ty = py * ny;
+        const float along = tx + ty;
+        const float side = along - line;
+        return side < 0.0F ? a : b;
+    }
+    const std::int64_t cell = std::max<std::int64_t>(
+        static_cast<std::int64_t>(table[kChannelBase + kChannelFloats + 1]), 1);
+    const auto floorDiv = [cell](const std::int64_t value) {
+        return value >= 0 ? value / cell : -((-value + cell - 1) / cell);
+    };
+    return ((floorDiv(place.x) + floorDiv(place.y)) & 1) == 0 ? a : b;
+}
+
 } // namespace
 
 std::optional<PreparedColorGrade> preparePixelMathGrade(const PixelMathKernel& kernel,
                                                         const std::span<const double> values) {
     const auto operation = kernel.operation;
-    if (static_cast<std::uint8_t>(operation) > static_cast<std::uint8_t>(PixelMathOperation::Clamp))
+    if (static_cast<std::uint8_t>(operation) > static_cast<std::uint8_t>(PixelMathOperation::Compare))
         return std::nullopt;
+    if (operation == PixelMathOperation::Compare)
+        return prepareCompare(kernel, values);
     const bool arithmetic = operation <= PixelMathOperation::Absolute;
     const bool clampNode = operation == PixelMathOperation::Clamp;
     std::size_t expected = 0;
@@ -186,8 +269,15 @@ bool pixelMathReadsSecond(const std::vector<float>& table) noexcept {
 }
 
 bool pixelMathPixel(const std::vector<float>& table, std::array<float, 4>& pixel,
-                    const std::array<float, 4>* second) noexcept {
+                    const std::array<float, 4>* second, const PixelMathPlace* place) noexcept {
     const int operation = static_cast<int>(table[0]);
+    if (operation == static_cast<int>(PixelMathOperation::Compare)) {
+        const std::array<float, 4> none{};
+        const PixelMathPlace origin;
+        pixel = comparePixel(table, pixel, second != nullptr ? *second : none,
+                             place != nullptr ? *place : origin);
+        return true;
+    }
     const unsigned flags = static_cast<unsigned>(table[1]);
     const unsigned mask = static_cast<unsigned>(table[2]);
     const bool straight = (flags & 1U) != 0U;
@@ -238,31 +328,57 @@ bool pixelMathPixel(const std::vector<float>& table, std::array<float, 4>& pixel
 }
 
 std::optional<std::vector<float>> pixelMathProgramData(const PreparedColorGrade& grade,
-                                                       const std::int64_t outputWidth) {
+                                                       const std::int64_t outputWidth,
+                                                       const PixelMathPlace* const place) {
     if (grade.kind != ColorGradeKind::PixelMath || grade.data.size() != kPixelMathFloats)
         return std::nullopt;
     auto data = grade.data;
+    const bool compare = static_cast<int>(data[0]) == static_cast<int>(PixelMathOperation::Compare);
+    if (compare != (place != nullptr))
+        return std::nullopt;
     if (pixelMathReadsSecond(data)) {
         // A width of 0 says the second image has no pixels: its operand is transparent black.
-        if (outputWidth < 0 || outputWidth > (std::int64_t{1} << 24))
+        constexpr std::int64_t kLimit = std::int64_t{1} << 24;
+        if (outputWidth < 0 || outputWidth > kLimit)
             return std::nullopt;
         data.insert(data.end(), {static_cast<float>(outputWidth), 0.0F, 0.0F, 0.0F});
+        if (compare) {
+            if (std::abs(place->x) > kLimit || std::abs(place->y) > kLimit || place->width < 1 ||
+                place->height < 1 || place->width > kLimit || place->height > kLimit)
+                return std::nullopt;
+            data[37] = static_cast<float>(place->x);
+            data[38] = static_cast<float>(place->y);
+            data[39] = static_cast<float>(place->width);
+            data.insert(data.end(), {static_cast<float>(place->height), 0.0F, 0.0F, 0.0F});
+        }
     }
     return data;
 }
 
 bool validPixelMathProgramData(const std::vector<float>& data) noexcept {
-    if (data.size() != kPixelMathFloats && data.size() != kPixelMathProgramFloats)
+    if (data.size() != kPixelMathFloats && data.size() != kPixelMathProgramFloats &&
+        data.size() != kPixelMathCompareProgramFloats)
         return false;
     const auto closed = [&](const float value, const float high) {
         return value >= 0.0F && value <= high && value == std::floor(value);
     };
-    if (!closed(data[0], 9.0F) || !closed(data[1], 7.0F) || !closed(data[2], 15.0F))
+    if (!closed(data[0], 10.0F) || !closed(data[1], 7.0F) || !closed(data[2], 15.0F))
         return false;
     const bool second = (static_cast<unsigned>(data[1]) & 4U) != 0U;
-    if (second != (data.size() == kPixelMathProgramFloats))
+    const bool compare = data[0] == 10.0F;
+    if (second != (data.size() != kPixelMathFloats) ||
+        compare != (data.size() == kPixelMathCompareProgramFloats))
         return false;
-    return !second || (data[36] >= 0.0F && data[36] == std::floor(data[36]));
+    if (!second)
+        return true;
+    if (!(data[36] >= 0.0F && data[36] == std::floor(data[36])))
+        return false;
+    if (!compare)
+        return true;
+    const auto whole = [](const float value) { return value == std::floor(value); };
+    return closed(data[kChannelBase], 2.0F) && data[kChannelBase + 1] >= 0.0F &&
+           data[kChannelBase + kChannelFloats + 1] >= 1.0F && whole(data[37]) && whole(data[38]) &&
+           data[39] >= 1.0F && whole(data[39]) && data[40] >= 1.0F && whole(data[40]);
 }
 
 const std::string& pixelMathProgramText() {
@@ -284,6 +400,48 @@ float bpm_power(float x, float y) {
   return mod(y, 2.0) != 0.0 ? -m : m;
  }
  return pow(x, y);
+}
+vec4 bpm_compare(vec4 a, vec4 b, ivec2 c) {
+ int mode = int(bpm(4));
+ if (mode == 0) {
+  precise float dr = a.r - b.r;
+  precise float dg = a.g - b.g;
+  precise float db = a.b - b.b;
+  precise float sr = abs(dr) * bpm(5);
+  precise float sg = abs(dg) * bpm(5);
+  precise float sb = abs(db) * bpm(5);
+  return vec4(bpm_finite(sr), bpm_finite(sg), bpm_finite(sb), max(a.a, b.a));
+ }
+ int x = c.x + int(bpm(37));
+ int y = c.y + int(bpm(38));
+ if (mode == 1) {
+  float nx = bpm(6);
+  float ny = bpm(7);
+  precise float width = bpm(39);
+  precise float height = bpm(40);
+  precise float spanX = abs(nx) * width;
+  precise float spanY = abs(ny) * height;
+  precise float extent = spanX + spanY;
+  precise float halfW = 0.5 * width;
+  precise float halfH = 0.5 * height;
+  precise float centerX = halfW * nx;
+  precise float centerY = halfH * ny;
+  precise float center = centerX + centerY;
+  precise float shifted = bpm(12) - 0.5;
+  precise float offset = shifted * extent;
+  precise float line = center + offset;
+  precise float px = float(x) + 0.5;
+  precise float py = float(y) + 0.5;
+  precise float tx = px * nx;
+  precise float ty = py * ny;
+  precise float along = tx + ty;
+  precise float side = along - line;
+  return side < 0.0 ? a : b;
+ }
+ int cell = max(int(bpm(13)), 1);
+ int qx = x >= 0 ? x / cell : -((-x + cell - 1) / cell);
+ int qy = y >= 0 ? y / cell : -((-y + cell - 1) / cell);
+ return ((qx + qy) & 1) == 0 ? a : b;
 }
 float bpm_channel(int op, int flags, int channel, float x, float b) {
  int base = 4 + channel * 8;
@@ -327,6 +485,10 @@ vec4 bloom_pixel_math(ivec2 c) {
  int width = (flags & 4) != 0 ? int(bpm(36)) : 0;
  if (width > 0 && c.x >= width) { return imageLoad(bloom_ocio_input, c); }
  vec4 p = imageLoad(bloom_ocio_input, c);
+ if (op == 10) {
+  vec4 other = width > 0 ? imageLoad(bloom_ocio_input, c + ivec2(width, 0)) : vec4(0.0);
+  return bpm_compare(p, other, c);
+ }
  float alpha = p.a;
  float operands[4];
  for (int i = 0; i < 4; ++i) { operands[i] = bpm(4 + i * 8); }
@@ -392,6 +554,7 @@ ImageEffectResult applyPixelMath(const PreparedColorGrade& grade, const render::
         secondWindow = second->descriptor()->dataWindow();
     }
     const auto window = input.descriptor()->dataWindow();
+    const auto display = input.descriptor()->displayWindow();
     const auto rows = window.extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, rows});
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
@@ -421,7 +584,11 @@ ImageEffectResult applyPixelMath(const PreparedColorGrade& grade, const render::
                 const auto tap = (*secondRow)[static_cast<std::size_t>(x - secondWindow->originX())];
                 other = {tap.red(), tap.green(), tap.blue(), tap.alpha()};
             }
-            if (!pixelMathPixel(grade.data, pixel, &other))
+            // Image Compare lays its split and squares on the display window.
+            const PixelMathPlace place{x - display.originX(), y - display.originY(),
+                                       static_cast<std::int64_t>(display.extent().width()),
+                                       static_cast<std::int64_t>(display.extent().height())};
+            if (!pixelMathPixel(grade.data, pixel, &other, &place))
                 return failed(EvaluationDiagnosticCode::InvalidPixel,
                               "Image math produced a non-finite value");
             const auto result =

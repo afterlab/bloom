@@ -72,10 +72,17 @@ NodeDefinition imagePixelDefinition(const std::string_view typeId) {
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Grade};
+                              // Histogram and Image Compare publish an analysis image, not the input
+                              // changed, so a mask over the input has nothing to select.
+                              typeId == kHistogramNodeType || typeId == kImageCompareNodeType
+                                  ? NodeCategory::Utilities
+                                  : NodeCategory::Grade};
     if (typeId == kImageMathNodeType)
         definition.inputs.push_back(
             {std::string(kImagePixelSecondPort), SocketValueKind::Image, false});
+    // #349 Image Compare has nothing to compare without its second image.
+    if (typeId == kImageCompareNodeType)
+        definition.inputs.push_back({std::string(kImagePixelSecondPort), SocketValueKind::Image, true});
     for (const auto& parameter : imagePixelParameters(typeId)) {
         definition.parameters.push_back({std::string(parameter.role),
                                          imagePixelSchemaKey(typeId, parameter.role),

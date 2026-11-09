@@ -19,12 +19,12 @@ emitPixelMathSecondCommand(const CompiledImageEffect& effect, const PreparedColo
                            ChargeCoverage&& chargeCoverage, GpuSceneEffectEmission& result) {
     if (cancellation.isCancellationRequested())
         return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
-                    "Image Math preparation was cancelled");
+                    "Image pixel math preparation was cancelled");
     const auto& outputWindowOf = *ctx.outputWindowOf;
     const auto inputValue = effect.input.value();
     if (!effect.secondaryInput || effect.secondaryInput->value() >= outputWindowOf.size())
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                    "The Image Math second input is invalid");
+                    "The second input is invalid");
     const auto secondValue = effect.secondaryInput->value();
     // An input with no pixels publishes none, as on the CPU reference.
     if (!outputWindowOf[inputValue]) {
@@ -39,7 +39,7 @@ emitPixelMathSecondCommand(const CompiledImageEffect& effect, const PreparedColo
     const auto descriptor = gpuSceneCommandDescriptorOf(*ctx.commands, colour, 0);
     if (!descriptor)
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                    "The Image Math descriptor is not derivable");
+                    "The image pixel math descriptor is not derivable");
     const auto source = descriptor->data;
     const auto display = descriptor->display;
     const auto aspect = descriptor->pixelAspect;
@@ -96,7 +96,15 @@ emitPixelMathSecondCommand(const CompiledImageEffect& effect, const PreparedColo
                                          .semanticKey = blendKey});
         baseKey = std::move(blendKey);
     }
-    auto data = pixelMathProgramData(grade, hasSecond ? width : 0);
+    // #349 Image Compare lays its split and squares on the display window, whatever window is
+    // dispatched.
+    std::optional<PixelMathPlace> place;
+    if (static_cast<int>(grade.data[0]) == static_cast<int>(PixelMathOperation::Compare))
+        place = PixelMathPlace{source.originX() - display.originX(),
+                               source.originY() - display.originY(),
+                               static_cast<std::int64_t>(display.extent().width()),
+                               static_cast<std::int64_t>(display.extent().height())};
+    auto data = pixelMathProgramData(grade, hasSecond ? width : 0, place ? &*place : nullptr);
     if (!data)
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "Image Math geometry cannot be represented");

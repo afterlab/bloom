@@ -19,6 +19,7 @@
 #include "auto_exposure_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
+#include "histogram_test_support.hpp"
 #include "pixel_math_test_support.hpp"
 #include "sharpen_test_support.hpp"
 #include "field_test_programs.hpp"
@@ -1468,6 +1469,18 @@ void runPixelMaths(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         }
     cases.push_back({pm::math(kernelId += 100, Op::Power, 0.0, doc::kImagePixelColor, true, true),
                      8.0, 6.0});
+    // #349 Image Compare: each mode against a second image of the same, a smaller and a larger
+    // window, and the split at several positions and angles (the display window lays it out).
+    for (const auto& [w, h] : {std::pair{12.0, 10.0}, std::pair{8.0, 6.0}, std::pair{16.0, 14.0}}) {
+        cases.push_back({pm::compare(kernelId += 100, doc::kImageCompareDifference, 3.0, 0.5, 0.0, 4.0),
+                         w, h});
+        cases.push_back({pm::compare(kernelId += 100, doc::kImageCompareSplit, 1.0, 0.35, 25.0, 4.0),
+                         w, h});
+        cases.push_back({pm::compare(kernelId += 100, doc::kImageCompareSplit, 1.0, 0.8, -140.0, 4.0),
+                         w, h});
+        cases.push_back({pm::compare(kernelId += 100, doc::kImageCompareCheckerboard, 1.0, 0.5, 0.0, 3.0),
+                         w, h});
+    }
     cases.push_back({pm::mapRange(kernelId += 100, 0.0, 4.0, 0.0, 1.0, false, doc::kImagePixelColor,
                                   true)});
     cases.push_back({pm::mapRange(kernelId += 100, -1.0, 2.0, 5.0, -5.0, true,
@@ -1535,7 +1548,9 @@ void runPixelMaths(Expectations& expectations, GpuDevice& device, GpuSceneCache&
             auto& changedKernel = std::get<bloom::runtime::PixelMathKernel>(
                 std::get<CompiledImageEffect>(changedDefinition.operations[item.kernel.second ? 2 : 1])
                     .kernel);
-            if (item.kernel.second)
+            if (changedKernel.operation == Op::Compare)
+                changedKernel.values[1].source = 0.6;
+            else if (item.kernel.second)
                 changedKernel.straight = !changedKernel.straight;
             else if (changedKernel.operation == Op::Absolute)
                 changedKernel.straight = !changedKernel.straight;
@@ -2774,6 +2789,122 @@ void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCac
 // strict gate with exact alpha; resident dispatches with no readback; only what the output reads;
 // warm RAM reuse with zero dispatches; a later frame with parity, whose window shares the earlier
 // frame's measurements; a changed value re-running with parity.
+// #349 Histogram: the production chain (the tile counts, their sums and the plot) over the HDR,
+// signed, partial-alpha gradient against the CPU oracle at the strict gate (color within 2e-6, alpha
+// exact; the counts are whole numbers, so only a logarithmic plot differs by a logarithm's last
+// bits), the windows, three resident dispatches and no per-operation readback, warm reuse with zero
+// dispatches and a changed value that re-runs with parity.
+void runHistograms(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    namespace ht = bloom::histogram_test;
+    namespace doc = bloom::document;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        ht::HistogramValues values;
+        const char* name;
+        bool proxy = false;
+        bool roi = false;
+    };
+    std::vector<Case> cases;
+    cases.push_back({ht::HistogramValues{}, "rgb and luminance"});
+    {
+        ht::HistogramValues values;
+        values.straight = false;
+        values.channels = doc::kHistogramRgb;
+        cases.push_back({values, "stored rgb"});
+        values = {};
+        values.channels = doc::kHistogramLuminance;
+        values.logarithmic = true;
+        cases.push_back({values, "luminance, logarithmic"});
+        values = {};
+        values.channels = doc::kHistogramAlpha;
+        values.rangeMax = 1.0;
+        cases.push_back({values, "alpha"});
+        values = {};
+        values.channels = doc::kHistogramRed;
+        values.rangeMin = -1.0;
+        values.rangeMax = 4.0;
+        values.bins = 128;
+        values.height = 32;
+        cases.push_back({values, "red over an HDR range, 128 bins"});
+        values = {};
+        values.rangeMin = 1.0;
+        values.rangeMax = 0.0;
+        cases.push_back({values, "an empty range"});
+        values = {};
+        values.sourceWidth = 7;
+        values.sourceHeight = 3;
+        values.bins = 512;
+        values.height = 16;
+        cases.push_back({values, "a source smaller than its tile counts"});
+    }
+    cases.push_back({ht::HistogramValues{}, "a region of interest", false, true});
+    std::uint64_t id = 34900;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("histogram native (") + item.name + "): ";
+        const auto plan = ht::histogramPlan(item.values, id);
+        id += 200;
+        auto request = requestFor(*plan);
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(10, 6, 30, 40);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared) {
+            if (!prepared)
+                std::cerr << name << "prepare diagnostic: " << prepared.diagnostic.message << '\n';
+            continue;
+        }
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches == 3 && coldCounters.readbacks == 0,
+                            name + "three resident dispatches and no per-operation readback");
+        expectations.expect(unreachableCommandCount(*prepared.scene) == 0,
+                            name + "the scene emits only what its output reads");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        ht::HistogramValues changedValues = item.values;
+        changedValues.rangeMax = item.values.rangeMax + 0.5;
+        const auto changedPlan = ht::histogramPlan(changedValues, id - 200);
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "a changed value re-runs with CPU parity: " + detail);
+    }
+}
+
 void runAutoExposures(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::exposure_test::ExposureValues;
     const CpuCompositionEvaluator evaluator;
@@ -3275,6 +3406,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runFilmGrains(expectations, device, cache);
     runCodecDegrades(expectations, device, cache);
     runAutoExposures(expectations, device, cache);
+    runHistograms(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
     runFrameRateHold(expectations, device, cache);
     runSharpens(expectations, device, cache);

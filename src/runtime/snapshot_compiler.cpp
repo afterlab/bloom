@@ -7,6 +7,7 @@
 #include "motion_blur_recipes.hpp"
 #include "codec_degrade_recipes.hpp"
 #include "auto_exposure_recipes.hpp"
+#include "histogram_recipes.hpp"
 #include "motion_shutter.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"

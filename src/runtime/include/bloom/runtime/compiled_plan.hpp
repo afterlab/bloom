@@ -726,7 +726,7 @@ struct FilmGrainKernel final {
 // GPU alike (motion_blur_image_effect.hpp).
 //
 // The shutter, constant per node. `shutter` is the open time in frames (180 degrees = 0.5);
-// `offset` (document::kShutterOffset*) places it Centred on the frame, from its Start, ending at
+// `offset` (document::kShutterOffset*) places it Centered on the frame, from its Start, ending at
 // its End, or (Custom) opening at `phase` frames; `curve` (document::kShutterCurve*) weights the
 // open time Box, Triangle, Gaussian or by `customCurve` (a Curves point list over [0, 1]).
 // `quality` (document::kMotionQuality*) picks the sample count: Draft 4, Standard 16, High 64, or
@@ -968,7 +968,11 @@ enum class PixelMathOperation : std::uint8_t {
     Maximum,
     Absolute,
     MapRange,
-    Clamp
+    Clamp,
+    // #349 Image Compare: A against the second image B, which is required. `compareMode` is the
+    // node's stored mode (document::kImageCompareDifference ...) and `values` its gain, split
+    // position, split angle in degrees and checkerboard cell size in pixels.
+    Compare
 };
 struct PixelMathKernel final {
     PixelMathOperation operation = PixelMathOperation::Multiply;
@@ -976,8 +980,31 @@ struct PixelMathKernel final {
     bool straight = true;
     bool clamp = false;
     bool second = false;
+    std::int64_t compareMode = document::kImageCompareDifference;
     std::array<CompiledScalarParameter, 8> values{};
     friend bool operator==(const PixelMathKernel&, const PixelMathKernel&) = default;
+};
+
+// #349 Histogram (docs/architecture/image-filters.md, "Histogram"): the node lowers to three passes
+// over the frame, the way Auto Exposure's reduction does.
+//   Bin   cuts the frame into at most `grid` by `grid` tiles and counts, in each tile, the pixels
+//         whose value falls in each of `bins` equal bins of the range `values[0]`..`values[1]`, for
+//         up to four channels at once (the `channels` choice, document::kHistogram*): one pixel per
+//         bin and tile, `bins` wide and one row per tile;
+//   Sum   adds the tiles' counts: one pixel per bin, the counts of the whole frame;
+//   Plot  draws the counts as bars on a `bins` by `height` image, `logarithmic` or not.
+// `straight` says the colour is divided by alpha before it is counted.
+enum class HistogramRole : std::uint8_t { Bin, Sum, Plot };
+struct HistogramKernel final {
+    HistogramRole role = HistogramRole::Bin;
+    std::int64_t channels = document::kHistogramRgb;
+    bool straight = true;
+    bool logarithmic = false;
+    std::int64_t bins = 256;
+    std::int64_t height = 128;
+    std::int64_t grid = 32;
+    std::array<CompiledScalarParameter, 2> values{};
+    friend bool operator==(const HistogramKernel&, const HistogramKernel&) = default;
 };
 
 using ImageEffectKernel =
@@ -990,7 +1017,7 @@ using ImageEffectKernel =
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
-                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel>;
+                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1182,12 +1209,21 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         std::size_t count = 0;
         if (pixelMath->operation == PixelMathOperation::Clamp)
             count = 8;
+        else if (pixelMath->operation == PixelMathOperation::Compare)
+            count = 4;
         else if (pixelMath->operation == PixelMathOperation::MapRange)
             count = 4;
         else if (!pixelMath->second && pixelMath->operation != PixelMathOperation::Absolute)
             count = 1;
         for (std::size_t index = 0; index < count; ++index)
             visit(pixelMath->values[index]);
+        return true;
+    }
+    // #349: a Histogram's Bin reads the range; its Sum and Plot have no operands.
+    if (const auto* histogram = std::get_if<HistogramKernel>(&kernel)) {
+        if (histogram->role == HistogramRole::Bin)
+            for (const auto& value : histogram->values)
+                visit(value);
         return true;
     }
     return isMotionKernel(kernel);
@@ -1210,7 +1246,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<SharpenKernel>(kernel) ||
            std::holds_alternative<CodecDegradeKernel>(kernel) ||
            std::holds_alternative<AutoExposureKernel>(kernel) ||
-           std::holds_alternative<PixelMathKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<PixelMathKernel>(kernel) ||
+           std::holds_alternative<HistogramKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

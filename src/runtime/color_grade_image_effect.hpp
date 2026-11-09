@@ -60,7 +60,10 @@ enum class ColorGradeKind : std::uint8_t {
     Sharpen,
     // #481: Image Math, Image Map Range and Image Clamp (pixel_math_image_effect.hpp), the table of
     // one per-pixel function, with a second image's atlas geometry appended where it is applied.
-    PixelMath
+    PixelMath,
+    // #349: Histogram (histogram_image_effect.hpp), the geometry of the image it follows appended
+    // where it is applied.
+    Histogram
 };
 
 // The packed table, always a whole number of vec4s:
