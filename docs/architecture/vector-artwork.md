@@ -118,47 +118,81 @@ Coverage masks, command storage and the scene cache are counted as what they are
 1920 by 1080, and tiger, bike and worldmap waited for device memory at 3840 by 2160 until the export
 stopped.
 
+### What a layer draws
+
+A layer draws only what can be seen, on both routes alike. Its window is its transformed support
+intersected with what its readers can show of the frame: the Composition Output asks for the frame,
+a Merge and the pass-through kernels (identity, combine, pointwise and colour transforms) pass that
+on, a frame-pivot layer maps it back through its own matrix, and a transparent-edge blur widens it
+by its taps. Anything else (a content-pivot layer's input, a field image, any other kernel) asks for
+everything, so nothing it reads is clipped. A layer whose track matte is a plain alpha or luma
+multiply is also clipped to the matte's window, since nothing outside it survives the matte
+(`detail::visibleSupportWindows` and `detail::matteBoundedLayers`, src/runtime/visible_support.hpp,
+used by the CPU reference's layer arm and by `CpuGpuSceneBuilder`). Before, an imported elliptical
+gradient's layer took its whole transformed support, about ten frames for firefox, and the Merges
+over it took the same window, so firefox held about 42 frames.
+
+A gradient node itself still draws in its own window: the GPU gradient kernel needs that window's
+origin at zero, so it is not sub-windowed. It is the import's elliptical reach on each axis (no
+longer a square of the larger), and admission counts it at that size. Once the scene is prepared
+the phase raises its claim to the executor's live set with every image at its prepared size
+(`GpuProcessingPhaseLease::raiseExecutorNeed`); a ceiling below that refuses the scene instead of
+drawing past it. Images are counted at their requested extent: the allocator rounds each one up (on
+this workstation's GPU a 1920-wide float image allocates 2048 wide, 7 to 10 percent), and that
+rounding is drawn against live device capacity like any allocation past a phase's need.
+
+### Results
+
 Results on the production headless export route (`bloom-cli run`, PNG still, the export requiring a
 GPU device, one frame each). The memory columns come from the corpus mode of
-`bloom.runtime.gpu_svg_artwork_native` (the same builder and executor). Where the last column has a
-value, the whole GPU frame was compared with the CPU reference, evaluated in tiles, at 2e-6; at
-these sizes that compare is extra evidence, not the parity requirement, and the stress file was not
-compared at 4K:
+`bloom.runtime.gpu_svg_artwork_native` (the same builder and executor). The phase claims the larger
+of the admission floor and the live set at real image sizes. The last column is the same export on
+the CPU reference route with no GPU device:
 
-| File | Size | Route result | PNG | Commands | Live peak, serial / batched (frames) | Admission floor (frames) | Full-frame CPU compare |
+| File | Size | Route result | PNG | Commands | Live peak, serial / batched (frames) | Admission floor / live set at real sizes (frames) | CPU-only export |
 |---|---|---|---|---|---|---|---|
-| tiger (482 layers) | 1920x1080 | GPU | 216,093 B | 854 | 1.76 / 4.69 | 5 | exact |
-| tiger | 3840x2160 | GPU | 524,084 B | 854 | 1.66 / 2.11 | 5 | exact |
-| bike (626 layers) | 1920x1080 | GPU | 205,099 B | 1,027 | 1.88 / 4.20 | 9 | exact |
-| bike | 3840x2160 | GPU | 501,295 B | 1,027 | 1.74 / 1.79 | 9 | exact |
-| firefox | 1920x1080 | GPU | 233,590 B | 76 | 42.5 / 42.5 | 6 | within 1.8e-7 |
-| firefox | 3840x2160 | GPU | 543,192 B | 76 | 41.9 / 41.9 | 6 | within 1.8e-7 |
-| worldmap | 1920x1080 | GPU | 141,463 B | 7,301 | 2.28 / 4.87 | 7 | exact |
-| worldmap | 3840x2160 | GPU | 369,562 B | 7,301 | 2.27 / 2.27 | 7 | exact |
-| gen-dense-4000 | 1920x1080 | GPU | 1,030,099 B | 13,045 | 5.58 / 6.77 | 7 | within 8.9e-8 |
-| gen-dense-4000 | 3840x2160 | GPU | 2,927,949 B | 13,045 | 5.40 / 5.40 | 7 | not compared (stress file) |
+| tiger (482 layers) | 1920x1080 | GPU | 216,093 B | 854 | 1.76 / 4.69 | 5 / 2.55 | |
+| tiger | 3840x2160 | GPU | 524,084 B | 854 | 1.66 / 2.11 | 5 / 2.55 | identical PNG |
+| bike (626 layers) | 1920x1080 | GPU | 205,099 B | 1,027 | 1.88 / 4.20 | 9 / 1.62 | |
+| bike | 3840x2160 | GPU | 501,295 B | 1,027 | 1.74 / 1.79 | 9 / 1.61 | identical PNG |
+| firefox | 1920x1080 | GPU | 233,629 B | 76 | 2.76 / 5.02 | 5 / 2.57 | |
+| firefox | 3840x2160 | GPU | 543,192 B | 76 | 2.61 / 2.76 | 5 / 2.56 | within one code |
+| worldmap | 1920x1080 | GPU | 141,463 B | 7,301 | 2.28 / 4.87 | 7 / 3.00 | |
+| worldmap | 3840x2160 | GPU | 369,562 B | 7,301 | 2.27 / 2.27 | 7 / 2.99 | identical PNG |
+| gen-dense-4000 | 1920x1080 | GPU | 1,030,099 B | 12,965 | 5.33 / 7.47 | 7 / 5.00 | |
+| gen-dense-4000 | 3840x2160 | GPU | 2,927,949 B | 12,962 | 5.04 / 5.04 | 7 / 5.00 | within one code |
 
-CPU/GPU parity is proven at 512 by 288 on every corpus file, whole frame, at 2e-6:
+The interactive Viewer shows firefox at 1920 by 1080 and 3840 by 2160 from the GPU-prepared packed
+product with no CPU fallback, on the application's own memory wiring
+(`bloom_ui_viewer_export_svg_artwork_test --svg <file> --size <W>x<H> --loader <loader>`).
 
-| File | Commands | Live peak, serial / batched (frames) | Admission floor (frames) | GPU against CPU reference |
-|---|---|---|---|---|
-| tiger | 854 | 2.25 / 7.33 | 5 | exact |
-| bike | 1,027 | 2.04 / 4.75 | 9 | exact |
-| firefox | 76 | 42.3 / 67.9 | 6 | within 1.2e-7 |
-| worldmap | 7,301 | 2.46 / 5.45 | 7 | exact |
-| gen-dense-4000 | 13,045 | 6.73 / 12.2 | 7 | within 6.0e-8 |
+CPU/GPU parity is proven at 512 by 288 on every corpus file, whole frame, at 2e-6. The CPU column is
+what the CPU reference holds for the whole frame:
 
-The live image peak is measured with batching off; batched submission keeps up to eight kernels'
-outputs until their fence, within its own byte bound. The phase's admission floor counts each image
-as one frame. An image larger than the frame is drawn against live device memory when the executor
-allocates it, like any allocation beyond a phase's claimed need. Examples are a layer whose
-transformed support extends past the frame, and a gradient drawn in its own window. Firefox's
-elliptical gradient layers are about ten frames each, and the Merges over them take the same
-window, hence its peak of about 42 frames. The CPU reference sizes those images the same way.
-Such an image is never assumed to fit.
+| File | Commands | Live peak, serial / batched (frames) | Admission floor / live set at real sizes (frames) | CPU reference holds (frames) | GPU against CPU reference |
+|---|---|---|---|---|---|
+| tiger | 854 | 2.25 / 7.33 | 5 / 2.55 | 4 | exact |
+| bike | 1,027 | 2.04 / 4.75 | 9 / 1.67 | 8 | exact |
+| firefox | 76 | 19.5 / 21.1 | 5 / 18.5 | 4 | within 1.8e-7 |
+| worldmap | 7,301 | 2.46 / 5.45 | 7 / 3.04 | 5 | exact |
+| gen-dense-4000 | 12,982 | 2.50 / 5.60 | 7 / 2.27 | 5 | within 6.0e-8 |
 
-The CPU reference route still holds every entry of a Merge at once and counts each image as one
-frame. Without a GPU device, an export of tiger, bike, worldmap or the 4,000-element file at 3840
-by 2160 stops before writing with "Frame 0 needs more memory than this computer can give the
-export, so the export stopped. Try a smaller resolution". At 1920 by 1080 the CPU route renders all
-five, and its PNGs match the GPU's within one 8-bit code (byte-identical except firefox).
+Firefox's gradient nodes are drawn in the file's own units, so at 512 by 288 one is about 18 frames;
+at 1920 by 1080 the same image is 1.3 frames. Admission counts it at that size. The live image peak
+is measured with batching off; batched submission keeps up to eight kernels' outputs until their
+fence, within its own byte bound.
+
+### The CPU reference
+
+The CPU reference folds Merges entry by entry as the executor does (`detail::mergeFoldSteps`,
+src/runtime/merge_fold_order.hpp). An entry's own operations run just before it is composited,
+bottom entry first, and the entry is released as soon as it is folded into the Merge's accumulator.
+The accumulator grows by half again as entries reach past it, within what the frame shows of the
+Merge; the pixels it adds are transparent, which every blend mode leaves where neither image has
+coverage, so the image is the one plan order computes. Anything read from more than one place keeps
+its plan position. The evaluator folds when plan order would hold more than eight images, or more
+than the request allows, and folding holds less; smaller plans keep plan order. The preflight and
+the evaluation take the same order, so what is admitted is what is held. Without a GPU device tiger,
+bike, worldmap, firefox and the 4,000-element file now export at 3840 by 2160, and their PNGs equal
+the GPU's (byte-identical for tiger, bike and worldmap; within one 8-bit code for firefox and the
+4,000-element file).

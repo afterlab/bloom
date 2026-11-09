@@ -1904,6 +1904,21 @@ slots. Each is now counted as what it is; no budget was raised.
 - **Leaf shapes flatten like the CPU reference.** A shape whose path is already on the layer's pixel
   grid is flattened by `PathRaster::create` at the plain scale, as the CPU leaf arm does, instead of
   through the transformed path at the matrix norm, so curved outlines cover the same pixels.
+- **A layer draws what can be seen.** Each layer's window is its transformed support intersected
+  with what its readers can show of the frame (`detail::visibleSupportWindows`), and with its track
+  matte's window when the matte is a plain alpha or luma multiply (`detail::matteBoundedLayers`).
+  The CPU reference's layer arm takes the same windows, so the pixels are the same on both routes.
+  A reader the demand pass does not understand asks for everything, so nothing it reads is clipped.
+- **The phase claims images at their real sizes.** The admission floor takes each image as one
+  frame. Once the scene is prepared, `detail::gpuExecutorLivePeakBytes` walks the plan again with
+  every prepared window and the phase raises its claim to that live set when it is more
+  (`GpuProcessingPhaseLease::raiseExecutorNeed`): a gradient node drawn in its own window larger
+  than the frame is counted at its size. The device admits, waits for or refuses the larger need;
+  an executor ceiling below it refuses the scene. Images are counted at their requested extent, not
+  the allocator's rounding of it.
+- **The CPU reference folds Merges too.** When plan order would hold more than eight images and
+  folding holds less, the CPU reference composites each Merge entry as it is ready and releases it
+  (`detail::mergeFoldSteps`), so a CPU-only export of a few hundred layers holds a few frames.
 
 Native batching still keeps up to eight kernels' outputs until their fence, bounded by
 `maxNativeBatchOutputBytes`; the live set itself is asserted with batching off.
