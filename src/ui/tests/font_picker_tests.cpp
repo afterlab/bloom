@@ -168,6 +168,50 @@ void testFieldAndPicker() {
     (void)cancelled;
     (void)committed;
 }
+// A commit after a live preview keeps the font that was chosen. Dropping the preview refreshes the
+// field to the old font, and the commit used to read the field's own text after that.
+void testCommitAfterPreview() {
+    auto project = document::makeNewProject("Fonts", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    (void)session.addTextLayer("Title", "Hello", 72, {1, 1, 1, 1});
+    ui::PropertiesEditor properties(session);
+    properties.resize(900, 2200);
+    properties.show();
+    QCoreApplication::processEvents();
+    auto* field = properties.findChild<ui::FontField*>();
+    expect(field != nullptr, "the text layer's Properties have a font field");
+    if (field == nullptr)
+        return;
+    const auto before = field->fontText();
+    Q_EMIT field->familyDropdown()->openRequested();
+    QCoreApplication::processEvents();
+    auto* popup = field->findChild<ui::FontPickerPopup*>();
+    expect(popup != nullptr, "the font field opens its picker");
+    if (popup == nullptr)
+        return;
+    document::FontId chosen;
+    chosen.source = document::FontSource::Google;
+    chosen.family = "Roboto";
+    chosen.style = "Bold";
+    chosen.weight = 700;
+    Q_EMIT popup->previewed(chosen);
+    QCoreApplication::processEvents();
+    expect(session.valueEditActive(),
+           "a preview is a live edit, not a commit");
+    const auto revision = session.snapshot().revision();
+    Q_EMIT popup->chosen(chosen);
+    QCoreApplication::processEvents();
+    expect(field->fontId().family == "Roboto",
+           "a commit after a preview keeps the chosen font, got " + field->fontId().family);
+    expect(session.snapshot().revision() != revision, "the commit is an edit");
+    expect(session.undo(), "the commit can be undone");
+    QCoreApplication::processEvents();
+    expect(field->fontText() == before, "one undo puts the earlier font back");
+    popup->close();
+}
+
 // Review tool, not a test: font_picker_test --capture <dir> <dpr>. Writes the Properties font row,
 // the text node's card and the open picker at 2000, 900 and 560 pixels wide.
 void capture(const QString& directory, const QString& dprText) {
@@ -231,5 +275,6 @@ int main(int argc, char** argv) {
     }
     testTransport();
     testFieldAndPicker();
+    testCommitAfterPreview();
     return failures == 0 ? 0 : 1;
 }

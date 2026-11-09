@@ -660,7 +660,9 @@ void FontField::commitId(const document::FontId& id) {
     }
     rebuildStyles();
     refreshStatus();
-    Q_EMIT fontCommitted(text_);
+    // A copy: a listener's refresh can change text_ while this signal is being delivered.
+    const QString committed = text_;
+    Q_EMIT fontCommitted(committed);
 }
 
 void FontField::styleActivated() {
@@ -712,8 +714,10 @@ void bindFontFieldToParameter(FontField& field, CompositionSession& session,
         state->editing.reset();
     });
     QObject::connect(&field, &FontField::fontCommitted, &field,
-                     [&session, parameter, state](const QString& text) {
-                         // The live preview is dropped first so the commit is the one undo step.
+                     [&session, parameter, state](const QString text) {
+                         // By value: dropping the preview refreshes the field, which owns the text
+                         // this signal was sent with. It is dropped first so the commit is the one
+                         // undo step.
                          if (state->editing && session.isValueEditing(*state->editing))
                              session.cancelValueEdit();
                          state->editing.reset();
