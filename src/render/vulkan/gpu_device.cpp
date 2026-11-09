@@ -3,6 +3,8 @@
 #include "gpu_command_reuse_private.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_display_transfer_retirement_private.hpp"
+#include "gpu_composite_private.hpp"
+#include "gpu_image_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_image_upload_retirement_private.hpp"
 #include "gpu_native_storage_reuse_private.hpp"
@@ -20,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #if defined(_WIN32)
@@ -332,6 +335,65 @@ bool GpuDevice::outputColorReadbackPending() const noexcept {
            output_color_readback_detail::readbackPendingFor(*impl_->control);
 }
 
+namespace {
+
+// Probes the driver for the real allocation size of an image or a small buffer, once per size. It
+// holds the generation weakly: after the device closes it answers with the plain requested bytes.
+std::shared_ptr<const GpuAllocationSizes>
+makeAllocationSizes(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& control) {
+    struct Memo final {
+        std::mutex mutex;
+        std::unordered_map<std::uint64_t, std::uint64_t> images;
+        std::unordered_map<std::uint64_t, std::uint64_t> buffers;
+    };
+    auto memo = std::make_shared<Memo>();
+    std::weak_ptr<vulkan_detail::DeviceAllocatorState> weak = control;
+    auto sizes = std::make_shared<GpuAllocationSizes>();
+    sizes->image = [memo, weak](const std::uint32_t width, const std::uint32_t height) -> std::uint64_t {
+        const std::uint64_t requested = static_cast<std::uint64_t>(width) * height * sizeof(Rgba32f);
+        const std::uint64_t key = (static_cast<std::uint64_t>(width) << 32) | height;
+        try {
+            {
+                const std::lock_guard lock(memo->mutex);
+                if (const auto found = memo->images.find(key); found != memo->images.end())
+                    return found->second;
+            }
+            std::uint64_t actual = 0;
+            if (const auto state = weak.lock())
+                actual = probeResidentImageBytes(*state, width, height);
+            if (actual < requested)
+                return requested;
+            const std::lock_guard lock(memo->mutex);
+            memo->images.emplace(key, actual);
+            return actual;
+        } catch (...) {
+            return requested;
+        }
+    };
+    sizes->buffer = [memo, weak](const std::uint64_t bytes) -> std::uint64_t {
+        try {
+            {
+                const std::lock_guard lock(memo->mutex);
+                if (const auto found = memo->buffers.find(bytes); found != memo->buffers.end())
+                    return found->second;
+            }
+            std::uint64_t actual = 0;
+            if (const auto state = weak.lock())
+                actual = probeCompositeBufferBytes(*state, bytes);
+            if (actual < bytes)
+                return bytes;
+            const std::lock_guard lock(memo->mutex);
+            memo->buffers.emplace(bytes, actual);
+            return actual;
+        } catch (...) {
+            return bytes;
+        }
+    };
+    return sizes;
+}
+
+} // namespace
+
 GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
     GpuAllocationBudget result;
     if (impl_ == nullptr || impl_->state != GpuDeviceState::Ready || impl_->control == nullptr) {
@@ -343,6 +405,13 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
     auto& control = *impl_->control;
     result.device_local_bytes = control.deviceLocalBytes;
     result.device_uuid = control.deviceUuid;
+    try {
+        if (!control.allocationSizes)
+            control.allocationSizes = makeAllocationSizes(impl_->control);
+        result.allocation_sizes = control.allocationSizes;
+    } catch (...) {
+        result.allocation_sizes.reset();
+    }
 
     if (control.allocator != VK_NULL_HANDLE && control.memoryBudgetEnabled) {
         // vmaGetHeapBudgets normally reuses its last driver sample until enough allocations pass

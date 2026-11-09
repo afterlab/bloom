@@ -135,6 +135,11 @@ compositeDispatchGroupCount(const std::uint64_t pixels) noexcept {
 // The ACTUAL bytes VMA allocated for a composite metadata/status buffer (allocator rounding
 // included), not the requested size. Zero for an unarmed buffer.
 [[nodiscard]] std::uint64_t compositeBufferAllocationBytes(const CompositeBuffer& buffer) noexcept;
+// The bytes the allocator takes for a metadata or status buffer of `bytes` requested bytes: the
+// driver's own memory requirement for the buffer createCompositeBuffer makes. Zero when the driver
+// cannot say. Any thread on a live device (a buffer created without backing is a query only).
+[[nodiscard]] std::uint64_t probeCompositeBufferBytes(vulkan_detail::DeviceAllocatorState& state,
+                                                      std::uint64_t bytes) noexcept;
 
 // The ACTUAL bytes VMA allocated for a resident image's backing allocation.
 [[nodiscard]] std::uint64_t compositeImageAllocationBytes(const GpuImageImpl& image) noexcept;

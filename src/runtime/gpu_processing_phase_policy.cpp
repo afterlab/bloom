@@ -427,6 +427,10 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         ceiling = ceiling ? std::min(*ceiling, whole) : whole;
     }
     budget_.setDeviceCeiling(ceiling);
+    std::shared_ptr<const render::GpuAllocationSizes> allocationSizes;
+    for (std::size_t slot = 0; slot < deviceCount_ && !allocationSizes; ++slot)
+        allocationSizes = devices_[slot].budget.allocation_sizes;
+    budget_.setAllocationSizes(std::move(allocationSizes));
     budget_.setDeviceCapacity(minimum, ready || (minimum && *minimum == 0));
 }
 render::GpuProcessingPhaseGrant

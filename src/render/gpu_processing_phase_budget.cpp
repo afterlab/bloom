@@ -396,6 +396,40 @@ GpuProcessingPhaseLease::raiseExecutorNeed(const std::uint64_t bytes) noexcept {
     return GpuProcessingPhaseAdmission::Accepted;
 }
 
+std::uint64_t GpuProcessingPhaseLease::imageAllocationBytes(const std::uint32_t width,
+                                                            const std::uint32_t height) const
+    noexcept {
+    std::shared_ptr<const GpuAllocationSizes> sizes;
+    if (state_) {
+        const std::lock_guard lock(state_->mutex);
+        sizes = state_->allocationSizes;
+    }
+    const auto plain = static_cast<std::uint64_t>(width) * height * 16U; // RGBA32F
+    if (!sizes || !sizes->image)
+        return plain;
+    try {
+        return std::max(plain, sizes->image(width, height));
+    } catch (...) {
+        return plain;
+    }
+}
+
+std::uint64_t GpuProcessingPhaseLease::bufferAllocationBytes(const std::uint64_t bytes) const
+    noexcept {
+    std::shared_ptr<const GpuAllocationSizes> sizes;
+    if (state_) {
+        const std::lock_guard lock(state_->mutex);
+        sizes = state_->allocationSizes;
+    }
+    if (!sizes || !sizes->buffer)
+        return bytes;
+    try {
+        return std::max(bytes, sizes->buffer(bytes));
+    } catch (...) {
+        return bytes;
+    }
+}
+
 bool GpuProcessingPhaseLease::retireToRetention() noexcept {
     {
         const std::lock_guard lock(state_->mutex);
@@ -748,6 +782,11 @@ void GpuProcessingPhaseBudget::setDeviceCapacity(const std::optional<std::uint64
             incrementSaturating(state_->counters.admissionRevision);
     }
     state_->changed.notify_all();
+}
+void GpuProcessingPhaseBudget::setAllocationSizes(
+    std::shared_ptr<const GpuAllocationSizes> sizes) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    state_->allocationSizes = std::move(sizes);
 }
 void GpuProcessingPhaseBudget::shiftHostCapacity(const std::uint64_t add,
                                                  const std::uint64_t subtract) noexcept {

@@ -12,6 +12,7 @@
 
 #include <bloom/render/gpu_allocator_memory.hpp>
 #include <bloom/render/gpu_presentation_types.hpp>
+#include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/native_buffer_storage.hpp>
 #include <bloom/render/native_image_storage.hpp>
 
@@ -150,6 +151,8 @@ struct GpuAllocationBudget final {
     // Which physical GPU this live budget describes (all zero when unknown). Owners that share a
     // GPU share its process-wide budget, so ownership credit is applied once per physical device.
     std::array<std::uint8_t, 16> device_uuid{};
+    // The device's allocation sizes (null when unknown); shared by every budget it resolves.
+    std::shared_ptr<const GpuAllocationSizes> allocation_sizes = nullptr;
 
     friend bool operator==(const GpuAllocationBudget&, const GpuAllocationBudget&) = default;
 };

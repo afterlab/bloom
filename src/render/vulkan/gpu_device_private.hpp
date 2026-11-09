@@ -221,6 +221,8 @@ struct DeviceAllocatorState final {
     std::uint64_t deviceLocalBytes = 0;
     // Driver-reported physical device UUID, copied into every live allocation budget.
     std::array<std::uint8_t, 16> deviceUuid{};
+    // The allocation sizes handed out with every allocation budget (created on first use).
+    std::shared_ptr<const GpuAllocationSizes> allocationSizes;
     // Owner-only VMA frame index. Advancing it refreshes VK_EXT_memory_budget even when this
     // allocator has made no allocations while other processes changed device-memory usage.
     std::uint32_t budgetFrameIndex = 0;

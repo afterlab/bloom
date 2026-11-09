@@ -37,6 +37,28 @@ constexpr std::uint64_t kReadbackDeadlineNanoseconds = 5ULL * 1000ULL * 1000ULL 
     return result;
 }
 
+
+// The one description of a resident RGBA32F storage image: what createResidentImage allocates and
+// what probeResidentImageBytes asks the driver about.
+[[nodiscard]] VkImageCreateInfo residentImageInfo(const std::uint32_t width,
+                                                  const std::uint32_t height) noexcept {
+    VkImageCreateInfo imageInfo;
+    std::memset(&imageInfo, 0, sizeof(imageInfo));
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = kSolidFormat;
+    imageInfo.extent = {width, height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    return imageInfo;
+}
+
 } // namespace
 
 GpuImage::GpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept : impl_(std::move(impl)) {}
@@ -223,6 +245,24 @@ SolidImageSupport querySolidImageSupport(vulkan_detail::DeviceAllocatorState& st
     return support;
 }
 
+std::uint64_t probeResidentImageBytes(vulkan_detail::DeviceAllocatorState& state,
+                                      const std::uint32_t width,
+                                      const std::uint32_t height) noexcept {
+    if (width == 0 || height == 0 || state.device == nullptr)
+        return 0;
+    // An image created without backing is a query only: no memory is allocated or counted.
+    const auto imageInfo = residentImageInfo(width, height);
+    const auto* dispatch = state.device.getDispatcher();
+    const auto device = static_cast<VkDevice>(*state.device);
+    VkImage probe = VK_NULL_HANDLE;
+    if (dispatch->vkCreateImage(device, &imageInfo, nullptr, &probe) != VK_SUCCESS)
+        return 0;
+    VkMemoryRequirements requirements{};
+    dispatch->vkGetImageMemoryRequirements(device, probe, &requirements);
+    dispatch->vkDestroyImage(device, probe, nullptr);
+    return static_cast<std::uint64_t>(requirements.size);
+}
+
 bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::uint32_t width,
                          const std::uint32_t height, GpuImageImpl& out,
                          const bool restoreFailedPrefix) {
@@ -230,20 +270,7 @@ bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::
         image_detail::releaseImageSlot(out);
         return false;
     }
-    VkImageCreateInfo imageInfo;
-    std::memset(&imageInfo, 0, sizeof(imageInfo));
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = kSolidFormat;
-    imageInfo.extent = {width, height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    const VkImageCreateInfo imageInfo = residentImageInfo(width, height);
 
     if (!vulkan_detail::allocateCoveredImage(state, imageInfo, out.image, out.allocation,
                                              out.storageToken, false, restoreFailedPrefix)) {

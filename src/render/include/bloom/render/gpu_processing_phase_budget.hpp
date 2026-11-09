@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -18,6 +19,19 @@ class PackedHostRetirementOwner;
 class NativeImageStorageToken;
 class NativeBufferStorageToken;
 class ProcessingHostStorageToken;
+
+// What the allocator takes for one resident RGBA32F image of this extent, from the driver's own
+// memory requirement (rows and tiles are padded: on one GPU a 1920-wide float image takes the room
+// of a 2048-wide one). Callable from any thread, memoised per extent, and falls back to
+// width * height * 16 once the device is gone or when the driver cannot say. A planner that claims
+// device bytes for images rounds each one with this, so the claim is what the allocator charges.
+struct GpuAllocationSizes final {
+    // A resident RGBA32F image of this width and height.
+    std::function<std::uint64_t(std::uint32_t, std::uint32_t)> image;
+    // A metadata or status buffer of this many requested bytes (small storage buffers take at
+    // least the allocator's alignment; a staging copy of one takes the same).
+    std::function<std::uint64_t(std::uint64_t)> buffer;
+};
 
 // Lifecycle identity of the existing neutral budget state, never a pixel/cache content identity.
 // A handle retains no phase admission, native owner or device. The incomplete const state cannot
@@ -240,6 +254,13 @@ class GpuProcessingPhaseLease final {
     // room cannot hold it now; BudgetRefused when it exceeds the phase's executor ceiling or the
     // device itself. Nothing changes unless Accepted.
     [[nodiscard]] GpuProcessingPhaseAdmission raiseExecutorNeed(std::uint64_t bytes) noexcept;
+    // The bytes the device's allocator takes for one resident RGBA32F image of this extent (#343),
+    // as the device reported them to the root: padded rows and tiles included. Without a report
+    // (no device, or one that cannot say) it is the plain width * height * 16. Any thread.
+    [[nodiscard]] std::uint64_t imageAllocationBytes(std::uint32_t width,
+                                                     std::uint32_t height) const noexcept;
+    // The same for one metadata or status buffer of `bytes`: never less than `bytes`.
+    [[nodiscard]] std::uint64_t bufferAllocationBytes(std::uint64_t bytes) const noexcept;
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
     // #539: the phase's scene execution has finished. Its device claim is held only while it
@@ -432,6 +453,8 @@ class GpuProcessingPhaseBudget final {
     void tightenHostCapacity(std::optional<std::uint64_t> upperBound, bool closeReadiness,
                              std::chrono::steady_clock::time_point validUntil) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
+    // The device's image allocation sizes (null clears), reported with its allocation budget.
+    void setAllocationSizes(std::shared_ptr<const GpuAllocationSizes> sizes) noexcept;
     // The host ceiling described on GpuProcessingPhaseSnapshot::hostCeilingBytes.
     void setHostCeiling(std::optional<std::uint64_t> bytes) noexcept;
     // The device ceiling described on GpuProcessingPhaseSnapshot::deviceCeilingBytes.

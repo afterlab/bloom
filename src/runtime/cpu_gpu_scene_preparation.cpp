@@ -1290,14 +1290,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // phase needs the executor's live set at those sizes, and claims it when that is more (an image
     // larger than the frame, such as a gradient drawn in its own window). The device admits, waits
     // for or refuses the larger need as it did the first. Each image is counted at its requested
-    // extent; the allocator's rounding of it is not known here and is drawn against live device
-    // capacity, as every allocation past a phase's need is.
+    // extent rounded to what the device's allocator takes for it (probed from the driver and
+    // reported to the root with the device's budget), so the claim is what the executor is charged.
     if (phaseLease && !phase_.admittedLease && phase_.envelope.native) {
         const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
-        const auto frameBytes =
-            static_cast<std::uint64_t>(extent.width()) * extent.height() * sizeof(render::Rgba32f);
+        // Each image at what the device's allocator takes for it, not its requested extent.
+        const render::GpuAllocationSizes allocated{
+            [&phaseLease](const std::uint32_t width, const std::uint32_t height) {
+                return phaseLease->imageAllocationBytes(width, height);
+            },
+            [&phaseLease](const std::uint64_t bytes) {
+                return phaseLease->bufferAllocationBytes(bytes);
+            }};
+        const auto frameBytes = allocated.image(extent.width(), extent.height());
         const auto live = detail::gpuExecutorLivePeakBytes(*plan, request.output.value(),
-                                                           frameBytes, &outputWindowOf);
+                                                           frameBytes, &outputWindowOf, &allocated,
+                                                           {extent.width(), extent.height()});
         switch (phaseLease->raiseExecutorNeed(live)) {
         case render::GpuProcessingPhaseAdmission::Accepted:
             break;

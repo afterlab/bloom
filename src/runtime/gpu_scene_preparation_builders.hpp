@@ -119,11 +119,16 @@ namespace bloom::runtime::detail {
 // phase's admission floor, each image taken as one frame. #343: once it is prepared, `windows`
 // (each operation's prepared output window; none where it publishes no image) gives every image its
 // real size, and the phase raises its claim to that when it is more (a gradient drawn in its own
-// window can be larger than the frame).
+// window can be larger than the frame). `sizes` rounds each image to what the device's allocator
+// takes for it and adds the metadata and status buffers a layer or blend operation allocates beside
+// its output (the executor charges both against its byte budget, so a ceiling equal to this claim
+// renders); null counts the requested extents and no metadata.
 [[nodiscard]] inline std::uint64_t
 gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t output,
                          const std::uint64_t frameBytes,
-                         const std::vector<std::optional<render::ImageWindow>>* windows = nullptr) {
+                         const std::vector<std::optional<render::ImageWindow>>* windows = nullptr,
+                         const render::GpuAllocationSizes* sizes = nullptr,
+                         const std::pair<std::uint32_t, std::uint32_t> frameExtent = {0, 0}) {
     const auto& operations = plan.operations();
     // One operation's image: its prepared window, or one frame before preparation.
     const auto imageBytes = [&](const std::size_t index) -> std::uint64_t {
@@ -132,8 +137,41 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
         const auto& window = (*windows)[index];
         if (!window)
             return index == output ? frameBytes : 0;
-        return static_cast<std::uint64_t>(window->extent().width()) * window->extent().height() *
-               sizeof(render::Rgba32f);
+        const auto width = window->extent().width();
+        const auto height = window->extent().height();
+        const auto requested = static_cast<std::uint64_t>(width) * height * sizeof(render::Rgba32f);
+        return sizes != nullptr && sizes->image ? std::max(requested, sizes->image(width, height))
+                                                : requested;
+    };
+    const auto buffer = [&](const std::uint64_t bytes) -> std::uint64_t {
+        return sizes != nullptr && sizes->buffer ? std::max(bytes, sizes->buffer(bytes)) : bytes;
+    };
+    // The buffers an operation allocates beside its output image while it runs (a translation's
+    // two axis tables and their staging copies, an affine map, the status word): bounded by the
+    // larger of a translation's and an affine's, each at the allocator's size for it. Only a pixel
+    // layer or a blend allocates them, and only when the sizes are known (a claim before the scene
+    // is prepared counts images alone).
+    const auto metadataBytes = [&](const std::size_t index) -> std::uint64_t {
+        if (sizes == nullptr || windows == nullptr)
+            return 0;
+        std::uint64_t width = frameExtent.first, height = frameExtent.second;
+        if (index < windows->size() && (*windows)[index]) {
+            width = (*windows)[index]->extent().width();
+            height = (*windows)[index]->extent().height();
+        } else if (index != output || width == 0) {
+            return 0;
+        }
+        const auto& operation = operations[index];
+        const bool layer = std::holds_alternative<CompiledLayerOutput>(operation) ||
+                           std::holds_alternative<CompiledCompositionOutput>(operation);
+        const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+        if (!layer && (effect == nullptr || !effect->secondaryInput))
+            return 0;
+        const std::uint64_t axisX = width * 8U;
+        const std::uint64_t axisY = height * 8U;
+        // Two axis tables, each device-local with a staging copy, and a status word; or an affine
+        // map (at most 256 bytes) and a status word.
+        return 2 * buffer(axisX) + 2 * buffer(axisY) + 2 * buffer(256) + 2 * buffer(4);
     };
     const auto isVectorChain = [&operations](std::size_t index) {
         while (index < operations.size()) {
@@ -189,11 +227,12 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
     const auto scratchBytes = [&](const std::size_t index) -> std::uint64_t {
         const auto& operation = operations[index];
         if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation))
-            return isVectorChain(layer->input.value()) ? 3 * imageBytes(index) : 0;
-        return std::holds_alternative<CompiledImageSource>(operation) ||
-                       std::holds_alternative<CompiledVideoSource>(operation)
-                   ? heldBytes(index)
-                   : 0;
+            return isVectorChain(layer->input.value()) ? 3 * imageBytes(index) + metadataBytes(index)
+                                                       : metadataBytes(index);
+        if (std::holds_alternative<CompiledImageSource>(operation) ||
+            std::holds_alternative<CompiledVideoSource>(operation))
+            return heldBytes(index);
+        return metadataBytes(index);
     };
 
     std::vector<std::uint32_t> readers(operations.size(), 0);
@@ -227,13 +266,17 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
         if (const auto* merge = std::get_if<CompiledMerge>(&operations[index])) {
             bool accumulating = false;
             const auto stack = imageBytes(index);
+            // Each entry is composited by a blend, which allocates its status word beside the
+            // replacement image.
+            const auto blendMetadata = sizes == nullptr ? std::uint64_t{0}
+                                                        : 2 * buffer(256) + 2 * buffer(4);
             for (auto entry = merge->entries.rbegin(); entry != merge->entries.rend(); ++entry) {
                 plan_(entry->input.value());
                 if (!accumulating) {
                     alive += stack;
                     accumulating = true;
                 }
-                peak = std::max(peak, alive + stack);
+                peak = std::max(peak, alive + stack + blendMetadata);
                 release(entry->input.value());
             }
             if (!accumulating)

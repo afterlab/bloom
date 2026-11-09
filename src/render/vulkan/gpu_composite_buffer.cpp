@@ -121,6 +121,25 @@ void CompositeBuffer::release() noexcept {
     armed = false;
 }
 
+std::uint64_t probeCompositeBufferBytes(DeviceAllocatorState& state, const std::uint64_t bytes) noexcept {
+    if (bytes == 0 || state.device == nullptr)
+        return 0;
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bytes;
+    bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const auto* dispatch = state.device.getDispatcher();
+    const auto device = static_cast<VkDevice>(*state.device);
+    VkBuffer probe = VK_NULL_HANDLE;
+    if (dispatch->vkCreateBuffer(device, &bufferInfo, nullptr, &probe) != VK_SUCCESS)
+        return 0;
+    VkMemoryRequirements requirements{};
+    dispatch->vkGetBufferMemoryRequirements(device, probe, &requirements);
+    dispatch->vkDestroyBuffer(device, probe, nullptr);
+    return static_cast<std::uint64_t>(requirements.size);
+}
+
 bool createCompositeBuffer(const std::shared_ptr<DeviceAllocatorState>& owner,
                            const std::uint64_t bytes, const bool hostVisible,
                            const void* const initialData, CompositeBuffer& out,

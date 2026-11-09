@@ -69,6 +69,14 @@ struct SolidImageSupport final {
                                                        std::uint32_t width,
                                                        std::uint32_t height) noexcept;
 
+// The bytes the allocator takes for one resident RGBA32F image of this extent: the driver's own
+// memory requirement for the exact image createResidentImage makes, which pads rows and tiles
+// beyond width * height * 16. Zero when the driver cannot say. Thread-safe on a live device (an
+// image created without backing is a query only).
+[[nodiscard]] std::uint64_t probeResidentImageBytes(vulkan_detail::DeviceAllocatorState& state,
+                                                    std::uint32_t width,
+                                                    std::uint32_t height) noexcept;
+
 // Creates a device-local RGBA32F storage image with a color view. `usage`
 // always includes STORAGE and SAMPLED (future transform/sourceover inputs) plus
 // TRANSFER_SRC for the test-only readback path. Returns false and leaves `out`

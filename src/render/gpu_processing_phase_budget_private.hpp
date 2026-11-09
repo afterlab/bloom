@@ -48,6 +48,8 @@ struct GpuProcessingPhaseBudgetState final {
     // Measured per-envelope device peaks (#417) and retained source bytes (#472).
     MeasuredEnvelopePeaks measuredDevicePeaks;
     MeasuredEnvelopePeaks measuredSourceRetention;
+    // The device's image allocation sizes (#343), set by the policy from the device's report.
+    std::shared_ptr<const GpuAllocationSizes> allocationSizes;
 };
 [[nodiscard]] inline std::uint64_t remaining(const std::uint64_t cap,
                                              const std::uint64_t reserved) noexcept {
