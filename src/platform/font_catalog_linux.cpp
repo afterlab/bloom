@@ -62,7 +62,9 @@ FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& ca
     result.status = FontCatalogueStatus::Available;
     if (!FcInitLoadConfigAndFonts())
         return result;
-    FcPattern* query = FcNameParse(reinterpret_cast<const FcChar8*>("*"));
+    // An empty pattern matches every font. (The name "*" is a family called "*" in current
+    // fontconfig releases and matches none.)
+    FcPattern* query = FcPatternCreate();
     FcObjectSet* objects = FcObjectSetBuild(FC_FAMILY, FC_STYLE, FC_WEIGHT, FC_WIDTH, FC_SLANT,
                                             FC_FILE, FC_INDEX, FC_POSTSCRIPT_NAME, nullptr);
     if (query == nullptr || objects == nullptr) {

@@ -47,6 +47,13 @@ int main() {
 
     expectations.expect(catalogue.available(), "fontconfig catalogue is available");
     expectations.expect(catalogue.faces.size() >= 4, "embedded faces are always present");
+    // The installed-font listing returns the fonts fontconfig knows (here, the fixture folder), not
+    // only the embedded ones.
+    std::size_t systemFaces = 0;
+    for (const auto& face : catalogue.faces)
+        if (face.source == bloom::platform::FontSource::System && face.family.starts_with("Inter"))
+            ++systemFaces;
+    expectations.expect(systemFaces >= 3, "installed fonts are listed from the fontconfig database");
     if (catalogue.faces.size() >= 4) {
         expectations.expect(catalogue.faces[0].source == bloom::platform::FontSource::Embedded,
                             "embedded faces sort before system faces");
