@@ -1236,6 +1236,12 @@ core::Color4d gradientColorAt(const GradientValue& value, const double position)
 }
 
 const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept {
+    if (sorted_) {
+        const auto iterator = std::lower_bound(
+            records_.begin(), records_.end(), id,
+            [](const ParameterRecord& record, const ParameterId wanted) { return record.id < wanted; });
+        return iterator != records_.end() && iterator->id == id ? &*iterator : nullptr;
+    }
     const auto iterator = std::find_if(records_.begin(), records_.end(),
                                        [id](const auto& record) { return record.id == id; });
     return iterator == records_.end() ? nullptr : &*iterator;
@@ -1247,6 +1253,8 @@ bool ParameterStore::insert(ParameterRecord record) {
         return false;
     }
 
+    if (!records_.empty() && !(records_.back().id < record.id))
+        sorted_ = false;
     records_.push_back(std::move(record));
     return true;
 }

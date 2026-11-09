@@ -566,6 +566,10 @@ class ParameterStore final {
 
   private:
     std::vector<ParameterRecord> records_;
+    // True while the records are in ascending id order, which is how ids are allocated and how a
+    // document is read, so a lookup is a binary search. An out-of-order insert clears it and
+    // lookups scan, as they always did.
+    bool sorted_ = true;
 };
 
 } // namespace bloom::document
