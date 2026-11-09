@@ -352,6 +352,50 @@ GpuProcessingPhaseLease::claimRetainedHostBytes(const std::uint64_t bytes) noexc
     return GpuProcessingPhaseAdmission::Accepted;
 }
 
+GpuProcessingPhaseAdmission
+GpuProcessingPhaseLease::raiseExecutorNeed(const std::uint64_t bytes) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    auto& counters = state_->counters;
+    if (id_ == 0 || unproven_ || retired_ || deviceBytes_ == 0 || !counters.deviceCapacityBytes)
+        return GpuProcessingPhaseAdmission::InvalidRequest;
+    const auto max = std::numeric_limits<std::uint64_t>::max();
+    if (bytes > max - envelopeWorkingBytes_)
+        return GpuProcessingPhaseAdmission::BudgetRefused;
+    const std::uint64_t need = envelopeWorkingBytes_ + bytes;
+    if (need <= deviceNeedBytes_ && bytes <= executorBytes_)
+        return GpuProcessingPhaseAdmission::Accepted;
+    const std::uint64_t deviceLimit =
+        std::max(*counters.deviceCapacityBytes, counters.deviceCeilingBytes.value_or(0));
+    if ((requestedExecutorBytes_ != 0 && bytes > requestedExecutorBytes_) || need > deviceLimit) {
+        incrementSaturating(counters.budgetRefusals);
+        return GpuProcessingPhaseAdmission::BudgetRefused;
+    }
+    // Before the device stage the whole need must fit the live room, as at admission; during it
+    // only the growth beyond the claim already held is new.
+    const bool staged = allocatedDeviceBytes_ != 0 || deviceClaimBytes_ != 0;
+    const std::uint64_t growth =
+        need > deviceClaimCapBytes_ ? need - deviceClaimCapBytes_ : std::uint64_t{0};
+    if ((staged ? growth : need) >
+        remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes))
+        return GpuProcessingPhaseAdmission::AwaitingCapacity;
+    if (staged && growth != 0) {
+        deviceClaimBytes_ += growth;
+        counters.deviceReservedBytes += growth;
+        counters.totalDeviceClaimBytes += growth;
+        counters.peakDeviceReservedBytes =
+            std::max(counters.peakDeviceReservedBytes, counters.deviceReservedBytes);
+    }
+    deviceNeedBytes_ = std::max(deviceNeedBytes_, need);
+    deviceClaimCapBytes_ = std::max(deviceClaimCapBytes_, need);
+    if (bytes > executorBytes_) {
+        const auto added = bytes - executorBytes_;
+        executorBytes_ = bytes;
+        deviceBytes_ += added;
+        remainingDeviceBytes_ += added;
+    }
+    return GpuProcessingPhaseAdmission::Accepted;
+}
+
 bool GpuProcessingPhaseLease::retireToRetention() noexcept {
     {
         const std::lock_guard lock(state_->mutex);

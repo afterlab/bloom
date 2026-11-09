@@ -232,6 +232,14 @@ class GpuProcessingPhaseLease final {
     // AwaitingCapacity when other claims hold the room; BudgetRefused when the phase's own claim
     // could never fit. Nothing changes unless Accepted.
     [[nodiscard]] GpuProcessingPhaseAdmission claimRetainedHostBytes(std::uint64_t bytes) noexcept;
+    // #343: the phase's scene is prepared and its images are known at their real sizes, which the
+    // admission took as one frame each. Raises the executor bytes the phase needs on the device to
+    // `bytes` (beside its working allowance) when that is more than it was admitted with: the
+    // larger need is checked against the device as at admission and claimed with the rest of the
+    // device stage. Accepted (also when `bytes` is not more); AwaitingCapacity when the live device
+    // room cannot hold it now; BudgetRefused when it exceeds the phase's executor ceiling or the
+    // device itself. Nothing changes unless Accepted.
+    [[nodiscard]] GpuProcessingPhaseAdmission raiseExecutorNeed(std::uint64_t bytes) noexcept;
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
     // #539: the phase's scene execution has finished. Its device claim is held only while it
