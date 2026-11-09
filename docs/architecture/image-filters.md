@@ -1650,16 +1650,26 @@ reuse with zero dispatches, the next frame and a changed value. `effect.CodecDeg
 Denoise & Smooth (`bloom.denoise`, schema 1, issue #514) is a Filters node: one Image in, one Image out,
 and the effect mask every filter takes. Its roles are `mode` (Median, Bilateral, Spatial, Temporal;
 default Bilateral), `radius` (full-resolution pixels, 0 to 6, default 2, animatable), `strength` (0 to 10
-in linear scene values, default 0.1, animatable) and `frames` (Temporal only, 2 to 16, default 5). The
-radius and strength have sockets, so a value graph drives them. Properties and the Timeline show `frames` only in
-Temporal mode and `radius` in every other (`propertiesRowInactive`, the same hook that hides Gaussian Blur's
-vertical radius until Separate axes is on and its channel radii until Per-channel radius is on). The temporal mean reads neither `radius` nor `strength`, so both are hidden in Temporal mode and an animated one is not lowered (a curve nothing reads would make the plan invalid).
+in linear scene values, default 0.1, animatable), `frames` (Temporal only, 2 to 16, default 5),
+`autoStrength` (a constant switch, default off) and `sampleFrom` / `sampleTo` (two opposite corners of
+the noise sample region in field units, pixels from the composition centre with +y up; constants,
+default a 64 x 64 square at the centre). The radius and strength have sockets, so a value graph drives
+them.
 
-The three spatial modes are one kernel, `DenoiseKernel` (`denoise_image_effect.hpp`), whose host table is
+Which parameters a node reads is one rule, `document::isParameterInactive`
+(`parameter_activity.hpp`): `frames` only in Temporal, `radius` in every mode but Temporal, `strength`
+only while Auto strength is off, and the sample region only while it is on (the same rule hides Gaussian
+Blur's vertical radius until Separate axes is on and its channel radii until Per-channel radius is on).
+Properties, the Timeline and the node card hide an inactive row through it (the card's sample region pad
+shows only while the region is active), and the snapshot compiler compiles no animation curve for an inactive parameter, so a
+key left on a value the node does not read is neither lowered nor refused by the evaluator as a curve
+nothing references.
+
+The four modes are one kernel, `DenoiseKernel` (`denoise_image_effect.hpp`), whose host table is
 the whole interface to the CPU reference and to the one fixed GPU neighborhood program
-(`bloom.render.denoise.v1`, six vec4 of data). The output has the input's data window and reads the
-square of radius (rx, ry) around each pixel, skipping texels outside the window, over the stored
-(associated) channels.
+(`bloom.render.denoise.v1`, six vec4 of data). The output has the input's data window. The spatial modes
+read the square of radius (rx, ry) around each pixel, skipping texels outside the window, over the stored
+(associated) channels; a Temporal step reads 3 x 3 patches of two frames (below).
 
 - **Median** takes the middle of the sorted values present (the upper middle on an even count). A
   channel keeps its own value unless it differs from that median by more than `strength`, so strength 0 is
@@ -1675,41 +1685,75 @@ square of radius (rx, ry) around each pixel, skipping texels outside the window,
 - **Spatial** is the same fold with the range weight taken from the mean squared difference of the 3 x 3
   patch around the center and around the candidate (patches clamp to the window's edge): a non-local
   means search. Texture that repeats inside the search radius is averaged even where single pixels differ.
-- **Temporal** is not a kernel. It lowers to the look-back window of the input (`look_back_recipes.hpp`,
-  the frames up to and including the current one on the plan's frame grid) and a running mean (image i
-  mixed into the mean of the ones before it by 1 / (i + 1)), built from Time Sample and Image Mix, which
-  already hold CPU and GPU parity. Every frame weighs the same, so it averages noise down by
-  `sqrt(frames)` on static content and ghosts content that moves; it does not search for motion, so
-  Spatial or a stabilized plate suits a moving shot. A frame before the composition's first repeats its
-  first, the same in preview, scrubbing and export.
+- **Temporal** is temporal non-local means (Buades, Coll and Morel, "Denoising image sequences does not
+  require motion estimation", 2005) over the look-back window of the input (`look_back_recipes.hpp`
+  `appendTemporalDenoise`, the frames up to and including the current one on the plan's frame grid). It
+  lowers to the window's Time Samples and one `DenoiseKernel` step (mode Temporal) per earlier frame,
+  each step reading the running result, the current frame and that earlier frame (`fieldImages`). For a
+  pixel, an earlier frame's weight is the compact biweight `(1 - d / s^2)^2` of `d`, the mean squared
+  difference of the 3 x 3 patches around the pixel in the current and the earlier frame over the four
+  stored channels, with `s` the strength; the current frame's weight is 1. The result is the weighted
+  mean of the colour channels, folded one frame at a time: `m' = fma(w / W', e - m, m)` with
+  `W' = W + w`, carrying `1 / W` in alpha between steps (the first step starts from the current frame
+  with `W = 1`; the last step writes the current frame's alpha back). Where an object moved, the patches
+  differ by more than the strength, the weight is 0 and that frame is ignored: this is the motion
+  rejection, and it needs no motion estimation. Static noise averages down nearly as a plain mean does
+  (on the 4-frame test plate, noise 0.0300 to 0.0142 against 0.0134 for the plain mean) and a moving
+  edge does not ghost (0.023 against 0.308 for the plain mean). Alpha is the current frame's, so a
+  matte never smears. A frame before the composition's first repeats its first, the same in preview,
+  scrubbing and export. On the device a step is the same fixed program's Temporal branch over an atlas
+  of the running result, the current and the earlier frame (each moved exactly into place, as Codec
+  Degrade lays out its frames), with the CPU reference's table and cell geometry
+  (`temporalDenoiseProgramData`).
+
+**Auto strength (noise profile).** With `autoStrength` on, the strength is measured: the lowering
+builds a statistics plan of its own (`lowerDenoiseSampleReduction`) that crops the node's input to the
+sample region (field units to crop margins against the composition size, clamped to the frame) and
+reduces it with the Image Statistics reduction over the green channel's stored values, and feeds its
+`deviation` (population standard deviation) through a value sink into the strength as
+`min(deviation * factor, 10)`. The factor is the mode's (`denoiseAutoStrengthFactor`): Median 3 (an
+outlier is beyond three deviations), Bilateral `2 sqrt(6)` (its range distance sums four channels'
+squared differences between two noisy pixels, eight variances), Spatial and Temporal `sqrt(6)` (their
+patch distance is a mean over the four channels, two variances, so the factor keeps the weight of
+two noisy copies of the same content above zero). The measure is the Image Statistics route
+(`image-statistics.md`): prepared before the frame on the worker evaluating it, at the frame's own
+time and resolution, so it follows the footage; cached by node, revision and time, with the plan
+compared on reuse, so moving the region or changing the input re-measures; on a device route its only
+readback is the two-pixel statistics result (`prep.statistics.result_readback`), never the picture.
+The interactive viewer's device preparation does not run statistics plans, so a frame with Auto
+strength on takes the CPU reference path there and is labelled a CPU reference frame (as any Image
+Statistics frame is); final renders and the headless and scripted routes measure on the device. Wiring
+an Image Statistics node's `deviation` into `strength` by hand remains possible.
 
 All weights are polynomials of the host's float inputs and sums are `fma` folds in scan order (dy, then
 dx), so the device repeats the CPU's arithmetic and the mean about the center keeps equal neighbors exact.
 The radius is authored in full-resolution pixels and scaled to the evaluation resolution
 (`round(radius * scale)` per axis, at most 6); a radius that rounds to zero is the identity and aliases its
-input. The cache identity is the prepared table (mode, both radii, threshold or inverse variance), so a
-render scale, a keyed radius or a changed strength never reuses another result.
-
-**Noise profile sampling.** The tolerance of Bilateral, Spatial and Temporal is a noise level. Measure it
-with the nodes that exist: Crop a flat patch of the plate, wire it to Image Statistics, and wire its
-`deviation` (the population standard deviation of one channel, luminance by default) to `strength`. The
-statistics are prepared on a worker before the frame (see `image-statistics.md`), so the profile follows
-the frame it measures. Wiring a multiple of the deviation (about 2 to 3) keeps the noise inside the
-tolerance.
+input. The cache identity is the prepared table (mode, both radii, threshold or inverse variance, and for a
+Temporal step its first and last flags, beside the keys of the images it reads), so a render scale, a keyed
+radius, a changed or measured strength or another frame of the window never reuses another result.
 
 **Cost per pass.** Reads per output pixel: Median and Bilateral (2r+1)^2 texels in one dispatch (Median
 also sorts them per channel, O(n^2) insertion on the device, n up to 169); Spatial 9 patch texel pairs for
 each of the (2r+1)^2 candidates, so nine times Bilateral; Temporal `frames - 1` Time Sample reads and the
-same number of one-dispatch mixes. The compute is the texel reads and their fused multiply-adds; nothing
+same number of one-dispatch steps, each reading 18 patch texels and two more per pixel; Auto strength one
+statistics reduction of the sample region per frame (cached). The compute is the texel reads and their fused multiply-adds; nothing
 waits on the host: the pass is one dispatch with its table in a storage buffer (a keyed radius or strength
 changes data, never the shader), no readback and no upload per frame beyond the six vec4, and the window
 is the input's, so no halo is allocated. The CPU reference is the same loops, checked for cancellation
 every sixteen pixels and every row. `tools/bench` has the cases (`denoise-<mode>-<radius>`,
-`denoise-temporal-5`) and the budgets in `NODE_COST_BUDGETS` are relaxed per mode from this model; they are
-marked unmeasured until a run replaces them.
+`denoise-temporal-5`, and the export scenario `denoise-temporal-auto-2k` for Temporal with Auto strength) and
+the budgets in `NODE_COST_BUDGETS` are relaxed per mode from this model; they are marked unmeasured until a
+run replaces them. Cancellation, budget and retirement follow the kernel: a Temporal step checks
+cancellation as the spatial passes do and publishes nothing when cancelled, each step and each window frame
+is charged against the frame's pixel budget like any pass, and the results retire with the operation and
+scene caches; the Auto strength measure follows the Image Statistics rules (`image-statistics.md`).
 
 **Limits.** The radius stops at 6 so the Median sort and the Spatial search stay bounded in registers.
-Spatial's patch is fixed at 3 x 3. Temporal has no motion rejection.
+Spatial's and Temporal's patch is fixed at 3 x 3. Temporal compares each pixel with the same pixel of the
+earlier frames (no search window), so moving content is kept sharp by rejection rather than averaged
+along its motion: a moving area keeps the noise of the current frame. The sample region is constant
+(not animated); place it on a flat area that stays flat through the shot.
 
 ## Sharpen
 

@@ -303,6 +303,22 @@ SCENARIOS["film-grain-2k"] = {
     ],
 }
 
+# #514: Denoise & Smooth in Temporal mode with Auto strength over a grained plate: every frame draws
+# its grain anew, measures the noise of the sample region (a reduction of the region to two pixels,
+# read back) and runs four weighted steps over the five frames of its window. Written, not run: it has
+# no recorded numbers and no budget.
+SCENARIOS["denoise-temporal-auto-2k"] = {
+    "description": "A PNG16 plate under Film Grain, then Denoise & Smooth in Temporal mode over five "
+                   "frames with its strength measured from the default sample region.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.film-grain", {"intensity": 0.05, "size": 1.0}],
+                     ["bloom.denoise", {"mode": "Temporal", "frames": 5, "autoStrength": True}]]},
+    ],
+}
+
 # #486: Sharpen over a plate, its amount keyed so every frame is new: each frame runs the plate's blur
 # and the one pass over the two.
 SCENARIOS["sharpen-2k"] = {

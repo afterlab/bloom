@@ -101,6 +101,11 @@ and the picture measured whole.
   reference frame. An unavailable device is reported by the evaluator as unavailable, as for any
   other frame.
 
+Denoise & Smooth's Auto strength (#514, `image-filters.md`) is a second user of this route: its
+lowering builds a statistics plan of the node's own input cropped to its sample region and reads the
+deviation as a compiled value, with the same preparation, cache, cancellation, budget, readback and
+viewer fallback as the node.
+
 The nested run is the one reentrant call the GPU process frame evaluator permits: the statistics plan
 of the frame being prepared, run by that frame's own preparation on the calling worker before the
 frame's scene is queued. It is admitted like any request and cannot wait on the frame it serves.

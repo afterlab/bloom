@@ -13,7 +13,8 @@
 // Cases: the cheap reference (a Grade), the closest existing node (a Gaussian Blur of the same radius)
 // and Denoise over a frame-sized beauty in each spatial mode, its radius stepped (the heaviest
 // parameter: the neighborhood grows with its square, and Spatial compares a 3 x 3 patch at every
-// candidate). Temporal runs the look-back mean of five frames. The strength runs the same work.
+// candidate). Temporal runs five frames: the look-back window and four weighted steps. The strength
+// runs the same work.
 //
 //   bloom_runtime_gpu_denoise_node_bench [--tiers 1080p,2160p] [--repeats N] [--json FILE]
 //                                        [--smoke] [--loader PATH]
@@ -191,7 +192,7 @@ std::vector<Case> cases() {
                 "radius", static_cast<std::int64_t>(radius));
         }
     }
-    // Temporal: the mean of five frames, the look-back window and four mixes.
+    // Temporal: five frames, the look-back window and four weighted steps.
     add("denoise-temporal-5", "bloom.denoise temporal (5 frames)", "gaussian-blur-1",
         [beauty](Doc& doc) {
             const auto layer = doc.solid(beauty);

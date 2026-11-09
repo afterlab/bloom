@@ -650,6 +650,17 @@ class DepthScenario(unittest.TestCase):
         for driver in drives.values():
             self.assertIn("@picture", driver[3:], "each statistic measures the plate the effect reads")
 
+    def test_denoise_scenario_measures_its_strength_over_a_temporal_window(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["denoise-temporal-auto-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effects = scenario["layers"][0]["effects"]
+        self.assertEqual([effect[0] for effect in effects], ["bloom.film-grain", "bloom.denoise"])
+        denoise = effects[1][1]
+        self.assertEqual(denoise["mode"], "Temporal")
+        self.assertTrue(denoise["autoStrength"], "the strength is measured every frame")
+        self.assertNotIn("strength", denoise, "Auto strength does not read a set strength")
+
     def test_audio_effects_scenario_chains_every_effect_and_exports_wav(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["audio-effects-wav"]
