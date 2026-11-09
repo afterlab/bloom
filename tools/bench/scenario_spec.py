@@ -22,7 +22,8 @@ area, and its layers from the bottom up. A layer is one of:
   "effects": [...], "pathNode": {"keys": [[frame, path value], ...]}} (a generator node drawn as a
   layer, with no media; "pathNode" drives its `path` from a keyed Path node, #589; "plotNode":
   {"function": name in FUNCTION_GROUPS, "values": {role: value}, "keys": {role: [[frame, value],
-  ...]}} drives it from a Function Plot reading that group, #595).
+  ...]}} drives it from a Function Plot reading that group, #595; "axesNode": {"values": {...},
+  "keys": {...}} drives it from an Axes node, #596).
 
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
@@ -608,8 +609,25 @@ SCENARIOS["function-plot-2k"] = {
          "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
          "plotNode": {"function": "damped-sine",
                       "values": {"start": -1.0, "end": 6.0, "samples": 4096,
-                                 "origin": [200.0, 700.0], "scale": [200.0, 300.0]},
+                                 "origin": [200.0, 700.0], "pixelsPerUnit": [200.0, 300.0]},
                       "keys": {"end": [[0, 2.0], [23, 6.0]]}}},
+    ],
+}
+
+# #596: Axes at its most ticks (1024 on each axis: 2050 two-anchor contours), read by a Shape Source, its X
+# range keyed so that every frame holds a new set of marks. The cost is the one path's evaluation and its
+# stroke. No media is read. Written, not run.
+SCENARIOS["axes-2k"] = {
+    "description": "A Shape Source reading a 2050-contour Axes path whose range grows over the shot.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Axes",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "axesNode": {"values": {"xMin": 0.0, "xMax": 1000.0, "yMin": 0.0, "yMax": 1000.0,
+                                 "xStep": 1.0, "yStep": 1.0, "tickLength": 6.0,
+                                 "origin": [100.0, 900.0], "pixelsPerUnit": [1.5, 0.8]},
+                      "keys": {"xMax": [[0, 500.0], [23, 1000.0]]}}},
     ],
 }
 

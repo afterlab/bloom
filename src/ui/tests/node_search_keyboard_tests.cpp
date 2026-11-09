@@ -632,7 +632,8 @@ void testSearchKeyboardAndMenus() {
         hasGroup("Time", {"Echo", "Frame Rate Hold"}, "Time holds Echo and Frame Rate Hold until the retimers land");
         hasGroup(
             "Text & Paths",
-            {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle"},
+            {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle",
+             "Function Plot", "Axes", "Axis Tick"},
             "Text & Paths holds Text and the shape presets");
         hasGroup("Utilities",
                  {"Combine XY", "Combine XYZ", "Group Input", "Group Output", "Node Group", "Reroute",

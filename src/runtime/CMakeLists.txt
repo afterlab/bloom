@@ -289,6 +289,7 @@ target_sources(
         value_utility_time.cpp
         value_utility_strings.cpp
         value_utility_numeric.cpp
+        value_utility_plot.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include

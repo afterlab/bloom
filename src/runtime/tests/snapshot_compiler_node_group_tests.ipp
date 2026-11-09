@@ -545,12 +545,17 @@ struct PlotSettings final {
     document::Vec2d origin{10.0, 20.0};
     document::Vec2d scale{100.0, 50.0};
     bool smooth = true;
+    // The shape layer's position, when the frame is to be looked at. A path shape is anchored at the
+    // center of its anchors' bounds, so this is what makes path pixels frame pixels.
+    document::Vec2d position{0.0, 0.0};
 };
 
 // The main composition with a Shape Source (kind Path) in place of the first layer's solid. Its
 // path is driven by a Function Plot, or holds `constant` when one is given.
 [[nodiscard]] document::Project makePlotProject(const PlotSettings& plot,
-                                                const std::optional<document::PathValue>& constant) {
+                                                const std::optional<document::PathValue>& constant,
+                                                const bool axes = false,
+                                                const bool stroked = false) {
     using namespace document;
     auto project = makeProject(singleLayerOptions());
     require(project.addComposition(makeDecayGroup(core::primitives::ScalarPrimitive::Multiply)) &&
@@ -567,7 +572,16 @@ struct PlotSettings final {
                                                        std::string(kLayerOutputContentInputPort)}}),
             "the shape feeds the layer");
     const auto pathParameter = parameterOf(*composition, kPlotShape, "path");
-    if (constant) {
+    if (axes) {
+        // The frame of a plot: a stroked Axes path, no fill.
+        addDefaultedNode(*composition, kPlotNode, kAxesNodeType, next,
+                         {{"xMin", plot.start}, {"xMax", plot.end}, {"yMin", -1.0}, {"yMax", 1.0},
+                          {"xStep", 1.0}, {"yStep", 0.5}, {"origin", plot.origin},
+                          {"pixelsPerUnit", plot.scale}});
+        require(composition->parameters().setSource(pathParameter,
+                                                    DriverBindingSource{kPlotNode, "path"}),
+                "the shape reads the axes");
+    } else if (constant) {
         require(composition->parameters().setSource(pathParameter, ConstantValueSource{*constant}),
                 "the shape holds the sampled path");
     } else {
@@ -577,11 +591,29 @@ struct PlotSettings final {
                           {"end", plot.end},
                           {"samples", plot.samples},
                           {"origin", plot.origin},
-                          {"scale", plot.scale},
+                          {"pixelsPerUnit", plot.scale},
                           {"smooth", plot.smooth}});
         require(composition->parameters().setSource(pathParameter,
                                                     DriverBindingSource{kPlotNode, "path"}),
                 "the shape reads the plot");
+    }
+    if (axes || stroked) {
+        require(composition->parameters().setSource(parameterOf(*composition, kPlotShape, "fillEnabled"),
+                                                    ConstantValueSource{false}) &&
+                    composition->parameters().setSource(
+                        parameterOf(*composition, kPlotShape, "strokeEnabled"),
+                        ConstantValueSource{true}) &&
+                    composition->parameters().setSource(
+                        parameterOf(*composition, kPlotShape, "strokeColor"),
+                        ConstantValueSource{core::Color4d{1, 1, 1, 1}}) &&
+                    composition->parameters().setSource(
+                        parameterOf(*composition, kPlotShape, "strokeWidth"),
+                        ConstantValueSource{3.0}),
+                "the shape is stroked, not filled");
+        // The layer sits at the composition's origin and is opaque, so path pixels are frame pixels.
+        require(composition->parameters().setSource(kFirstPosition, ConstantValueSource{plot.position}) &&
+                    composition->parameters().setSource(kFirstOpacity, ConstantValueSource{1.0}),
+                "the layer is placed at the origin");
     }
     const auto validation = project.validate();
     for (const auto& issue : validation.issues())
@@ -705,4 +737,77 @@ void testFunctionPlot(Expectations& expectations) {
                            std::abs(anchor.point.y - (pole.origin.y - (1.0 / x) * pole.scale.y)) < 1e-9;
             }
     expectations.expect(gapKnown, "1 / x leaves a gap at zero: two contours of four known anchors");
+}
+
+// With BLOOM_FRAME_CAPTURE_DIR set, the plot and its axes are rendered on the CPU reference and written
+// as binary PPM frames (a mid-gray backdrop under the straight-alpha picture, display gamma 2.2) so a
+// person can look at them.
+void writeFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
+                const std::string& name) {
+    const char* directory = std::getenv("BLOOM_FRAME_CAPTURE_DIR");
+    if (directory == nullptr)
+        return;
+    const auto pixels = renderReference(plan);
+    const auto width = static_cast<std::size_t>(plan->format().width());
+    const auto height = static_cast<std::size_t>(plan->format().height());
+    require(pixels.size() == width * height, "the frame has the composition's size");
+    std::ofstream file(std::string(directory) + "/" + name + ".ppm", std::ios::binary);
+    file << "P6\n" << width << ' ' << height << "\n255\n";
+    for (const auto& pixel : pixels) {
+        const float alpha = std::clamp(pixel.alpha(), 0.0F, 1.0F);
+        for (const float channel : {pixel.red(), pixel.green(), pixel.blue()}) {
+            const float straight = alpha > 0.0F ? channel / alpha : 0.0F;
+            const float shown = straight * alpha + 0.2F * (1.0F - alpha);
+            file.put(static_cast<char>(
+                std::lround(255.0F * std::pow(std::clamp(shown, 0.0F, 1.0F), 1.0F / 2.2F))));
+        }
+    }
+}
+
+void testPlotFrames(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    PlotSettings settings;
+    settings.start = -1.0;
+    settings.end = 9.0;
+    settings.samples = 257;
+    settings.origin = {200.0, 540.0};
+    settings.scale = {120.0, 150.0};
+    // The center of the anchors' bounds, from a first compile, is where the layer must sit.
+    const auto centerOf = [&](const bool axes) {
+        const auto probe = compile(makePlotProject(settings, std::nullopt, axes, true), registry);
+        require(probe.plan != nullptr, "the probe compiles");
+        const auto evaluation = runtime::evaluateValueGraph(
+            probe.plan->valueOperations(), probe.plan->valueOutputCount(),
+            core::RationalTime::fromInteger(0), probe.plan->format().frameRate());
+        double left = 1e300, top = 1e300, right = -1e300, bottom = -1e300;
+        for (const auto& output : evaluation.outputs)
+            if (const auto* path = std::get_if<runtime::CompiledPathValue>(&output))
+                for (const auto& contour : path->value->contours)
+                    for (const auto& anchor : contour.anchors) {
+                        left = std::min(left, anchor.point.x);
+                        right = std::max(right, anchor.point.x);
+                        top = std::min(top, anchor.point.y);
+                        bottom = std::max(bottom, anchor.point.y);
+                    }
+        return document::Vec2d{(left + right) / 2.0, (top + bottom) / 2.0};
+    };
+    PlotSettings plotAt = settings;
+    plotAt.position = centerOf(false);
+    PlotSettings framesAt = settings;
+    framesAt.position = centerOf(true);
+    const auto plot = compile(makePlotProject(plotAt, std::nullopt, false, true), registry);
+    const auto frame = compile(makePlotProject(framesAt, std::nullopt, true), registry);
+    expectations.expect(plot.plan != nullptr && frame.plan != nullptr,
+                        "the stroked plot and the stroked axes compile");
+    if (!plot.plan || !frame.plan)
+        return;
+    const auto count = [](const std::vector<render::Rgba32f>& pixels) {
+        return std::ranges::count_if(pixels, [](const auto& pixel) { return pixel.alpha() > 0.5F; });
+    };
+    expectations.expect(count(renderReference(plot.plan)) > 100 && count(renderReference(frame.plan)) > 100,
+                        "the stroked plot and axes put pixels on the frame");
+    writeFrame(plot.plan, "function-plot");
+    writeFrame(frame.plan, "axes");
 }

@@ -168,6 +168,11 @@ void PropertiesEditor::configureRegistryRows() {
                 auto* create = new kit::KButton(tr("New"), section->body());
                 create->setObjectName("propertiesNewNodeGroup");
                 create->setControlSize(kit::KButton::ControlSize::Compact);
+                // The chooser takes the row's width; the two actions stay the size of their words.
+                selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                for (auto* action : {open, create}) {
+                    action->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+                }
                 auto* row = new kit::KPropertyRow(label, nullptr, {selector, open, create},
                                                   section->body());
                 row->setProperty("rowLabel", tr("Group"));
@@ -291,7 +296,13 @@ void PropertiesEditor::configureRegistryRows() {
                 }
             }
             bool hasValueOutputs = false;
+            // #342: a Node Group is replaced by its group before anything is evaluated, and a group's
+            // boundaries republish the values it was given, so none has a result of its own to read.
+            const bool groupBoundary = definition->lowering == document::NodeLoweringKind::NodeGroup ||
+                                       definition->lowering == document::NodeLoweringKind::GroupBoundary;
             for (const auto& output : definition->outputs) {
+                if (groupBoundary)
+                    continue;
                 // Pixel and sound outputs carry no value to read out (a Mask or a channel set
                 // never resolves to text, which left "Resolving…" on screen for good).
                 if (output.valueKind == document::SocketValueKind::Image ||

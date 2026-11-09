@@ -21,6 +21,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/function_body.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
@@ -2061,6 +2062,7 @@ int main() {
         testFunctionGroups(expectations);
         testFunctionSharesGroupWithInstance(expectations);
         testFunctionPlot(expectations);
+        testPlotFrames(expectations);
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);

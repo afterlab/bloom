@@ -125,6 +125,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.reroute", "Dot|Elbow"},
     {"bloom.node-group", "Subgraph|Nested Graph|Macro|Encapsulate"},
     {"bloom.function", "Formula|Equation|f(x)|Graph Function"},
+    {"bloom.axes", "Graph Frame|Grid|Chart Axes|Ticks|Plot Frame"},
+    {"bloom.axis-tick", "Tick Label|Axis Label|Graph Label|Number Line"},
     {"bloom.function-plot", "Graph|Plot|Curve|Chart|Equation|Sine Wave"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},
     {"bloom.group-output", "Subgraph Output|Outputs|Function Output"},

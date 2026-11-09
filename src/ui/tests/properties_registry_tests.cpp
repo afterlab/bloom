@@ -26,6 +26,8 @@
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
@@ -1294,6 +1296,52 @@ void audioEffectRows() {
     }
 }
 
+// #342, #590, #595, #596: the group nodes, Function, Function Plot, Axes and Axis Tick present every value in
+// plain words at each width, a node that reads a group offers the group chooser, and every label is shown
+// whole. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device
+// pixel ratio).
+void groupAndPlotRows() {
+    for (const auto type :
+         {document::kNodeGroupNodeType, document::kGroupInputNodeType, document::kGroupOutputNodeType,
+          document::kFunctionNodeType, document::kFunctionPlotNodeType, document::kAxesNodeType,
+          document::kAxisTickNodeType}) {
+        auto project = document::makeNewProject("Plot", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, type);
+        session.selectNode(node);
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1500);
+            properties.show();
+            QCoreApplication::processEvents();
+            expect((properties.findChild<ui::kit::KDropdown*>("propertiesNodeGroup") != nullptr) ==
+                       document::usesGroupReference(type),
+                   "exactly the nodes that read a group offer the group chooser");
+            for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                if (label->isVisibleTo(&properties))
+                    expect(label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                           "a group or plot row label is shown whole");
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "the rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/") +
+                                            QString::fromLatin1(type.data(), static_cast<int>(type.size())) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the Properties capture\n";
+            }
+        }
+    }
+}
+
 // #564 Frame Rate Hold in Properties: the amount and the seed appear with the irregular cadence, the
 // seed row carries Randomize seed, and every label is shown whole.
 void frameRateHoldRows() {
@@ -1510,6 +1558,7 @@ int main(int argc, char** argv) try {
     autoExposureRows();
     warpRows();
     audioEffectRows();
+    groupAndPlotRows();
     cameraShakeRows();
     matteBlurRows();
     matteKeyRows();

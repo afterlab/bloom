@@ -545,6 +545,101 @@ void testTimeConversions(Expectations& expectations) {
 
 } // namespace
 
+
+// #596 Axes and Axis Tick, against numbers worked out by hand.
+void testAxes(Expectations& expectations) {
+    using document::Vec2d;
+    // x from -2 to 2 by 1 (5 ticks), y from -1 to 1 by 0.5 (5 ticks), ticks 10 long, origin (100, 200),
+    // 50 by 40 pixels a unit.
+    const auto drawn = run(Kernel::Axes, {-2.0, 2.0, -1.0, 1.0, 1.0, 0.5, 10.0, Vec2d{100.0, 200.0},
+                                          Vec2d{50.0, 40.0}});
+    expectations.expect(!drawn.failed && holds(drawn, 1, std::int64_t{5}) &&
+                            holds(drawn, 2, std::int64_t{5}),
+                        "Axes counts five ticks on each axis");
+    const auto* path = std::get_if<runtime::CompiledPathValue>(&drawn.outputs[0]);
+    const bool shaped = path != nullptr && path->value != nullptr &&
+                        path->value->contours.size() == 12 && path->value->isValid();
+    expectations.expect(shaped, "Axes draws the two axes and ten ticks as twelve open contours");
+    if (!shaped)
+        return;
+    const auto& contours = path->value->contours;
+    const auto is = [&](const std::size_t index, const Vec2d from, const Vec2d to) {
+        const auto& anchors = contours[index].anchors;
+        return anchors.size() == 2 && !contours[index].closed && anchors[0].point == from &&
+               anchors[1].point == to;
+    };
+    expectations.expect(is(0, {0.0, 200.0}, {200.0, 200.0}),
+                        "the X axis runs from x = -2 to x = 2 along y = 0");
+    expectations.expect(is(1, {100.0, 240.0}, {100.0, 160.0}),
+                        "the Y axis runs from y = -1 (down the page) to y = 1 along x = 0");
+    expectations.expect(is(2, {0.0, 195.0}, {0.0, 205.0}), "the first X tick is a mark at x = -2");
+    expectations.expect(is(6, {200.0, 195.0}, {200.0, 205.0}), "the last X tick is at x = 2");
+    expectations.expect(is(9, {95.0, 200.0}, {105.0, 200.0}), "the Y tick for y = 0 crosses the origin");
+
+    // The axes cross at the range's nearest edge when zero is out of range.
+    const auto offset = run(Kernel::Axes, {1.0, 3.0, 2.0, 4.0, 1.0, 1.0, 4.0, Vec2d{0.0, 0.0},
+                                           Vec2d{10.0, 10.0}});
+    const auto* shifted = std::get_if<runtime::CompiledPathValue>(&offset.outputs[0]);
+    expectations.expect(shifted != nullptr && shifted->value != nullptr &&
+                            shifted->value->contours.size() == 2 + 3 + 3 &&
+                            shifted->value->contours[0].anchors[0].point == Vec2d{10.0, -20.0} &&
+                            shifted->value->contours[1].anchors[0].point == Vec2d{10.0, -20.0},
+                        "with zero out of range the axes meet at the range's low corner");
+
+    // The tick count is the shared rule: a whole number of steps keeps its last tick.
+    expectations.expect(document::axisTickCount(0.0, 1.0, 0.1) == 11 &&
+                            document::axisTickCount(0.0, 1.0, 0.0) == 0 &&
+                            document::axisTickCount(1.0, 0.0, 0.1) == 0 &&
+                            document::axisTickCount(0.0, 1.0e9, 1.0) == document::kMaximumAxisTicks + 1,
+                        "the tick count handles whole steps, no step, a reversed range and too many");
+
+    // Refusals say so and still answer an empty path and zero counts.
+    const auto crowded = run(Kernel::Axes, {0.0, 1.0e9, -1.0, 1.0, 1.0, 1.0, 4.0, Vec2d{}, Vec2d{1.0, 1.0}});
+    const auto* none = std::get_if<runtime::CompiledPathValue>(&crowded.outputs[0]);
+    expectations.expect(crowded.failed && none != nullptr && none->value->contours.empty() &&
+                            holds(crowded, 1, std::int64_t{0}),
+                        "an axis with more than 1024 ticks is refused with an empty path");
+    const auto nonFinite = run(Kernel::Axes, {std::numeric_limits<double>::quiet_NaN(), 1.0, 0.0, 1.0,
+                                              1.0, 1.0, 4.0, Vec2d{}, Vec2d{1.0, 1.0}});
+    expectations.expect(nonFinite.failed, "a range that is not finite is refused");
+}
+
+void testAxisTick(Expectations& expectations) {
+    using document::Vec2d;
+    const auto tick = [](const double min, const double max, const double step,
+                         const std::int64_t index, const bool yAxis, const Vec2d offset,
+                         const std::int64_t decimals) {
+        return run(Kernel::AxisTick, {min, max, step, index, yAxis, Vec2d{100.0, 200.0},
+                                      Vec2d{50.0, 40.0}, offset, decimals});
+    };
+    // Tick 3 of 0 to 10 by 2.5 is 7.5: 100 + 7.5 * 50 across, 24 below the axis.
+    const auto x = tick(0.0, 10.0, 2.5, 3, false, {0.0, 24.0}, 1);
+    expectations.expect(holds(x, 0, 7.5) && holds(x, 1, Vec2d{475.0, 224.0}) &&
+                            holds(x, 2, std::string("7.5")) && holds(x, 3, true),
+                        "an X tick has its value, its place below the axis, its label and is valid");
+    // The next index is 12.5, past the range: not valid and no text, but the number is still its index's.
+    const auto past = tick(0.0, 10.0, 2.5, 5, false, {0.0, 24.0}, 1);
+    expectations.expect(holds(past, 0, 12.5) && holds(past, 2, std::string()) && holds(past, 3, false),
+                        "a tick past the range is not valid and shows no label");
+    expectations.expect(holds(tick(0.0, 10.0, 2.5, -1, false, {0.0, 24.0}, 1), 3, false),
+                        "a negative index is not valid");
+    // A Y tick: 100 - 24 across, 200 - 2 * 40 up.
+    const auto y = tick(-5.0, 5.0, 1.0, 7, true, {-24.0, 0.0}, 0);
+    expectations.expect(holds(y, 0, 2.0) && holds(y, 1, Vec2d{76.0, 120.0}) &&
+                            holds(y, 2, std::string("2")) && holds(y, 3, true),
+                        "a Y tick is placed up the page by its value, beside the axis");
+    // Rounding and decimals.
+    expectations.expect(holds(tick(-1.0, 1.0, 0.1, 11, false, {}, 1), 2, std::string("0.1")),
+                        "decimals set the places shown");
+    expectations.expect(holds(tick(-0.0004, 1.0, 1.0, 0, false, {}, 1), 2, std::string("0.0")),
+                        "a value that rounds to zero is written without a sign");
+    expectations.expect(holds(tick(0.0, 1.0, 0.0, 0, false, {}, 1), 3, false),
+                        "a range with no step has no valid tick");
+    // An axis tick and Axes agree: tick i is at min + i * step.
+    expectations.expect(holds(tick(-2.0, 2.0, 1.0, 4, false, {}, 0), 0, 2.0),
+                        "tick 4 of -2 to 2 by 1 is the range's end");
+}
+
 int main() {
     Expectations expectations;
     testDescriptorShapes(expectations);
@@ -554,5 +649,7 @@ int main() {
     testStructuredConversions(expectations);
     testTimeConversions(expectations);
     testMalformedOperands(expectations);
+    testAxes(expectations);
+    testAxisTick(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

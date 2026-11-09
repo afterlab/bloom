@@ -540,18 +540,22 @@ Function Plot samples a group's function over a range and answers the curve as a
 | `start`, `end` | Scalar | -5, 5 | The arguments of the first and last sample |
 | `samples` | Integer | 256 | Samples taken, held to 2 through 4096 (the anchors one contour holds) |
 | `origin` | Vector 2 | 0, 0 | Where argument 0 with answer 0 lands, in pixels |
-| `scale` | Vector 2 | 100, 100 | Pixels per unit along X and Y |
+| `pixelsPerUnit` | Vector 2 | 100, 100 | Pixels per unit along X and Y |
 | `smooth` | Boolean | on | Auto anchors, whose handles are derived, so the curve is smooth; off gives Corner anchors, a polyline |
 
 Every parameter except `group` is an operand, so a wire can drive the range, the resolution and the
 placement. Sample `i` of `n` is at `x = start + (end - start) * i / (n - 1)`, and the last is exactly
-`end`. Its anchor is `origin + (x * scale.x, -y * scale.y)`: Y is up on the plot and down in the
+`end`. Its anchor is `origin + (x * pixelsPerUnit.x, -y * pixelsPerUnit.y)`: Y is up on the plot and down in the
 path's pixels, so a positive answer rises.
+
+A Shape Source places a path about the center of its anchors' bounds, so the plot's position on the
+frame is set by the shape layer's Position as well as by `origin`; with the layer's Position at that
+center, path pixels are frame pixels.
 
 A sample whose answer is missing or not finite ends the contour and the next one starts a new
 contour. A pole or a domain edge is therefore a gap and never a line drawn across it. A contour of
 one anchor draws nothing and is dropped. A plot with no valid sample at all reports the node. A
-range or scale that is not finite answers the empty path and reports the node.
+range or unit size that is not finite answers the empty path and reports the node.
 
 Cost, as read from the code: one run of the group's body per sample, so at most 4096 runs of at most
 512 operations per evaluation, plus one path of at most 4096 anchors that the path budget charges
@@ -561,6 +565,49 @@ request time only when the body reads time.
 
 The plot is a host value computation: it produces the same Path on every route, and the path's
 drawing is the shape's, with the parity `path-value.md` records for a driven path.
+
+### Axes and Axis Tick
+
+A plot's frame is two nodes, in Text & Paths beside Function Plot. There is no shared coordinate space
+yet (#591), so each takes the same explicit range, `origin` and `pixelsPerUnit` that Function Plot does; put
+the same numbers (or one set of shared value nodes, wired to all three) on each and they agree.
+Placement is in pixels with Y up on the plot, as in Function Plot.
+
+**Axes** (`bloom.axes`) answers a Path of the two axes and their tick marks, and how many ticks each
+axis holds.
+
+| Parameter | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `xMin`, `xMax`, `yMin`, `yMax` | Scalar | -5, 5, -5, 5 | The ranges drawn |
+| `xStep`, `yStep` | Scalar | 1, 1 | Spacing of the ticks on each axis |
+| `tickLength` | Scalar | 8 | Pixels a tick crosses the axis, centered on it |
+| `origin`, `pixelsPerUnit` | Vector 2 | (0, 0), (100, 100) | As in Function Plot |
+
+Outputs: `path` (Path), `xTicks` and `yTicks` (Integer). The path is one open two-anchor contour for
+each axis and one for each tick. The axes cross at zero where zero is in range and at the nearest
+edge of the range where it is not.
+
+**Axis Tick** (`bloom.axis-tick`) answers one mark's number, place and text, so a Text Source can
+label it: set `index` to `i` and drive the Text Source's text from `label` and its position from
+`position`.
+
+| Parameter | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `min`, `max`, `step` | Scalar | -5, 5, 1 | The axis's range and spacing |
+| `index` | Integer | 0 | Which tick |
+| `yAxis` | Boolean | off | The tick is on the Y axis |
+| `origin`, `pixelsPerUnit` | Vector 2 | (0, 0), (100, 100) | As in Function Plot |
+| `labelOffset` | Vector 2 | (0, 24) | Pixels from the mark to the label's position (below an X mark; use a negative X for a Y mark) |
+| `decimals` | Integer | 0 | Places shown, held to 0 through 9 |
+
+Outputs: `value` (Scalar), `position` (Vector 2), `label` (String) and `valid` (Boolean).
+
+Tick `i` of an axis is at `min + i * step`, for every `i` whose value does not pass `max`; Axes and
+Axis Tick use this one rule (`document::axisTickCount`), so labels set against the same range land on
+the marks. An axis holds at most 1024 ticks; Axes refuses more and answers an empty path. A tick whose
+index is outside the range, or whose range has no usable step, is not `valid` and has an empty label,
+so a label layer reading it shows nothing. A label that rounds to zero is written without a sign.
+Both nodes are pure functions of their operands and do not depend on time.
 
 ## Color Image Effects
 

@@ -117,6 +117,9 @@ enum class ValueUtilityKernel : std::uint8_t {
     Oscillator,
     Wiggle,
     LoopValue,
+    // #596: the axes of a plot, and the number, position and label of one tick on them.
+    Axes,
+    AxisTick,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -198,6 +201,19 @@ inline constexpr std::string_view kLightFlickerNodeType = "bloom.light-flicker";
 inline constexpr std::string_view kOscillatorNodeType = "bloom.oscillator";
 inline constexpr std::string_view kWiggleNodeType = "bloom.wiggle";
 inline constexpr std::string_view kLoopValueNodeType = "bloom.loop-value";
+inline constexpr std::string_view kAxesNodeType = "bloom.axes";
+inline constexpr std::string_view kAxisTickNodeType = "bloom.axis-tick";
+
+// #596 Axes and Axis Tick. Tick `i` of an axis is at `min + i * step`, for every `i` whose value does
+// not pass `max`; Axes and Axis Tick use the same rule, so labels set against the same range land on
+// the marks. An axis holds at most this many ticks.
+inline constexpr std::int64_t kMaximumAxisTicks = 1024;
+// The most decimal places an Axis Tick label shows.
+inline constexpr std::int64_t kMaximumAxisTickDecimals = 9;
+// The ticks one axis holds for a range and a step; zero when the range or step is unusable (not
+// finite, a step of zero or less, or a range that runs backward). More than kMaximumAxisTicks is
+// reported as kMaximumAxisTicks + 1 so the caller can refuse it.
+[[nodiscard]] std::int64_t axisTickCount(double minimum, double maximum, double step) noexcept;
 // The two motion selectors' schema keys and vocabularies. The stored integers are durable.
 inline constexpr std::string_view kOscillatorWaveParameterSchemaKey = "bloom.oscillator.wave";
 inline constexpr std::string_view kLoopValueModeParameterSchemaKey = "bloom.loop-value.mode";

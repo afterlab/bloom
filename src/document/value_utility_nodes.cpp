@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace {
 
@@ -101,6 +102,41 @@ constexpr std::array<ValueUtilitySelector, 1> kLoopValueModeSelector{ValueUtilit
 constexpr std::array<ValueUtilityOutput, 2> kLoopValueOutputs{
     ValueUtilityOutput{"value", SocketValueKind::Scalar},
     ValueUtilityOutput{"cycle", SocketValueKind::Integer}};
+// #596 Axes and Axis Tick. Placement is in pixels, Y up on the plot (the path's Y grows downward, so
+// a value's Y is subtracted from the origin). The ranges default to a plot ten units across at 100
+// pixels a unit.
+constexpr std::array<ValueUtilityOperand, 9> kAxesOperands{
+    ValueUtilityOperand{.role = "xMin", .kind = SocketValueKind::Scalar, .number = -5.0},
+    ValueUtilityOperand{.role = "xMax", .kind = SocketValueKind::Scalar, .number = 5.0},
+    ValueUtilityOperand{.role = "yMin", .kind = SocketValueKind::Scalar, .number = -5.0},
+    ValueUtilityOperand{.role = "yMax", .kind = SocketValueKind::Scalar, .number = 5.0},
+    ValueUtilityOperand{.role = "xStep", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "yStep", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "tickLength", .kind = SocketValueKind::Scalar, .number = 8.0},
+    ValueUtilityOperand{.role = "origin", .kind = SocketValueKind::Vector2, .number = 0.0, .y = 0.0},
+    ValueUtilityOperand{
+        .role = "pixelsPerUnit", .kind = SocketValueKind::Vector2, .number = 100.0, .y = 100.0}};
+constexpr std::array<ValueUtilityOutput, 3> kAxesOutputs{
+    ValueUtilityOutput{"path", SocketValueKind::Path},
+    ValueUtilityOutput{"xTicks", SocketValueKind::Integer},
+    ValueUtilityOutput{"yTicks", SocketValueKind::Integer}};
+constexpr std::array<ValueUtilityOperand, 9> kAxisTickOperands{
+    ValueUtilityOperand{.role = "min", .kind = SocketValueKind::Scalar, .number = -5.0},
+    ValueUtilityOperand{.role = "max", .kind = SocketValueKind::Scalar, .number = 5.0},
+    ValueUtilityOperand{.role = "step", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "index", .kind = SocketValueKind::Integer, .integer = 0},
+    ValueUtilityOperand{.role = "yAxis", .kind = SocketValueKind::Boolean, .flag = false},
+    ValueUtilityOperand{.role = "origin", .kind = SocketValueKind::Vector2, .number = 0.0, .y = 0.0},
+    ValueUtilityOperand{
+        .role = "pixelsPerUnit", .kind = SocketValueKind::Vector2, .number = 100.0, .y = 100.0},
+    ValueUtilityOperand{
+        .role = "labelOffset", .kind = SocketValueKind::Vector2, .number = 0.0, .y = 24.0},
+    ValueUtilityOperand{.role = "decimals", .kind = SocketValueKind::Integer, .integer = 0}};
+constexpr std::array<ValueUtilityOutput, 4> kAxisTickOutputs{
+    ValueUtilityOutput{"value", SocketValueKind::Scalar},
+    ValueUtilityOutput{"position", SocketValueKind::Vector2},
+    ValueUtilityOutput{"label", SocketValueKind::String},
+    ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
 constexpr std::array<ValueUtilityOutput, 2> kPointSetOutputs{
     ValueUtilityOutput{"count", SocketValueKind::Integer},
     ValueUtilityOutput{"point", SocketValueKind::Vector3}};
@@ -403,7 +439,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 70> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 72> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -618,6 +654,11 @@ constexpr std::array<ValueUtilityDescriptor, 70> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kLoopValueNodeType, "Loop Value",
                            ValueUtilityKernel::LoopValue, NodeCategory::Values, kLoopValueOperands,
                            kLoopValueModeSelector, kLoopValueOutputs},
+    ValueUtilityDescriptor{bloom::document::kAxesNodeType, "Axes", ValueUtilityKernel::Axes,
+                           NodeCategory::Values, kAxesOperands, kNoSelectors, kAxesOutputs},
+    ValueUtilityDescriptor{bloom::document::kAxisTickNodeType, "Axis Tick",
+                           ValueUtilityKernel::AxisTick, NodeCategory::Values, kAxisTickOperands,
+                           kNoSelectors, kAxisTickOutputs},
 };
 
 } // namespace
@@ -625,6 +666,19 @@ constexpr std::array<ValueUtilityDescriptor, 70> kDescriptors{
 namespace bloom::document {
 
 std::span<const ValueUtilityDescriptor> valueUtilityDescriptors() noexcept { return kDescriptors; }
+
+std::int64_t axisTickCount(const double minimum, const double maximum,
+                           const double step) noexcept {
+    if (!std::isfinite(minimum) || !std::isfinite(maximum) || !std::isfinite(step) || step <= 0.0 ||
+        maximum < minimum)
+        return 0;
+    // A small allowance, so a range that is a whole number of steps (0 to 1 by 0.1) keeps its last
+    // tick in spite of the step's binary rounding.
+    const double steps = std::floor((maximum - minimum) / step + 1e-9);
+    if (!(steps < static_cast<double>(kMaximumAxisTicks)))
+        return kMaximumAxisTicks + 1;
+    return static_cast<std::int64_t>(steps) + 1;
+}
 
 const ValueUtilityDescriptor* findValueUtilityDescriptor(const ValueUtilityKernel kernel) noexcept {
     const auto* const match =

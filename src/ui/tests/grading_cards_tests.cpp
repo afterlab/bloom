@@ -1293,7 +1293,15 @@ void pixelAndMotionCards() {
         {"bloom.image-compare", {"bloom.image-math", "bloom.levels", "bloom.invert"}},
         {"bloom.oscillator", {"bloom.math", "bloom.map-range", "bloom.random"}},
         {"bloom.wiggle", {"bloom.math", "bloom.map-range", "bloom.random"}},
-        {"bloom.loop-value", {"bloom.math", "bloom.map-range", "bloom.random"}}};
+        {"bloom.loop-value", {"bloom.math", "bloom.map-range", "bloom.random"}},
+        // #342, #590, #595, #596
+        {"bloom.node-group", {"bloom.reroute", "bloom.separate-xy", "bloom.combine-xy"}},
+        {"bloom.group-input", {"bloom.reroute", "bloom.separate-xy", "bloom.combine-xy"}},
+        {"bloom.group-output", {"bloom.reroute", "bloom.separate-xy", "bloom.combine-xy"}},
+        {"bloom.function", {"bloom.math", "bloom.map-range", "bloom.oscillator"}},
+        {"bloom.function-plot", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        {"bloom.axes", {"bloom.text-source", "bloom.shape-source", "bloom.function-plot"}},
+        {"bloom.axis-tick", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}}};
     for (const auto& spec : specs) {
         CardFixture fixture(spec.type);
         expect(fixture.item != nullptr, "a new node draws a card");

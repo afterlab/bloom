@@ -67,6 +67,15 @@ QString nodeGroupTitle(const document::NodeGroup group) {
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    // #342: the slots of a group boundary are "image1", "scalar2" and so on; the artist reads them
+    // as "Image 1" and "Scalar 2".
+    for (const auto& slot : document::kNodeGroupSlots)
+        if (typeId == slot.name) {
+            QString name = QString::fromLatin1(slot.name.data(), static_cast<int>(slot.name.size()));
+            name[0] = name[0].toUpper();
+            name.insert(name.size() - 1, QLatin1Char(' '));
+            return name;
+        }
     if (typeId == "bloom.crop")
         return QCoreApplication::translate("node_editor", "Crop");
     if (typeId == "bloom.pad")

@@ -557,6 +557,15 @@ class DepthScenario(unittest.TestCase):
             self.assertTrue(set(wiring.values()) <= seen, "a step reads only x or an earlier step")
             seen.add(step)
 
+    def test_axes_scenario_holds_the_most_ticks_in_a_shape(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["axes-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        axes = scenario["layers"][0]["axesNode"]
+        for low, high, step in (("xMin", "xMax", "xStep"), ("yMin", "yMax", "yStep")):
+            values = axes["values"]
+            self.assertLessEqual((values[high] - values[low]) / values[step] + 1, 1024 + 1)
+
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["auto-exposure-2k"]

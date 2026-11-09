@@ -607,6 +607,15 @@ class Builder:
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort="path")
+        if "axesNode" in layer:
+            axes = layer["axesNode"]
+            driver = self.transact("bloom.node.add", composition=self.composition,
+                                   nodeType="bloom.axes")["node"]
+            self.set_values(driver, "bloom.axes", axes["values"])
+            self.set_keys(driver, axes.get("keys") or {})
+            self.transact("bloom.parameter.set-source", composition=self.composition,
+                          parameter=self.parameter_id(source, "path"), driverNode=driver,
+                          driverPort="path")
         port = layer.get("port", "image")
         last = self.chain(source, port, layer.get("effects") or ())
         holder = self.transact("bloom.node.add-fed-by", composition=self.composition,
