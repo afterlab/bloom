@@ -2290,7 +2290,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_node_viewer_evidence_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_node_viewer_evidence_test)
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
-                              blur-separate blur-per-channel transform-skew hue-vibrance
+                              denoise-temporal blur-separate blur-per-channel transform-skew hue-vibrance
                               hue-colorize)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}

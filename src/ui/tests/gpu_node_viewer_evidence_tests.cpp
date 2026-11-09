@@ -117,6 +117,11 @@ struct Scenario final {
                                 {{"mode", std::int64_t{1}}, {"radius", 2.0}, {"strength", 0.5}}};
     out["denoise-spatial"] = {"bloom.checker-source", {}, "bloom.denoise",
                               {{"mode", std::int64_t{2}}, {"radius", 2.0}, {"strength", 0.4}}};
+    // #514: the look-back window and its weighted steps (a checker stands still, so every earlier
+    // frame is weighed in).
+    out["denoise-temporal"] = {"bloom.checker-source", {}, "bloom.denoise",
+                               {{"mode", std::int64_t{3}}, {"frames", std::int64_t{4}},
+                                {"strength", 0.3}}};
     out["blur-separate"] = {"bloom.checker-source", {}, "bloom.gaussian-blur",
                             {{"radius", 12.0}, {"separate", true}, {"radiusY", 2.0}}};
     out["blur-per-channel"] = {"bloom.checker-source", {}, "bloom.gaussian-blur",

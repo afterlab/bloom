@@ -16,6 +16,7 @@
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
+#include "denoise_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
@@ -3044,6 +3045,132 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     return static_cast<std::size_t>(std::count(reached.begin(), reached.end(), false));
 }
 
+// #514 Temporal denoise: the production chain (the look-back window and one weighted step per
+// earlier frame) over a grained HDR picture with a moving partial-alpha block, against the CPU oracle
+// at the strict gate with exact alpha: a moving block, a still one, a window reaching before the
+// first frame, two frames (one step that is both first and last), a zero tolerance, a proxy and a
+// region of interest. Resident dispatches and no readback; one step dispatch per earlier frame; warm
+// RAM reuse with zero dispatches; the next frame with parity; a changed strength re-running with
+// parity.
+void runTemporalDenoise(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::denoise_test::TemporalValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        TemporalValues values;
+        const char* name;
+        std::int64_t frame = 5;
+        bool proxy = false;
+        bool roi = false;
+    };
+    std::vector<Case> cases;
+    cases.push_back({TemporalValues{}, "a moving block"});
+    {
+        TemporalValues still;
+        still.still = true;
+        cases.push_back({still, "a still block"});
+    }
+    cases.push_back({TemporalValues{}, "a window before the first frame", 1});
+    {
+        TemporalValues two;
+        two.frames = 2;
+        cases.push_back({two, "two frames"});
+        TemporalValues exact;
+        exact.strength = 0.0;
+        cases.push_back({exact, "a zero tolerance"});
+        TemporalValues wide;
+        wide.frames = 6;
+        wide.strength = 0.6;
+        cases.push_back({wide, "six frames, a wide tolerance"});
+    }
+    cases.push_back({TemporalValues{}, "a proxy", 5, true});
+    cases.push_back({TemporalValues{}, "a region of interest", 5, false, true});
+    std::uint64_t id = 51400;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("temporal denoise native (") + item.name + "): ";
+        const auto plan = bloom::denoise_test::temporalPlan(item.values, id);
+        id += 200;
+        auto request = requestFor(*plan);
+        request.time = *RationalTime::create(item.frame, 24);
+        if (item.proxy) {
+            const auto extent = bloom::render::ImageExtent::create(20, 12);
+            request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        }
+        if (item.roi) {
+            const auto window = bloom::render::ImageWindow::create(6, 4, 20, 14);
+            request.roi = *window.value();
+        }
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare: " +
+                                prepared.diagnostic.message);
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        // Each earlier frame of the window is one step: every step ran on the device.
+        const auto steps = static_cast<std::uint64_t>(item.values.frames - 1);
+        expectations.expect(coldCounters.ocioEffectDispatches >= steps &&
+                                coldCounters.readbacks == 0,
+                            name + "a resident dispatch per step and no per-operation readback");
+        expectations.expect(unreachableCommandCount(*prepared.scene) == 0,
+                            name + "the scene emits only what its output reads");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        auto nextRequest = request;
+        nextRequest.time = *RationalTime::create(item.frame + 1, 24);
+        auto nextOracleRequest = nextRequest;
+        nextOracleRequest.bypassOperationCache = true;
+        const auto next = builder.build(plan, nextRequest);
+        const auto nextOracle = evaluator.evaluate(plan, nextOracleRequest, {});
+        expectations.expect(next && nextOracle.frame(), name + "the next frame prepares");
+        if (!next || !nextOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, next.scene);
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(rerun.pixels, nextOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact),
+                            name + "the next frame matches the CPU: " + detail);
+        TemporalValues changedValues = item.values;
+        changedValues.strength += 0.2;
+        const auto changedPlan = bloom::denoise_test::temporalPlan(changedValues, id - 200);
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "a changed strength re-runs with CPU parity: " + detail);
+    }
+}
+
 void runCodecDegrades(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::codec_test::CodecValues;
     const CpuCompositionEvaluator evaluator;
@@ -4101,6 +4228,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runLensFlares(expectations, device, cache);
     runFilmGrains(expectations, device, cache);
     runCodecDegrades(expectations, device, cache);
+    runTemporalDenoise(expectations, device, cache);
     runAutoExposures(expectations, device, cache);
     runHistograms(expectations, device, cache);
     runStatistics(expectations, device, cache);

@@ -37,6 +37,7 @@
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
+#include "denoise_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
 #include "audio_plot_test_support.hpp"
 #include "histogram_test_support.hpp"
@@ -3153,10 +3154,47 @@ displayProofRunner(const bool customView) {
                 "full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #514 Temporal denoise: the production chain (the look-back window and its weighted steps)
+    // over a grained HDR picture with a moving partial-alpha block, full frame and ROI.
+    const auto runTemporalDenoise =
+        [](const std::vector<std::pair<bloom::denoise_test::TemporalValues, std::int64_t>>& variants,
+           std::uint64_t idBase) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& [values, frame] : variants) {
+                const auto plan = bloom::denoise_test::temporalPlan(values, idBase);
+                idBase += 200;
+                auto request = requestFor(*plan);
+                request.time = *bloom::core::RationalTime::create(frame, 24);
+                auto run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(6, 4, 20, 14);
+                request.roi = *roiWindow.value();
+                run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            return combined;
+        };
+    // A spatial run and the temporal chain, as one fixture.
+    const auto withTemporal = [](FixtureRun spatial, FixtureRun temporal, std::string evidence) {
+        spatial.prepared = spatial.prepared && temporal.prepared;
+        for (auto& value : temporal.frames)
+            spatial.frames.push_back(std::move(value));
+        spatial.evidence = std::move(evidence);
+        return spatial;
+    };
     add(
         "effect.DenoiseKernel", GpuCoverageFixtureCriterion::Prepared, "src/runtime denoise tests",
-        [runGrades] {
-            return runGrades(
+        [runGrades, runTemporalDenoise, withTemporal] {
+            bloom::denoise_test::TemporalValues two;
+            two.frames = 2;
+            bloom::denoise_test::TemporalValues still;
+            still.still = true;
+            return withTemporal(runGrades(
                 {
                  [](const std::uint64_t idBase) -> ImageEffectKernel {
                      return bloom::runtime::DenoiseKernel{
@@ -3183,13 +3221,18 @@ displayProofRunner(const bool customView) {
                          {ParameterId::fromRaw(idBase + 61), 0.6}};
                  }},
                 501000,
-                "production Denoise: Median with and without a threshold, Bilateral and Spatial passes over HDR and partial alpha, full frame and ROI");
+                "production Denoise: Median with and without a threshold, Bilateral and Spatial passes over HDR and partial alpha, full frame and ROI"),
+                runTemporalDenoise({{{}, 5}, {two, 5}, {still, 4}, {{}, 1}}, 501400),
+                "production Denoise: Median with and without a threshold, Bilateral and Spatial "
+                "passes over HDR and partial alpha, and the Temporal steps over a moving, a still "
+                "and an early window (a first step, middle steps and a last step), full frame and "
+                "ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     add(
         "node.bloom.denoise", GpuCoverageFixtureCriterion::Prepared, "src/runtime denoise tests",
-        [runGrades] {
-            return runGrades(
+        [runGrades, runTemporalDenoise, withTemporal] {
+            return withTemporal(runGrades(
                 {
                  [](const std::uint64_t idBase) -> ImageEffectKernel {
                      return bloom::runtime::DenoiseKernel{
@@ -3216,7 +3259,11 @@ displayProofRunner(const bool customView) {
                          {ParameterId::fromRaw(idBase + 61), 0.6}};
                  }},
                 502000,
-                "production Denoise node: the neighborhood pass its lowering builds in every spatial mode, full frame and ROI");
+                "production Denoise node: the neighborhood pass its lowering builds in every spatial mode, full frame and ROI"),
+                runTemporalDenoise({{{}, 5}}, 502400),
+                "production Denoise node: the neighborhood pass its lowering builds in every "
+                "spatial mode and the Temporal chain its lowering builds (the look-back window "
+                "and its weighted steps), full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     add(
