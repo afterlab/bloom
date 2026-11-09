@@ -115,7 +115,9 @@ A missing font keeps its recorded ID. It is shown in two places and both are dis
 
 - The font name in Properties, on the node card and in the picker is drawn in the error color.
 - With the Viewer option "Highlight missing fonts" on (Guides menu, default on), text with a missing
-  font is overlaid in red. The overlay is never drawn into rendered frames.
+  font is overlaid in red. Every text layer is marked, however its source is wired to the Layer Output
+  (straight in, or through effects, merges and other nodes); a layer that only parents or stacks over
+  that text is not. The overlay is never drawn into RAM Preview frames, exports or headless renders.
 
 Notices (a download started or finished, a failure, a version change, a system font taken from Google
 Fonts) are transient: the status bar and the log. The red name is the only persistent indication.

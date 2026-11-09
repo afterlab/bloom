@@ -20,6 +20,9 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/font_id.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -1679,6 +1682,122 @@ void testSelectedBoundsOverlayPixels(Expectations& expectations) {
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
+// #489: the missing-font overlay marks every text layer drawn in a fallback face, however its source
+// is wired to the Layer Output, and only those. It is painted over the Viewer, never into frames.
+void testMissingFontOverlayMarksEveryWiringOfTheLayer(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("viewer/overlay");
+    const auto format = document::CompositionFormat::create(640, 360);
+    if (!format) {
+        expectations.expect(false, "missing-font format is valid");
+        return;
+    }
+    ViewerFixture fixture(document::makeNewProject("Missing font overlay", "Main",
+                                                   core::RationalTime::fromInteger(2), *format));
+    auto footer = std::unique_ptr<QWidget>(bloom::ui::test::footer(fixture.viewer));
+    footer->hide();
+    const auto setFont = [&](const document::LayerId layer, const std::string& font) {
+        const auto source = fixture.session.directSourceNodeForLayer(layer);
+        return source &&
+               fixture.session.setNodeParameterValue(*source,
+                                                     std::string(document::kTextFontParameterRole),
+                                                     document::ParameterValue{font}, "Font");
+    };
+    const auto addText = [&](const QString& name, const double x, const double y) {
+        if (!fixture.session.addTextLayer(name, QStringLiteral("Hamburgefonts"), 72.0,
+                                          core::Color4d{0.9, 0.9, 0.9, 1.0}, document::Vec2d{x, y}))
+            return std::optional<document::LayerId>{};
+        return std::optional<document::LayerId>{
+            std::get<document::LayerId>(fixture.session.selection().primary)};
+    };
+    const auto direct = addText(QStringLiteral("Direct"), 320, 70);
+    const auto wired = addText(QStringLiteral("Wired"), 320, 180);
+    const auto installed = addText(QStringLiteral("Installed"), 320, 290);
+    if (!direct || !wired || !installed) {
+        expectations.expect(false, "three text layers are added");
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    const auto missing = document::encodeFontId({document::FontSource::System, "Nobody Has This",
+                                                 "Regular", 400, false, {}, "NobodyHasThis-Regular",
+                                                 {}});
+    expectations.expect(setFont(*direct, missing) && setFont(*wired, missing),
+                        "two layers name a font nobody has");
+    // The wired layer's text reaches its Layer Output through an effect.
+    std::optional<document::NodeId> wiredOutput;
+    for (const auto& node : fixture.session.composition()->graph().nodes())
+        if (node.typeId == document::kLayerOutputNodeType &&
+            fixture.session.layerForNode(node.id) == wired)
+            wiredOutput = node.id;
+    expectations.expect(wiredOutput.has_value(), "the wired layer has a Layer Output");
+    if (!wiredOutput) {
+        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+        return;
+    }
+    commands::Transaction transaction("Add Effect", fixture.session.snapshot().revision());
+    transaction.emplace<commands::AddEditorNode>(
+        fixture.session.compositionId(), std::string(document::kGradeNodeType),
+        document::Vec2d{400.0, 0.0},
+        document::InputPortRef{document::NodeInputRef{*wiredOutput,
+                                                      std::string(document::kLayerOutputContentInputPort)}});
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(transaction)).changed(),
+                        "a Grade effect is inserted between the text and its Layer Output");
+
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
+    fixture.viewer.resize(900, 560);
+    fixture.viewer.show();
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the frame is delivered");
+    const auto marked = fixture.controller.missingFontBounds();
+    expectations.expect(marked.size() == 2,
+                        "the layer wired straight in and the one behind an effect are both marked");
+    std::vector<document::LayerId> markedLayers;
+    for (const auto& bound : marked)
+        markedLayers.push_back(bound.layerId);
+    expectations.expect(std::ranges::find(markedLayers, *direct) != markedLayers.end() &&
+                            std::ranges::find(markedLayers, *wired) != markedLayers.end() &&
+                            std::ranges::find(markedLayers, *installed) == markedLayers.end(),
+                        "the layer whose font is available is not marked");
+
+    // The overlay is painted over the Viewer only: the delivered frame is the same with it on and off.
+    fixture.session.clearSelection();
+    auto* toggle = fixture.viewer.findChild<QAction*>(QStringLiteral("viewerMissingFontsAction"));
+    expectations.expect(toggle != nullptr && toggle->isChecked(),
+                        "Highlight Missing Fonts is on by default");
+    QCoreApplication::processEvents();
+    const auto withOverlay = fixture.viewer.grab().toImage();
+    if (const auto directory = qEnvironmentVariable("BLOOM_MISSING_FONT_CAPTURE_DIR");
+        !directory.isEmpty())
+        withOverlay.save(directory + QStringLiteral("/viewer-overlay-on.png"));
+    if (toggle != nullptr)
+        toggle->setChecked(false);
+    QCoreApplication::processEvents();
+    const auto withoutOverlay = fixture.viewer.grab().toImage();
+    if (const auto directory = qEnvironmentVariable("BLOOM_MISSING_FONT_CAPTURE_DIR");
+        !directory.isEmpty())
+        withoutOverlay.save(directory + QStringLiteral("/viewer-overlay-off.png"));
+    expectations.expect(withOverlay != withoutOverlay, "the overlay draws over the Viewer");
+    const auto center = [&](const runtime::EvaluatedOperationBounds& bound) {
+        const auto display = ui::viewTransformedDisplayRect(
+            fixture.viewer.canvasRectForTest(), extent(640, 360), core::PixelAspectRatio::square(),
+            fixture.viewer.viewTransformForTest());
+        const auto x = (bound.polygon[0].x + bound.polygon[2].x) / 2.0;
+        const auto y = (bound.polygon[0].y + bound.polygon[2].y) / 2.0;
+        return QPoint(qRound(display.left() + x * display.width() / 640.0),
+                      qRound(display.top() + y * display.height() / 360.0));
+    };
+    for (const auto& bound : marked) {
+        const auto point = center(bound) + QPoint(0, 0);
+        expectations.expect(withOverlay.pixelColor(point) != withoutOverlay.pixelColor(point) ||
+                                withOverlay.pixelColor(point + QPoint(6, 6)) !=
+                                    withoutOverlay.pixelColor(point + QPoint(6, 6)),
+                            "each marked layer is washed in the Viewer");
+    }
+    if (toggle != nullptr)
+        toggle->setChecked(true);
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 void testViewerHeaderSelectorsMenusAndOverflow(Expectations& expectations) {
     using namespace bloom;
     QSettings().remove("viewer/overlay");
@@ -2257,6 +2376,7 @@ int main(int argc, char** argv) {
     testEmptyCompositionShowsNoLayerInvitation(expectations);
     testTimeReadoutEditsFramesAndSwitchesFormat(expectations);
     testViewerHeaderSelectorsMenusAndOverflow(expectations);
+    testMissingFontOverlayMarksEveryWiringOfTheLayer(expectations);
     testViewerHeaderCollapseIsStableAcrossResizes(expectations);
     testViewerOverlayPixelsFollowTransformAndThreshold(expectations);
     testMiddleDragPans(expectations);

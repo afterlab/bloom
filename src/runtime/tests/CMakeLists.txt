@@ -24,6 +24,12 @@ bloom_enable_warnings(bloom_runtime_variable_font_test)
 bloom_add_test(NAME bloom.runtime.variable_font COMMAND bloom_runtime_variable_font_test
     LABELS runtime unit text TIMEOUT 60)
 
+add_executable(bloom_runtime_missing_font_layers_test missing_font_layers_tests.cpp)
+target_link_libraries(bloom_runtime_missing_font_layers_test PRIVATE bloom_runtime_compiler)
+bloom_enable_warnings(bloom_runtime_missing_font_layers_test)
+bloom_add_test(NAME bloom.runtime.missing_font_layers COMMAND bloom_runtime_missing_font_layers_test
+    LABELS runtime unit text TIMEOUT 30)
+
 add_executable(bloom_runtime_task_test task_scheduler_tests.cpp)
 add_executable(bloom_runtime_completion_test task_completion_tests.cpp)
 add_executable(bloom_runtime_regression_test task_scheduler_regression_tests.cpp)

@@ -115,6 +115,7 @@ target_sources(
         auto_exposure_recipes.cpp
         histogram_recipes.cpp
         compositing_recipes.hpp
+        missing_font_layers.cpp
         plan_time_scopes.cpp
         motion_shutter.cpp
         profiler_gpu_reader.cpp
@@ -133,6 +134,7 @@ target_sources(
         FILES
             include/bloom/runtime/audio_analysis_source.hpp
             include/bloom/runtime/compiled_plan.hpp
+            include/bloom/runtime/missing_font_layers.hpp
             include/bloom/runtime/compiled_composition_source.hpp
             include/bloom/runtime/channel_expression.hpp
             include/bloom/runtime/channel_inspection.hpp

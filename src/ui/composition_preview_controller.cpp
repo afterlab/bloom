@@ -6,6 +6,7 @@
 
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/missing_font_layers.hpp>
 
 #include <QThread>
 
@@ -247,17 +248,11 @@ CompositionPreviewController::missingFontBounds(PreparedPreviewFrameHandle sourc
         return result;
     const auto operations = source->processIdentity().plan->operations();
     const auto allBounds = source->evaluatedBounds();
-    for (std::size_t index = 0; index < allBounds.size() && index < operations.size(); ++index) {
-        const auto* boundary = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
-        if (boundary == nullptr || allBounds[index].output.empty())
-            continue;
-        const auto input = static_cast<std::size_t>(boundary->input.value());
-        if (input >= operations.size())
-            continue;
-        const auto* text = std::get_if<runtime::CompiledText>(&operations[input]);
-        if (text != nullptr && text->fontMissing)
+    // Every layer whose picture is built from a Text in a fallback face, however it is wired.
+    const auto usesMissingFont = runtime::layersUsingMissingFont(operations);
+    for (std::size_t index = 0; index < allBounds.size() && index < operations.size(); ++index)
+        if (usesMissingFont[index] && !allBounds[index].output.empty())
             result.push_back(allBounds[index]);
-    }
     return result;
 }
 
