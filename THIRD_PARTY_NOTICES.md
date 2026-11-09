@@ -6,8 +6,8 @@ bytes are checked in here and shipped inside the Bloom binary or its resources.
 
 Third-party libraries Bloom builds from pinned upstream source archives rather than vendoring are
 inventoried separately in `dependencies/dependencies.lock.json`, with their license texts,
-provenance, review, and security records under `dependencies/licenses/`. Six vendored components
--- `stb_truetype`, `stb_image`, `dr_wav`, `minimp3`, `miniaudio`, and `libebur128` -- keep their
+provenance, review, and security records under `dependencies/licenses/`. Seven vendored components
+-- `stb_truetype`, `stb_image`, `dr_wav`, `minimp3`, `miniaudio`, `libebur128`, and `Clipper2` -- keep their
 records in that same shape without a lock entry, because their bytes are checked in here rather
 than acquired by the superbuild; each is listed below like every other vendored component, and its
 own records explain why the lock cannot represent it.
@@ -181,6 +181,7 @@ archive digest, the selection, the processing steps and every file digest are in
 | miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | MIT-0 OR public domain | `src/media/third_party/miniaudio/` | `dependencies/licenses/miniaudio/` |
 | libebur128 | 1.2.6 (commit `67b33abe1558160ed76ada1322329b0e9e058b02`) | MIT (bundled `queue.h`: BSD-3-Clause) | `src/media/third_party/ebur128/` | `dependencies/licenses/ebur128/` |
 | stb_image | 2.30 (commit `013ac3beddff3dbffafd5177e7972067cd2b5083`) | MIT OR Unlicense | `src/media/third_party/stb_image/` | `dependencies/licenses/stb_image/` |
+| Clipper2 | 1.5.4 (commit `ef88ee97c0e759792e43a2b2d8072def6c9244e8`) | BSL-1.0 | `src/runtime/third_party/clipper2/` | `dependencies/licenses/clipper2/` |
 
 ### stb_image
 
@@ -235,3 +236,14 @@ loudness and true peak). It is not a superbuild dependency and has no entry in
 byte-identical to the upstream files at the pinned commit, and again under
 `dependencies/licenses/ebur128/`, with the acquisition provenance, license review, and security
 review. The library only measures samples Bloom has already mixed; it reads no files.
+
+### Clipper2
+
+Copyright (c) Angus Johnson 2010-2025. Released under the Boost Software License 1.0. Bloom vendors the
+unmodified C++ source (`clipper.engine.cpp`, `clipper.offset.cpp`, `clipper.rectclip.cpp` and their
+headers) and compiles it through one private object-library target for path union, difference,
+intersection, exclusive-or and offsetting. It is not a superbuild dependency and has no entry in
+`dependencies/dependencies.lock.json`. The license text is at
+`src/runtime/third_party/clipper2/LICENSE`, byte-identical to the upstream file at the pinned commit,
+and again under `dependencies/licenses/clipper2/`, with the acquisition provenance, license review, and
+security review. The library only transforms polygons Bloom has already built; it reads no files.
