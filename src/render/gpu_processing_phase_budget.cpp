@@ -326,6 +326,32 @@ bool GpuProcessingPhaseLease::finishSourcePreparation(
     return true;
 }
 
+GpuProcessingPhaseAdmission
+GpuProcessingPhaseLease::claimRetainedHostBytes(const std::uint64_t bytes) noexcept {
+    const std::lock_guard lock(state_->mutex);
+    auto& counters = state_->counters;
+    if (id_ == 0 || unproven_ || retired_ || !counters.hostCapacityBytes)
+        return GpuProcessingPhaseAdmission::InvalidRequest;
+    if (bytes > remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes)) {
+        const auto limit =
+            std::max(*counters.hostCapacityBytes, counters.hostCeilingBytes.value_or(0));
+        if (bytes > std::numeric_limits<std::uint64_t>::max() - hostBytes_ ||
+            hostBytes_ + bytes > limit) {
+            incrementSaturating(counters.budgetRefusals);
+            return GpuProcessingPhaseAdmission::BudgetRefused;
+        }
+        return GpuProcessingPhaseAdmission::AwaitingCapacity;
+    }
+    remainingHostBytes_ += bytes;
+    hostBytes_ += bytes;
+    counters.hostReservedBytes += bytes;
+    counters.totalHostClaimBytes += bytes;
+    counters.peakHostReservedBytes =
+        std::max(counters.peakHostReservedBytes, counters.hostReservedBytes);
+    detail::notePeaksLocked(counters);
+    return GpuProcessingPhaseAdmission::Accepted;
+}
+
 bool GpuProcessingPhaseLease::retireToRetention() noexcept {
     {
         const std::lock_guard lock(state_->mutex);

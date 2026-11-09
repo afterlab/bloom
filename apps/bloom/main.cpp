@@ -383,6 +383,7 @@ int main(int argc, char* argv[]) try {
         {.policy = processingPhasePolicy,
          .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
                       .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                      .growsRetainedSceneStorage = true,
                       .requestedExecutorBytes = std::nullopt,
                       // A stated room of 512 MiB for one general OCIO display job (the arm has
                       // no fixed ceiling since #474; measured peaks replace this need, #417)

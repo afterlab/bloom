@@ -344,6 +344,9 @@ struct GpuSceneBlendCommand final {
     // image, so the executor does not offer it to the scene cache, where hundreds of frame-sized
     // images would push out what is worth keeping. Not part of the semantic key.
     bool transientResult = false;
+    // A step of a Merge fold (#343): the accumulated backdrop runs before this entry, so an entry's
+    // image lives only for its own blend, as in a Normal stack. Execution order only.
+    bool planDestinationFirst = false;
 };
 
 // One OCIO ProcessEffect transform over a resident RGBA32F input. `program` is the immutable

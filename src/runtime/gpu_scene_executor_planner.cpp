@@ -156,13 +156,13 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a covered solid coverage size does not match its window");
         }
-        if (coverageBytes > budgets.maxCoverageBytes ||
-            expected > budgets.maxCoverageBytes - coverageBytes) {
+        // One mask at a time (#343): each is released when its fill retires, so the ceiling bounds
+        // the one mask, never the sum over a scene's mutually exclusive lifetimes.
+        if (expected > budgets.maxCoverageBytes) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget,
-                                  "the scene coverage bytes exceed the configured ceiling");
+                                  "a coverage mask exceeds the configured ceiling");
         }
-        coverageBytes += expected;
         GpuSceneExecutorStep step;
         step.kind = GpuSceneExecutorStepKind::CoveredSolid;
         step.command = index;
@@ -285,11 +285,15 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* blendCommand = std::get_if<GpuSceneBlendCommand>(&command)) {
-        if (const auto plan = planCommand(blendCommand->source, color);
+        const auto first = blendCommand->planDestinationFirst ? blendCommand->destination
+                                                              : blendCommand->source;
+        const auto second = blendCommand->planDestinationFirst ? blendCommand->source
+                                                               : blendCommand->destination;
+        if (const auto plan = planCommand(first, color);
             plan.code != GpuSceneExecutorDiagnosticCode::None) {
             return plan;
         }
-        if (const auto plan = planCommand(blendCommand->destination, color);
+        if (const auto plan = planCommand(second, color);
             plan.code != GpuSceneExecutorDiagnosticCode::None) {
             return plan;
         }

@@ -520,7 +520,8 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
                                    .outputWindow = descriptor.dataWindow(),
                                    .pixelAspect = descriptor.pixelAspect(),
                                    .artifactDigest = std::string{kGpuBlendSpirvSha256},
-                                   .semanticKey = blendKey};
+                                   .semanticKey = blendKey,
+                                   .planDestinationFirst = true};
         accumulator = emit(std::move(blend));
         accumulatorKey = blendKey;
     }

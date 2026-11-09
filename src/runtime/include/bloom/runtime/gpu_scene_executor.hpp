@@ -252,8 +252,18 @@ struct GpuSceneExecutorBudgets final {
     // to actually fit 1080p plus a bounded margin. It is a real ceiling, never unlimited; the
     // per-request live ledger and the native byte budget still bound the simultaneous peak.
     std::uint64_t maxAffineMetadataBytes = 256ULL * 1024ULL * 1024ULL;
-    // Structural ceilings validated before any Vulkan work.
-    std::uint64_t maxCommands = 4096;
+    // Structural ceilings validated before any Vulkan work. The command ceiling is a guard against
+    // a runaway plan, not a limit on an artist's scene (#343): a command holds no pixels, its
+    // storage is charged to the phase's host claim when the scene is built, and execution pins only
+    // the live set. One imported SVG element is at most a few dozen commands and an import holds
+    // at most 20,000 elements.
+    std::uint64_t maxCommands = 1ULL << 20;
+    // A scene of more commands than this offers the scene cache only its output and its stacks of
+    // three or more layers, not every layer (#343). A frame that changes one shape of thousands then
+    // reuses every stack it did not touch and re-runs one, where a cache flooded with thousands of
+    // layer images would evict the stacks and re-run them all.
+    std::uint64_t maxCommandsOfferingEveryImage = 1024;
+    // One coverage mask.
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;
     // OCIO native-program cache: every program the current scene uses stays, plus at most this many
     // others, least recently used evicted first (#386).

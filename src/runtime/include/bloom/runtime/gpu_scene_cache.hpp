@@ -44,6 +44,11 @@ struct GpuSceneCacheBudgets final {
     // resolver, a final-render evaluator from its own device), and an explicitly tiny value stays
     // tiny. The cache still evicts unpinned entries and never invalidates a live pin.
     std::uint64_t maxRetainedBytes = std::numeric_limits<std::uint64_t>::max();
+    // Retained images. A device holds a fixed number of live images (4096 per family, whatever
+    // their size), so a scene of thousands of small layers would otherwise fill them with cached
+    // images until the next image it needs cannot be created (#343). Half is left for the scene
+    // running now and the frames being shown; the rest is evicted like a byte budget.
+    std::size_t maxRetainedImages = 2048;
 };
 
 enum class GpuSceneCacheDiagnosticCode : std::uint8_t {

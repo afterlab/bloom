@@ -86,7 +86,6 @@ void GpuSceneExecutor::Impl::clearJob() noexcept {
     remainingUses.clear();
     cursor = 0;
     requestBudget = 0;
-    coverageBytes = 0;
     batchAttempted = false;
     nativeKind = NativeKind::None;
     nativeInFlight = false;

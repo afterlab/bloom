@@ -523,7 +523,6 @@ struct GpuSceneExecutor::Impl final {
     std::uint64_t peakLiveBytes = 0;
 
     std::uint64_t requestBudget = 0;
-    std::uint64_t coverageBytes = 0;
     // Live pin bytes at the moment the in-flight op was dispatched; the true during-op peak adds
     // the op's own actual retained bytes to this.
     std::uint64_t liveBytesAtDispatch = 0;

@@ -243,6 +243,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
         return planned;
     }
 
+    if (commands.size() > impl.budgets.maxCommandsOfferingEveryImage) {
+        for (auto& step : impl.steps) {
+            const auto* merge = std::get_if<GpuSceneMergeCommand>(&commands[step.command]);
+            if (step.command != output && (merge == nullptr || merge->foregrounds.size() < 3))
+                step.cacheOnComplete = false;
+        }
+    }
+
     // Count, per ACTUALLY emitted step, how many times each command's image is consumed. Only steps
     // generated after the cache cut exist here, so an edge to an unreachable or cache-hit subtree
     // is never counted and never holds a pin. A repeated or shared input is counted once per

@@ -227,6 +227,11 @@ class GpuProcessingPhaseLease final {
     // original upload ceiling. Spent decode/conversion scratch must not block native execution.
     // Call once, before publishing the prepared scene to the device thread.
     [[nodiscard]] bool finishSourcePreparation(std::uint64_t retainedSourceBytes) noexcept;
+    // #343: claims `bytes` more host memory for what preparation retains beyond the phase's fixed
+    // quota, held until the phase is released. Accepted within the room left of the live capacity;
+    // AwaitingCapacity when other claims hold the room; BudgetRefused when the phase's own claim
+    // could never fit. Nothing changes unless Accepted.
+    [[nodiscard]] GpuProcessingPhaseAdmission claimRetainedHostBytes(std::uint64_t bytes) noexcept;
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
     // #539: the phase's scene execution has finished. Its device claim is held only while it

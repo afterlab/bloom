@@ -160,7 +160,7 @@ GpuSceneCache::insert(std::string semanticKey,
         ++impl.counters.refusals;
         return GpuSceneCacheInsertResult::InvalidArgument;
     }
-    if (bytes > impl.budgets.maxRetainedBytes) {
+    if (bytes > impl.budgets.maxRetainedBytes || impl.budgets.maxRetainedImages == 0) {
         ++impl.counters.refusals;
         return GpuSceneCacheInsertResult::RefusedOverBudget;
     }
@@ -215,13 +215,21 @@ GpuSceneCache::insert(std::string semanticKey,
             return GpuSceneCacheInsertResult::RefusedOverBudget;
         }
     }
+    // Likewise for the image count: an entry this insertion replaces leaves no extra room to make.
+    const bool imageCountFull = existing == impl.entries.end() &&
+                                impl.entries.size() >= impl.budgets.maxRetainedImages;
+    if (imageCountFull && impl.findEvictable(key) == impl.order.end()) {
+        ++impl.counters.refusals;
+        return GpuSceneCacheInsertResult::RefusedOverBudget;
+    }
 
     // Phase 2: commit. Drop the replaced entry (proved unpinned above), then evict unpinned LRU
     // entries until it fits. `wouldExceed` is subtraction-only, so the loop cannot wrap.
     if (existing != impl.entries.end()) {
         impl.removeAt(key);
     }
-    while (wouldExceed(impl.retainedBytes, bytes, maxBytes)) {
+    while (wouldExceed(impl.retainedBytes, bytes, maxBytes) ||
+           impl.entries.size() >= impl.budgets.maxRetainedImages) {
         const auto victim = impl.findEvictable(key);
         if (victim == impl.order.end()) {
             // Phase 1 proved this cannot happen; fail closed rather than corrupt accounting.

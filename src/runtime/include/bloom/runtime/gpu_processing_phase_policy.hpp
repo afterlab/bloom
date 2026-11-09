@@ -29,6 +29,10 @@ struct GpuProcessingPhaseEnvelope final {
     std::uint64_t metadataBytes = 0;
     // Explicit retained vector/text coverage cap, plus one temporary overlap in fixed host quota.
     std::uint64_t retainedCoverageByteLimit = 0;
+    // #343: what scene preparation retains past that cap and the metadata allowance (a dense vector
+    // scene's coverage and command list) is claimed from the host root as it is built, and refused
+    // only by that root. False keeps the cap a hard ceiling.
+    bool growsRetainedSceneStorage = false;
     std::uint64_t requestedSourceBytes = 0;
     std::uint64_t minimumSourceBytes = 0;
     // The largest single source within minimumSourceBytes (#472); zero when unknown.

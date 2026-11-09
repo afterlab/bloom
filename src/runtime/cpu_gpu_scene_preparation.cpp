@@ -84,6 +84,37 @@ using detail::GpuSceneVectorChain;
            std::holds_alternative<CompiledCryptomatte>(operation);
 }
 
+// Retained scene storage past the stated allowance is claimed in steps, so a dense scene takes the
+// budget's lock a few times rather than once per shape.
+constexpr std::uint64_t kRetainedCoverageClaimStep = 16ULL * 1024 * 1024;
+
+// One command, its keys, and the executor's step for it.
+[[nodiscard]] std::uint64_t gpuSceneCommandStorageBytes(const std::size_t commands) noexcept {
+    constexpr std::uint64_t kKeyBytes = 2 * 96;
+    constexpr std::uint64_t kExecutorStepBytes = 512;
+    return commands * (sizeof(GpuSceneCommand) + kKeyBytes + kExecutorStepBytes);
+}
+
+struct RetainedStorageRefusal final {
+    PreparedGpuSceneDiagnosticCode code = PreparedGpuSceneDiagnosticCode::None;
+    std::string message;
+};
+
+[[nodiscard]] std::optional<RetainedStorageRefusal>
+claimRetainedSceneStorage(const std::shared_ptr<render::GpuProcessingPhaseLease>& lease,
+                          const std::uint64_t bytes) {
+    switch (lease->claimRetainedHostBytes(bytes)) {
+    case render::GpuProcessingPhaseAdmission::Accepted:
+        return std::nullopt;
+    case render::GpuProcessingPhaseAdmission::AwaitingCapacity:
+        return RetainedStorageRefusal{PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                                      "The prepared scene is awaiting host-memory capacity"};
+    default:
+        return RetainedStorageRefusal{PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                                      "The prepared scene does not fit the host-memory capacity"};
+    }
+}
+
 } // namespace
 
 PreparedGpuSceneBuildResult
@@ -261,14 +292,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             derivedCeiling = true;
         }
         if (envelope.native && envelope.requestedExecutorBytes) {
-            // The executor needs at least the plan's preflight live-image peak (one float frame
-            // at minimum), whether its ceiling was derived above or stated by the caller (a final
-            // render, #417); the ceiling is only an upper bound shared with other phases.
+            // The executor needs at least its live-image peak (one float frame at minimum),
+            // whether its ceiling was derived above or stated by the caller (a final render,
+            // #417); the ceiling is only an upper bound shared with other phases. The preflight's
+            // peak is the CPU reference's, which holds a whole Merge at once; the executor does not
+            // (#343), and never holds more than that. Both count each image as one frame: this is
+            // the admission floor. An image larger than the frame (a layer's unclipped support,
+            // a gradient drawn in its own window) is drawn against live device capacity when it is
+            // allocated, beyond the claimed need, as every allocation past the need is.
             const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
             const auto frameBytes = static_cast<std::uint64_t>(extent.width()) * extent.height() *
                                     sizeof(render::Rgba32f);
             const auto peak = std::max(
-                frameBytes, static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes));
+                frameBytes,
+                std::min(static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes),
+                         detail::gpuExecutorLivePeakBytes(*plan, request.output.value(),
+                                                          frameBytes)));
             const auto ceiling = *envelope.requestedExecutorBytes;
             if (derivedCeiling)
                 envelope.minimumExecutorBytes =
@@ -477,7 +516,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         "The admitted source/coverage ceilings overflow");
         }
         retainedAllowance = sourceAllowance + coverageAllowance;
-        if (phase_.admittedLease && coverageAllowance == 0) {
+        if (phase_.admittedLease && coverageAllowance == 0 &&
+            !phase_.envelope.growsRetainedSceneStorage) {
             for (std::size_t index = 0; index < operationCount; ++index) {
                 if (reachable[index] &&
                     (std::holds_alternative<CompiledText>(plan->operations()[index]) ||
@@ -558,7 +598,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // run (for example a 4608x3164 source over an FHD solid and text). Only the retained host set
     // is bounded here; GPU residency is bounded by GpuSceneExecutor::begin(scene, budget), which
     // takes the honest CPU fallback on refusal. Overflow-checked with subtraction-only comparators.
-    const std::uint64_t allowance = retainedAllowance;
+    std::uint64_t allowance = retainedAllowance;
     std::uint64_t retainedBytes = 0;
     std::uint64_t coverageBytes = 0;
     std::uint64_t sourceBytes = 0;
@@ -604,9 +644,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const std::uint64_t bytes = detail::gpuSceneCoverageHostBytes(command);
         if (phaseLease &&
             (coverageBytes > coverageAllowance || bytes > coverageAllowance - coverageBytes)) {
-            return detail::GpuSceneLeafFailure{
-                PreparedGpuSceneDiagnosticCode::BudgetRefused,
-                "Prepared coverage exceeds its admitted retained coverage ceiling"};
+            if (!phase_.envelope.growsRetainedSceneStorage) {
+                return detail::GpuSceneLeafFailure{
+                    PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                    "Prepared coverage exceeds its admitted retained coverage ceiling"};
+            }
+            // #343: a dense vector scene retains more geometry than the stated allowance. The rest
+            // is claimed from the host root as it is rasterized, so the claim stays what the scene
+            // holds and a scene that cannot be held is refused or waits for room.
+            const auto growth = std::max<std::uint64_t>(
+                bytes - std::min(bytes, coverageAllowance - std::min(coverageAllowance, coverageBytes)),
+                kRetainedCoverageClaimStep);
+            if (const auto refused = claimRetainedSceneStorage(phaseLease, growth)) {
+                return detail::GpuSceneLeafFailure{refused->code, std::move(refused->message)};
+            }
+            coverageAllowance += growth;
+            allowance += growth;
         }
         coverageBytes += bytes;
         if (retainedBytes > allowance || bytes > allowance - retainedBytes) {
@@ -811,7 +864,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto sourceBytesBefore = sourceBackings->chargedBytes;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, clockRequest, resolved, hScale, vScale,
-                detail::nestedCompositionDepth(), allowance, retainedBytes, cancellation,
+                detail::nestedCompositionDepth(),
+                phase_.envelope.growsRetainedSceneStorage ? std::numeric_limits<std::uint64_t>::max()
+                                                          : allowance,
+                retainedBytes, cancellation,
                 [this, &media, &phaseLease, &sourceBackings, sourceAllowance, coverageAllowance,
                  coverageBytes, foregroundLimit = request.pixelStorageByteLimit](
                     const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
@@ -837,6 +893,14 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 return fail(error->code, error->message, mediaStatistics);
             }
             const auto newlyCharged = sourceBackings->chargedBytes - sourceBytesBefore;
+            // A child that grew the phase's retained storage claimed it from the root already.
+            if (phase_.envelope.growsRetainedSceneStorage &&
+                nested.coverageResidentBytes > coverageAllowance - coverageBytes) {
+                const auto grown =
+                    nested.coverageResidentBytes - (coverageAllowance - coverageBytes);
+                coverageAllowance += grown;
+                allowance += grown;
+            }
             if (sourceBytes > sourceAllowance || newlyCharged > sourceAllowance - sourceBytes ||
                 nested.coverageResidentBytes > coverageAllowance - coverageBytes) {
                 return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
@@ -1221,6 +1285,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         std::move(bounds), frameResolved.imageDescriptor, mediaStatistics));
     // Nested builders borrow the root phase and must not retire its preparation scratch while
     // siblings can still decode. The shared backing ledger deduplicates all nested source pixels.
+    // #343: the command list of a scene past the phase's metadata allowance, and the executor's plan
+    // of it, are host memory like its coverage. A nested build's commands are spliced into the root's.
+    if (phaseLease && !phase_.admittedLease && phase_.envelope.growsRetainedSceneStorage) {
+        const auto storage = gpuSceneCommandStorageBytes(scene->commands().size());
+        if (storage > phase_.envelope.metadataBytes) {
+            if (auto refused = claimRetainedSceneStorage(
+                    phaseLease, storage - phase_.envelope.metadataBytes)) {
+                return fail(refused->code, std::move(refused->message), mediaStatistics);
+            }
+        }
+    }
     if (phaseLease && !phase_.admittedLease &&
         !phaseLease->finishSourcePreparation(sourceBackings->chargedBytes)) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
