@@ -8,6 +8,7 @@ target_sources(
         document.cpp
         evaluation_inputs.cpp
         extension_records.cpp
+        font_id.cpp
         data_block.cpp
         grade_curves.cpp
         field_nodes.cpp
@@ -71,6 +72,7 @@ target_sources(
             include/bloom/document/evaluation_inputs.hpp
             include/bloom/document/export_queue.hpp
             include/bloom/document/extension_records.hpp
+            include/bloom/document/font_id.hpp
             include/bloom/document/data_block.hpp
             include/bloom/document/graph.hpp
             include/bloom/document/node_definition_registry.hpp
@@ -104,6 +106,11 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_document_node_model_test PRIVATE bloom_document)
     bloom_enable_warnings(bloom_document_node_model_test)
     bloom_add_test(NAME bloom.document.node-model COMMAND bloom_document_node_model_test LABELS unit)
+
+    add_executable(bloom_document_font_id_test tests/font_id_tests.cpp)
+    target_link_libraries(bloom_document_font_id_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_font_id_test)
+    bloom_add_test(NAME bloom.document.font-id COMMAND bloom_document_font_id_test LABELS unit)
 
     add_executable(bloom_document_node_group_test tests/node_group_tests.cpp)
     target_link_libraries(bloom_document_node_group_test PRIVATE bloom_document)

@@ -50,6 +50,37 @@ target_compile_features(bloom_runtime PUBLIC cxx_std_20)
 target_link_libraries(bloom_runtime PUBLIC bloom_core Threads::Threads)
 bloom_enable_warnings(bloom_runtime)
 
+# Font IDs to font files: installed fonts, the per-user cache, Google Fonts downloads and the
+# fallback table (docs/architecture/fonts.md). No Qt and no network library: the transport is a seam
+# the application fills.
+add_library(bloom_runtime_fonts STATIC)
+
+target_sources(
+    bloom_runtime_fonts
+    PRIVATE
+        font_fallback.cpp
+        font_resolver.cpp
+        google_catalogue.cpp
+        google_catalogue_data.cpp
+        google_fonts.cpp
+        system_font_index.cpp
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS include
+        FILES
+            include/bloom/runtime/font_fallback.hpp
+            include/bloom/runtime/font_resolver.hpp
+            include/bloom/runtime/font_transport.hpp
+            include/bloom/runtime/google_catalogue.hpp
+            include/bloom/runtime/google_fonts.hpp
+            include/bloom/runtime/system_font_index.hpp
+)
+
+target_compile_features(bloom_runtime_fonts PUBLIC cxx_std_20)
+target_link_libraries(bloom_runtime_fonts PUBLIC bloom_core bloom_document bloom_platform
+                                                 Threads::Threads)
+bloom_enable_warnings(bloom_runtime_fonts)
+
 add_library(bloom_runtime_compiler STATIC)
 
 target_sources(
@@ -106,7 +137,8 @@ target_sources(
 )
 
 target_compile_features(bloom_runtime_compiler PUBLIC cxx_std_20)
-target_link_libraries(bloom_runtime_compiler PUBLIC bloom_runtime bloom_document bloom_render)
+target_link_libraries(bloom_runtime_compiler PUBLIC bloom_runtime bloom_runtime_fonts bloom_document
+                                                    bloom_render)
 bloom_enable_warnings(bloom_runtime_compiler)
 
 add_library(bloom_runtime_evaluator STATIC)
