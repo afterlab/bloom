@@ -209,6 +209,7 @@ target_sources(
         motion_blur_planner.cpp
         sharpen_image_effect.cpp
         field_raster.cpp
+        point_tracker.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp
         image_effect.hpp

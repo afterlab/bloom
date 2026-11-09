@@ -2491,3 +2491,12 @@ bloom_add_test(
     TIMEOUT 300
 )
 set_tests_properties(bloom.runtime.gpu_merge_entry_native PROPERTIES SKIP_RETURN_CODE 77)
+
+# #513 point tracking: known motion to a fraction of a pixel, every way a track ends, cancellation.
+add_executable(bloom_runtime_point_tracker_test point_tracker_tests.cpp)
+target_include_directories(bloom_runtime_point_tracker_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_point_tracker_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_point_tracker_test)
+bloom_enable_strict_floating_point(bloom_runtime_point_tracker_test)
+bloom_add_test(NAME bloom.runtime.point_tracker COMMAND bloom_runtime_point_tracker_test
+    LABELS unit runtime)
