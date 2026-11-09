@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -33,6 +34,22 @@ inline void publish(ValueUtilityOutcome& outcome, document::PathValue value,
                     const std::size_t slot = 0) {
     outcome.outputs[slot] =
         CompiledPathValue{std::make_shared<document::PathValue>(std::move(value))};
+}
+
+// The kernels' cancellation poll, called inside every loop that grows with the path (per contour,
+// per segment, per dash, per sample, between polygon-library calls). True means stop: the kernel
+// returns cancelledOutcome() and publishes nothing. The vendored polygon library's own calls are
+// not interruptible, so each is bounded by the path value's caps and polled around, not inside.
+[[nodiscard]] inline bool stopRequested(const ValueUtilityInvocation& invocation) {
+    const auto& limits = invocation.limits;
+    if (limits.pollObserver != nullptr && *limits.pollObserver)
+        (*limits.pollObserver)();
+    return limits.cancellation != nullptr && limits.cancellation->isCancellationRequested();
+}
+[[nodiscard]] inline ValueUtilityOutcome cancelledOutcome(const ValueUtilityInvocation& invocation) {
+    auto outcome = shapedOutcome(invocation.operation);
+    outcome.cancelled = true;
+    return outcome;
 }
 
 [[nodiscard]] inline bool finite(const document::Vec2d value) noexcept {
@@ -118,12 +135,16 @@ inline void publish(ValueUtilityOutcome& outcome, document::PathValue value,
     return path;
 }
 
-// Polygons as a path value: closed corner anchors, filled by the even-odd rule, no groups.
-[[nodiscard]] inline document::PathValue valueOf(const Clipper2Lib::PathsD& polygons) {
+// Polygons as a path value: closed corner anchors, filled by the even-odd rule, no groups. Empty
+// when the kernel was cancelled while converting.
+[[nodiscard]] inline std::optional<document::PathValue>
+valueOf(const Clipper2Lib::PathsD& polygons, const ValueUtilityInvocation& invocation) {
     document::PathValue value;
     value.fillRule = document::PathFillRule::EvenOdd;
     value.contours.reserve(polygons.size());
     for (const auto& polygon : polygons) {
+        if (stopRequested(invocation))
+            return std::nullopt;
         if (polygon.size() < 3)
             continue;
         document::PathContour contour;

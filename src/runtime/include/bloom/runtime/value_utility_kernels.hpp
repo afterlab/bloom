@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string_view>
 
@@ -41,6 +42,10 @@ struct ValueUtilityLimits final {
     std::size_t availableStringBytes = kDefaultValueStringBytes;
     std::size_t maxScratchBytes = kDefaultValueStringScratchBytes;
     const CancellationToken* cancellation = nullptr;
+    // Called each time a path kernel polls `cancellation` inside its loops (and never otherwise).
+    // It exists so a test can cancel a kernel at an exact poll, deterministically, and count the
+    // polls; production leaves it null.
+    const std::function<void()>* pollObserver = nullptr;
 };
 
 struct ValueUtilityInvocation final {

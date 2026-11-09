@@ -143,15 +143,19 @@ struct Style {
 
 // The outline of one stretch, as polygons to be united: a trapezoid for each segment, a join at
 // each inner vertex and a cap at each end. The union is taken once, over everything.
-void outline(const Stretch& stretch, const Style& style, PathsD& polygons) {
+// False when cancelled.
+[[nodiscard]] bool outline(const Stretch& stretch, const Style& style, PathsD& polygons,
+                         const ValueUtilityInvocation& invocation) {
     const auto count = stretch.points.size();
     if (count < 2)
-        return;
+        return true;
     const auto half = [&](const std::size_t index) {
         return 0.5 * style.width * stretch.envelope[index];
     };
     const auto normal = [](const Vec2d direction) { return Vec2d{-direction.y, direction.x}; };
     for (std::size_t index = 0; index + 1 < count; ++index) {
+        if (support::stopRequested(invocation))
+            return false;
         const auto direction = unit(stretch.points[index], stretch.points[index + 1]);
         const auto n = normal(direction);
         const double h0 = half(index);
@@ -166,6 +170,8 @@ void outline(const Stretch& stretch, const Style& style, PathsD& polygons) {
     // Joins: between the segment before a vertex and the segment after it.
     for (std::size_t vertex = stretch.closed ? 0 : 1; vertex + (stretch.closed ? 0 : 1) < count;
          ++vertex) {
+        if (support::stopRequested(invocation))
+            return false;
         const std::size_t previous = vertex == 0 ? count - 2 : vertex - 1;
         const std::size_t next = vertex + 1 < count ? vertex + 1 : 1;
         const auto& p = stretch.points[vertex];
@@ -201,7 +207,7 @@ void outline(const Stretch& stretch, const Style& style, PathsD& polygons) {
         }
     }
     if (stretch.closed)
-        return;
+        return true;
     const auto capAt = [&](const std::size_t index, const Vec2d outward) {
         const double h = half(index);
         const auto& p = stretch.points[index];
@@ -219,6 +225,7 @@ void outline(const Stretch& stretch, const Style& style, PathsD& polygons) {
     const auto end = unit(stretch.points[count - 2], stretch.points[count - 1]);
     capAt(0, {-start.x, -start.y});
     capAt(count - 1, end);
+    return true;
 }
 
 ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
@@ -262,10 +269,15 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
     // Flatten every contour at the one flattening every route shares.
     std::vector<Stretch> sources;
     for (const auto& contour : path.contours) {
+        if (support::stopRequested(invocation))
+            return support::cancelledOutcome(invocation);
         if (contour.anchors.size() < 2)
             continue;
-        auto points =
-            render::flattenPathContour(support::renderPath(contour, contour.closed), tolerance);
+        auto points = render::flattenPathContour(
+            support::renderPath(contour, contour.closed), tolerance,
+            [&invocation] { return support::stopRequested(invocation); });
+        if (!points && support::stopRequested(invocation))
+            return support::cancelledOutcome(invocation);
         if (!points)
             return support::refuse(
                 std::move(outcome), "Path Stroke is too detailed",
@@ -275,6 +287,9 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
         stretch.closed = contour.closed;
         double along = 0.0;
         for (const auto& point : *points) {
+            // A contour may flatten to as many points as the flattener allows; poll in its walk.
+            if (support::stopRequested(invocation))
+                return support::cancelledOutcome(invocation);
             const Vec2d next{point.x, point.y};
             if (!stretch.points.empty()) {
                 const auto& previous = stretch.points.back();
@@ -314,6 +329,8 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
         for (const auto& [low, high] : windows) {
             double base = 0.0;
             for (const auto& source : sources) {
+                if (support::stopRequested(invocation))
+                    return support::cancelledOutcome(invocation);
                 const double length = lengthOf(source.points);
                 const double from = std::max(low * total, base) - base;
                 const double to = std::min(high * total, base + length) - base;
@@ -360,6 +377,8 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             std::size_t cursor = 0;
             double base = 0.0;
             for (std::size_t sample = 0; sample < samples; ++sample) {
+                if (support::stopRequested(invocation))
+                    return support::cancelledOutcome(invocation);
                 const double distance = std::min(length, static_cast<double>(sample) * step);
                 while (cursor + 2 < piece.points.size()) {
                     const double segment =
@@ -383,6 +402,8 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                 continue;
             Stretch moved = resampled;
             for (std::size_t index = 0; index < resampled.points.size(); ++index) {
+                if (support::stopRequested(invocation))
+                    return support::cancelledOutcome(invocation);
                 const auto before = resampled.points[index == 0 ? 0 : index - 1];
                 const auto after =
                     resampled.points[std::min(index + 1, resampled.points.size() - 1)];
@@ -401,6 +422,8 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
     const double startShare = std::clamp(taperStart / 100.0, 0.0, 1.0);
     const double endShare = std::clamp(taperEnd / 100.0, 0.0, 1.0);
     for (auto& piece : pieces) {
+        if (support::stopRequested(invocation))
+            return support::cancelledOutcome(invocation);
         const double length = lengthOf(piece.points);
         piece.envelope.assign(piece.points.size(), 1.0);
         double distance = 0.0;
@@ -432,6 +455,8 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             std::size_t index = 0;
             double base = 0.0;
             for (double at = 0.0; at <= length + 1e-9; at += spacing) {
+                if (support::stopRequested(invocation))
+                    return support::cancelledOutcome(invocation);
                 while (index + 2 < piece.points.size()) {
                     const double segment =
                         std::hypot(piece.points[index + 1].x - piece.points[index].x,
@@ -463,6 +488,8 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             if (first > 0.0)
                 first -= period;
             for (double at = first; at < length; at += period) {
+                if (support::stopRequested(invocation))
+                    return support::cancelledOutcome(invocation);
                 const double from = std::max(at, 0.0);
                 const double to = std::min(at + dashLength, length);
                 if (!(to > from))
@@ -505,34 +532,56 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
     }
 
     // The outline of the body, and of the core at its share of the width.
+    // nullopt when the stroke is too detailed or the kernel was cancelled (`cancelled` says which).
+    bool cancelled = false;
     const auto build = [&](const double scale) -> std::optional<PathsD> {
         if (!(width * scale > 0.0))
             return PathsD{};
         const Style style{width * scale, join, cap};
         PathsD polygons;
         for (const auto& stroke : strokes) {
-            outline(stroke, style, polygons);
+            if (!outline(stroke, style, polygons, invocation)) {
+                cancelled = true;
+                return std::nullopt;
+            }
             if (polygons.size() > kMaximumPolygons)
                 return std::nullopt;
         }
         for (const auto& [center, envelope] : stamps) {
+            if (support::stopRequested(invocation)) {
+                cancelled = true;
+                return std::nullopt;
+            }
             addDisc(polygons, center, 0.5 * style.width * envelope);
             if (polygons.size() > kMaximumPolygons)
                 return std::nullopt;
         }
-        return Clipper2Lib::Union(polygons, Clipper2Lib::FillRule::NonZero, 3);
+        // The polygon library's union is one uninterruptible call, bounded by kMaximumPolygons.
+        auto united = Clipper2Lib::Union(polygons, Clipper2Lib::FillRule::NonZero, 3);
+        if (support::stopRequested(invocation)) {
+            cancelled = true;
+            return std::nullopt;
+        }
+        return united;
     };
     try {
         const auto body = build(1.0);
-        const auto core = coreWidth > 0.0 ? build(std::clamp(coreWidth, 0.0, 100.0) / 100.0)
-                                          : std::optional<PathsD>(PathsD{});
+        const auto core = cancelled ? std::optional<PathsD>(PathsD{})
+                          : coreWidth > 0.0 ? build(std::clamp(coreWidth, 0.0, 100.0) / 100.0)
+                                            : std::optional<PathsD>(PathsD{});
+        if (cancelled)
+            return support::cancelledOutcome(invocation);
         if (!body || !core)
             return support::refuse(
                 shapedOutcome(invocation.operation), "Path Stroke is too detailed",
                 "The stroke is made of more pieces than can be united; raise the "
                 "tolerance or lengthen the dashes.");
-        auto bodyValue = support::valueOf(*body);
-        auto coreValue = support::valueOf(*core);
+        auto bodyConverted = support::valueOf(*body, invocation);
+        auto coreConverted = support::valueOf(*core, invocation);
+        if (!bodyConverted || !coreConverted)
+            return support::cancelledOutcome(invocation);
+        auto bodyValue = std::move(*bodyConverted);
+        auto coreValue = std::move(*coreConverted);
         if (!support::fitsValue(bodyValue) || !support::fitsValue(coreValue))
             return support::refuse(
                 shapedOutcome(invocation.operation), "Path Stroke result is too large",

@@ -1,6 +1,7 @@
 // #344 Transform Path, Trim Path and Offset Path; #530 Boolean Paths, Merge Paths and Round
 // Corners, against answers worked out by hand.
 
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
 
 #include <bloom/document/path_value.hpp>
@@ -9,7 +10,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -502,6 +510,342 @@ void testPathStroke(Expectations& expectations) {
     expectations.expect(stroke(line, fine).failed, "dashes that would number millions are refused");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Cancellation inside the kernels, and the budgets each one refuses at (#344 #530 #509)
+// ---------------------------------------------------------------------------------------------
+
+// A real token from a scheduler task that the test cancels at an exact moment.
+class CancelGate final {
+  public:
+    CancelGate() : scheduler_(configuration()) {
+        auto submission = scheduler_.submit<void>(
+            runtime::TaskRequest("path kernel cancel gate",
+                                 {.kind = runtime::TaskOwnerKind::Composition,
+                                  .id = runtime::TaskOwnerId::fromRaw(97)}),
+            [this](runtime::TaskContext& context) {
+                {
+                    std::lock_guard lock(mutex_);
+                    token_ = context.cancellation();
+                    entered_ = true;
+                }
+                condition_.notify_all();
+                std::unique_lock lock(mutex_);
+                condition_.wait(lock, [this] { return release_; });
+                return runtime::TaskResult<void>::succeeded();
+            });
+        if (!submission.accepted())
+            throw std::logic_error("the cancel gate task was refused");
+        handle_ = std::move(submission.handle);
+        std::unique_lock lock(mutex_);
+        condition_.wait(lock, [this] { return entered_; });
+    }
+    ~CancelGate() {
+        {
+            std::lock_guard lock(mutex_);
+            release_ = true;
+        }
+        condition_.notify_all();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!handle_.tryTakeResult().has_value() &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CancelGate(const CancelGate&) = delete;
+    CancelGate& operator=(const CancelGate&) = delete;
+    [[nodiscard]] const runtime::CancellationToken& token() const { return token_; }
+    void cancel() { handle_.cancel(); }
+
+  private:
+    static runtime::TaskSchedulerConfig configuration() {
+        auto config = runtime::TaskSchedulerConfig::defaults();
+        config.cpuWorkerCount = 1;
+        config.blockingIoWorkerCount = 1;
+        return config;
+    }
+    runtime::TaskScheduler scheduler_;
+    runtime::TaskHandle<void> handle_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool entered_ = false;
+    bool release_ = false;
+    runtime::CancellationToken token_;
+};
+
+// One kernel over one operand set; what a scenario runs and how it is told apart from a refusal.
+struct Scenario final {
+    std::string name;
+    Kernel kernel;
+    std::vector<CompiledValue> values;
+    std::vector<std::int64_t> selectors;
+};
+
+[[nodiscard]] ValueUtilityOutcome runWith(const Scenario& scenario,
+                                          const runtime::ValueUtilityLimits& limits) {
+    std::vector<const CompiledValue*> operands;
+    for (const auto& value : scenario.values)
+        operands.push_back(&value);
+    return runtime::evaluateValueUtility({scenario.kernel, operands, scenario.selectors,
+                                          core::RationalTime::fromInteger(0),
+                                          document::FrameRate::framesPerSecond24(), nullptr,
+                                          limits});
+}
+
+[[nodiscard]] bool publishedNothing(const ValueUtilityOutcome& outcome) {
+    // An outcome starts shaped with an empty path per slot, so "published" is a path with contours.
+    for (const auto& value : outcome.outputs)
+        if (const auto* held = std::get_if<runtime::CompiledPathValue>(&value);
+            held != nullptr && held->value != nullptr && !held->value->contours.empty())
+            return false;
+    return true;
+}
+
+// A closed contour of `count` corner anchors on a circle (`wobble` pushes alternate anchors out so
+// the polygon is not convex and rounding, offsetting and merging have real work to do).
+[[nodiscard]] PathContour ring(const std::size_t count, const double centerX, const double centerY,
+                               const double radius, const bool curved, const double wobble = 0.0) {
+    PathContour contour;
+    contour.closed = true;
+    for (std::size_t index = 0; index < count; ++index) {
+        const double angle = 2.0 * std::numbers::pi * static_cast<double>(index) /
+                             static_cast<double>(count);
+        const double r = radius + (index % 2 == 0 ? wobble : -wobble);
+        PathAnchor anchor = corner(centerX + r * std::cos(angle), centerY + r * std::sin(angle));
+        if (curved) {
+            const double reach = radius * 2.0 * std::numbers::pi / static_cast<double>(count) / 3.0;
+            anchor.outHandle = Vec2d{anchor.point.x - reach * std::sin(angle),
+                                     anchor.point.y + reach * std::cos(angle)};
+            anchor.inHandle = Vec2d{anchor.point.x + reach * std::sin(angle),
+                                    anchor.point.y - reach * std::cos(angle)};
+            anchor.mode = document::PathAnchorMode::Free;
+        }
+        contour.anchors.push_back(anchor);
+    }
+    return contour;
+}
+
+// An open zig-zag of `count` corner anchors, `step` apart.
+[[nodiscard]] PathContour zigzag(const std::size_t count, const double step) {
+    PathContour contour;
+    contour.closed = false;
+    for (std::size_t index = 0; index < count; ++index)
+        contour.anchors.push_back(
+            corner(static_cast<double>(index) * step, index % 2 == 0 ? 0.0 : 25.0));
+    return contour;
+}
+
+[[nodiscard]] PathValue crowd(const std::size_t contours, const std::size_t anchors,
+                              const bool curved, const double wobble) {
+    PathValue value;
+    for (std::size_t index = 0; index < contours; ++index)
+        value.contours.push_back(ring(anchors, 40.0 * static_cast<double>(index % 8),
+                                      30.0 * static_cast<double>(index / 8), 90.0, curved, wobble));
+    return value;
+}
+
+[[nodiscard]] std::vector<Scenario> heavyScenarios() {
+    std::vector<Scenario> scenarios;
+    const auto stroke = [](const char* name, auto&& customise, const std::size_t anchors = 700) {
+        StrokeOptions options;
+        options.tolerance = 0.1;
+        customise(options);
+        PathValue open;
+        open.contours.push_back(zigzag(anchors, anchors < 700 ? 30.0 : 12.0));
+        return Scenario{name,
+                        Kernel::PathStroke,
+                        {wrap(std::move(open)), options.width, options.start, options.end,
+                         options.offset, options.taperStart, options.taperEnd, options.dashLength,
+                         options.dashGap, options.dashOffset, options.spacing, options.wiggle,
+                         options.frequency, options.phase, options.seed, options.core,
+                         options.tolerance},
+                        {options.cap, options.join}};
+    };
+    scenarios.push_back({"Transform Path",
+                         Kernel::TransformPath,
+                         {wrap(crowd(24, 4000, false, 1.0)), Vec2d{5, 5}, Vec2d{0, 0}, Vec2d{2, 1},
+                          33.0},
+                         {}});
+    scenarios.push_back({"Round Corners",
+                         Kernel::RoundCorners,
+                         {wrap(crowd(4, 2000, false, 4.0)), 2.0},
+                         {}});
+    scenarios.push_back({"Trim Path",
+                         Kernel::TrimPath,
+                         {wrap(crowd(8, 2000, true, 0.0)), 10.0, 85.0, 7.0},
+                         {0}});
+    scenarios.push_back({"Trim Path (individually)",
+                         Kernel::TrimPath,
+                         {wrap(crowd(8, 2000, true, 0.0)), 10.0, 85.0, 7.0},
+                         {1}});
+    scenarios.push_back({"Offset Path",
+                         Kernel::OffsetPath,
+                         {wrap(crowd(8, 300, true, 0.0)), 6.0, 4.0, 0.05},
+                         {1}});
+    scenarios.push_back({"Boolean Paths",
+                         Kernel::BooleanPaths,
+                         {wrap(crowd(4, 600, true, 0.0)), wrap(crowd(4, 600, true, 6.0)), 0.05},
+                         {2}});
+    scenarios.push_back({"Merge Paths",
+                         Kernel::MergePaths,
+                         {wrap(crowd(16, 300, true, 0.0)), 0.05},
+                         {1}});
+    scenarios.push_back({"Path Stroke (solid with core)", Kernel::PathStroke, {}, {}});
+    scenarios.back() = stroke("Path Stroke (solid with core)", [](StrokeOptions& o) {
+        o.core = 40;
+        o.cap = 1;
+        o.join = 0;
+    });
+    scenarios.push_back(stroke("Path Stroke (dashed)", [](StrokeOptions& o) {
+        o.dashLength = 9;
+        o.dashGap = 4;
+    }));
+    scenarios.push_back(stroke("Path Stroke (dots)", [](StrokeOptions& o) { o.spacing = 14; }));
+    scenarios.push_back(stroke("Path Stroke (tapered, wiggle)", [](StrokeOptions& o) {
+        o.taperStart = 30;
+        o.taperEnd = 30;
+        o.wiggle = 3;
+        o.frequency = 2;
+    }, 60));
+    return scenarios;
+}
+
+void testKernelCancellation(Expectations& expectations) {
+    for (const auto& scenario : heavyScenarios()) {
+        const std::string name = scenario.name;
+        if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr)
+            std::cerr << "scenario: " << name << '\n';
+        // The answer with no cancellation, and how many times the kernel polls to reach it.
+        std::uint64_t total = 0;
+        const std::function<void()> counter = [&total] { ++total; };
+        runtime::ValueUtilityLimits counting;
+        counting.pollObserver = &counter;
+        const auto baseline = runWith(scenario, counting);
+        expectations.expect(!baseline.failed && !baseline.cancelled && !publishedNothing(baseline),
+                            name + ": the large input has a real answer (" +
+                                std::string(baseline.summary) + ")");
+        expectations.expect(total >= 8, name + ": the kernel polls cancellation inside its loops (" +
+                                            std::to_string(total) + " polls)");
+
+        // A token cancelled before the call: cancelled, nothing published.
+        {
+            CancelGate gate;
+            gate.cancel();
+            runtime::ValueUtilityLimits limits;
+            limits.cancellation = &gate.token();
+            const auto outcome = runWith(scenario, limits);
+            expectations.expect(outcome.cancelled && !outcome.failed && publishedNothing(outcome),
+                                name + ": a cancelled token cancels the kernel and publishes nothing");
+        }
+        // Cancelled from inside the kernel, at the first poll, the middle poll and the last but
+        // one: the kernel stops at the next poll, before it reaches its answer, and publishes
+        // nothing. Polls after the one that cancelled are a handful at most.
+        for (const std::uint64_t at : {std::uint64_t{1}, std::max<std::uint64_t>(2, total / 2),
+                                       total > 3 ? total - 2 : std::uint64_t{1}}) {
+            CancelGate gate;
+            std::uint64_t polls = 0;
+            std::uint64_t after = 0;
+            const std::function<void()> observer = [&] {
+                ++polls;
+                if (polls == at)
+                    gate.cancel();
+                else if (polls > at)
+                    ++after;
+            };
+            runtime::ValueUtilityLimits limits;
+            limits.cancellation = &gate.token();
+            limits.pollObserver = &observer;
+            const auto outcome = runWith(scenario, limits);
+            const auto label = name + " cancelled at poll " + std::to_string(at) + " of " +
+                               std::to_string(total);
+            expectations.expect(outcome.cancelled && !outcome.failed,
+                                label + ": the kernel reports cancelled");
+            expectations.expect(publishedNothing(outcome), label + ": it publishes no value");
+            expectations.expect(after <= 4, label + ": it stops at the next poll (" +
+                                                std::to_string(after) + " polls after)");
+            expectations.expect(polls < total + 1 && polls <= at + 4,
+                                label + ": it stopped before the work was done");
+        }
+        // And the next, uncancelled call returns the same full answer.
+        const auto again = runWith(scenario, {});
+        expectations.expect(!again.failed && !again.cancelled &&
+                                pathOf(again) == pathOf(baseline) &&
+                                coreOf(again) == coreOf(baseline),
+                            name + ": an uncancelled call after a cancelled one is the full answer");
+    }
+}
+
+// Each kernel's budget: an input past what it may hold fails with its documented diagnostic.
+void testKernelBudgets(Expectations& expectations) {
+    const auto refusal = [&](const Scenario& scenario, const std::string_view summary) {
+        const auto outcome = runWith(scenario, {});
+        expectations.expect(outcome.failed && !outcome.cancelled && outcome.summary == summary,
+                            scenario.name + ": refused with \"" + std::string(summary) +
+                                "\" (got \"" + std::string(outcome.summary) + "\")");
+    };
+    // A contour of curves each a million pixels across, flattened at the finest tolerance, runs
+    // past the flattener's segment budget.
+    PathValue vast;
+    vast.contours.push_back(ring(4000, 0.0, 0.0, 5.0e8, true));
+    const auto fine = 0.001;
+    refusal({"Offset Path", Kernel::OffsetPath, {wrap(vast), 5.0, 4.0, fine}, {0}},
+            "Offset Path is too detailed");
+    refusal({"Boolean Paths", Kernel::BooleanPaths, {wrap(vast), wrap(vast), fine}, {0}},
+            "Boolean Paths is too detailed");
+    refusal({"Merge Paths", Kernel::MergePaths, {wrap(vast), fine}, {0}},
+            "Merge Paths is too detailed");
+    {
+        StrokeOptions options;
+        options.tolerance = fine;
+        refusal({"Path Stroke",
+                 Kernel::PathStroke,
+                 {wrap(vast), options.width, options.start, options.end, options.offset,
+                  options.taperStart, options.taperEnd, options.dashLength, options.dashGap,
+                  options.dashOffset, options.spacing, options.wiggle, options.frequency,
+                  options.phase, options.seed, options.core, options.tolerance},
+                 {options.cap, options.join}},
+                "Path Stroke is too detailed");
+    }
+    // Rounding every corner of a contour already at the anchor cap doubles it past the cap.
+    PathValue crowded;
+    crowded.contours.push_back(ring(document::kMaximumPathAnchors, 0.0, 0.0, 1000.0, false, 100.0));
+    refusal({"Round Corners", Kernel::RoundCorners, {wrap(crowded), 5.0}, {}},
+            "Round Corners result is too large");
+    // A coordinate a billion pixels out is not a usable path.
+    PathValue outside = single(polygon({{0, 0}, {3.0e9, 0}, {3.0e9, 5}}, true));
+    refusal({"Trim Path", Kernel::TrimPath, {wrap(outside), 0.0, 50.0, 0.0}, {0}},
+            "Trim Path path is out of range");
+    refusal({"Round Corners", Kernel::RoundCorners, {wrap(outside), 2.0}, {}},
+            "Round Corners path is out of range");
+    // A scale that carries a coordinate past what a number holds overflows.
+    refusal({"Transform Path",
+             Kernel::TransformPath,
+             {wrap(single(square(0, 0, 1.0e9))), Vec2d{}, Vec2d{}, Vec2d{1.0e300, 1.0e300}, 0.0},
+             {}},
+            "Transform Path overflowed");
+    // Dashes and brush dots are bounded at the sample budget.
+    {
+        PathValue line = single(polygon({{0, 0}, {1.0e9, 0}}, false));
+        StrokeOptions dots;
+        dots.spacing = 1.0e-3;
+        const auto make = [&](const StrokeOptions& o, const char* name) {
+            return Scenario{name,
+                            Kernel::PathStroke,
+                            {wrap(line), o.width, o.start, o.end, o.offset, o.taperStart,
+                             o.taperEnd, o.dashLength, o.dashGap, o.dashOffset, o.spacing,
+                             o.wiggle, o.frequency, o.phase, o.seed, o.core, o.tolerance},
+                            {o.cap, o.join}};
+        };
+        refusal(make(dots, "Path Stroke (dots)"), "Path Stroke spacing is too small");
+        StrokeOptions dashes;
+        dashes.dashLength = 1.0e-3;
+        dashes.dashGap = 0.0;
+        refusal(make(dashes, "Path Stroke (dashes)"), "Path Stroke dashes are too short");
+        StrokeOptions shaky;
+        shaky.wiggle = 4;
+        shaky.frequency = 1.0e9;
+        refusal(make(shaky, "Path Stroke (wiggle)"), "Path Stroke wiggle is too fine");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -512,5 +856,7 @@ int main() {
     testOffset(expectations);
     testCombine(expectations);
     testPathStroke(expectations);
+    testKernelCancellation(expectations);
+    testKernelBudgets(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

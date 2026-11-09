@@ -105,7 +105,9 @@ ValueUtilityOutcome transformPath(const ValueUtilityInvocation& invocation) {
         return Vec2d{position.x + dx * cosine - dy * sine, position.y + dx * sine + dy * cosine};
     };
     PathValue result = path;
-    for (auto& contour : result.contours)
+    for (auto& contour : result.contours) {
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
         for (auto& each : contour.anchors) {
             each.point = map(each.point);
             if (each.inHandle)
@@ -118,6 +120,7 @@ ValueUtilityOutcome transformPath(const ValueUtilityInvocation& invocation) {
                 return refuse(shapedOutcome(invocation.operation), "Transform Path overflowed",
                               "The transformed path has a coordinate that is not a finite number.");
         }
+    }
     publish(outcome, std::move(result));
     return outcome;
 }
@@ -131,7 +134,9 @@ ValueUtilityOutcome transformPath(const ValueUtilityInvocation& invocation) {
            (!to.inHandle || *to.inHandle == to.point);
 }
 
-PathContour roundContour(const PathContour& source, const double radius) {
+// nullopt when cancelled part way through the contour's anchors.
+std::optional<PathContour> roundContour(const PathContour& source, const double radius,
+                                        const ValueUtilityInvocation& invocation) {
     const auto count = source.anchors.size();
     if (count < 3)
         return source;
@@ -139,6 +144,8 @@ PathContour roundContour(const PathContour& source, const double radius) {
     result.closed = source.closed;
     result.anchors.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
+        if (stopRequested(invocation))
+            return std::nullopt;
         const auto& corner = source.anchors[index];
         const bool endpoint = !source.closed && (index == 0 || index + 1 == count);
         const auto& before = source.anchors[(index + count - 1) % count];
@@ -210,8 +217,12 @@ ValueUtilityOutcome roundCorners(const ValueUtilityInvocation& invocation) {
     PathValue result;
     result.fillRule = path.fillRule;
     result.contours.reserve(path.contours.size());
-    for (const auto& contour : path.contours)
-        result.contours.push_back(roundContour(contour, radius));
+    for (const auto& contour : path.contours) {
+        auto rounded = roundContour(contour, radius, invocation);
+        if (!rounded)
+            return cancelledOutcome(invocation);
+        result.contours.push_back(std::move(*rounded));
+    }
     if (!fitsValue(result))
         return refuse(std::move(outcome), "Round Corners result is too large",
                       "Rounding every corner would exceed the anchors a path may hold.");
@@ -264,11 +275,15 @@ struct Segment {
     return splitRight(head, t1 > 0.0 ? t0 / t1 : 0.0);
 }
 
-[[nodiscard]] std::vector<Segment> measure(const PathContour& contour) {
+// Empty when cancelled (a contour with no segment is never measured).
+[[nodiscard]] std::vector<Segment> measure(const PathContour& contour,
+                                           const ValueUtilityInvocation& invocation) {
     std::vector<Segment> segments;
     const auto count = document::contourSegmentCount(contour);
     segments.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
+        if (stopRequested(invocation))
+            return {};
         Segment segment;
         segment.controls = document::contourSegmentControls(contour, index);
         const auto& c = segment.controls;
@@ -320,7 +335,8 @@ struct Piece {
 
 // The open piece of a contour from distance `from` to distance `to` along it.
 [[nodiscard]] Piece extract(const PathContour& source, const std::vector<Segment>& segments,
-                            const double from, const double to) {
+                            const double from, const double to,
+                            const ValueUtilityInvocation& invocation) {
     Piece piece;
     piece.contour.closed = false;
     auto& anchors = piece.contour.anchors;
@@ -331,6 +347,8 @@ struct Piece {
     piece.atStart = from <= 0.0;
     piece.atEnd = to >= total;
     for (std::size_t index = 0; index < segments.size(); ++index) {
+        if (stopRequested(invocation))
+            return {};
         const auto& segment = segments[index];
         const double low = base;
         const double high = base + segment.length;
@@ -405,7 +423,9 @@ ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
     lengths.reserve(count);
     double total = 0.0;
     for (const auto& contour : path.contours) {
-        measured.push_back(measure(contour));
+        measured.push_back(measure(contour, invocation));
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
         double length = 0.0;
         for (const auto& segment : measured.back())
             length += segment.length;
@@ -444,7 +464,10 @@ ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
             std::vector<Piece> pieces;
             for (const auto& [low, high] : windows)
                 pieces.push_back(
-                    extract(contour, measured[index], low * lengths[index], high * lengths[index]));
+                    extract(contour, measured[index], low * lengths[index], high * lengths[index],
+                            invocation));
+            if (stopRequested(invocation))
+                return cancelledOutcome(invocation);
             if (pieces.size() == 2 && contour.closed && pieces[0].contour.anchors.size() >= 2 &&
                 pieces[1].contour.anchors.size() >= 2 && pieces[0].atEnd && pieces[1].atStart) {
                 addPiece(index, joinPieces(pieces[0].contour, pieces[1].contour));
@@ -476,9 +499,11 @@ ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
                     const double b = std::min(high * total, from + length);
                     if (!(b > a))
                         continue;
-                    pieces.push_back(
-                        extract(path.contours[index], measured[index], a - from, b - from));
+                    pieces.push_back(extract(path.contours[index], measured[index], a - from,
+                                             b - from, invocation));
                 }
+                if (stopRequested(invocation))
+                    return cancelledOutcome(invocation);
                 if (pieces.size() == 2 && path.contours[index].closed &&
                     pieces[0].contour.anchors.size() >= 2 &&
                     pieces[1].contour.anchors.size() >= 2 && pieces[0].atEnd && pieces[1].atStart) {
@@ -508,9 +533,13 @@ ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
 // ---------------------------------------------------------------------------------------------
 
 // One contour as a polygon, flattened at `tolerance`. Fewer than three points is no area.
+// nullopt when flattening ran past its segment budget or the kernel was cancelled inside it (the
+// caller asks stopRequested() to tell which).
 [[nodiscard]] std::optional<Clipper2Lib::PathD> polygonOf(const PathContour& contour,
-                                                          const double tolerance) {
-    auto flattened = render::flattenPathContour(renderPath(contour, true), tolerance);
+                                                          const double tolerance,
+                                                          const ValueUtilityInvocation& invocation) {
+    auto flattened = render::flattenPathContour(renderPath(contour, true), tolerance,
+                                                [&invocation] { return stopRequested(invocation); });
     if (!flattened)
         return std::nullopt;
     Clipper2Lib::PathD polygon;
@@ -528,16 +557,24 @@ ValueUtilityOutcome trimPath(const ValueUtilityInvocation& invocation) {
                                                    : Clipper2Lib::FillRule::NonZero;
 }
 
-// Every contour of a value as polygons, or nullopt when one is too detailed to flatten.
+// Every contour of a value as polygons, or nullopt when one is too detailed to flatten or the
+// kernel was cancelled (`cancelled` says which).
 [[nodiscard]] std::optional<Clipper2Lib::PathsD>
-polygonsOf(const PathValue& value, const double tolerance, const bool closedOnly) {
+polygonsOf(const PathValue& value, const double tolerance, const bool closedOnly,
+           const ValueUtilityInvocation& invocation, bool& cancelled) {
     Clipper2Lib::PathsD polygons;
     for (const auto& contour : value.contours) {
+        if (stopRequested(invocation)) {
+            cancelled = true;
+            return std::nullopt;
+        }
         if (closedOnly && !contour.closed)
             continue;
-        auto polygon = polygonOf(contour, tolerance);
-        if (!polygon)
+        auto polygon = polygonOf(contour, tolerance, invocation);
+        if (!polygon) {
+            cancelled = stopRequested(invocation);
             return std::nullopt;
+        }
         if (!polygon->empty())
             polygons.push_back(std::move(*polygon));
     }
@@ -570,7 +607,10 @@ ValueUtilityOutcome offsetPath(const ValueUtilityInvocation& invocation) {
         return outcome;
     }
     try {
-        auto polygons = polygonsOf(path, tolerance, true);
+        bool cancelled = false;
+        auto polygons = polygonsOf(path, tolerance, true, invocation, cancelled);
+        if (cancelled)
+            return cancelledOutcome(invocation);
         if (!polygons)
             return refuse(std::move(outcome), "Offset Path is too detailed",
                           "The path has more flattened segments than can be offset; raise the "
@@ -578,13 +618,20 @@ ValueUtilityOutcome offsetPath(const ValueUtilityInvocation& invocation) {
         // Orientation and overlap are settled first, so the offset grows the filled area whichever
         // way the contours were wound.
         const auto settled = Clipper2Lib::Union(*polygons, clipRule(path.fillRule), kClipPrecision);
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
         const auto joinType = join == document::OffsetJoin::Round   ? Clipper2Lib::JoinType::Round
                               : join == document::OffsetJoin::Bevel ? Clipper2Lib::JoinType::Bevel
                                                                     : Clipper2Lib::JoinType::Miter;
         const auto grown = Clipper2Lib::InflatePaths(
             settled, amount, joinType, Clipper2Lib::EndType::Polygon,
             std::clamp(miterLimit, 1.0, 100.0), kClipPrecision, tolerance);
-        auto result = valueOf(grown);
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
+        auto converted = valueOf(grown, invocation);
+        if (!converted)
+            return cancelledOutcome(invocation);
+        auto result = std::move(*converted);
         // An open contour has no inside to offset: it is kept as it is.
         for (const auto& contour : path.contours)
             if (!contour.closed)
@@ -635,8 +682,13 @@ ValueUtilityOutcome booleanPaths(const ValueUtilityInvocation& invocation) {
         return refuse(std::move(outcome), "Boolean Paths path is out of range",
                       "Every coordinate must be finite and within a billion pixels.");
     try {
-        const auto left = polygonsOf(first, tolerance, false);
-        const auto right = polygonsOf(second, tolerance, false);
+        bool cancelled = false;
+        const auto left = polygonsOf(first, tolerance, false, invocation, cancelled);
+        std::optional<Clipper2Lib::PathsD> right;
+        if (!cancelled)
+            right = polygonsOf(second, tolerance, false, invocation, cancelled);
+        if (cancelled)
+            return cancelledOutcome(invocation);
         if (!left || !right)
             return refuse(std::move(outcome), "Boolean Paths is too detailed",
                           "A path has more flattened segments than can be combined; raise the "
@@ -646,7 +698,15 @@ ValueUtilityOutcome booleanPaths(const ValueUtilityInvocation& invocation) {
             Clipper2Lib::Union(*left, clipRule(first.fillRule), kClipPrecision);
         const auto settledSecond =
             Clipper2Lib::Union(*right, clipRule(second.fillRule), kClipPrecision);
-        auto result = valueOf(combine(settledFirst, settledSecond, operation));
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
+        const auto combined = combine(settledFirst, settledSecond, operation);
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
+        auto converted = valueOf(combined, invocation);
+        if (!converted)
+            return cancelledOutcome(invocation);
+        auto result = std::move(*converted);
         if (!fitsValue(result))
             return refuse(std::move(outcome), "Boolean Paths result is too large",
                           "The result has a contour with more anchors than a path may hold; raise "
@@ -678,7 +738,11 @@ ValueUtilityOutcome mergePaths(const ValueUtilityInvocation& invocation) {
         // Each contour is one shape; the first is combined with each later one in order.
         std::vector<Clipper2Lib::PathsD> shapes;
         for (const auto& contour : path.contours) {
-            auto polygon = polygonOf(contour, tolerance);
+            if (stopRequested(invocation))
+                return cancelledOutcome(invocation);
+            auto polygon = polygonOf(contour, tolerance, invocation);
+            if (!polygon && stopRequested(invocation))
+                return cancelledOutcome(invocation);
             if (!polygon)
                 return refuse(std::move(outcome), "Merge Paths is too detailed",
                               "The path has more flattened segments than can be merged; raise the "
@@ -689,6 +753,8 @@ ValueUtilityOutcome mergePaths(const ValueUtilityInvocation& invocation) {
                                                 Clipper2Lib::FillRule::NonZero, kClipPrecision));
         }
         Clipper2Lib::PathsD merged;
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
         if (operation == document::PathCombine::Union) {
             Clipper2Lib::PathsD all;
             for (auto& shape : shapes)
@@ -696,10 +762,18 @@ ValueUtilityOutcome mergePaths(const ValueUtilityInvocation& invocation) {
             merged = Clipper2Lib::Union(all, Clipper2Lib::FillRule::NonZero, kClipPrecision);
         } else if (!shapes.empty()) {
             merged = shapes.front();
-            for (std::size_t index = 1; index < shapes.size(); ++index)
+            for (std::size_t index = 1; index < shapes.size(); ++index) {
+                if (stopRequested(invocation))
+                    return cancelledOutcome(invocation);
                 merged = combine(merged, shapes[index], operation);
+            }
         }
-        auto result = valueOf(merged);
+        if (stopRequested(invocation))
+            return cancelledOutcome(invocation);
+        auto converted = valueOf(merged, invocation);
+        if (!converted)
+            return cancelledOutcome(invocation);
+        auto result = std::move(*converted);
         if (!fitsValue(result))
             return refuse(std::move(outcome), "Merge Paths result is too large",
                           "The result has a contour with more anchors than a path may hold; raise "
