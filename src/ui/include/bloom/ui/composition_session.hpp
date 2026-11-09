@@ -55,6 +55,7 @@ struct Vec2d;
 
 namespace bloom::ui {
 class AssetController;
+class TrackController;
 class CryptomatteController;
 class ChannelSetController;
 class ToolController;
@@ -222,6 +223,9 @@ class CompositionSession final : public QObject {
 
     void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
     [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
+    // #513: the tracking job runner a Stabilize node starts its track with; null when none runs.
+    void setTrackController(TrackController* controller) noexcept { trackController_ = controller; }
+    [[nodiscard]] TrackController* trackController() const noexcept { return trackController_; }
     // #364: the Cryptomatte layer listing and eyedropper (null without a composition root).
     void setCryptomatteController(CryptomatteController* controller) noexcept {
         cryptomatteController_ = controller;
@@ -928,6 +932,7 @@ class CompositionSession final : public QObject {
     std::optional<document::NodeId> focusPickNode_;
 
     AssetController* assetController_ = nullptr;
+    TrackController* trackController_ = nullptr;
     CryptomatteController* cryptomatteController_ = nullptr;
     ChannelSetController* channelSetController_ = nullptr;
     CompositionThumbnailController* compositionThumbnails_ = nullptr;

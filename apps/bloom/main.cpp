@@ -46,6 +46,7 @@
 #include <bloom/ui/composition_thumbnail_controller.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/track_controller.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/export_queue_edits.hpp>
 #include <bloom/ui/export_queue_service_port.hpp>
@@ -267,6 +268,9 @@ int main(int argc, char* argv[]) try {
                                                {.policy = processingPhasePolicy});
     QObject::connect(&memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied,
                      &assetController, &bloom::ui::AssetController::retryAudioAfterCapacitySample);
+    // #513: the Stabilize node's tracking job, one at a time, off the UI thread.
+    bloom::ui::TrackController trackController(compositionSession, taskScheduler, taskUiBridge,
+                                               nodeDefinitions);
     const auto updateMediaDirectory = [&] {
         const auto path = projectHost.displayPath();
         cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path() : std::filesystem::path{});

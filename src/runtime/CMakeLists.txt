@@ -301,6 +301,8 @@ target_sources(
             include/bloom/runtime/video_source_report.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
+            include/bloom/runtime/point_tracker.hpp
+            include/bloom/runtime/point_tracker_job.hpp
             include/bloom/runtime/layer_bounds_query.hpp
             include/bloom/runtime/gpu_neutral_display_qualification.hpp
             include/bloom/runtime/gpu_coverage_contract.hpp

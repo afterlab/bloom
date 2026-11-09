@@ -43,7 +43,7 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include "field_test_programs.hpp"
-#include "point_tracker_job.hpp"
+#include <bloom/runtime/point_tracker_job.hpp>
 #include "snapshot_compiler_support.hpp"
 
 #include <algorithm>

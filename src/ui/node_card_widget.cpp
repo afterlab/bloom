@@ -22,6 +22,7 @@
 #include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
 #include <bloom/ui/corner_pin_widget.hpp>
+#include <bloom/ui/stabilize_widget.hpp>
 #include <bloom/ui/test_card_widget.hpp>
 #include <bloom/ui/light_rays_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
@@ -46,6 +47,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            typeId == document::kLensDistortionNodeType ||
            typeId == document::kChromaticAberrationNodeType ||
            typeId == document::kCornerPinNodeType ||
+           typeId == document::kStabilizeNodeType ||
            typeId == document::kTestCardNodeType ||
            typeId == document::kLightRaysNodeType ||
            document::isMotionBlurNodeType(typeId) ||
@@ -82,6 +84,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new ChromaticAberrationCardWidget(session, node, card, parent);
     if (typeId == document::kCornerPinNodeType)
         return new CornerPinCardWidget(session, node, card, parent);
+    if (typeId == document::kStabilizeNodeType)
+        return new StabilizeCardWidget(session, node, card, parent);
     if (typeId == document::kTestCardNodeType)
         return new TestCardCardWidget(session, node, card, parent);
     if (typeId == document::kLightRaysNodeType)

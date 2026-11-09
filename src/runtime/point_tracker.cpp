@@ -1,4 +1,4 @@
-#include "point_tracker.hpp"
+#include <bloom/runtime/point_tracker.hpp>
 
 #include <algorithm>
 #include <cmath>

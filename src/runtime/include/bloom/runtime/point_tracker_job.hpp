@@ -12,7 +12,7 @@
 // (docs/architecture/point-tracking.md), so the GPU coverage contract is met by the node's own
 // Required fixtures; the job is analysis, and neither a pixel operation nor a render route.
 
-#include "point_tracker.hpp"
+#include <bloom/runtime/point_tracker.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>

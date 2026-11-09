@@ -2618,3 +2618,10 @@ target_include_directories(bloom_font_picker_test PRIVATE ..)
 target_link_libraries(bloom_font_picker_test PRIVATE bloom_ui bloom_runtime_compiler bloom_platform Qt6::Test Qt6::Network)
 bloom_enable_warnings(bloom_font_picker_test)
 bloom_add_test(NAME bloom.ui.font-picker COMMAND bloom_font_picker_test LABELS ui integration kit TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# #513 Stabilize: its card and the tracking job end to end through the controller.
+add_executable(bloom_stabilize_test stabilize_tests.cpp)
+target_include_directories(bloom_stabilize_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_stabilize_test PRIVATE bloom_ui bloom_commands)
+bloom_enable_warnings(bloom_stabilize_test)
+bloom_add_test(NAME bloom.ui.stabilize COMMAND bloom_stabilize_test LABELS ui integration TIMEOUT 180 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

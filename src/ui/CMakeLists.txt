@@ -584,6 +584,8 @@ target_sources(
         lens_distortion_widget.cpp
         chromatic_aberration_widget.cpp
         corner_pin_widget.cpp
+        stabilize_widget.cpp
+        track_controller.cpp
         test_card_widget.cpp
         test_card_expectation.cpp
         light_rays_widget.cpp
@@ -794,6 +796,8 @@ target_sources(
             include/bloom/ui/lens_distortion_widget.hpp
             include/bloom/ui/chromatic_aberration_widget.hpp
             include/bloom/ui/corner_pin_widget.hpp
+            include/bloom/ui/stabilize_widget.hpp
+            include/bloom/ui/track_controller.hpp
             include/bloom/ui/test_card_widget.hpp
             include/bloom/ui/light_rays_widget.hpp
             include/bloom/ui/film_grain_widget.hpp

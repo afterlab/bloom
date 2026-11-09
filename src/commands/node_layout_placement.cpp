@@ -381,6 +381,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #348: the Corner Pin card's pad.
     if (node->typeId == document::kCornerPinNodeType)
         thumbnail = kPadMaxHeight + kPadding;
+    // #513: the Stabilize card's pad, its Track button and a status line.
+    if (node->typeId == document::kStabilizeNodeType)
+        thumbnail = kPadMaxHeight + kPadding + kControl + 3.0 * kSmall;
     // #563: the Codec Degrade card's two slider rows, each a value over a slider.
     if (node->typeId == document::kCodecDegradeNodeType)
         thumbnail = 2.0 * (kControl + kSmall) + kPadding;

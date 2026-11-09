@@ -1,4 +1,4 @@
-#include "point_tracker_job.hpp"
+#include <bloom/runtime/point_tracker_job.hpp>
 
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>

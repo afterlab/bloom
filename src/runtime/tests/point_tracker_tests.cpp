@@ -4,7 +4,7 @@
 // cancelled job stops without a result. The texture is analytic, so the position of every feature at
 // every frame is known without reading it back from a picture.
 
-#include "point_tracker.hpp"
+#include <bloom/runtime/point_tracker.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <chrono>
