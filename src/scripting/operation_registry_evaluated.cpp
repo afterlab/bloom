@@ -21,6 +21,7 @@
 #include <bloom/runtime/layer_bounds_query.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/readings.hpp>
 #include <bloom/scripting/render.hpp>
 
 #include "operation_registry_parity.hpp"
@@ -523,4 +524,73 @@ void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors) {
         cryptomattePick);
 }
 
+[[nodiscard]] static LayerBoundsReading measureLayerBoundsReading(const OperationContext& context,
+                                             const CompositionId compositionId,
+                                             const core::RationalTime time, const LayerId layerId) {
+    LayerBoundsReading reading;
+    const auto unavailable = [&reading](std::string why) {
+        reading.status = LayerBoundsStatus::Unavailable;
+        reading.diagnostic = std::move(why);
+        return reading;
+    };
+    if (!context.source)
+        return unavailable("This client cannot read the project to evaluate it");
+    const auto source = context.source();
+    if (!source)
+        return unavailable("The project is closed or being replaced");
+    const auto* composition = source->snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return unavailable("Composition " + std::to_string(compositionId.value()) +
+                           " does not exist; query kind=compositions lists them");
+    if (composition->graph().findLayer(layerId) == nullptr)
+        return unavailable("Layer " + std::to_string(layerId.value()) +
+                           " does not exist in composition " +
+                           std::to_string(compositionId.value()) +
+                           "; query kind=layers lists its layers");
+    const auto colorIntent = captureRenderColorIntent(*source, *composition);
+    if (!colorIntent)
+        return unavailable("The project color settings are unavailable");
+    const auto measured =
+        measureLayer(context, *source, compositionId, time, layerId, *colorIntent);
+    if (measured.cancelled) {
+        reading.status = LayerBoundsStatus::Cancelled;
+        reading.diagnostic = "The request was cancelled";
+        return reading;
+    }
+    if (!measured.value || !measured.value->succeeded())
+        return unavailable(measured.value ? measured.value->diagnostic : "No result");
+    const auto found = std::ranges::find(measured.value->bounds, layerId,
+                                         &runtime::EvaluatedOperationBounds::layerId);
+    if (found == measured.value->bounds.end() || found->local.empty()) {
+        reading.status = LayerBoundsStatus::NotVisible;
+        reading.diagnostic = "The layer has no visible bounds at this time: it is outside its "
+                             "range, disabled or empty";
+        return reading;
+    }
+    reading.status = LayerBoundsStatus::Measured;
+    reading.localLeft = found->local.left;
+    reading.localTop = found->local.top;
+    reading.localRight = found->local.right;
+    reading.localBottom = found->local.bottom;
+    for (std::size_t index = 0; index < 4; ++index)
+        reading.corners[index] = {found->polygon[index].x, found->polygon[index].y};
+    reading.boundsLeft = found->output.left;
+    reading.boundsTop = found->output.top;
+    reading.boundsRight = found->output.right;
+    reading.boundsBottom = found->output.bottom;
+    reading.anchorX = found->anchor.x;
+    reading.anchorY = found->anchor.y;
+    return reading;
+}
+
 } // namespace bloom::scripting::detail::parity
+
+namespace bloom::scripting {
+
+LayerBoundsReading measureLayerBounds(const OperationContext& context,
+                                      const document::CompositionId composition,
+                                      const core::RationalTime time, const document::LayerId layer) {
+    return detail::parity::measureLayerBoundsReading(context, composition, time, layer);
+}
+
+} // namespace bloom::scripting

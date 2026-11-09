@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <initializer_list>
 #include <string>
@@ -836,6 +837,27 @@ void refine(const std::string& op, ArgumentSchema& argument) {
                 exampleText(argument) == "content")) {
         choose(argument, {{"content", "The slot's image (layer) input"},
                           {"audio", "The slot's audio input"}});
+    } else if (name == "kind" && op == "bloom.data-block.create") {
+        choose(argument, {{"curve", "Sampled curve (give payloadKind \"curve\")"},
+                          {"ramp", "Color ramp (give payloadKind \"ramp\")"},
+                          {"opaque", "Opaque bytes (payloadKind \"opaque\"); the default"},
+                          {"analysis", "Analysis result held as opaque bytes (payloadKind "
+                                       "\"opaque\")"}});
+        argument.defaultText = "opaque";
+        argument.unit = "block kind; the kind and payloadKind must agree. table, point-set, path "
+                        "and mask blocks need payloads this operation cannot build and are "
+                        "refused";
+    } else if (name == "typeId" && op == "bloom.data-block.create") {
+        argument.unit = "namespaced identifier: lowercase letters, digits, '.', '_' and '-', "
+                        "starting with a letter or digit, at most 128 bytes, such as "
+                        "\"bloom.curve\". Bloom names its own asset-backed blocks "
+                        "bloom.media.asset and bloom.color.lut-asset";
+    } else if (name == "mediaType" && op == "bloom.data-block.create") {
+        argument.unit = "media type text of 1 to 256 UTF-8 bytes, such as "
+                        "\"application/vnd.bloom.curve\", \"application/vnd.bloom.ramp\" or "
+                        "\"application/octet-stream\". Bloom checks only its length and "
+                        "encoding; it writes application/vnd.bloom.asset for a block backed by an "
+                        "asset";
     } else if ((name == "payloadKind" || name == "kind") && op.starts_with("bloom.data-block.")) {
         choose(argument, {{"curve", "Curve"}, {"ramp", "Ramp"}, {"opaque", "Opaque"}});
         argument.defaultText = "opaque";
@@ -879,7 +901,224 @@ void refine(const std::string& op, ArgumentSchema& argument) {
     }
 }
 
+// What an operation changes beyond the object it names. Each text is checked against the command
+// it describes; an operation without one has no such effect. Separate sentences are separate lines.
+struct SideEffectNote final {
+    std::string_view id;
+    std::string_view text;
+};
+
+// clang-format off
+constexpr std::array kSideEffects{
+    SideEffectNote{"bloom.node.connect",
+        "An input holds one link: connecting to an input that is already fed replaces that link "
+        "(the edge keeps its id and the old source is disconnected).\n"
+        "Linking into a parameter's operand socket makes the parameter driven: its constant value "
+        "is replaced by the link, and disconnecting returns it to the registered default."},
+    SideEffectNote{"bloom.node.add-feeding",
+        "When the input was already fed, the new node is inserted into the link: what fed the "
+        "input now feeds the new node's first input of the same kind.\n"
+        "A new node with no input of that kind (a value node, for example) replaces the existing "
+        "link instead; nothing is kept of it."},
+    SideEffectNote{"bloom.node.disconnect-input",
+        "Disconnecting the only remaining link of a Merge layer-stack slot removes the slot, and "
+        "the layer loses the track mattes it shared in that Merge.\n"
+        "Disconnecting a parameter's operand socket returns the parameter to its registered "
+        "default constant."},
+    SideEffectNote{"bloom.node.duplicate",
+        "Repeated ids in `nodes` collapse: a node named twice is copied once.\n"
+        "Links among the copied nodes are copied, and a copied Layer Output keeps reading the same "
+        "source; no other link from outside the set is copied."},
+    SideEffectNote{"bloom.node.remove",
+        "Removing a layer's Layer Output node deletes that layer.\n"
+        "Links to and from a removed node are removed with it, and a Merge slot it fed goes too.\n"
+        "A layer whose parent or track-matte source was a removed Layer Output loses that link.\n"
+        "A removed node's parameters, and a removed layer's masks, are deleted with it."},
+    SideEffectNote{"bloom.layer.duplicate",
+        "A layer named N times is copied N times (unlike bloom.node.duplicate, which collapses "
+        "repeated ids).\n"
+        "The copies take new ids and a new stack slot directly below the original."},
+    SideEffectNote{"bloom.layer.delete",
+        "The layer's source nodes stay in the graph; only the layer is removed."},
+    SideEffectNote{"bloom.parameter.set-source",
+        "Setting a constant, a driver or another curve on an animated parameter retires its "
+        "animation curve and every key on it; undo restores them. (bloom.animation."
+        "convert-to-constant does the same and keeps one value.)\n"
+        "Pointing a source node's asset or composition parameter at another one renames the "
+        "layers whose name follows their source.\n"
+        "Refused when the parameter belongs to a locked layer."},
+    SideEffectNote{"bloom.animation.convert-to-constant",
+        "The parameter's animation curve and all its keys are removed; undo restores them."},
+    SideEffectNote{"bloom.composition.duplicate",
+        "The copy is named after the source with \" copy\" appended and takes new ids for its "
+        "layers, nodes and parameters."},
+    SideEffectNote{"bloom.asset.import",
+        "Files the project already holds are reused: no second asset is made and the existing "
+        "asset's id is reported.\n"
+        "In a project that has never been saved there is no project folder, so the assets keep "
+        "external locators (the file's absolute location); a relative path then needs "
+        "projectDirectory."},
+    SideEffectNote{"bloom.asset.relink",
+        "The asset keeps its id, name, folder, tags and place in the list; only its file, size, "
+        "duration and digest change, so every layer that uses it shows the new file."},
+};
+// clang-format on
+
+[[nodiscard]] std::string_view trimmed(std::string_view text) {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\n'))
+        text.remove_prefix(1);
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\n' || text.back() == '.'))
+        text.remove_suffix(1);
+    return text;
+}
+
+[[nodiscard]] bool outputNameCharacter(const char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '.' || c == '<' || c == '>' ||
+           c == '_';
+}
+
+// What kind of id an output carries, from its name.
+[[nodiscard]] std::string outputKind(std::string_view name) {
+    const auto dot = name.find('.');
+    const auto base = name.substr(0, dot);
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 24> kinds{{
+        {"layer", "layer"},
+        {"movedLayer", "layer"},
+        {"skippedLayer", "layer"},
+        {"slot", "layer-slot"},
+        {"layerSlot", "layer-slot"},
+        {"node", "node"},
+        {"editorNode", "node"},
+        {"audioNode", "node"},
+        {"imageNode", "node"},
+        {"solidNode", "node"},
+        {"textNode", "node"},
+        {"layerOutputNode", "node"},
+        {"edge", "edge"},
+        {"composition", "composition"},
+        {"asset", "asset"},
+        {"folder", "asset-folder"},
+        {"mask", "mask"},
+        {"keyframe", "keyframe"},
+        {"animationCurve", "animation-curve"},
+        {"curve", "animation-curve"},
+        {"exportJob", "export-job"},
+        {"exportOutput", "export-output"},
+        {"dataBlock", "data-block"},
+        {"nodeGroup", "node-group"},
+    }};
+    for (const auto& [key, kind] : kinds)
+        if (base == key)
+            return std::string(kind);
+    if (base == "parameter" || base.ends_with("Parameter") || base == "path" || base == "feather" ||
+        base == "expansion" || base == "opacity")
+        return "parameter";
+    return std::string(base);
+}
+
+[[nodiscard]] ReferenceOutput makeOutput(std::string name, std::string note, const bool repeated) {
+    ReferenceOutput output;
+    output.kind = outputKind(name);
+    output.name = std::move(name);
+    output.note = std::move(note);
+    output.repeated = repeated;
+    return output;
+}
+
+// "animationCurve (when created), keyframe (one per key); edge" -> the outputs it names.
+[[nodiscard]] std::vector<ReferenceOutput> declaredOutputs(const std::string_view declared) {
+    std::vector<ReferenceOutput> result;
+    std::size_t depth = 0;
+    std::size_t start = 0;
+    const auto flush = [&](const std::size_t end) {
+        auto token = trimmed(declared.substr(start, end - start));
+        std::size_t length = 0;
+        while (length < token.size() && outputNameCharacter(token[length]))
+            ++length;
+        if (length == 0 || token.substr(0, length) == "and" || token.substr(0, length) == "none")
+            return;
+        auto note = std::string(trimmed(token.substr(length)));
+        if (note.size() >= 2 && note.front() == '(' && note.back() == ')')
+            note = note.substr(1, note.size() - 2);
+        const bool repeated = note.find("one per") != std::string::npos ||
+                              note.find("each") != std::string::npos;
+        result.push_back(makeOutput(std::string(token.substr(0, length)), std::move(note), repeated));
+    };
+    for (std::size_t index = 0; index < declared.size(); ++index) {
+        const char c = declared[index];
+        if (c == '(')
+            ++depth;
+        else if (c == ')' && depth > 0)
+            --depth;
+        else if ((c == ',' || c == ';') && depth == 0) {
+            flush(index);
+            start = index + 1;
+        }
+    }
+    flush(declared.size());
+    return result;
+}
+
+// The "Outputs:" sentence of an operation that carries its own text: every quoted name is an output.
+[[nodiscard]] std::vector<ReferenceOutput> describedOutputs(const std::string_view description) {
+    std::vector<ReferenceOutput> result;
+    const auto at = description.find("Outputs:");
+    if (at == std::string_view::npos)
+        return result;
+    auto sentence = description.substr(at + 8);
+    for (const std::string_view stop : {"Errors:", "Undo:", "MCP example:"}) {
+        if (const auto end = sentence.find(stop); end != std::string_view::npos)
+            sentence = sentence.substr(0, end);
+    }
+    std::size_t cursor = 0;
+    std::size_t previousEnd = 0;
+    while (true) {
+        const auto open = sentence.find('"', cursor);
+        if (open == std::string_view::npos)
+            break;
+        const auto close = sentence.find('"', open + 1);
+        if (close == std::string_view::npos)
+            break;
+        const auto name = std::string(sentence.substr(open + 1, close - open - 1));
+        const auto before = sentence.substr(previousEnd, open - previousEnd);
+        const auto nextOpen = sentence.find('"', close + 1);
+        const auto after = sentence.substr(close + 1, (nextOpen == std::string_view::npos
+                                                           ? sentence.size()
+                                                           : nextOpen) - close - 1);
+        const bool repeated = (before.find("one ") != std::string_view::npos &&
+                               after.find(" per ") != std::string_view::npos) ||
+                              after.find("for each") != std::string_view::npos ||
+                              after.find("per ") == 1;
+        if (!name.empty() && outputNameCharacter(name.front()))
+            result.push_back(makeOutput(name, {}, repeated));
+        previousEnd = close + 1;
+        cursor = close + 1;
+    }
+    return result;
+}
+
 } // namespace
+
+std::vector<ReferenceOutput> operationOutputs(const std::string_view typeId,
+                                              const std::string_view description) {
+    if (const auto* notes = operationNotes(typeId); notes != nullptr && !notes->outputs.empty())
+        return declaredOutputs(notes->outputs);
+    return describedOutputs(description);
+}
+
+std::vector<std::string> operationSideEffects(const std::string_view typeId) {
+    std::vector<std::string> result;
+    const auto found = std::ranges::find(kSideEffects, typeId, &SideEffectNote::id);
+    if (found == kSideEffects.end())
+        return result;
+    auto rest = found->text;
+    while (!rest.empty()) {
+        const auto end = rest.find('\n');
+        result.emplace_back(rest.substr(0, end));
+        rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end + 1);
+    }
+    return result;
+}
 
 const OperationNotes* operationNotes(const std::string_view typeId) noexcept {
     const auto found = std::ranges::find(kNotes, typeId, &OperationNotes::id);

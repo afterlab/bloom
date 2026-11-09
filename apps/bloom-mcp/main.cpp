@@ -257,7 +257,10 @@ int serve(scripting::Session& session) {
                     .deleteCompositionPreset = {},
                     .answerDialog = {},
                     .runScript = {},
-                    .cancelScript = {}},
+                    .cancelScript = {},
+                    .undoHistory = {},
+                    .viewerState = {},
+                    .previewCache = {}},
              .profilerSnapshot =
                  [&profiler](runtime::ProfilerSnapshot& out) {
                      static_cast<void>(profiler.sampleNow());

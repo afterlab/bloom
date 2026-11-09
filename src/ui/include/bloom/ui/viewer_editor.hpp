@@ -454,6 +454,24 @@ class ViewerEditor final : public QWidget,
     // Validates the whole change first, then applies it. Returns the refusal as a plain sentence
     // (in the interface language), or an empty string once applied.
     [[nodiscard]] QString applyRemoteChange(const RemoteChange& change);
+    // The same settings, read back (MCP query kind=viewer). Empty display and view mean the
+    // project default.
+    struct RemoteState final {
+        QString display;
+        QString view;
+        double exposure = 0.0;
+        double gamma = 1.0;
+        ViewerChannel channel = ViewerChannel::Rgba;
+        bool fitToWindow = true;
+        double zoom = 1.0;
+        // An index of the Resolution dropdown: Auto, Full, Half, Quarter.
+        int resolution = 0;
+        ViewerBackground background = ViewerBackground::Solid;
+        bool transparencyGrid = false;
+        bool look = false;
+        std::optional<QRectF> regionOfInterest;
+    };
+    [[nodiscard]] RemoteState remoteState() const;
 
   signals:
     void displayedStateChanged();

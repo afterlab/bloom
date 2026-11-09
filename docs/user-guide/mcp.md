@@ -480,6 +480,10 @@ drawn in DejaVu Sans (`bloom.runtime.compile.font-asset-unavailable`).
 `composition.compile-failed`, `project.saved`, `project.opened`, `project.created`,
 `project.closed` and `project.copy-saved`.
 
+Command events and every `transact` and `history` result also carry `origin`: `user` (the artist),
+`agent` (an MCP call) or `script` (the Script editor or `bloom-cli`), so a client can tell its own
+edits from the artist's.
+
 For a large parameter set, start with `{"kind":"parameters","composition":1,"pageSize":64}`.
 Repeat with its `nextCursor` until it is `null`. Each page includes `revision` and `totalRecords`;
 the cursor binds the server session, project, composition, revision and next record index. A
@@ -515,6 +519,26 @@ are searched first, then its source's. An optional `composition` in the referenc
 lookup; the default is the operation's composition. A name that matches no layer or several lists
 the candidates with their ids, and a role the layer lacks lists the roles it has. Ids still work
 everywhere.
+
+**Readings.** Beyond the project records, `query` answers measurements and window state, all
+through the same route (`help` lists them with their arguments):
+
+- `kind:"text-metrics"` with `text`, optional `font` and `size` (pixels per em) returns the advance
+  and the ink bounds per line.
+- `kind:"layer-bounds"` with `composition`, `layer` and optional `time` returns the evaluated
+  bounds: `local` (the content rectangle before the layer transform), `corners` (four corners after
+  it) and `output` (their axis-aligned box), with the space stated in the answer; a time outside the
+  layer reads `visible:false` with a reason.
+- `kind:"history"` lists the undo history (labels, the current position, `canUndo`, `canRedo`).
+- `kind:"viewer"` and `kind:"preview-cache"` read the Viewer state and the RAM preview (filled
+  range, fill rate, budget, stop reason; what is not known reads `null`). They answer
+  `bloom.mcp.not-live` on stdio.
+
+An operations record also lists `outputs` (the ids the result carries, by name and kind) and
+`sideEffects` (for example that connecting a node replaces the existing edge, or that repeated ids
+in `bloom.node.duplicate` collapse). Data-block `typeId` and `mediaType` rules are in the
+`bloom.data-block.create` entry. `script.run` runs its source as a whole program, so multi-line
+code works.
 
 **Filters and projection.** `query` accepts `idPrefix` on `kind:"operations"` (for example
 `"bloom.layer."`), `layer` on `kind:"nodes"` and `kind:"layers"` (a layer id: its nodes and

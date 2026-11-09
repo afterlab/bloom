@@ -235,7 +235,9 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "The same schemas help describes, as data. The full list is large (hundreds of "
          "thousands of characters); narrow it with idPrefix and fields.",
          "{revision, records:[{id, description, arguments:[{name, kind, required, contextual, "
-         "context, summary, unit?, minimum?, maximum?, default?, choices?}], example}]}",
+         "context, summary, unit?, minimum?, maximum?, default?, choices?}], example, "
+         "outputs:[{name, kind, repeated, note?}] (the ids the transaction result carries), "
+         "sideEffects:[text] (what the call changes beyond its target)}]}",
          {{.name = "idPrefix",
            .type = "string",
            .summary = "Only operations whose id starts with this text, such as "
@@ -243,6 +245,95 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
            .unit = "operation id prefix"},
           fields},
          R"({"name":"query","arguments":{"kind":"operations","idPrefix":"bloom.animation.","fields":["id","example"]}})");
+    kind("text-metrics", "The advance and ink bounds of a piece of text, without rendering.",
+         "Lays the text out as every render does: one left-aligned block of point text, no "
+         "wrapping, line height 1.0 and no letter spacing, with kerning. All values are layout "
+         "pixels at 1:1: x to the right of the text origin (the left edge of the first glyph's "
+         "advance), y down from the top of the first line. `advance` is the widest line's width; "
+         "`ink` is the union of every glyph's ink in whole pixels (null for text without ink). "
+         "Only the four built-in faces are measured; a font asset's own metrics are not.",
+         "{revision, font:{value, label}, size, unit:\"pixels\", space, advance, lineHeight, "
+         "lines:[{index, x, y, advance, height, byteBegin, byteEnd}], "
+         "ink:{x, y, width, height}|null}",
+         {{.name = "text",
+           .type = "string",
+           .required = true,
+           .summary = "The text; a newline starts a new line.",
+           .unit = "UTF-8 text",
+           .range = "at most 4096 bytes"},
+          {.name = "font",
+           .type = "string or integer",
+           .summary = "A built-in face by label, stored value 0 to 3, or font reference.",
+           .unit = "built-in face",
+           .defaultValue = "DejaVu Sans"},
+          {.name = "size",
+           .type = "number",
+           .required = true,
+           .summary = "The text size.",
+           .unit = "pixels per em",
+           .range = "above 0 to 4096"}},
+         R"({"name":"query","arguments":{"kind":"text-metrics","text":"Hello","font":"Inter Regular","size":48}})");
+    kind("layer-bounds", "A layer's evaluated bounds at a time, without rendering.",
+         "Evaluates the composition at `time` on the CPU reference path (heavy: a compile and "
+         "one frame) and reads the layer's bounds. `local` is the layer's content rectangle "
+         "before its transform: pixel edges, origin at the top-left of the layer's content (a "
+         "solid's own size, a text block's laid-out box). `corners` are that rectangle's four "
+         "corners after the layer's transform and its parents', in composition pixels (x to the "
+         "right, y down, origin at the frame's top-left corner), in the order top-left, "
+         "top-right, bottom-right, bottom-left; `bounds` is the axis-aligned box around them and "
+         "`anchor` the layer's anchor point, both in composition pixels and not clipped to the "
+         "frame. A layer outside its range, disabled or empty at that time answers "
+         "visible:false with a reason.",
+         "{revision, composition, layer, time:" + std::string(time) +
+             ", visible, status? (not-visible|unavailable), reason?, space, local:{left, top, "
+             "right, bottom}, bounds:{left, top, right, bottom}, corners:[[x, y] x 4], "
+             "anchor:[x, y]}",
+         {composition,
+          {.name = "layer",
+           .type = "integer",
+           .required = true,
+           .summary = "The layer.",
+           .unit = "layer id (query:layers .id)",
+           .range = ">= 1"},
+          {.name = "time",
+           .type = "integer or [numerator, denominator]",
+           .summary = "An integer is a whole frame of the composition at its frame rate; "
+                      "[numerator, denominator] is exact seconds (concept:time).",
+           .unit = "composition time",
+           .defaultValue = "the playhead (frame 0 headless)"}},
+         R"({"name":"query","arguments":{"kind":"layer-bounds","composition":1,"layer":2,"time":24}})");
+    kind("history", "The undo history: every entry's label and where the project is in it.",
+         "Entries are oldest first. The first `position` entries are applied; the ones after "
+         "that are the redo branch. `undoLabel` is the step the history tool's undo would take "
+         "and `redoLabel` its redo. A transact entry carries the call's `label` (\"Agent edit\" "
+         "in the desktop application when none was given). The history is bounded, so the oldest "
+         "entries retire.",
+         "{revision, canUndo, canRedo, undoLabel|null, redoLabel|null, position, "
+         "entries:[{index, label, applied}]}",
+         {}, R"({"name":"query","arguments":{"kind":"history"}})");
+    kind("viewer", "The Viewer's display settings: what viewer.set writes, read back.",
+         "Desktop application only. These are display settings; none reaches a render or the "
+         "project. `display` and `view` are empty while the project default applies. `zoom` is "
+         "\"fit\" or the factor (1.0 is 100 percent). `available` is false when no Viewer is "
+         "showing; show one with editor.reveal.",
+         "{revision, available, display, view, exposure (stops), gamma, channel (rgba|rgb|red|"
+         "green|blue|alpha), zoom (\"fit\"|factor), resolution (auto|full|half|quarter), "
+         "background (solid|gray|black|white), transparencyGrid, look, "
+         "regionOfInterest:{x, y, width, height}|null (composition pixels)}",
+         {}, R"({"name":"query","arguments":{"kind":"viewer"}})");
+    kind("preview-cache", "RAM Preview: the filled range, fill rate, budget and why it stopped.",
+         "Desktop application only. A value the application does not know reads null, never a "
+         "made-up number: `fillRate` is null until the Profiler has sampled a fill, and "
+         "`stopReason` is null while a fill runs and before any fill has ended. `filledRange` is "
+         "the longest run of consecutive cached frames (composition frame indices, `endFrame` "
+         "exclusive). `budgetBytes` is the Preview frames pool's ceiling and `heldBytes` what it "
+         "holds. `stopReason` is complete (the whole range is cached), budget (the range "
+         "outgrew the memory budget; the frames that fit stay cached), cancelled or failed.",
+         "{revision, available, state (filling|idle)|null, cachedFrames|null, "
+         "totalFrames|null, filledRange:{firstFrame, endFrame, frames}|null, "
+         "fillRate (frames per second)|null, budgetBytes|null, heldBytes|null, "
+         "stopReason (complete|budget|cancelled|failed)|null}",
+         {}, R"({"name":"query","arguments":{"kind":"preview-cache"}})");
     kind("context", "The editor context omitted contextual arguments fall back to.",
          "In the desktop application: the Viewer's composition, the playhead, the selection and "
          "the Viewer's display and view. On stdio: the session defaults (concept:context).",

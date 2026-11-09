@@ -261,6 +261,101 @@ void everyNodeGroupIsNamed() {
            "the node reference is headed by the group names");
 }
 
+// #390: what an operation reports and what it changes beyond its target are declared before the
+// call, in the reference every surface prints.
+void outputsAndSideEffectsAreDeclared() {
+    const auto& reference = OperationReference::builtIn();
+    const auto has = [](const ReferenceEntry& entry, const std::string_view name) {
+        return std::ranges::any_of(entry.outputs,
+                                   [name](const auto& output) { return output.name == name; });
+    };
+    const auto output = [](const ReferenceEntry& entry, const std::string_view name) {
+        return *std::ranges::find(entry.outputs, name, &ReferenceOutput::name);
+    };
+    const auto* curve = reference.find("bloom.animation.create-for-parameter");
+    expect(curve != nullptr && has(*curve, "animationCurve") && has(*curve, "keyframe"),
+           "create-for-parameter declares its curve and key");
+    if (curve != nullptr && has(*curve, "animationCurve"))
+        expect(output(*curve, "animationCurve").kind == "animation-curve",
+               "an output names the kind of id it carries");
+    const auto* paste = reference.find("bloom.animation.paste-keyframes");
+    expect(paste != nullptr && has(*paste, "keyframe") && output(*paste, "keyframe").repeated,
+           "paste-keyframes declares one key per pasted key as repeated");
+    const auto* duplicate = reference.find("bloom.layer.duplicate");
+    expect(duplicate != nullptr && has(*duplicate, "layer") &&
+               output(*duplicate, "layer").repeated,
+           "layer.duplicate declares one layer per copy, from its own description");
+    const auto* feeding = reference.find("bloom.node.add-feeding");
+    expect(feeding != nullptr && has(*feeding, "node") && has(*feeding, "editorNode") &&
+               has(*feeding, "parameter.<role>"),
+           "add-feeding declares the node, the editor node and the parameter family");
+    const auto* job = reference.find("bloom.export.add-job");
+    expect(job != nullptr && has(*job, "exportJob") && has(*job, "exportOutput") &&
+               output(*job, "exportOutput").repeated,
+           "export.add-job declares the job and one output per output");
+    const auto* rename = reference.find("bloom.project.set-name");
+    expect(rename != nullptr && rename->outputs.empty() && rename->sideEffects.empty(),
+           "an operation with no ids and no side effects declares none");
+    for (const auto& entry : reference.entries())
+        if (entry.kind == ReferenceKind::Operation)
+            for (const auto& declared : entry.outputs)
+                expect(!declared.name.empty() && !declared.kind.empty(),
+                       entry.name + " declares an output without a name or kind");
+
+    const auto effect = [&](const std::string_view id, const std::string_view part) {
+        const auto* entry = reference.find(id);
+        return entry != nullptr &&
+               std::ranges::any_of(entry->sideEffects, [part](const std::string& line) {
+                   return contains(line, part);
+               });
+    };
+    expect(effect("bloom.node.add-feeding", "replaces the existing link"),
+           "add-feeding declares that a value node replaces the link");
+    expect(effect("bloom.node.duplicate", "collapse"), "node.duplicate declares that ids collapse");
+    expect(effect("bloom.layer.duplicate", "copied N times"),
+           "layer.duplicate declares that it copies repeated ids");
+    expect(effect("bloom.parameter.set-source", "retires its animation curve"),
+           "set-source declares that an animated parameter's curve is retired");
+    expect(effect("bloom.node.connect", "replaces that link"),
+           "node.connect declares that a fed input's link is replaced");
+    expect(effect("bloom.node.remove", "deletes that layer"),
+           "node.remove declares that a Layer Output takes its layer");
+    expect(effect("bloom.asset.import", "external locators"),
+           "asset.import declares what an unsaved project keeps");
+    const auto text = referenceHelp("bloom.node.duplicate").text;
+    expect(contains(text, "Side effects:") && contains(text, "Outputs (ids the result carries):"),
+           "the help text prints both sections");
+
+    // The data block's closed and open vocabularies are named.
+    const auto* block = reference.find("bloom.data-block.create");
+    expect(block != nullptr, "data-block.create is documented");
+    if (block != nullptr) {
+        for (const auto& argument : block->arguments) {
+            if (argument.name == "kind")
+                expect(argument.choices.size() == 4 && contains(argument.unit, "refused"),
+                       "the data block kinds the operation can create are listed");
+            if (argument.name == "typeId")
+                expect(contains(argument.unit, "bloom.media.asset"),
+                       "the block type id says what it is and what Bloom itself uses");
+            if (argument.name == "mediaType")
+                expect(contains(argument.unit, "application/vnd.bloom.asset"),
+                       "the media type says what it is and what Bloom itself writes");
+        }
+    }
+
+    // The new query kinds, the origin and the export script's format are in the reference.
+    for (const auto* name : {"query:text-metrics", "query:layer-bounds", "query:history",
+                             "query:viewer", "query:preview-cache"})
+        expect(reference.find(name) != nullptr, std::string(name) + " is in the reference");
+    const auto* events = reference.find("events");
+    expect(events != nullptr && contains(events->description, "origin"),
+           "events documents the edit origin");
+    const auto* script = reference.find("export.script");
+    expect(script != nullptr && contains(script->result, "bloom.export.add-job") &&
+               contains(script->result, "export.start"),
+           "export.script documents the format of its output");
+}
+
 } // namespace
 
 int main() {
@@ -271,6 +366,7 @@ int main() {
     everyChoiceParameterHasValues();
     timesReadBackInBothUnits();
     everyNodeGroupIsNamed();
+    outputsAndSideEffectsAreDeclared();
     if (failures != 0) {
         std::cerr << failures << " reference check(s) failed\n";
         return 1;

@@ -36,6 +36,9 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Side effects:
+          - The parameter's animation curve and all its keys are removed; undo restores them.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -110,6 +113,10 @@ class AnimationOps:
                 6  Alpha
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          animationCurve animation-curve
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -347,6 +354,9 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -412,6 +422,9 @@ class AnimationOps:
                 "ease-in-out"  Ease In-Out
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -483,6 +496,9 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -548,6 +564,9 @@ class AnimationOps:
                 "ease-in-out"  Ease In-Out
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -641,12 +660,15 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe repeated - one per pasted key
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: keyframe (one
-          per pasted key) (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: keyframe
+          (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -712,13 +734,17 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          animationCurve animation-curve - when created
+          keyframe keyframe repeated - one per key, in the order given
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: animationCurve
-          (when created), keyframe (one per key, in the order given) (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names:
+          animationCurve, keyframe (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -780,6 +806,9 @@ class AnimationOps:
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -845,6 +874,9 @@ class AnimationOps:
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -927,6 +959,9 @@ class AnimationOps:
               Unit: the animated parameter's own stored units (query:parameter reports them)
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -1339,13 +1374,17 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          animationCurve animation-curve - when created
+          keyframe keyframe repeated - one per key, in the order given
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: animationCurve
-          (when created), keyframe (one per key, in the order given) (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names:
+          animationCurve, keyframe (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -1423,6 +1462,9 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -1492,6 +1534,9 @@ class AnimationOps:
                 "ease-in-out"  Ease In-Out
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -1563,6 +1608,9 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -1633,6 +1681,9 @@ class AnimationOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -1680,6 +1731,9 @@ class AssetOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          folder asset-folder
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -1800,6 +1854,9 @@ class AssetOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          asset asset
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
@@ -1866,12 +1923,21 @@ class AssetOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          asset asset repeated - one per imported or reused item
+
+        Side effects:
+          - Files the project already holds are reused: no second asset is made and the existing asset's
+          id is reported.
+          - In a project that has never been saved there is no project folder, so the assets keep
+          external locators (the file's absolute location); a relative path then needs projectDirectory.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: asset (one per
-          imported or reused item) (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: asset
+          (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.operation-warning
@@ -2049,6 +2115,10 @@ class AssetOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Side effects:
+          - The asset keeps its id, name, folder, tags and place in the list; only its file, size,
+          duration and digest change, so every layer that uses it shows the new file.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -2117,6 +2187,9 @@ class AssetOps:
               Asset tags.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          asset asset
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -2644,6 +2717,9 @@ class CompositionOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          composition composition
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
@@ -2700,12 +2776,16 @@ class CompositionOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          composition composition
+          layer layer repeated
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: composition,
+          layer (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -2822,6 +2902,13 @@ class CompositionOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          composition composition
+
+        Side effects:
+          - The copy is named after the source with " copy" appended and takes new ids for its layers,
+          nodes and parameters.
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -3304,13 +3391,16 @@ class CryptomatteOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          mattes mattes
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: mattes (each
+          {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -3345,14 +3435,23 @@ class DataBlockOps:
         Arguments:
           typeId  str  required
               The block's authored type id.
+              Unit: namespaced identifier: lowercase letters, digits, '.', '_' and '-', starting with a
+              letter or digit, at most 128 bytes, such as "bloom.curve". Bloom names its own
+              asset-backed blocks bloom.media.asset and bloom.color.lut-asset
           mediaType  str  required
               The payload media type.
+              Unit: media type text of 1 to 256 UTF-8 bytes, such as "application/vnd.bloom.curve",
+              "application/vnd.bloom.ramp" or "application/octet-stream". Bloom checks only its length
+              and encoding; it writes application/vnd.bloom.asset for a block backed by an asset
           kind  str  optional, default opaque
               Block kind name, for example "curve", "ramp" or "opaque".
+              Unit: block kind; the kind and payloadKind must agree. table, point-set, path and mask
+              blocks need payloads this operation cannot build and are refused
               Values:
-                "curve"  Curve
-                "ramp"  Ramp
-                "opaque"  Opaque
+                "curve"  Sampled curve (give payloadKind "curve")
+                "ramp"  Color ramp (give payloadKind "ramp")
+                "opaque"  Opaque bytes (payloadKind "opaque"); the default
+                "analysis"  Analysis result held as opaque bytes (payloadKind "opaque")
           payloadKind  str  optional, default opaque
               "curve", "ramp" or "opaque". Defaults to "opaque".
               Values:
@@ -3374,6 +3473,9 @@ class DataBlockOps:
               Block tags.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          dataBlock data-block
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -3646,12 +3748,16 @@ class ExportOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          exportJob export-job
+          exportOutput export-output repeated - one per output
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
           The transact result {succeeded, revision, diagnostics, outputs}. outputs names: exportJob,
-          exportOutput (one per output) (each {operationIndex, name, id}).
+          exportOutput (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -3695,6 +3801,9 @@ class ExportOps:
               portability "external" with its file:// URI.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          exportOutput export-output
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -3781,6 +3890,10 @@ class ExportOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          exportJob export-job
+          exportOutput export-output
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -4377,6 +4490,12 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          audioNode node
+          layerOutputNode node
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -4464,12 +4583,15 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer repeated
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer
+          (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -4511,6 +4633,20 @@ class LayerOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          imageNode node
+          layerOutputNode node
+          positionParameter parameter
+          anchorParameter parameter
+          scaleParameter parameter
+          rotationParameter parameter
+          opacityParameter parameter
+          blendModeParameter parameter
+          imageToLayerEdge imageToLayerEdge
+          layerToStackEdge layerToStackEdge
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -4590,6 +4726,13 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          mask mask
+          path parameter
+          feather parameter
+          expansion parameter
+          opacity parameter
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
@@ -4666,6 +4809,13 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          mask mask
+          path parameter
+          feather parameter
+          expansion parameter
+          opacity parameter
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
@@ -4741,13 +4891,17 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          layerOutputNode node - and the shape's nodes and parameters (listed in the result)
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
           The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, slot,
-          layerOutputNode and the shape's nodes and parameters (listed in the result) (each
-          {operationIndex, name, id}).
+          layerOutputNode (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -4795,6 +4949,21 @@ class LayerOps:
               Range: 0..1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          solidNode node
+          layerOutputNode node
+          colorParameter parameter
+          widthParameter parameter
+          heightParameter parameter
+          positionParameter parameter
+          anchorParameter parameter
+          scaleParameter parameter
+          rotationParameter parameter
+          opacityParameter parameter
+          blendModeParameter parameter
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -4860,6 +5029,26 @@ class LayerOps:
               green and blue are finite and may exceed 1, alpha is 0..1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          textNode node
+          layerOutputNode node
+          textParameter parameter
+          sizeParameter parameter
+          colorParameter parameter
+          fontParameter parameter
+          boxParameter parameter
+          wrapParameter parameter
+          anchorModeParameter parameter
+          overflowParameter parameter
+          positionParameter parameter
+          anchorParameter parameter
+          scaleParameter parameter
+          rotationParameter parameter
+          opacityParameter parameter
+          blendModeParameter parameter
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -4934,6 +5123,10 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          movedLayer layer
+          skippedLayer layer
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
@@ -4997,6 +5190,10 @@ class LayerOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          curve animation-curve
+          keyframe keyframe
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -5166,6 +5363,9 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Side effects:
+          - The layer's source nodes stay in the graph; only the layer is removed.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
@@ -5287,6 +5487,10 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          movedLayer layer
+          skippedLayer layer
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
@@ -5340,12 +5544,24 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer repeated
+          layer.<original> layer
+          node.<original> node
+          slot.<original> layer-slot
+
+        Side effects:
+          - A layer named N times is copied N times (unlike bloom.node.duplicate, which collapses
+          repeated ids).
+          - The copies take new ids and a new stack slot directly below the original.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer
+          (repeated), layer.<original>, node.<original>, slot.<original> (each {operationIndex, name,
+          id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -6891,12 +7107,15 @@ class LayerOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer - the new layer
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer (the new
-          layer) (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer (each
+          {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -7022,13 +7241,18 @@ class MergeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node - the Adjustment node
+          layerSlot layer-slot
+          layer layer
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node (the
-          Adjustment node), layerSlot, layer (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          layerSlot, layer (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.command-rejected
@@ -7089,14 +7313,23 @@ class MergeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer
+          parameter.position parameter
+          parameter.anchor parameter
+          parameter.scale parameter
+          parameter.rotation parameter
+          parameter.opacity parameter
+          parameter.blendMode parameter - when the layer is created
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer;
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer,
           parameter.position, parameter.anchor, parameter.scale, parameter.rotation, parameter.opacity,
-          parameter.blendMode when the layer is created (each {operationIndex, name, id}).
+          parameter.blendMode (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.command-rejected
@@ -7152,6 +7385,12 @@ class MergeOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          node node
+          layer layer
+          edge edge
+          parameter.<role> parameter
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -7348,14 +7587,18 @@ class MergeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          layer layer
+          parameter.<role> parameter - when the layer is created
+          keyframe keyframe - when keyed
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer;
-          parameter.<role> when the layer is created; keyframe when keyed (each {operationIndex, name,
-          id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer,
+          parameter.<role>, keyframe (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -7412,6 +7655,9 @@ class NodeOps:
               Unit: node-editor layout units
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          node node
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -7474,13 +7720,17 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node
+          parameter.<role> parameter repeated
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          parameter.<role> (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -7528,13 +7778,17 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node
+          parameter.<role> parameter repeated
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          parameter.<role> (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -7590,13 +7844,18 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node
+          editorNode node
+          parameter.<role> parameter
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          editorNode, parameter.<role> (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -7660,13 +7919,24 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node
+          editorNode node
+          parameter.<role> parameter
+
+        Side effects:
+          - When the input was already fed, the new node is inserted into the link: what fed the input
+          now feeds the new node's first input of the same kind.
+          - A new node with no input of that kind (a value node, for example) replaces the existing link
+          instead; nothing is kept of it.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          editorNode, parameter.<role> (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -7782,13 +8052,23 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          edge edge
+          layerSlot layer-slot - when a new stack slot is created
+
+        Side effects:
+          - An input holds one link: connecting to an input that is already fed replaces that link (the
+          edge keeps its id and the old source is disconnected).
+          - Linking into a parameter's operand socket makes the parameter driven: its constant value is
+          replaced by the link, and disconnecting returns it to the registered default.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: edge;
-          layerSlot when a new stack slot is created (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: edge,
+          layerSlot (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.command-rejected
@@ -7845,6 +8125,12 @@ class NodeOps:
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Side effects:
+          - Disconnecting the only remaining link of a Merge layer-stack slot removes the slot, and the
+          layer loses the track mattes it shared in that Merge.
+          - Disconnecting a parameter's operand socket returns the parameter to its registered default
+          constant.
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -7940,12 +8226,20 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node repeated - one per copy
+
+        Side effects:
+          - Repeated ids in `nodes` collapse: a node named twice is copied once.
+          - Links among the copied nodes are copied, and a copied Layer Output keeps reading the same
+          source; no other link from outside the set is copied.
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node (one per
-          copy) (each {operationIndex, name, id}).
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node
+          (repeated) (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -8005,13 +8299,17 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          node node
+          editorNode node
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node,
+          editorNode (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -8095,6 +8393,12 @@ class NodeOps:
               Unit: array of node ids (query:nodes); defaults to the selected nodes
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Side effects:
+          - Removing a layer's Layer Output node deletes that layer.
+          - Links to and from a removed node are removed with it, and a Merge slot it fed goes too.
+          - A layer whose parent or track-matte source was a removed Layer Output loses that link.
+          - A removed node's parameters, and a removed layer's masks, are deleted with it.
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -8260,13 +8564,16 @@ class NodeOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          parameter parameter
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: parameter
+          (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -8411,6 +8718,9 @@ class NodeGroupOps:
               The frame's name. Defaults to "Group".
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          nodeGroup node-group
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -8666,13 +8976,16 @@ class ParameterOps:
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
+        Outputs (ids the result carries):
+          keyframe keyframe
+
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
           - Existing ids for the id arguments; each argument's unit names the query that lists them.
 
         Result:
-          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
-          ids, so outputs is empty.
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: keyframe (each
+          {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -8729,6 +9042,14 @@ class ParameterOps:
               Unit: port name (query:node-types lists each type's ports)
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Side effects:
+          - Setting a constant, a driver or another curve on an animated parameter retires its animation
+          curve and every key on it; undo restores them. (bloom.animation.convert-to-constant does the
+          same and keeps one value.)
+          - Pointing a source node's asset or composition parameter at another one renames the layers
+          whose name follows their source.
+          - Refused when the parameter belongs to a locked layer.
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.

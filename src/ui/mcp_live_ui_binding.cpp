@@ -154,6 +154,9 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
                 runScript(std::move(request), std::move(done));
             },
         .cancelScript = [this] { cancelScript(); },
+        .undoHistory = [this] { return undoHistory(); },
+        .viewerState = [this] { return viewerState(); },
+        .previewCache = [this] { return previewCache(); },
     };
 }
 
@@ -384,6 +387,74 @@ mcp::McpUiResult McpLiveUiBinding::setViewer(const mcp::McpViewerRequest& reques
     if (!refusal.isEmpty())
         return uiResult(McpUiRefusal::InvalidArgument, refusal);
     return uiOk(tr("The Viewer was updated."));
+}
+
+// ---- query kinds: history, viewer, preview-cache ------------------------------------------------
+
+mcp::McpUndoHistory McpLiveUiBinding::undoHistory() const {
+    mcp::McpUndoHistory history;
+    const auto* stack = project_.liveDocumentAndStack().second;
+    if (stack == nullptr)
+        return history;
+    history.labels = stack->historyLabels();
+    history.position = stack->historyPosition();
+    return history;
+}
+
+mcp::McpViewerState McpLiveUiBinding::viewerState() {
+    mcp::McpViewerState state;
+    auto* viewer = window_ ? window_->displayedViewer() : nullptr;
+    if (viewer == nullptr)
+        return state;
+    const auto shown = viewer->remoteState();
+    state.available = true;
+    state.display = shown.display.toStdString();
+    state.view = shown.view.toStdString();
+    state.exposure = shown.exposure;
+    state.gamma = shown.gamma;
+    state.channel = static_cast<mcp::McpViewerChannel>(shown.channel);
+    state.fit = shown.fitToWindow;
+    state.zoomFactor = shown.zoom;
+    state.resolution = static_cast<mcp::McpViewerResolution>(shown.resolution);
+    state.background = static_cast<mcp::McpViewerBackground>(shown.background);
+    state.transparencyGrid = shown.transparencyGrid;
+    state.look = shown.look;
+    if (shown.regionOfInterest)
+        state.regionOfInterest = mcp::McpViewerRegion{.x = shown.regionOfInterest->x(),
+                                                      .y = shown.regionOfInterest->y(),
+                                                      .width = shown.regionOfInterest->width(),
+                                                      .height = shown.regionOfInterest->height()};
+    return state;
+}
+
+mcp::McpPreviewCacheState McpLiveUiBinding::previewCache() const {
+    mcp::McpPreviewCacheState state;
+    if (ramPreview_ == nullptr)
+        return state;
+    state.available = true;
+    state.filling = ramPreview_->isCaching();
+    state.cachedFrames = ramPreview_->cachedFrameCount();
+    state.totalFrames = ramPreview_->totalFrameCount();
+    state.longestRun = ramPreview_->longestRetainedRun();
+    if (!ramPreview_->isCaching()) {
+        if (const auto last = ramPreview_->lastCompletion()) {
+            switch (*last) {
+            case RamPreviewController::Completion::Complete:
+                state.stopReason = mcp::McpPreviewStop::Complete;
+                break;
+            case RamPreviewController::Completion::PartialBudget:
+                state.stopReason = mcp::McpPreviewStop::Budget;
+                break;
+            case RamPreviewController::Completion::Cancelled:
+                state.stopReason = mcp::McpPreviewStop::Cancelled;
+                break;
+            case RamPreviewController::Completion::Failed:
+                state.stopReason = mcp::McpPreviewStop::Failed;
+                break;
+            }
+        }
+    }
+    return state;
 }
 
 // ---- project.set-color-settings ----------------------------------------------------------------

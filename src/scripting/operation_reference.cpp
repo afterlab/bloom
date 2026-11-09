@@ -135,12 +135,17 @@ ReferenceEntry operationEntry(const OperationDescriptor& descriptor) {
             break;
         }
     }
-    const auto outputs = notes != nullptr ? notes->outputs : std::string_view{};
+    entry.outputs = detail::operationOutputs(schema.typeId, schema.description);
+    entry.sideEffects = detail::operationSideEffects(schema.typeId);
+    std::string outputNames;
+    for (const auto& output : entry.outputs)
+        outputNames += (outputNames.empty() ? "" : ", ") + output.name +
+                       (output.repeated ? " (repeated)" : "");
     entry.result = "The transact result {succeeded, revision, diagnostics, outputs}. ";
     entry.result +=
-        outputs.empty()
+        outputNames.empty()
             ? std::string("This operation creates no ids, so outputs is empty.")
-            : "outputs names: " + std::string(outputs) + " (each {operationIndex, name, id}).";
+            : "outputs names: " + outputNames + " (each {operationIndex, name, id}).";
     if (notes != nullptr && !notes->errors.empty()) {
         auto rest = notes->errors;
         while (!rest.empty()) {
@@ -629,6 +634,18 @@ std::string referenceText(const ReferenceEntry& entry) {
     add(entry.effects.liveOnly, "desktop application only");
     if (!effects.empty())
         appendWrapped(text, "", "\nEffects: " + effects + ".");
+    if (!entry.outputs.empty()) {
+        text += "\nOutputs (ids the result carries):\n";
+        for (const auto& output : entry.outputs)
+            appendWrapped(text, "  ",
+                          output.name + "  " + output.kind + (output.repeated ? "  repeated" : "") +
+                              (output.note.empty() ? "" : "  - " + output.note));
+    }
+    if (!entry.sideEffects.empty()) {
+        text += "\nSide effects:\n";
+        for (const auto& effect : entry.sideEffects)
+            appendWrapped(text, "  ", "- " + effect);
+    }
     if (!entry.prerequisites.empty()) {
         text += "\nPrerequisites:\n";
         for (const auto& prerequisite : entry.prerequisites)
@@ -706,6 +723,15 @@ std::string referenceJson(const ReferenceEntry& entry) {
             ",\"dirtiesProject\":" + boolean(entry.effects.dirtiesProject) +
             ",\"writesFiles\":" + boolean(entry.effects.writesFiles) +
             ",\"liveOnly\":" + boolean(entry.effects.liveOnly) + "}";
+    text += ",\"outputs\":[";
+    for (std::size_t index = 0; index < entry.outputs.size(); ++index) {
+        const auto& output = entry.outputs[index];
+        text += (index == 0 ? "" : ",") + std::string("{\"name\":") + jsonQuote(output.name) +
+                ",\"kind\":" + jsonQuote(output.kind) +
+                ",\"repeated\":" + boolean(output.repeated) +
+                ",\"note\":" + jsonQuote(output.note) + "}";
+    }
+    text += "],\"sideEffects\":" + strings(entry.sideEffects);
     text += ",\"prerequisites\":" + strings(entry.prerequisites);
     text += ",\"result\":" + jsonQuote(entry.result) + ",\"errors\":[";
     for (std::size_t index = 0; index < entry.errors.size(); ++index) {

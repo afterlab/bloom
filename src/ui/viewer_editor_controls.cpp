@@ -356,6 +356,33 @@ QString ViewerEditor::applyRemoteChange(const RemoteChange& change) {
     return {};
 }
 
+ViewerEditor::RemoteState ViewerEditor::remoteState() const {
+    RemoteState state;
+    if (viewerDisplayView_ != nullptr && viewerDisplayView_->isEnabled() &&
+        viewerDisplayView_->count() > 0) {
+        // The project default reads as empty, as viewer.set spells it.
+        if (viewerDisplayView_->currentIndex() != viewerDisplayViewDefault_) {
+            const auto data =
+                viewerDisplayView_->itemData(viewerDisplayView_->currentIndex()).toStringList();
+            if (data.size() == 2) {
+                state.display = data[0];
+                state.view = data[1];
+            }
+        }
+    }
+    state.exposure = exposureField_->value();
+    state.gamma = gammaField_->value();
+    state.channel = static_cast<ViewerChannel>(channelDropdown_->currentIndex());
+    state.fitToWindow = transform_.fitToWindow;
+    state.zoom = transform_.zoom;
+    state.resolution = resolutionDropdown_->currentIndex();
+    state.background = static_cast<ViewerBackground>(backgroundDropdown_->currentIndex());
+    state.transparencyGrid = transparencyGridAction_->isChecked();
+    state.look = lookAction_->isChecked();
+    state.regionOfInterest = roiRect_;
+    return state;
+}
+
 void ViewerEditor::resetViewAdjust() {
     exposureField_->cancelEdit();
     gammaField_->cancelEdit();

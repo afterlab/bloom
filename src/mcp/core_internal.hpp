@@ -268,6 +268,11 @@ struct TransientResult final {
 [[nodiscard]] yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, McpTool tool,
                                           yyjson_val* arguments, const McpRequestControl& control,
                                           std::string& summary);
+// The read-back queries text-metrics, layer-bounds, history, viewer and preview-cache
+// (tools_inspection.cpp).
+[[nodiscard]] bool isInspectionQuery(std::string_view kind) noexcept;
+[[nodiscard]] yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& call,
+                                              yyjson_val* arguments, std::string_view kind);
 // An integer is a whole frame of the composition at its frame rate; [numerator, denominator] is
 // exact seconds.
 [[nodiscard]] core::RationalTime frameOrSecondsArgument(yyjson_val* value,

@@ -578,7 +578,10 @@ void liveSeams() {
                 }
                 done(std::move(result));
             },
-        .cancelScript = {}};
+        .cancelScript = {},
+        .undoHistory = {},
+        .viewerState = {},
+        .previewCache = {}};
     Live server(std::move(port));
     expect(contains(server.call("dialog.answer", R"({"button":"Cancel"})"), R"("succeeded":true)") &&
                answered == "Cancel",
@@ -964,6 +967,159 @@ void retiredTransientJobs() {
                    contains(numberStart, "UnknownJob") && contains(textStart, "UnknownJob"),
                "export.start answers a job id the same as an integer and as a string: " +
                    numberStart + textStart);
+    }
+}
+
+// #390: the read-back queries that answer a fact an agent would otherwise render to learn, and
+// the operations records' outputs and side effects, and the origin of each edit.
+void inspectionQueries() {
+    {
+        Headless server;
+        // text-metrics: advance and ink without a render.
+        auto metrics = server.call(
+            "query", R"({"kind":"text-metrics","text":"Hello","font":"Inter Regular","size":48})");
+        expect(contains(metrics, R"("isError":false)") && contains(metrics, R"("advance":)") &&
+                   contains(metrics, R"("ink":{)") && contains(metrics, R"("label":"Inter Regular")"),
+               "text-metrics answers advance and ink: " + metrics);
+        const auto narrow = firstMatch(metrics, R"re("advance":([0-9.]+))re");
+        const auto wide = firstMatch(
+            server.call("query", R"({"kind":"text-metrics","text":"Hello","size":96})"),
+            R"re("advance":([0-9.]+))re");
+        expect(!narrow.empty() && !wide.empty() && std::stod(wide) > std::stod(narrow) * 0.5,
+               "a larger size has a larger advance");
+        metrics = server.call("query", R"({"kind":"text-metrics","text":"a\nb","size":20})");
+        expect(contains(metrics, R"("index":1)"), "a newline starts a second line: " + metrics);
+        metrics = server.call("query", R"({"kind":"text-metrics","text":"   ","size":20})");
+        expect(contains(metrics, R"("ink":null)"), "text without ink reports ink null: " + metrics);
+        metrics = server.call("query", R"({"kind":"text-metrics","text":"x","size":0})");
+        expect(contains(metrics, "pixels per em"), "a zero size is refused: " + metrics);
+        metrics = server.call("query", R"({"kind":"text-metrics","text":"x","font":"Comic","size":9})");
+        expect(contains(metrics, "built-in faces"), "an unknown font names the faces: " + metrics);
+
+        // layer-bounds: the evaluated bounds of a layer, with the space named.
+        auto before = server.session->snapshot().revision();
+        auto added = server.call(
+            "transact", R"({"expectedRevision":)" + std::to_string(before.value()) +
+                            R"(,"label":"Add card","operations":[{"op":"bloom.layer.add-solid","args":{)"
+                            R"("composition":1,"name":"Card","color":[1,1,1,1]}}]})");
+        expect(contains(added, R"("origin":"agent")"), "a transact result names its origin: " + added);
+        const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+        const auto layer = firstMatch(layers, R"re("records":\[\{"id":(\d+))re");
+        auto bounds = server.call(
+            "query", R"({"kind":"layer-bounds","composition":1,"layer":)" + layer + R"(,"time":0})");
+        expect(contains(bounds, R"("visible":true)") && contains(bounds, R"("corners":[[)") &&
+                   contains(bounds, "composition pixels") && contains(bounds, R"("anchor":[)"),
+               "layer-bounds measures a solid: " + bounds);
+        const auto left = firstMatch(bounds, R"re("local":\{"left":(-?[0-9.]+))re");
+        const auto right = firstMatch(bounds, R"re("local":\{"left":-?[0-9.]+,"top":-?[0-9.]+,"right":(-?[0-9.]+))re");
+        expect(!left.empty() && !right.empty() && std::stod(right) - std::stod(left) > 0.0,
+               "the local rectangle is the solid's own extent: " + bounds);
+        bounds = server.call("query", R"({"kind":"layer-bounds","composition":1,"layer":9999})");
+        expect(contains(bounds, R"("isError":true)") ||
+                   contains(bounds, R"("status":"unavailable")") || contains(bounds, "does not exist"),
+               "an unknown layer is not measured: " + bounds);
+        bounds = server.call("query", R"({"kind":"layer-bounds","composition":1,"layer":)" + layer +
+                                          R"(,"time":[1000,1]})");
+        expect(contains(bounds, R"("visible":false)") && contains(bounds, R"("reason":)"),
+               "a time outside the layer's range reads visible:false with a reason: " + bounds);
+
+        // history: labels and position, kept in step with undo.
+        auto history = server.call("query", R"({"kind":"history"})");
+        expect(contains(history, R"("undoLabel":"Add card")") && contains(history, R"("canRedo":false)") &&
+                   contains(history, R"("applied":true)"),
+               "history lists the agent's step: " + history);
+        const auto revision = server.session->snapshot().revision().value();
+        static_cast<void>(server.call(
+            "history", R"({"action":"undo","expectedRevision":)" + std::to_string(revision) + "}"));
+        history = server.call("query", R"({"kind":"history"})");
+        expect(contains(history, R"("canRedo":true)") && contains(history, R"("redoLabel":"Add card")") &&
+                   contains(history, R"("applied":false)") && contains(history, R"("undoLabel":null)"),
+               "an undo moves the position, the step stays as the redo: " + history);
+
+        // events: the origin of an edit.
+        const auto events = server.call("events", R"({"sinceRevision":0})");
+        expect(contains(events, R"(\"origin\":\"agent\")"),
+               "events name the agent as the origin: " + events);
+
+        // The window-only kinds answer not-live on stdio.
+        for (const auto* kind : {"viewer", "preview-cache"}) {
+            const auto answer = server.call("query", std::string(R"({"kind":")") + kind + R"("})");
+            expect(contains(answer, "bloom.mcp.not-live"), std::string(kind) + " is not-live on stdio: " + answer);
+        }
+
+        // The operations list: structured outputs and side effects, filtered by prefix.
+        const auto duplicate =
+            server.call("query", R"({"kind":"operations","idPrefix":"bloom.node.duplicate"})");
+        expect(contains(duplicate, R"("sideEffects":["Repeated ids in `nodes` collapse)") &&
+                   contains(duplicate, R"("outputs":[{"name":"node","kind":"node","repeated":true)"),
+               "node.duplicate declares its outputs and that repeated ids collapse: " + duplicate);
+        const auto setSource =
+            server.call("query", R"({"kind":"operations","idPrefix":"bloom.parameter.set-source"})");
+        expect(contains(setSource, "retires its animation curve"),
+               "set-source declares what it does to an animated parameter: " + setSource);
+        const auto feeding =
+            server.call("query", R"({"kind":"operations","idPrefix":"bloom.node.add-feeding"})");
+        expect(contains(feeding, "replaces the existing link") &&
+                   contains(feeding, R"("name":"editorNode")"),
+               "add-feeding declares the replaced link and its outputs: " + feeding);
+        const auto curve = server.call(
+            "query", R"({"kind":"operations","idPrefix":"bloom.animation.create-for-parameter"})");
+        expect(contains(curve, R"("name":"animationCurve")") && contains(curve, R"("name":"keyframe")"),
+               "create-for-parameter declares the curve and the key: " + curve);
+        const auto none =
+            server.call("query", R"({"kind":"operations","idPrefix":"bloom.project.set-name"})");
+        expect(contains(none, R"("outputs":[])") && contains(none, R"("sideEffects":[])"),
+               "an operation with neither says so with empty lists: " + none);
+    }
+    {
+        // The live host: the window-only kinds read the port, and an unknown state reads null.
+        mcp::McpLiveUiPort port;
+        port.undoHistory = [] { return mcp::McpUndoHistory{.labels = {"One", "Two"}, .position = 1}; };
+        port.viewerState = [] {
+            mcp::McpViewerState state;
+            state.available = true;
+            state.exposure = 1.5;
+            state.channel = mcp::McpViewerChannel::Alpha;
+            state.fit = false;
+            state.zoomFactor = 2.0;
+            state.regionOfInterest = mcp::McpViewerRegion{.x = 1, .y = 2, .width = 3, .height = 4};
+            return state;
+        };
+        bool known = false;
+        port.previewCache = [&known] {
+            mcp::McpPreviewCacheState state;
+            state.available = true;
+            if (known) {
+                state.filling = false;
+                state.cachedFrames = 12;
+                state.totalFrames = 48;
+                state.longestRun = std::pair<std::uint64_t, std::uint64_t>{0, 12};
+                state.stopReason = mcp::McpPreviewStop::Budget;
+            }
+            return state;
+        };
+        Live server(std::move(port));
+        const auto history = server.call("query", R"({"kind":"history"})");
+        expect(contains(history, R"("undoLabel":"One")") && contains(history, R"("redoLabel":"Two")") &&
+                   contains(history, R"("position":1)"),
+               "history reads the window's stack: " + history);
+        const auto viewer = server.call("query", R"({"kind":"viewer"})");
+        expect(contains(viewer, R"("exposure":1.5)") && contains(viewer, R"("channel":"alpha")") &&
+                   contains(viewer, R"("zoom":2)") && contains(viewer, R"("regionOfInterest":{)"),
+               "viewer reads the settings viewer.set writes: " + viewer);
+        auto cache = server.call("query", R"({"kind":"preview-cache"})");
+        expect(contains(cache, R"("state":null)") && contains(cache, R"("cachedFrames":null)") &&
+                   contains(cache, R"("fillRate":null)") && contains(cache, R"("budgetBytes":null)") &&
+                   contains(cache, R"("stopReason":null)") && contains(cache, R"("filledRange":null)"),
+               "what the application does not know reads null, never a made-up value: " + cache);
+        known = true;
+        cache = server.call("query", R"({"kind":"preview-cache"})");
+        expect(contains(cache, R"("state":"idle")") && contains(cache, R"("cachedFrames":12)") &&
+                   contains(cache, R"("filledRange":{"firstFrame":0,"endFrame":12,"frames":12})") &&
+                   contains(cache, R"("stopReason":"budget")"),
+               "preview-cache reports the range and why the fill stopped: " + cache);
+        expect(contains(cache, R"("fillRate":null)"),
+               "without a profiler sample the fill rate stays unknown: " + cache);
     }
 }
 
@@ -1906,6 +2062,7 @@ int main() {
         curvesAutoAnchors();
         lockedLayerRule();
         parityTools();
+        inspectionQueries();
         stdioStopsWhileInputIdle();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';

@@ -63,6 +63,17 @@ struct ReferenceEffects final {
     bool writesFiles = false;
 };
 
+// One id a successful operation reports in the transaction result's `outputs`, declared before the
+// call. `name` is what each output is called (`parameter.<role>` is a family); `kind` is what kind
+// of id it carries (layer, node, parameter, keyframe, ...); `repeated` is true when one call can
+// report several of them.
+struct ReferenceOutput final {
+    std::string name;
+    std::string kind;
+    bool repeated = false;
+    std::string note;
+};
+
 struct ReferenceError final {
     std::string code;
     std::string when;
@@ -84,6 +95,10 @@ struct ReferenceEntry final {
     std::string description;
     std::vector<ReferenceArgument> arguments;
     ReferenceEffects effects;
+    // Operations: the ids the result's `outputs` carry (empty when it creates none) and what the
+    // call changes beyond its named target (a link replaced, an object removed, a rename).
+    std::vector<ReferenceOutput> outputs;
+    std::vector<std::string> sideEffects;
     std::vector<std::string> prerequisites;
     std::string result;
     std::vector<ReferenceError> errors;

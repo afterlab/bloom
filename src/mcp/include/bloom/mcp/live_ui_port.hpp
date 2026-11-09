@@ -20,6 +20,7 @@
 #include <bloom/document/ids.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -312,6 +313,57 @@ struct McpCompositionPreset final {
     std::optional<std::array<double, 4>> background;
 };
 
+// ---- Read-back (query kinds history, viewer and preview-cache)
+
+// The project's undo history, oldest entry first. `position` entries are applied; the ones after
+// it are the redo branch.
+struct McpUndoHistory final {
+    std::vector<std::string> labels;
+    std::size_t position = 0;
+};
+
+// The Viewer's display settings as viewer.set writes them. A string that is empty is the project
+// default; `zoomFactor` is meaningful only when `fit` is false.
+struct McpViewerState final {
+    // False when no Viewer is showing.
+    bool available = false;
+    std::string display;
+    std::string view;
+    double exposure = 0.0;
+    double gamma = 1.0;
+    McpViewerChannel channel = McpViewerChannel::Rgba;
+    bool fit = true;
+    double zoomFactor = 1.0;
+    McpViewerResolution resolution = McpViewerResolution::Auto;
+    McpViewerBackground background = McpViewerBackground::Solid;
+    bool transparencyGrid = false;
+    bool look = false;
+    std::optional<McpViewerRegion> regionOfInterest;
+};
+
+// How the last RAM Preview fill ended.
+enum class McpPreviewStop : std::uint8_t {
+    Complete = 0,
+    // The range outgrew the memory budget; the frames that fit stay cached.
+    Budget = 1,
+    Cancelled = 2,
+    Failed = 3,
+};
+
+// The RAM Preview controller's state. Every field the application does not know stays empty: an
+// unknown state is reported as unknown, never as a made-up value.
+struct McpPreviewCacheState final {
+    // False when this window has no RAM Preview controller.
+    bool available = false;
+    std::optional<bool> filling;
+    std::optional<std::uint64_t> cachedFrames;
+    std::optional<std::uint64_t> totalFrames;
+    // The longest run of consecutive cached frames, as half-open composition frame indices.
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> longestRun;
+    // Why the last fill stopped; empty while filling or before any fill ended.
+    std::optional<McpPreviewStop> stopReason;
+};
+
 struct McpLiveUiPort final {
     // editor.reveal: show the composition in the Viewer (making it active) and, when given, move
     // the playhead to `time` (seconds). False when the composition or time cannot be shown.
@@ -370,6 +422,10 @@ struct McpLiveUiPort final {
     // Cancel: it stops the running script and the commits it queued.
     std::function<void(McpScriptRequest, std::function<void(McpScriptResult)> done)> runScript;
     std::function<void()> cancelScript;
+    // query kinds history, viewer and preview-cache: owner-thread reads, never project edits.
+    std::function<McpUndoHistory()> undoHistory;
+    std::function<McpViewerState()> viewerState;
+    std::function<McpPreviewCacheState()> previewCache;
 };
 
 } // namespace bloom::mcp

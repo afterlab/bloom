@@ -6,6 +6,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/scripting/command_diagnostics.hpp>
+#include <bloom/scripting/operation_reference.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
 #include <algorithm>
@@ -501,6 +502,7 @@ yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result) 
     auto* value = out.object();
     out.set(value, "succeeded", out.boolean(result.succeeded()));
     out.set(value, "revision", out.number(result.afterRevision.value()));
+    out.set(value, "origin", out.text(commands::commandOriginName(result.origin)));
     auto* diagnostics = out.array();
     for (const auto& diagnostic : scripting::commandDiagnostics(result)) {
         auto* detail = out.object();
@@ -697,6 +699,7 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     if (!yyjson_is_arr(operations) || yyjson_arr_size(operations) == 0)
         throw InvalidInput("Expected operations");
     commands::Transaction transaction(label, document::Revision::fromRaw(revision));
+    transaction.setOrigin(commands::CommandOrigin::Agent);
     const auto& context = call.context;
     const auto& registry = call.session.operations();
     std::string operationIds;
@@ -807,13 +810,15 @@ yyjson_mut_val* historyTool(McpServerCore::State&, Json& out, McpCall& call,
     } else if (call.session.snapshot().revision() != expected) {
         commands::CommandResult stale;
         stale.action = redo ? commands::CommandAction::Redo : commands::CommandAction::Undo;
+        stale.origin = commands::CommandOrigin::Agent;
         stale.status = commands::CommandStatus::StaleRevision;
         stale.beforeRevision = call.session.snapshot().revision();
         stale.afterRevision = stale.beforeRevision;
         stale.expectedRevision = expected;
         return commandResult(out, stale);
     } else {
-        result = redo ? call.session.redo() : call.session.undo();
+        result = redo ? call.session.redo(commands::CommandOrigin::Agent)
+                      : call.session.undo(commands::CommandOrigin::Agent);
     }
     if (!result.command)
         throwUnavailable(call, result);
@@ -909,6 +914,10 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         yyjson_is_str(requested) &&
         isReadbackQuery(std::string_view(yyjson_get_str(requested), yyjson_get_len(requested))))
         return readbackQuery(out, call, arguments, string(requested, 32), sessionToken);
+    if (auto* requested = member(arguments, "kind");
+        yyjson_is_str(requested) &&
+        isInspectionQuery(std::string_view(yyjson_get_str(requested), yyjson_get_len(requested))))
+        return inspectionQuery(core, out, call, arguments, string(requested, 32));
     members(arguments,
             {"kind", "composition", "pageSize", "cursor", "parameter", "expectedRevision", "offset",
              "limit", "idPrefix", "layer", "fields"},
@@ -1015,6 +1024,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
     if (kind == "operations") {
         const auto prefix = member(arguments, "idPrefix") ? string(member(arguments, "idPrefix"), 128)
                                                           : std::string{};
+        const auto& reference = scripting::OperationReference::builtIn();
         for (const auto& descriptor : call.session.operations().descriptors()) {
             if (!descriptor.schema.typeId.starts_with(prefix))
                 continue;
@@ -1055,6 +1065,25 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
             }
             out.set(record, "arguments", schema);
             out.set(record, "example", out.text(scripting::exampleCall(descriptor.schema)));
+            // The ids the transaction result's outputs carry, and what the call changes beyond
+            // its target: the same declarations help prints.
+            auto* outputs = out.array();
+            auto* sideEffects = out.array();
+            if (const auto* entry = reference.find(descriptor.schema.typeId)) {
+                for (const auto& output : entry->outputs) {
+                    auto* row = out.object();
+                    out.set(row, "name", out.text(output.name));
+                    out.set(row, "kind", out.text(output.kind));
+                    out.set(row, "repeated", out.boolean(output.repeated));
+                    if (!output.note.empty())
+                        out.set(row, "note", out.text(output.note));
+                    out.append(outputs, row);
+                }
+                for (const auto& effect : entry->sideEffects)
+                    out.append(sideEffects, out.text(effect));
+            }
+            out.set(record, "outputs", outputs);
+            out.set(record, "sideEffects", sideEffects);
             out.append(records, record);
         }
     } else if (kind == "compositions") {
@@ -1115,7 +1144,8 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         throw InvalidInput("Unknown query kind " + kind +
                            ". Kinds: project, compositions, layers, nodes, node-types, "
                            "parameters, parameter, parameter-value, keyframes, assets, "
-                           "operations, context");
+                           "operations, context, enums, text-metrics, layer-bounds, history, "
+                           "viewer, preview-cache");
     out.set(result, "records", records);
     projectRecords(out, result, arguments);
     return result;

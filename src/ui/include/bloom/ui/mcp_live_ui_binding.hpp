@@ -102,6 +102,10 @@ class McpLiveUiBinding final : public QObject {
     void runScript(mcp::McpScriptRequest request,
                    std::function<void(mcp::McpScriptResult)> done);
     void cancelScript();
+    // Read-back for the history, viewer and preview-cache queries.
+    [[nodiscard]] mcp::McpUndoHistory undoHistory() const;
+    [[nodiscard]] mcp::McpViewerState viewerState();
+    [[nodiscard]] mcp::McpPreviewCacheState previewCache() const;
 
   private:
     struct Pending;

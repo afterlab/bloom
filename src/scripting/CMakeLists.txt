@@ -27,6 +27,7 @@ target_sources(
         merge_entry_view.cpp
         node_reference.cpp
         operation_docs.cpp
+        readings.cpp
         operation_docs.hpp
         operation_reference.cpp
         operation_registry.cpp
@@ -62,6 +63,7 @@ target_sources(
             include/bloom/scripting/operation_reference.hpp
             include/bloom/scripting/operation_registry.hpp
             include/bloom/scripting/query.hpp
+            include/bloom/scripting/readings.hpp
             include/bloom/scripting/render.hpp
             include/bloom/scripting/session.hpp
             include/bloom/scripting/tasks.hpp

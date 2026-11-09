@@ -189,7 +189,13 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                {"assets", "Every asset"},
                                {"operations", "Every operation schema"},
                                {"context", "The editor context contextual arguments use"},
-                               {"enums", "Keyframe interpolation, ease and handle-mode tokens"}}},
+                               {"enums", "Keyframe interpolation, ease and handle-mode tokens"},
+                               {"text-metrics", "The advance and ink bounds of a piece of text"},
+                               {"layer-bounds", "A layer's evaluated bounds at a time"},
+                               {"history", "The undo history: labels and position"},
+                               {"viewer", "The Viewer's display settings (desktop only)"},
+                               {"preview-cache", "RAM Preview: filled range, fill rate, budget, "
+                                                 "stop reason (desktop only)"}}},
                   {.name = "composition",
                    .type = "integer",
                    .summary = "The composition, for layers, nodes, parameters, parameter, "
@@ -251,6 +257,32 @@ void addTools(std::vector<ReferenceEntry>& out) {
                               "everything upstream of it. Default: every layer.",
                    .unit = "layer id (query:layers .id)",
                    .range = ">= 1"},
+                  {.name = "text",
+                   .type = "string",
+                   .summary = "For text-metrics: the text to measure. A newline starts a new "
+                              "line.",
+                   .unit = "UTF-8 text",
+                   .range = "at most 4096 bytes"},
+                  {.name = "font",
+                   .type = "string or integer",
+                   .summary = "For text-metrics: a built-in face, by label (\"DejaVu Sans\", "
+                              "\"Inter Regular\", \"Inter Medium\", \"Inter SemiBold\"), by "
+                              "stored value 0 to 3, or by its family|style|digest font "
+                              "reference.",
+                   .unit = "built-in face",
+                   .defaultValue = "DejaVu Sans (a new Text layer's font)"},
+                  {.name = "size",
+                   .type = "number",
+                   .summary = "For text-metrics: the text size.",
+                   .unit = "pixels per em",
+                   .range = "above 0 to 4096"},
+                  {.name = "time",
+                   .type = "integer or [numerator, denominator]",
+                   .summary = "For layer-bounds: the time to evaluate at. An integer is a whole "
+                              "frame of the composition at its frame rate; [numerator, "
+                              "denominator] is exact seconds (concept:time).",
+                   .unit = "composition time",
+                   .defaultValue = "the playhead (frame 0 headless)"},
                   {.name = "fields",
                    .type = "array of strings",
                    .summary = "For the kinds that return records: keep only these members of "
@@ -268,7 +300,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
     addExamples(query,
                 {{"mcp", R"({"name":"query","arguments":{"kind":"layers","composition":1}})"}});
     addRelated(query, {"query:context", "query:compositions", "query:layers", "query:nodes",
-                       "query:keyframes", "query:node-types"});
+                       "query:keyframes", "query:node-types", "query:text-metrics",
+                       "query:layer-bounds", "query:history", "query:viewer",
+                       "query:preview-cache"});
     out.push_back(std::move(query));
 
     auto transact = makeEntry(
@@ -312,8 +346,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
                       {"summary", "`outputSummary`: counts by output name and one digest"}}}});
     transact.prerequisites = {"Read the current revision (any query result)."};
     transact.result =
-        "{succeeded, revision, diagnostics:[{code, severity?, operationIndex, operation, "
-        "argument?, message}], outputs:[{operationIndex, name, id}]}. `revision` is the new "
+        "{succeeded, revision, origin (\"agent\"), diagnostics:[{code, severity?, operationIndex, "
+        "operation, argument?, message}], outputs:[{operationIndex, name, id}]}. `revision` is "
+        "the new "
         "revision; `outputs` lists every id the operations created, by the zero-based index of "
         "the operation that made it (an operation's reference names its outputs). Over MCP any "
         "operation argument may be {\"fromFile\": \"<absolute .json path>\"}: the server reads "
@@ -361,7 +396,7 @@ void addTools(std::vector<ReferenceEntry>& out) {
                             .required = true,
                             .summary = "The current revision; a stale one changes nothing.",
                             .range = ">= 0"}});
-    history.result = "The transact result shape: {succeeded, revision, diagnostics, outputs}.";
+    history.result = "The transact result shape: {succeeded, revision, origin, diagnostics, outputs}.";
     history.errors = {makeError("bloom.scripting.stale-revision", "the project moved on",
                                 "re-query and retry", true),
                       makeError("bloom.scripting.command-rejected",
@@ -378,7 +413,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
         "Poll what changed: command events after a revision and sequence.",
         "Each event is a command result with `sequence` and `kind` (revision: an edit applied; "
         "history: an undo or redo; rejected: an edit refused). Pass the last `sequence` you saw "
-        "as afterSequence. When `resetRequired` is true (events were trimmed or the project was "
+        "as afterSequence. Every event names who made the edit in `origin`: user (the artist, in "
+        "the application's panels), agent (an MCP client: transact and history) or script (a "
+        "Python or JSON script, the Script editor included), so you can tell your own edits from "
+        "the artist's. When `resetRequired` is true (events were trimmed or the project was "
         "replaced) re-query whatever you cache and start again from the returned sequence.");
     events.effects = readOnlyEffects();
     addArguments(events, {{.name = "sinceRevision",
@@ -392,7 +430,7 @@ void addTools(std::vector<ReferenceEntry>& out) {
                            .range = ">= 0",
                            .defaultValue = "0"}});
     events.result = "{revision, sequence, resetRequired, events:[{sequence, kind, succeeded, "
-                    "revision, diagnostics, outputs}]}";
+                    "revision, origin (user|agent|script), diagnostics, outputs}]}";
     addExamples(events, {{"mcp", R"({"name":"events","arguments":{"sinceRevision":0}})"}});
     addRelated(events, {"concept:revisions"});
     out.push_back(std::move(events));
@@ -789,6 +827,16 @@ void addTools(std::vector<ReferenceEntry>& out) {
                              "script text."
                            : "{accepted, revision, availability?:{code, reason}}: accepted is "
                              "false with the queue's reason when the call is refused.";
+        if (name == "export.script")
+            value.result =
+                "{succeeded, format, script}. `script` is text. cli-json: a JSON array for "
+                "bloom-cli run, two steps: {\"op\":\"bloom.export.add-job\",\"args\":{composition, "
+                "name?, range, first?, last?, enabled, labelColor?, outputs:[...]}} and "
+                "{\"op\":\"export.start\",\"args\":{}}; each element of `outputs` is a string "
+                "holding one output as JSON ({preset, settings, destination:{portability, path, "
+                "overwrite}, enabled, importIntoAssets}), the form bloom.export.add-job takes. "
+                "python: a script that imports bloom, calls bloom.ops.export.add_job(...) with the "
+                "same arguments and ends with bloom.export.start().";
         value.errors = {makeError("bloom.mcp.export-unavailable",
                                   "the queue refused (unknown job, wrong state, platform)",
                                   "diagnostic.detail names the queue's availability code")};
