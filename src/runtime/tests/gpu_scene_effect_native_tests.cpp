@@ -21,6 +21,10 @@
 #include "motion_blur_test_support.hpp"
 #include "audio_plot_test_support.hpp"
 #include "histogram_test_support.hpp"
+#include "statistics_test_support.hpp"
+
+#include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include "pixel_math_test_support.hpp"
 #include "sharpen_test_support.hpp"
 #include "field_test_programs.hpp"
@@ -268,6 +272,12 @@ enum class AlphaGate : std::uint8_t { Exact, KeyedFromToleranceQualifiedColour }
         }
     }
     return true;
+}
+
+// The Vulkan loader the run was started with, for the evaluator the device-route test creates.
+std::filesystem::path& loaderPath() {
+    static std::filesystem::path path;
+    return path;
 }
 
 [[nodiscard]] GpuSceneOcioContext ocioContext() {
@@ -2927,6 +2937,186 @@ void runHistograms(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #349 Image Statistics: the production chain (the tiles' reduction and their combination, relocated
+// to the origin of the composition) over the HDR, signed, partial-alpha gradient against the CPU oracle
+// at the strict gate, requested the way a statistics plan is run (the two-pixel window), two resident
+// dispatches and no readback inside the scene, warm reuse with zero dispatches and a changed value
+// that re-runs with parity.
+void runStatistics(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    namespace stt = bloom::statistics_test;
+    namespace doc = bloom::document;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        stt::StatisticsValues values;
+        const char* name;
+    };
+    std::vector<Case> cases;
+    cases.push_back({stt::StatisticsValues{}, "luminance"});
+    {
+        stt::StatisticsValues values;
+        values.channel = doc::kStatisticsRed;
+        values.straight = false;
+        cases.push_back({values, "stored red"});
+        values = {};
+        values.channel = doc::kStatisticsGreen;
+        cases.push_back({values, "straight green"});
+        values = {};
+        values.channel = doc::kStatisticsAlpha;
+        cases.push_back({values, "alpha"});
+        values = {};
+        values.channel = doc::kStatisticsBlue;
+        values.opaqueOnly = true;
+        cases.push_back({values, "blue, only pixels with alpha"});
+        values = {};
+        values.gradient = false;
+        values.color = bloom::core::Color4d{24.0, 0.0, 0.0, 1.0};
+        values.channel = doc::kStatisticsRed;
+        cases.push_back({values, "a constant picture"});
+        values = {};
+        values.pictureWidth = 7;
+        values.pictureHeight = 3;
+        cases.push_back({values, "a picture smaller than its result"});
+        values = {};
+        values.pictureWidth = 64;
+        values.pictureHeight = 64;
+        cases.push_back({values, "a picture that fills the composition"});
+    }
+    std::uint64_t id = 34910;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("statistics native (") + item.name + "): ";
+        const auto plan = stt::statisticsPlan(item.values, id);
+        id += 200;
+        auto request = requestFor(*plan);
+        const auto resultWindow = bloom::render::ImageWindow::create(0, 0, 2, 1);
+        request.roi = *resultWindow.value();
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared) {
+            if (!prepared)
+                std::cerr << name << "prepare diagnostic: " << prepared.diagnostic.message << '\n';
+            continue;
+        }
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(cold.dataWindow && cold.dataWindow->extent().width() == 2 &&
+                                cold.dataWindow->extent().height() == 1,
+                            name + "the scene's output is the two-pixel result, the only readback");
+        expectations.expect(coldCounters.ocioEffectDispatches == 2 && coldCounters.readbacks == 0,
+                            name + "two resident dispatches and no per-operation readback");
+        expectations.expect(unreachableCommandCount(*prepared.scene) == 0,
+                            name + "the scene emits only what its output reads");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        stt::StatisticsValues changedValues = item.values;
+        changedValues.straight = !item.values.straight;
+        const auto changedPlan = stt::statisticsPlan(changedValues, id - 200);
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto beforeChanged = executor.executor->counters();
+        const auto again = runScene(*executor.executor, changed.scene);
+        expectations.expect(again.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(again.pixels, changedOracle.frame()->processImage().pixels(),
+                                       detail, AlphaGate::Exact) &&
+                                executor.executor->counters().dispatches > beforeChanged.dispatches,
+                            name + "a changed value re-runs with CPU parity: " + detail);
+    }
+}
+
+// #349: an Image Statistics value in a final render's frame is measured by the device route of the
+// same evaluator, for that frame's own time, and only the two-pixel result is read back: the frame
+// is as high as the picture's maximum, the cache holds a result labelled with the device, the same
+// frame again measures nothing and another frame measures its own.
+void runStatisticsRoute(Expectations& expectations) {
+    namespace stt = bloom::statistics_test;
+    bloom::runtime::GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.enabled = true;
+    evaluatorOptions.loaderPath = loaderPath();
+    evaluatorOptions.ocioContext = std::make_shared<const GpuSceneOcioContext>(ocioContext());
+    auto evaluator = bloom::runtime::GpuProcessFrameEvaluator::create(evaluatorOptions);
+    expectations.expect(evaluator != nullptr && evaluator->gpuAvailable(),
+                        "statistics: the evaluator is constructed on the same device");
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        return;
+    }
+    bloom::runtime::clearImageStatistics();
+    stt::StatisticsValues red;
+    red.gradient = false;
+    red.color = bloom::core::Color4d{24.0, 0.0, 0.0, 1.0};
+    red.channel = bloom::document::kStatisticsRed;
+    const auto tap = stt::statisticsPlan(red, 36000);
+    const auto driven = stt::drivenPlan(tap, 1, 36100);
+    const auto request = requestFor(*driven);
+    const auto height = [](const bloom::runtime::GpuProcessFrameOutcome& outcome) {
+        std::int64_t rows = 0;
+        if (outcome.frame == nullptr)
+            return rows;
+        const auto& image = outcome.frame->processImage();
+        const auto window = image.descriptor()->dataWindow();
+        for (std::int64_t y = window.originY();
+             y < window.originY() + static_cast<std::int64_t>(window.extent().height()); ++y)
+            if (const auto pixel = image.read(32, y); pixel && pixel.value()->alpha() > 0.5F)
+                ++rows;
+        return rows;
+    };
+    const auto first = evaluator->evaluate(driven, request);
+    expectations.expect(first.status == bloom::runtime::GpuProcessFrameStatus::Evaluated && first.frame != nullptr,
+                        "statistics: the frame evaluates on the device route: " +
+                            first.diagnostic.message);
+    expectations.expect(height(first) == 24,
+                        "statistics: the frame is as high as the picture's maximum, 24");
+    auto statistics = bloom::runtime::imageStatisticsCacheStatistics();
+    expectations.expect(statistics.computed == 1 && statistics.computedOnDevice == 1,
+                        "statistics: the frame's statistics were measured once, on the device");
+    const auto again = evaluator->evaluate(driven, request);
+    statistics = bloom::runtime::imageStatisticsCacheStatistics();
+    expectations.expect(again.status == bloom::runtime::GpuProcessFrameStatus::Evaluated && height(again) == 24 &&
+                            statistics.computed == 1 && statistics.hits >= 1,
+                        "statistics: the same frame again reads the cache and measures nothing");
+    auto later = request;
+    later.time = bloom::core::RationalTime::fromInteger(3);
+    const auto next = evaluator->evaluate(driven, later);
+    statistics = bloom::runtime::imageStatisticsCacheStatistics();
+    expectations.expect(next.status == bloom::runtime::GpuProcessFrameStatus::Evaluated && height(next) == 24 &&
+                            statistics.computed == 2 && statistics.computedOnDevice == 2,
+                        "statistics: another frame measures its own statistics on the device");
+    // A picture that is edited gives its own statistics.
+    red.color = bloom::core::Color4d{10.0, 0.0, 0.0, 1.0};
+    const auto edited = stt::drivenPlan(stt::statisticsPlan(red, 36000), 1, 36100);
+    const auto editedOutcome = evaluator->evaluate(edited, request);
+    expectations.expect(editedOutcome.status == bloom::runtime::GpuProcessFrameStatus::Evaluated &&
+                            height(editedOutcome) == 10,
+                        "statistics: an edited picture is measured again, not read from the cache");
+    // Cancelled before it starts: no measure is cached.
+    evaluator->beginShutdown();
+}
+
 // #347 Audio Waveform and Audio Spectrum: the production chain (the prepared analysis drawn by the one
 // plot pass) over a generated WAV against the CPU oracle at the strict gate, the windows, no
 // per-operation readback, warm reuse with zero dispatches and a changed time that re-runs with parity.
@@ -3532,6 +3722,8 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runCodecDegrades(expectations, device, cache);
     runAutoExposures(expectations, device, cache);
     runHistograms(expectations, device, cache);
+    runStatistics(expectations, device, cache);
+    runStatisticsRoute(expectations);
     runAudioPlots(expectations, device, cache);
     runMotionBlur(expectations, device, cache);
     runFrameRateHold(expectations, device, cache);
@@ -3574,6 +3766,7 @@ int main(int argc, char** argv) {
         Expectations expectations;
         GpuDeviceCreationOptions createOptions;
         createOptions.loader_path = options.loader_path;
+        loaderPath() = options.loader_path;
         auto device = GpuDevice::create(createOptions);
         if (!device) {
             if (options.require_device) {

@@ -1725,6 +1725,155 @@ void testHistogramCompareLowering(Expectations& expectations) {
     }
 }
 
+// #349 Image Statistics lowers to a value operation with five outputs whose kernel carries a plan of
+// its own: the picture its input ends in, then the two reduction passes, shown through the
+// composition output. A parameter driven by an output reads the operation's output; the picture is not
+// part of the plan that contains the node; the node's choices reach its passes; an unwired node gives
+// no plan; a muted node gives no plan; and a node that reads a picture which depends on its own result
+// is not a valid document.
+void testImageStatisticsLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto* definition = builtInNodeDefinitions().find(kImageStatisticsNodeType, 1);
+    require(definition != nullptr, "the Image Statistics definition exists");
+    expectations.expect(definition->outputs.size() == 5 && definition->inputs.size() == 1 &&
+                            definition->category == NodeCategory::Values &&
+                            definition->lowering == runtime::NodeLoweringKind::ValueImageStatistics,
+                        "Image Statistics has one Image in, five Scalars out and is a value node");
+    for (const bool wired : {true, false}) {
+        for (const bool muted : {false, true}) {
+            const auto statsId = NodeId::fromRaw(996);
+            auto project = makeProject(singleLayerOptions());
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            std::vector<ParameterBinding> bindings;
+            std::uint64_t next = 3100;
+            for (const auto& parameter : definition->parameters) {
+                auto value = parameter.defaultValue;
+                if (parameter.role == "channel")
+                    value = kStatisticsAlpha;
+                if (parameter.role == "space")
+                    value = kImagePixelStored;
+                if (parameter.role == "pixels")
+                    value = kStatisticsOpaqueOnly;
+                const auto id = ParameterId::fromRaw(next++);
+                require(composition->parameters().insert(
+                            {id, parameter.schemaKey, ConstantValueSource{value}}),
+                        "statistics parameter is valid");
+                bindings.push_back({parameter.role, id});
+            }
+            require(graph.addNode({statsId, std::string(kImageStatisticsNodeType),
+                                   std::move(bindings), 1}),
+                    "statistics node is accepted");
+            if (wired)
+                require(graph.addEdge({EdgeId::fromRaw(995), {kFirstSolidNode, "image"},
+                                       NodeInputRef{statsId, "input"}}),
+                        "the source feeds the statistics node");
+            require(composition->parameters().setSource(
+                        kFirstOpacity, DriverBindingSource{statsId, "maximum"}),
+                    "the maximum drives the layer's opacity");
+            if (muted)
+                composition->nodeLayout()[statsId].muted = true;
+            const auto validated = project.validate();
+            expectations.expect(validated.ok(), "the statistics document is valid");
+            if (!validated.ok()) {
+                std::cerr << "wired " << wired << " muted " << muted << " issues:";
+                for (const auto& issue : validated.issues())
+                    std::cerr << ' ' << issue.message;
+                std::cerr << '\n';
+                continue;
+            }
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "a document with Image Statistics compiles");
+            if (!result.plan)
+                continue;
+            const runtime::CompiledValueImageStatistics* kernel = nullptr;
+            std::uint8_t outputs = 0;
+            for (const auto& operation : result.plan->valueOperations())
+                if (const auto* item = std::get_if<runtime::CompiledValueImageStatistics>(&operation.kernel)) {
+                    kernel = item;
+                    outputs = operation.outputCount;
+                }
+            if (!kernel)
+                continue;
+            expectations.expect(outputs == 5 && kernel->node == statsId,
+                                "the value operation has the five outputs");
+            if (!wired || muted) {
+                expectations.expect(kernel->plan == nullptr,
+                                    "an unwired or muted node has no picture to measure");
+                continue;
+            }
+            require(kernel->plan != nullptr, "a wired node carries the plan of its picture");
+            const auto operations = kernel->plan->operations();
+            std::vector<const runtime::StatisticsKernel*> passes;
+            for (const auto& operation : operations)
+                if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation))
+                    if (const auto* pass = std::get_if<runtime::StatisticsKernel>(&effect->kernel))
+                        passes.push_back(pass);
+            require(passes.size() == 2, "the plan reduces the picture in two passes");
+            expectations.expect(passes[0]->role == runtime::StatisticsRole::Reduce &&
+                                    passes[1]->role == runtime::StatisticsRole::Sum &&
+                                    passes[0]->channel == kStatisticsAlpha && !passes[0]->straight &&
+                                    passes[0]->opaqueOnly && passes[1]->opaqueOnly,
+                                "both passes carry the node's choices");
+            expectations.expect(
+                std::ranges::none_of(result.plan->operations(), [](const auto& operation) {
+                    const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+                    return effect != nullptr &&
+                           std::holds_alternative<runtime::StatisticsKernel>(effect->kernel);
+                }),
+                "the picture and its reduction are not part of the plan that contains the node");
+            expectations.expect(std::ranges::any_of(operations, [](const auto& operation) {
+                                    return std::holds_alternative<runtime::CompiledSolid>(operation);
+                                }),
+                                "the picture the node's input ends in is part of its plan");
+        }
+    }
+    // A node that reads a picture that depends on its own result is refused, not looped over.
+    {
+        const auto statsId = NodeId::fromRaw(996);
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 3200;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{parameter.defaultValue}}),
+                    "statistics parameter is valid");
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({statsId, std::string(kImageStatisticsNodeType), std::move(bindings), 1}),
+                "statistics node is accepted");
+        require(graph.addEdge({EdgeId::fromRaw(995), {kFirstSolidNode, "image"},
+                               NodeInputRef{statsId, "input"}}),
+                "the source feeds the statistics node");
+        // The source's own opacity-less width is driven by the node that reads the source.
+        const auto solid = std::ranges::find_if(graph.nodes(), [](const auto& node) {
+            return node.id == kFirstSolidNode;
+        });
+        require(solid != graph.nodes().end(), "the source node exists");
+        const auto width = std::ranges::find_if(solid->parameters, [](const auto& binding) {
+            return binding.role == "width";
+        });
+        require(width != solid->parameters.end(), "the source has a width");
+        require(composition->parameters().setSource(width->parameterId,
+                                                    DriverBindingSource{statsId, "maximum"}),
+                "the maximum drives the width of the picture it measures");
+        require(composition->parameters().setSource(kFirstOpacity,
+                                                    DriverBindingSource{statsId, "mean"}),
+                "the mean drives the layer");
+        // The document refuses the loop before a compile could meet it; the compiler's own guard
+        // (a node in its own statistics stack) is the second line.
+        expectations.expect(!project.validate().ok(),
+                            "an Image Statistics node that measures its own result is not a valid "
+                            "document");
+    }
+}
+
 // #505 Vignette lowers to one vignette kernel with its constant shape and mode. The mode keeps the
 // identity of only the strength it reads (Multiply the amount, Exposure the stops); the other stays
 // the kernel's constant default without an identity. Every shared value and the centre keep theirs.

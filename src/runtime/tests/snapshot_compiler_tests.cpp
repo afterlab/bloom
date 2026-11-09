@@ -2148,6 +2148,7 @@ int main() {
         testVignetteLowering(expectations);
         testPixelMathLowering(expectations);
         testHistogramCompareLowering(expectations);
+        testImageStatisticsLowering(expectations);
         testNodeGroupExpansion(expectations);
         testNodeGroupValues(expectations);
         testNodeGroupRefusals(expectations);

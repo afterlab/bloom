@@ -557,6 +557,13 @@ bloom_enable_warnings(bloom_runtime_auto_exposure_test)
 bloom_enable_strict_floating_point(bloom_runtime_auto_exposure_test)
 bloom_add_test(NAME bloom.runtime.auto-exposure COMMAND bloom_runtime_auto_exposure_test LABELS unit runtime render)
 
+add_executable(bloom_runtime_image_statistics_test image_statistics_tests.cpp)
+target_include_directories(bloom_runtime_image_statistics_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_image_statistics_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_image_statistics_test)
+bloom_enable_strict_floating_point(bloom_runtime_image_statistics_test)
+bloom_add_test(NAME bloom.runtime.image-statistics COMMAND bloom_runtime_image_statistics_test LABELS unit runtime render)
+
 add_executable(bloom_runtime_histogram_compare_test histogram_compare_tests.cpp)
 target_include_directories(bloom_runtime_histogram_compare_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_histogram_compare_test PRIVATE bloom_runtime_evaluator)

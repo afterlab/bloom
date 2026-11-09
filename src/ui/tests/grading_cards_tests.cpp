@@ -1292,6 +1292,7 @@ void pixelAndMotionCards() {
         {"bloom.histogram", {"bloom.image-math", "bloom.levels", "bloom.invert"}},
         {"bloom.image-compare", {"bloom.image-math", "bloom.levels", "bloom.invert"}},
         {"bloom.audio-amplitude", {"bloom.math", "bloom.map-range", "bloom.random"}},
+        {"bloom.image-statistics", {"bloom.math", "bloom.map-range", "bloom.audio-amplitude"}},
         {"bloom.audio-waveform", {"bloom.histogram", "bloom.levels", "bloom.invert"}},
         {"bloom.audio-spectrum", {"bloom.histogram", "bloom.levels", "bloom.invert"}},
         {"bloom.oscillator", {"bloom.math", "bloom.map-range", "bloom.random"}},

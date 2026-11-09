@@ -40,6 +40,7 @@
 #include "auto_exposure_test_support.hpp"
 #include "audio_plot_test_support.hpp"
 #include "histogram_test_support.hpp"
+#include "statistics_test_support.hpp"
 #include "pixel_math_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
@@ -57,6 +58,7 @@
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -2130,6 +2132,58 @@ displayProofRunner(const bool customView) {
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }
+    // #349 Image Statistics: the tiles' reduction and their combination through the production chain
+    // over the HDR, signed, partial-alpha gradient and a constant picture, requested whole and as a
+    // statistics plan is run (the two-pixel result window). The node itself is a value lowering, so
+    // it has no pixel-operation fixture of its own: the pixel work is this kernel.
+    {
+        namespace stt = bloom::statistics_test;
+        namespace doc = bloom::document;
+        const auto runStatistics = [](const std::vector<stt::StatisticsValues>& variants,
+                                      std::uint64_t idBase, std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& values : variants) {
+                const auto plan = stt::statisticsPlan(values, idBase);
+                idBase += 200;
+                auto request = requestFor(*plan);
+                auto run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto resultWindow = bloom::render::ImageWindow::create(0, 0, 2, 1);
+                request.roi = *resultWindow.value();
+                run = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+        stt::StatisticsValues stored;
+        stored.channel = doc::kStatisticsRed;
+        stored.straight = false;
+        stt::StatisticsValues alpha;
+        alpha.channel = doc::kStatisticsAlpha;
+        stt::StatisticsValues opaque;
+        opaque.channel = doc::kStatisticsBlue;
+        opaque.opaqueOnly = true;
+        stt::StatisticsValues flat;
+        flat.gradient = false;
+        flat.channel = doc::kStatisticsGreen;
+        add(
+            "effect.StatisticsKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime image statistics tests",
+            [runStatistics, stored, alpha, opaque, flat] {
+                return runStatistics({stt::StatisticsValues{}, stored, alpha, opaque, flat}, 349950,
+                                     "production Image Statistics: luminance, stored red, alpha, "
+                                     "blue over the pixels with alpha and a constant picture, over "
+                                     "HDR and partial-alpha values, whole and as the two-pixel "
+                                     "result");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
     // #347 Audio Waveform and Audio Spectrum: the prepared analysis of a generated WAV drawn by the
     // one plot pass, the HDR/partial-alpha colors, both axes, separate lanes, silence and an ROI, on
     // the production preparation chain and the CPU reference.
@@ -3088,6 +3142,32 @@ int run(int argc, char** argv) {
     std::vector<std::string> failures;
     for (const auto& issue : bloom::runtime::validateGpuCoverageContract()) {
         failures.push_back("contract: " + issue.detail);
+    }
+    // #349 (owner decision, 2026-11-09): the statistics readback is one narrow host-preparation
+    // entry with an id, a rationale and its owning document, and it is the only addition: the
+    // statistics kernel itself is a Required pixel operation.
+    {
+        const auto preparation = bloom::runtime::gpuApprovedCpuPreparation();
+        const auto readback = std::ranges::find_if(preparation, [](const auto& entry) {
+            return entry.id == "prep.statistics.result_readback";
+        });
+        if (readback == preparation.end() ||
+            readback->disposition != bloom::runtime::GpuCoverageDisposition::ApprovedCpuHostPreparation ||
+            readback->approvalReference != "docs/architecture/image-statistics.md" ||
+            readback->rationale.empty() || readback->label.empty() ||
+            std::ranges::count_if(preparation, [](const auto& entry) {
+                return entry.id.starts_with("prep.statistics.");
+            }) != 1)
+            failures.push_back("the statistics readback is not one narrow typed entry naming its "
+                               "owning document");
+        const auto effects = bloom::runtime::gpuImageEffectCoverage();
+        const auto kernel = std::ranges::find_if(effects, [](const auto& entry) {
+            return entry.id == "effect.StatisticsKernel";
+        });
+        if (kernel == effects.end() ||
+            kernel->disposition != bloom::runtime::GpuCoverageDisposition::Required ||
+            !kernel->approvalReference.empty())
+            failures.push_back("the statistics kernel is not a Required pixel operation");
     }
     bloom::gpu_coverage_mutation::nodeTypeMutationProof(fixtureIds, failures);
     bloom::gpu_coverage_route_proof::routeProofSinkRejectsFakes(failures);
