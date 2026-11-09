@@ -67,13 +67,17 @@ class CommandStack final {
     ~CommandStack();
 
     [[nodiscard]] CommandResult execute(Transaction&& transaction);
-    [[nodiscard]] CommandResult undo();
-    [[nodiscard]] CommandResult redo();
+    [[nodiscard]] CommandResult undo(CommandOrigin origin = CommandOrigin::User);
+    [[nodiscard]] CommandResult redo(CommandOrigin origin = CommandOrigin::User);
 
     [[nodiscard]] bool canUndo() const noexcept { return cursor_ > 0; }
     [[nodiscard]] bool canRedo() const noexcept { return cursor_ < history_.size(); }
     [[nodiscard]] std::optional<std::string_view> undoLabel() const noexcept;
     [[nodiscard]] std::optional<std::string_view> redoLabel() const noexcept;
+    // The label of every history entry, oldest first, and how many of them are applied (the
+    // entries at and after this position are the redo branch).
+    [[nodiscard]] std::vector<std::string> historyLabels() const;
+    [[nodiscard]] std::size_t historyPosition() const noexcept { return cursor_; }
     [[nodiscard]] document::Revision trackedRevision() const noexcept { return trackedRevision_; }
     [[nodiscard]] std::size_t size() const noexcept { return history_.size(); }
     [[nodiscard]] std::size_t historyChargedBytes() const noexcept { return historyChargedBytes_; }
@@ -109,6 +113,9 @@ class CommandStack final {
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,
                                                            const document::Snapshot& current) const;
+    [[nodiscard]] CommandResult executeStep(Transaction&& transaction);
+    [[nodiscard]] CommandResult undoStep();
+    [[nodiscard]] CommandResult redoStep();
     void notify(const CommandResult& result) const noexcept;
 
     std::vector<HistoryEntry> history_;
@@ -118,6 +125,7 @@ class CommandStack final {
     std::unique_ptr<HistoryCharge> historyCharge_;
     Work work_;
     document::Revision trackedRevision_;
+    CommandOrigin currentOrigin_ = CommandOrigin::User;
     document::Document& document_;
     mutable std::mutex observerMutex_;
     std::vector<std::pair<CommandObserverId, CommandObserver>> observers_;

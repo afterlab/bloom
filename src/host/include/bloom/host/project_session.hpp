@@ -716,8 +716,10 @@ class ProjectSession final {
     [[nodiscard]] bool matchesPathIntent(SessionPathIntentCapture capture) const noexcept;
 
     [[nodiscard]] ProjectSessionCommandResult execute(commands::Transaction transaction);
-    [[nodiscard]] ProjectSessionCommandResult undo();
-    [[nodiscard]] ProjectSessionCommandResult redo();
+    [[nodiscard]] ProjectSessionCommandResult
+    undo(commands::CommandOrigin origin = commands::CommandOrigin::User);
+    [[nodiscard]] ProjectSessionCommandResult
+    redo(commands::CommandOrigin origin = commands::CommandOrigin::User);
 
     // This is an acceptance seam, not persistence. A future I/O owner calls it only after a
     // publication result has succeeded; this method owns its session and path-intent checks.

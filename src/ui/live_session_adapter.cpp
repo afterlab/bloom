@@ -35,9 +35,9 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
     committer_->execute = [this](commands::Transaction transaction) {
         return completed(session_.executeTransaction(std::move(transaction)));
     };
-    committer_->history = [this](const bool redo) {
+    committer_->history = [this](const bool redo, const commands::CommandOrigin origin) {
         auto* stack = project_.liveDocumentAndStack().second;
-        return stack ? completed(redo ? stack->redo() : stack->undo()) : Result{};
+        return stack ? completed(redo ? stack->redo(origin) : stack->undo(origin)) : Result{};
     };
     committer_->gestureOpen = [this] {
         return session_.transformInteractionActive() || session_.valueEditActive();

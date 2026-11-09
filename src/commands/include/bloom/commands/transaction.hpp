@@ -40,6 +40,10 @@ class Transaction final {
     [[nodiscard]] std::optional<document::Revision> expectedRevision() const noexcept {
         return expectedRevision_;
     }
+    // Who is making this edit. User unless the caller says otherwise (MCP: Agent; scripting
+    // sessions: Script). The command result and its event carry it.
+    [[nodiscard]] CommandOrigin origin() const noexcept { return origin_; }
+    void setOrigin(const CommandOrigin origin) noexcept { origin_ = origin; }
     [[nodiscard]] std::size_t size() const noexcept { return operations_.size(); }
     [[nodiscard]] bool empty() const noexcept { return operations_.empty(); }
     [[nodiscard]] const std::vector<std::unique_ptr<Operation>>& operations() const noexcept {
@@ -49,6 +53,7 @@ class Transaction final {
   private:
     std::string label_;
     std::optional<document::Revision> expectedRevision_;
+    CommandOrigin origin_ = CommandOrigin::User;
     std::vector<std::unique_ptr<Operation>> operations_;
 };
 

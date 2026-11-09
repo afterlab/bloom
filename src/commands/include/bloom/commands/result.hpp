@@ -6,6 +6,7 @@
 #include <bloom/document/validation.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -153,6 +154,27 @@ enum class CommandAction {
     Redo,
 };
 
+// Who made an edit, so an agent can tell its own edits from the artist's. User is every edit made
+// in the application's own panels; Agent is an MCP client; Script is a Python or JSON script run
+// through a scripting session (the Script editor, bloom-cli, bloom.Host).
+enum class CommandOrigin : std::uint8_t {
+    User,
+    Agent,
+    Script,
+};
+
+[[nodiscard]] constexpr std::string_view commandOriginName(const CommandOrigin origin) noexcept {
+    switch (origin) {
+    case CommandOrigin::User:
+        return "user";
+    case CommandOrigin::Agent:
+        return "agent";
+    case CommandOrigin::Script:
+        return "script";
+    }
+    return "user";
+}
+
 enum class CommandStatus {
     Succeeded,
     NoChange,
@@ -186,6 +208,8 @@ struct CommandOutput {
 struct CommandResult {
     CommandAction action = CommandAction::Execute;
     CommandStatus status = CommandStatus::NoChange;
+    // Who asked for this step; copied from the transaction, or given to undo and redo.
+    CommandOrigin origin = CommandOrigin::User;
     document::Revision beforeRevision;
     document::Revision afterRevision;
     std::optional<document::Revision> expectedRevision;

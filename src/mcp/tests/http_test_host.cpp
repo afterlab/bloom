@@ -88,8 +88,8 @@ int main(int argc, char** argv) {
                 return result;
             },
         .history =
-            [&](const bool redo) {
-                auto result = redo ? session->redo() : session->undo();
+            [&](const bool redo, const commands::CommandOrigin origin) {
+                auto result = redo ? session->redo(origin) : session->undo(origin);
                 live.publish(mirror());
                 return result;
             },

@@ -291,7 +291,8 @@ SessionCommandResult LiveSessionLease::history(const bool redo,
             return SessionCommandResult{host::ProjectSessionCommandStatus::Completed,
                                         std::move(stale), std::nullopt};
         }
-        return committer.history ? committer.history(redo) : SessionCommandResult{};
+        return committer.history ? committer.history(redo, commands::CommandOrigin::Agent)
+                                 : SessionCommandResult{};
     });
 }
 
@@ -425,9 +426,9 @@ LiveSessionLease LiveSessionHost::acquire(LiveCallControl control) {
                                      : SessionCommandResult{};
         });
     };
-    binding.history = [hold](const bool redo) {
-        return hold->commit([redo](const LiveSessionCommitter& committer) {
-            return committer.history ? committer.history(redo) : SessionCommandResult{};
+    binding.history = [hold](const bool redo, const commands::CommandOrigin origin) {
+        return hold->commit([redo, origin](const LiveSessionCommitter& committer) {
+            return committer.history ? committer.history(redo, origin) : SessionCommandResult{};
         });
     };
     binding.events = services.events ? services.events : std::make_shared<EventStream>();

@@ -91,7 +91,7 @@ struct SessionBinding final {
     std::function<bool()> valid;
     std::function<document::Snapshot()> snapshot;
     std::function<SessionCommandResult(commands::Transaction)> execute;
-    std::function<SessionCommandResult(bool)> history;
+    std::function<SessionCommandResult(bool, commands::CommandOrigin)> history;
     std::shared_ptr<EventStream> events;
     host::PublicationCoordinator* publication = nullptr;
     platform::StagedArtifactCoordinator* artifacts = nullptr;
@@ -142,8 +142,13 @@ class Session final {
     [[nodiscard]] document::Snapshot snapshot() const;
 
     [[nodiscard]] SessionCommandResult execute(commands::Transaction transaction);
-    [[nodiscard]] SessionCommandResult undo();
-    [[nodiscard]] SessionCommandResult redo();
+    // `origin` is who is asking: a script (the default) or an MCP client. execute() marks a
+    // transaction nobody labelled as a script's, so a scripting client's edits never read as the
+    // artist's.
+    [[nodiscard]] SessionCommandResult
+    undo(commands::CommandOrigin origin = commands::CommandOrigin::Script);
+    [[nodiscard]] SessionCommandResult
+    redo(commands::CommandOrigin origin = commands::CommandOrigin::Script);
     [[nodiscard]] SessionCommandResult
     executeJsonOperation(std::string_view operation, const Arguments& arguments,
                          const std::optional<std::string>& label = {});

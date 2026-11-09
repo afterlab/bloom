@@ -385,6 +385,7 @@ nb::dict commandResult(const commands::CommandResult& result) {
     row["succeeded"] = result.succeeded();
     row["revision"] = result.afterRevision.value();
     row["status"] = static_cast<int>(result.status);
+    row["origin"] = std::string(commands::commandOriginName(result.origin));
     nb::list diagnostics;
     for (const auto& item : commandDiagnostics(result)) {
         nb::dict diagnostic;

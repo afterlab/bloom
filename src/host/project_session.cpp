@@ -524,18 +524,18 @@ ProjectSessionCommandResult ProjectSession::execute(commands::Transaction transa
             .command = commandStack_->execute(std::move(transaction))};
 }
 
-ProjectSessionCommandResult ProjectSession::undo() {
+ProjectSessionCommandResult ProjectSession::undo(const commands::CommandOrigin origin) {
     if (!isValid() || contentKind_ != ProjectSessionContentKind::DecodedDocument) {
         return unavailableCommandResult();
     }
-    return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->undo()};
+    return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->undo(origin)};
 }
 
-ProjectSessionCommandResult ProjectSession::redo() {
+ProjectSessionCommandResult ProjectSession::redo(const commands::CommandOrigin origin) {
     if (!isValid() || contentKind_ != ProjectSessionContentKind::DecodedDocument) {
         return unavailableCommandResult();
     }
-    return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->redo()};
+    return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->redo(origin)};
 }
 
 ProjectSessionColorSettingsStatus

@@ -246,6 +246,8 @@ SessionCommandResult Session::makeCommandResult(host::ProjectSessionCommandResul
 }
 
 SessionCommandResult Session::execute(commands::Transaction transaction) {
+    if (transaction.origin() == commands::CommandOrigin::User)
+        transaction.setOrigin(commands::CommandOrigin::Script);
     if (binding_)
         return isValid() ? binding_->execute(std::move(transaction)) : SessionCommandResult{};
     if (session_ == nullptr) {
@@ -254,22 +256,22 @@ SessionCommandResult Session::execute(commands::Transaction transaction) {
     return makeCommandResult(session_->execute(std::move(transaction)));
 }
 
-SessionCommandResult Session::undo() {
+SessionCommandResult Session::undo(const commands::CommandOrigin origin) {
     if (binding_)
-        return isValid() ? binding_->history(false) : SessionCommandResult{};
+        return isValid() ? binding_->history(false, origin) : SessionCommandResult{};
     if (session_ == nullptr) {
         return {};
     }
-    return makeCommandResult(session_->undo());
+    return makeCommandResult(session_->undo(origin));
 }
 
-SessionCommandResult Session::redo() {
+SessionCommandResult Session::redo(const commands::CommandOrigin origin) {
     if (binding_)
-        return isValid() ? binding_->history(true) : SessionCommandResult{};
+        return isValid() ? binding_->history(true, origin) : SessionCommandResult{};
     if (session_ == nullptr) {
         return {};
     }
-    return makeCommandResult(session_->redo());
+    return makeCommandResult(session_->redo(origin));
 }
 
 std::vector<std::uint64_t> selectedLayers(const document::Snapshot& snapshot,

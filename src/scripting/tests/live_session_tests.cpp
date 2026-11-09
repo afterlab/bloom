@@ -31,7 +31,9 @@ void exercise() {
             [owner](commands::Transaction transaction) {
                 return owner->execute(std::move(transaction));
             },
-        .history = [owner](bool redo) { return redo ? owner->redo() : owner->undo(); },
+        .history = [owner](bool redo, commands::CommandOrigin origin) {
+            return redo ? owner->redo(origin) : owner->undo(origin);
+        },
         .events = stream,
         .publication = owner->publicationCoordinator(),
         .artifacts = owner->artifactCoordinator(),

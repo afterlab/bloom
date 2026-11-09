@@ -71,8 +71,8 @@ struct Owner final {
                         return result;
                     },
                 .history =
-                    [this](const bool redo) {
-                        auto result = redo ? session->redo() : session->undo();
+                    [this](const bool redo, const commands::CommandOrigin origin) {
+                        auto result = redo ? session->redo(origin) : session->undo(origin);
                         host.publish(state());
                         return result;
                     },

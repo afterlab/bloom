@@ -271,10 +271,12 @@ void CommandStack::notify(const CommandResult& result) const noexcept {
         return;
     }
 
-    const auto send = [&callbacks, &result](const CommandEventKind kind) noexcept {
+    const auto send = [this, &callbacks, &result](const CommandEventKind kind) noexcept {
         for (const auto& callback : callbacks) {
             try {
-                callback(CommandEvent{.kind = kind, .result = result});
+                CommandEvent event{.kind = kind, .result = result};
+                event.result.origin = currentOrigin_;
+                callback(event);
             } catch (...) {
                 // Observers cannot change the command outcome or interrupt history publication.
                 static_cast<void>(0);
@@ -292,6 +294,15 @@ void CommandStack::notify(const CommandResult& result) const noexcept {
 }
 
 CommandResult CommandStack::execute(Transaction&& transaction) {
+    const auto origin = transaction.origin();
+    currentOrigin_ = origin;
+    auto result = executeStep(std::move(transaction));
+    result.origin = origin;
+    currentOrigin_ = CommandOrigin::User;
+    return result;
+}
+
+CommandResult CommandStack::executeStep(Transaction&& transaction) {
     const document::Snapshot before = document_.snapshot();
     if (const auto stale =
             staleResult(CommandAction::Execute, std::string(transaction.label()), before)) {
@@ -651,7 +662,15 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     return result;
 }
 
-CommandResult CommandStack::undo() {
+CommandResult CommandStack::undo(const CommandOrigin origin) {
+    currentOrigin_ = origin;
+    auto result = undoStep();
+    result.origin = origin;
+    currentOrigin_ = CommandOrigin::User;
+    return result;
+}
+
+CommandResult CommandStack::undoStep() {
     const document::Snapshot before = document_.snapshot();
     if (!canUndo()) {
         auto result = makeResult(CommandAction::Undo, CommandStatus::NothingToUndo, before);
@@ -692,7 +711,15 @@ CommandResult CommandStack::undo() {
     return result;
 }
 
-CommandResult CommandStack::redo() {
+CommandResult CommandStack::redo(const CommandOrigin origin) {
+    currentOrigin_ = origin;
+    auto result = redoStep();
+    result.origin = origin;
+    currentOrigin_ = CommandOrigin::User;
+    return result;
+}
+
+CommandResult CommandStack::redoStep() {
     const document::Snapshot before = document_.snapshot();
     if (!canRedo()) {
         auto result = makeResult(CommandAction::Redo, CommandStatus::NothingToRedo, before);
@@ -737,6 +764,14 @@ std::optional<std::string_view> CommandStack::undoLabel() const noexcept {
         return std::nullopt;
     }
     return history_[cursor_ - 1].label;
+}
+
+std::vector<std::string> CommandStack::historyLabels() const {
+    std::vector<std::string> labels;
+    labels.reserve(history_.size());
+    for (const auto& entry : history_)
+        labels.push_back(entry.label);
+    return labels;
 }
 
 std::optional<std::string_view> CommandStack::redoLabel() const noexcept {

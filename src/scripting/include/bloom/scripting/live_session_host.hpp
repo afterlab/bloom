@@ -119,8 +119,8 @@ inline constexpr std::size_t kLiveCommitQueueCapacity = 16;
 // thread inside drainOne() only.
 struct LiveSessionCommitter final {
     std::function<SessionCommandResult(commands::Transaction)> execute;
-    // false = undo, true = redo.
-    std::function<SessionCommandResult(bool)> history;
+    // false = undo, true = redo; the origin is who asked.
+    std::function<SessionCommandResult(bool, commands::CommandOrigin)> history;
     // True while an interactive gesture (drag, scrub-edit, text edit) is open.
     std::function<bool()> gestureOpen;
     // The live document revision, so a revision-guarded history step (MCP `history` with
