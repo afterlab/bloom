@@ -112,7 +112,7 @@ runtime::detail::MotionGeometry geometryOf(const std::int64_t width, const std::
 std::vector<double> pathValues(const double angle, const double length, const double cx,
                                const double cy, const double amount) {
     std::vector<double> values{0.0, 0.0, angle, length, cx, cy, amount};
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 11; ++i)
         values.push_back(0.0);
     return values;
 }
@@ -647,6 +647,7 @@ void testChains() {
         {"zoom", {.scene = Scene::Zoom, .jitter = true}},
         {"transform blur", {.scene = Scene::TransformBlur}},
         {"transform blur gaussian", {.scene = Scene::TransformBlur, .curve = document::kShutterCurveGaussian}},
+        {"transform blur, skew and fading opacity", {.scene = Scene::TransformBlur, .skew = 25.0, .skewAxis = 10.0, .fadeOpacity = true}},
         {"sub-frame", {.scene = Scene::SubFrame, .quality = document::kMotionQualityDraft}},
         {"sub-frame custom curve", {.scene = Scene::SubFrame, .quality = document::kMotionQualityDraft, .curve = document::kShutterCurveCustom, .offset = document::kShutterOffsetEnd}},
         {"echo add", {.scene = Scene::Echo}},
@@ -713,6 +714,27 @@ void testChains() {
         const auto c = evaluator.evaluate(sharp, request(sharp->output()), {});
         expect(frameOf(a) && frameOf(c) && maxDifference(*frameOf(a), *frameOf(c), 4, 4, 28, 20) > 0.01,
                "a moving texture is blurred by its shutter");
+    }
+    // The same with a skew and an opacity that fades through the shutter: the sub-frame accumulation
+    // resamples through the plain Transform 2D path (its own skew and opacity), so the path
+    // sampler's rows must agree with it.
+    {
+        const motion_test::MotionValues look{.scene = Scene::TransformBlur, .skew = 25.0,
+                                             .skewAxis = 10.0, .fadeOpacity = true};
+        auto subLook = look;
+        subLook.scene = Scene::SubFrame;
+        const auto sub = motion_test::motionPlan(subLook).plan;
+        const auto shutter = motion_test::motionPlan(look).plan;
+        const auto still = motion_test::motionPlan({.scene = Scene::TransformBlur}).plan;
+        const auto a = evaluator.evaluate(sub, request(sub->output()), {});
+        const auto b = evaluator.evaluate(shutter, request(shutter->output()), {});
+        const auto c = evaluator.evaluate(still, request(still->output()), {});
+        expect(frameOf(a) && frameOf(b) &&
+                   maxDifference(*frameOf(a), *frameOf(b), 4, 4, 28, 20) < 2e-4,
+               "sub-frame accumulation matches the Transform 2D shutter with skew and fading opacity");
+        expect(frameOf(b) && frameOf(c) &&
+                   maxDifference(*frameOf(b), *frameOf(c), 4, 4, 28, 20) > 0.01,
+               "skew and opacity change the Transform 2D shutter's picture");
     }
     // A still texture: the sub-frame samples sum to it, Echo's weights to their total, and the
     // optical-flow blur finds no motion.

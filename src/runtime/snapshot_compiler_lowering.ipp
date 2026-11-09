@@ -2490,15 +2490,9 @@ lowerImageEffect(const document::NodeRecord& node,
                 return std::nullopt;
             }
             // #484: with motion blur on, the transform resampled at each sub-frame.
-            if (auto blurred = transformMotionBlurKernel(node, transform)) {
-                // The shutter samples carry translate, pivot, scale and rotation only.
-                if (!transform.plainSkewOpacity()) {
-                    addTopologyFailure(node.id,
-                                       "Transform 2D skew and opacity need motion blur off.");
-                    return std::nullopt;
-                }
+            // Skew, skew axis and opacity ride in the shutter samples with the rest.
+            if (auto blurred = transformMotionBlurKernel(node, transform))
                 return runtime::CompiledImageEffect{node.id, *input, std::move(*blurred)};
-            }
             return runtime::CompiledImageEffect{node.id, *input, std::move(transform)};
         }
         addTopologyFailure(node.id, "Transform 2D parameters could not be lowered.");

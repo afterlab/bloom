@@ -279,9 +279,12 @@ sampleMotionOperands(const ImageEffectKernel& kernel, const CompiledCompositionP
         push(transform.pivot, at);
         push(transform.scale, at);
         push(transform.rotation, at);
+        push(transform.skew, at);
+        push(transform.skewAxis, at);
+        push(transform.opacity, at);
     };
     if (!path->transform) {
-        for (int i = 0; i < 7; ++i)
+        for (int i = 0; i < 10; ++i)
             values.push_back(0.0);
         values.push_back(0.0);
         return evaluable ? std::optional{std::move(values)} : std::nullopt;
@@ -291,7 +294,10 @@ sampleMotionOperands(const ImageEffectKernel& kernel, const CompiledCompositionP
     const bool animated = !constantParameter(transform.translate) ||
                           !constantParameter(transform.pivot) ||
                           !constantParameter(transform.scale) ||
-                          !constantParameter(transform.rotation);
+                          !constantParameter(transform.rotation) ||
+                          !constantParameter(transform.skew) ||
+                          !constantParameter(transform.skewAxis) ||
+                          !constantParameter(transform.opacity);
     if (!animated) {
         values.push_back(0.0);
         return evaluable ? std::optional{std::move(values)} : std::nullopt;
@@ -323,7 +329,8 @@ sampleMotionOperands(const ImageEffectKernel& kernel, const CompiledCompositionP
 //
 // [variant (1 accumulate, 2 path, 3 vector stage, 4 optical flow), frame index, operands offset,
 // row count], the kernel's constants, then (a path) at the operands offset [angle, length, centre x,
-// centre y, amount, translate x, y, pivot x, y, scale x, y, rotation] and the rows of seven.
+// centre y, amount, translate x, y, pivot x, y, scale x, y, rotation, skew, skew axis, opacity] and
+// the rows of ten (the same ten values at each shutter row).
 
 std::optional<PreparedColorGrade> prepareMotionGrade(const ImageEffectKernel& kernel,
                                                      const std::span<const double> values) {
@@ -347,10 +354,10 @@ std::optional<PreparedColorGrade> prepareMotionGrade(const ImageEffectKernel& ke
             static_cast<std::uint8_t>(path->mode) >
                 static_cast<std::uint8_t>(MotionPathMode::Transform) ||
             (path->mode == MotionPathMode::Transform) != path->transform.has_value() ||
-            (path->transform && !validTransform2DKernel(*path->transform)) || values.size() < 15)
+            (path->transform && !validTransform2DKernel(*path->transform)) || values.size() < 18)
             return std::nullopt;
-        const auto rows = static_cast<std::size_t>(values[14]);
-        if (values[14] < 0.0 || values.size() != 15 + 7 * rows ||
+        const auto rows = static_cast<std::size_t>(values[17]);
+        if (values[17] < 0.0 || values.size() != 18 + 10 * rows ||
             std::abs(values[3]) > 1.0e6 || std::abs(values[4]) > 1.0e6 ||
             std::abs(values[5]) > 1.0e6 || std::abs(values[6]) > 1.0e6)
             return std::nullopt;
@@ -369,9 +376,9 @@ std::optional<PreparedColorGrade> prepareMotionGrade(const ImageEffectKernel& ke
             data.push_back(0.0F);
         data[2] = static_cast<float>(data.size());
         data[3] = static_cast<float>(rows);
-        for (std::size_t i = 2; i < 14; ++i)
+        for (std::size_t i = 2; i < 17; ++i)
             data.push_back(static_cast<float>(values[i]));
-        for (std::size_t i = 15; i < values.size(); ++i)
+        for (std::size_t i = 18; i < values.size(); ++i)
             data.push_back(static_cast<float>(values[i]));
         // A spatial path with no extent is the identity.
         const bool still = (path->mode == MotionPathMode::Directional && values[3] == 0.0) ||

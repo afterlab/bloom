@@ -304,15 +304,15 @@ void testMotionBlurLowering(Expectations& expectations) {
     }
 
     // Transform 2D with its motion blur on.
-    {
+    for (const bool skewedAndFaded : {false, true}) {
         auto project = makeProject(singleLayerOptions());
         auto* composition = project.findComposition(kCompositionId);
         auto& graph = composition->graph();
-        const auto effectId = NodeId::fromRaw(1484);
+        const auto effectId = NodeId::fromRaw(skewedAndFaded ? 1584 : 1484);
         const auto* definition = builtInNodeDefinitions().find(kTransform2DNodeType, 1);
         require(definition != nullptr, "Transform 2D definition exists");
         std::vector<ParameterBinding> bindings;
-        std::uint64_t next = 1484;
+        std::uint64_t next = skewedAndFaded ? 1584 : 1484;
         for (const auto& parameter : definition->parameters) {
             const auto id = ParameterId::fromRaw(next++);
             auto value = parameter.defaultValue;
@@ -320,6 +320,13 @@ void testMotionBlurLowering(Expectations& expectations) {
                 value = true;
             if (parameter.role == "quality")
                 value = kMotionQualityDraft;
+            // Skew and opacity at other than their defaults ride in the shutter samples.
+            if (skewedAndFaded && parameter.role == "skew")
+                value = 20.0;
+            if (skewedAndFaded && parameter.role == "skewAxis")
+                value = 15.0;
+            if (skewedAndFaded && parameter.role == "opacity")
+                value = 0.5;
             require(composition->parameters().insert(
                         {id, parameter.schemaKey, ConstantValueSource{value}}),
                     "Transform 2D parameter is valid");
@@ -331,12 +338,14 @@ void testMotionBlurLowering(Expectations& expectations) {
         require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
                                NodeInputRef{effectId, "input"}}),
                 "source feeds Transform 2D");
-        require(graph.addEdge({EdgeId::fromRaw(1484), {effectId, "image"},
+        require(graph.addEdge({EdgeId::fromRaw(skewedAndFaded ? 1584 : 1484), {effectId, "image"},
                                NodeInputRef{kFirstLayerNode,
                                             std::string(kLayerOutputContentInputPort)}}),
                 "Transform 2D feeds Layer");
         auto result = compileRecipe(std::move(project));
-        expectations.expect(result.plan != nullptr, "Transform 2D with motion blur compiles");
+        expectations.expect(result.plan != nullptr,
+                            skewedAndFaded ? "Transform 2D with motion blur, skew and opacity compiles"
+                                           : "Transform 2D with motion blur compiles");
         if (result.plan) {
             const auto effects = effectsOf(*result.plan, effectId);
             const auto* path = effects.size() == 1
@@ -346,6 +355,16 @@ void testMotionBlurLowering(Expectations& expectations) {
                                     path->transform.has_value() &&
                                     path->shutter.quality == kMotionQualityDraft,
                                 "Transform 2D's motion blur is the path sampler through it");
+            if (skewedAndFaded) {
+                const auto* skew = path && path->transform
+                                       ? std::get_if<double>(&path->transform->skew.source)
+                                       : nullptr;
+                const auto* opacity = path && path->transform
+                                          ? std::get_if<double>(&path->transform->opacity.source)
+                                          : nullptr;
+                expectations.expect(skew && *skew == 20.0 && opacity && *opacity == 0.5,
+                                    "Transform 2D's motion blur keeps its skew and opacity");
+            }
             expectations.expect(evaluates(result), "Transform 2D with motion blur evaluates");
         }
     }

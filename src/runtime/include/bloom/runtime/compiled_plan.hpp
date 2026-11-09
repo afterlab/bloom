@@ -1280,7 +1280,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         return true;
     }
     // #484: the path sampler's angle, length, centre and amount, then a Transform path's
-    // translate, pivot, scale and rotation. The other motion kernels have constant operands.
+    // translate, pivot, scale, rotation, skew, skew axis and opacity. The other motion kernels have
+    // constant operands.
     if (const auto* path = std::get_if<MotionPathBlurKernel>(&kernel)) {
         visit(path->angle);
         visit(path->length);
@@ -1291,6 +1292,9 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(path->transform->pivot);
             visit(path->transform->scale);
             visit(path->transform->rotation);
+            visit(path->transform->skew);
+            visit(path->transform->skewAxis);
+            visit(path->transform->opacity);
         }
         return true;
     }

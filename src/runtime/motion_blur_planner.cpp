@@ -308,6 +308,12 @@ struct PathSample final {
                                               : 0.0;
 }
 
+// The prepared table's transform operands: the frame's own ten values follow the five path
+// operands, then one row of ten per shutter row (translate, pivot, scale, rotation, skew, skew axis,
+// opacity).
+constexpr std::size_t kTransformStride = 10;
+constexpr std::size_t kTransformBase = 15;
+
 std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
                                        const PreparedColorGrade& grade,
                                        const std::span<const MotionRect> inputs,
@@ -336,14 +342,18 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
         const auto transformAt =
             [&](const std::optional<std::size_t> row) -> std::optional<Transform2DGeometry> {
             const auto v = [&](const std::size_t i) {
-                return row ? rowValue(grade, 12 + 7 * *row + i) : rowValue(grade, 5 + i);
+                return row ? rowValue(grade, kTransformBase + kTransformStride * *row + i)
+                           : rowValue(grade, 5 + i);
             };
             PreparedTransform2D prepared{kernel.transform->extent, kernel.transform->filter,
                                          Transform2DValues{{v(0), v(1)},
                                                            {v(2), v(3)},
                                                            {v(4), v(5)},
                                                            v(6),
-                                                           {geometry.centreX, geometry.centreY}}};
+                                                           {geometry.centreX, geometry.centreY},
+                                                           v(7),
+                                                           v(8),
+                                                           v(9)}};
             const auto window = render::ImageWindow::create(
                 in.x, in.y, static_cast<std::uint64_t>(in.width),
                 static_cast<std::uint64_t>(in.height));
@@ -359,9 +369,16 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
                 return std::nullopt;
             return resolveTransform2DGeometry(prepared, *descriptor.value(), hs, vs);
         };
+        const auto transformOpacityAt = [&](const std::optional<std::size_t> row) {
+            return row ? rowValue(grade, kTransformBase + kTransformStride * *row + 9)
+                       : rowValue(grade, 5 + 9);
+        };
         struct Row final {
             std::optional<render::LayerTransform> transform;
             MotionRect window{};
+            // Opacity at the row: each sample's weight carries it, since the path sampler sums its
+            // samples and a Transform 2D opacity multiplies the whole premultiplied pixel.
+            double opacity = 1.0;
         };
         std::vector<Row> resolved;
         const auto count = rows == 0 ? std::size_t{1} : rows;
@@ -371,6 +388,7 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
                 return std::nullopt;
             Row row;
             row.transform = g->transform;
+            row.opacity = transformOpacityAt(rows == 0 ? std::nullopt : std::optional{r});
             if (g->window)
                 row.window = {g->window->originX(), g->window->originY(),
                               static_cast<std::int64_t>(g->window->extent().width()),
@@ -395,7 +413,7 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
             return a;
         };
         if (rows == 0) {
-            samples.push_back({affineOf(resolved[0]), affineOf(resolved[0]), 1.0});
+            samples.push_back({affineOf(resolved[0]), affineOf(resolved[0]), resolved[0].opacity});
         } else {
             // The widest displacement of the input's corners between consecutive rows.
             double widest = 0.0;
@@ -421,12 +439,14 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
                 const auto r0 = static_cast<std::size_t>(2 * k) * step;
                 const auto rc = r0 + step;
                 const auto r1 = r0 + 2 * step;
+                const auto weight = s.weight[static_cast<std::size_t>(k)];
                 if (shutter.jitter)
                     samples.push_back({affineOf(resolved[r0]), affineOf(resolved[r1]),
-                                       s.weight[static_cast<std::size_t>(k)]});
+                                       weight * 0.5 *
+                                           (resolved[r0].opacity + resolved[r1].opacity)});
                 else
                     samples.push_back({affineOf(resolved[rc]), affineOf(resolved[rc]),
-                                       s.weight[static_cast<std::size_t>(k)]});
+                                       weight * resolved[rc].opacity});
             }
         }
     } else {

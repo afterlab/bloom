@@ -82,6 +82,12 @@ struct MotionValues final {
     // reads no image (the accumulator's input or its sample is then absent).
     std::optional<std::int64_t> layerIn{};
     std::optional<std::int64_t> layerOut{};
+    // The moving Transform 2D's skew and skew axis (degrees) and an opacity that fades along the
+    // animation (a linear curve from 0.2 at frame -20 to 1 at frame 28), for the skew and opacity
+    // that ride in the shutter samples. Zero skew and no fade are the plain transform.
+    double skew = 0.0;
+    double skewAxis = 0.0;
+    bool fadeOpacity = false;
 };
 
 struct MotionPlan final {
@@ -207,6 +213,22 @@ struct MotionPlan final {
     }
     Transform2DKernel transform{translate, vec2(idBase + 26, 0.0, 0.0), vec2(idBase + 27, 1.0, 1.0),
                                 scalar(idBase + 28, 0.0)};
+    if (values.skew != 0.0 || values.skewAxis != 0.0) {
+        transform.skew = scalar(idBase + 92, values.skew);
+        transform.skewAxis = scalar(idBase + 93, values.skewAxis);
+    }
+    if (values.fadeOpacity) {
+        const auto key = [&](const std::uint64_t id, const std::int64_t frame, const double value) {
+            return CompiledScalarKeyframe{document::KeyframeId::fromRaw(id),
+                                          *core::RationalTime::create(frame, 24), value,
+                                          CompiledKeyframeInterpolation::Linear};
+        };
+        definition.scalarCurves.push_back(CompiledScalarCurve{
+            document::AnimationCurveId::fromRaw(idBase + 94),
+            {key(idBase + 95, -20, 0.2), key(idBase + 96, 28, 1.0)}});
+        transform.opacity = scalar(idBase + 97, 1.0);
+        transform.opacity.source = ScalarCurveIndex::fromRaw(definition.scalarCurves.size() - 1);
+    }
     const auto moving =
         usesMoving ? emitter.effect(texture, transform) : OperationIndex::fromRaw(0);
     const auto shutter = shutterOf(values);

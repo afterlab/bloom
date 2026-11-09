@@ -2733,6 +2733,8 @@ displayProofRunner(const bool customView) {
         const MotionValues spin{.scene = Scene::Spin, .quality = draft};
         const MotionValues zoom{.scene = Scene::Zoom, .quality = draft};
         const MotionValues shutter{.scene = Scene::TransformBlur, .quality = draft};
+        const MotionValues skewedShutter{.scene = Scene::TransformBlur, .quality = draft,
+                                         .skew = 25.0, .skewAxis = 10.0, .fadeOpacity = true};
         const MotionValues gather{.scene = Scene::VectorGather, .quality = draft};
         const MotionValues splat{.scene = Scene::VectorSplat, .quality = draft};
         const MotionValues layered{.scene = Scene::VectorLayered, .quality = draft};
@@ -2806,8 +2808,8 @@ displayProofRunner(const bool customView) {
         addMotion("feature.motion.path.directional", {directional}, 494200, "Directional path");
         addMotion("feature.motion.path.spin", {spin}, 494400, "Spin path");
         addMotion("feature.motion.path.zoom", {zoom}, 494600, "Zoom path");
-        addMotion("feature.motion.path.transform", {shutter, customCurve}, 494800,
-                  "the Transform 2D shutter through animated rows");
+        addMotion("feature.motion.path.transform", {shutter, customCurve, skewedShutter}, 494800,
+                  "the Transform 2D shutter through animated rows, with skew and a fading opacity");
         addMotion("feature.motion.vector.gather", {gather, jitteredGather, validGather}, 495200,
                   "the reconstruction gather, curved, with depth, jitter and valid vectors");
         addMotion("feature.motion.vector.splat", {splat, depthSplat, flowBlur, flowQuadratic}, 495600,
