@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace bloom::ui {
@@ -109,24 +111,51 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
         // effects/media/ACES transforms refuse (Unsupported) and the request takes the CPU path
         // with a reason.
         runtime::GpuSceneOcioContext ocioContext;
+        std::optional<runtime::TaskDiagnostic> unresolved;
         if (ocioContextResolver != nullptr) {
             runtime::GpuOcioCancellation cancel = [&context] {
                 return context.isCancellationRequested();
             };
             auto resolved = ocioContextResolver->resolve(cancel);
+            // A cold first frame qualifies the tools (hashing and starting them) on a machine that
+            // may be busy: a time-out or an I/O failure says nothing about the tools, and a failed
+            // resolve is not remembered, so the frame tries once more before it gives up.
+            if (!resolved.hasValue() && (resolved.error == runtime::GpuOcioContextError::Timeout ||
+                                         resolved.error == runtime::GpuOcioContextError::IoFailure))
+                resolved = ocioContextResolver->resolve(cancel);
             if (!resolved.hasValue() && resolved.error == runtime::GpuOcioContextError::Cancelled) {
                 return Result::cancelled();
             }
             if (resolved.hasValue()) {
                 ocioContext = *resolved.context;
+            } else {
+                unresolved = runtime::TaskDiagnostic{
+                    .code = "bloom.preview.gpu-scene.tools-unresolved",
+                    .severity = runtime::DiagnosticSeverity::Warning,
+                    .summary = "The GPU shader tools could not be prepared (" +
+                               std::string(runtime::gpuOcioContextErrorName(resolved.error)) +
+                               "), so GPU programs are unavailable for this frame",
+                    .detail = resolved.diagnostic,
+                    .suggestedAction = "Take the full CPU composition preview path."};
             }
         }
         const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext),
                                                   std::move(ocioContext), processingPhase);
         auto stage = makeCompositionPreviewGpuSceneStage(
             compiler, builder, qualifiedProcessorProvider, planCache, displayProgramService);
-        return stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
-                     context);
+        auto result =
+            stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride, context);
+        // A frame that leaves the GPU subset because the tools were not ready names that reason
+        // first, ahead of the operation the builder could not prepare without them.
+        if (unresolved && result.state() == runtime::TaskState::Succeeded &&
+            result.value().has_value() && *result.value() != nullptr &&
+            (*result.value())->status == runtime::PreviewGpuSceneStageStatus::UnsupportedGpuSubset) {
+            auto outcome = **result.value();
+            outcome.diagnostics.insert(outcome.diagnostics.begin(), std::move(*unresolved));
+            return Result::succeeded(
+                std::make_shared<const runtime::PreviewGpuSceneStageOutcome>(std::move(outcome)));
+        }
+        return result;
     };
 }
 

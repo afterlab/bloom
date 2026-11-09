@@ -14,7 +14,10 @@
 //   * that a warm identical refresh performs no new native work.
 //
 // The scenario is chosen with --scenario <name>; --project <file> runs the same checks over a saved
-// project instead (its lowest composition). It writes no route proof: it is evidence, and it SKIPs
+// project instead (its lowest composition). --cold makes the node's frame the process's first: no
+// baseline frame, and the viewer stage the application builds (makeSessionRefreshingGpuSceneStage),
+// which resolves the packaged tools lazily on the frame's own worker, so a cold first frame is
+// proved to prepare on the GPU. It writes no route proof: it is evidence, and it SKIPs
 // when there is no Wayland platform or device (and fails then with --require-device).
 
 #include "gpu_route_proof_harness_support.hpp"
@@ -32,6 +35,7 @@
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -65,6 +69,7 @@ struct HarnessOptions final {
     std::filesystem::path project;
     std::string scenario;
     bool requireDevice = false;
+    bool cold = false;
     bool valid = true;
 };
 
@@ -80,6 +85,8 @@ struct HarnessOptions final {
             options.scenario = argv[++index];
         } else if (argument == "--require-device") {
             options.requireDevice = true;
+        } else if (argument == "--cold") {
+            options.cold = true;
         } else {
             options.valid = false;
             return options;
@@ -279,11 +286,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ocioRequest.toolPackage.spirvValStagedDigest = bloom::core::Sha256Digest::fromLowercaseHex(
         std::string_view{BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256}.substr(7));
 #endif
-    runtime::GpuOcioContextResolver ocioResolver(std::move(ocioRequest));
+    auto ocioResolver = std::make_shared<runtime::GpuOcioContextResolver>(std::move(ocioRequest));
     runtime::GpuSceneOcioContext ocioContext;
-    {
+    if (!options.cold) {
         runtime::GpuOcioCancellation never = [] { return false; };
-        auto resolved = ocioResolver.resolve(never);
+        auto resolved = ocioResolver->resolve(never);
         if (!resolved.hasValue()) {
             std::cout << "SKIP: the packaged GPU tools are unavailable\n";
             return options.requireDevice ? 1 : 0;
@@ -294,10 +301,16 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     sceneMediaContext.assetBaseDirectory = mediaDirectory;
     const runtime::CpuGpuSceneBuilder sceneBuilder(nullptr, std::move(sceneMediaContext),
                                                    std::move(ocioContext));
-    GpuPreviewDisplayService service(
-        scheduler, ui::makeCompositionPreviewGpuSceneStage(fixture.compiler, sceneBuilder, fixture.provider),
-        fixture.productionCpuStage(),
-        fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader));
+    // Cold: the stage the application builds, resolving the tools on the first frame's worker.
+    auto gpuStage =
+        options.cold
+            ? ui::makeSessionRefreshingGpuSceneStage(fixture.compiler, fixture.evaluator,
+                                                     fixture.provider, nullptr, nullptr, ocioResolver)
+            : ui::makeCompositionPreviewGpuSceneStage(fixture.compiler, sceneBuilder,
+                                                      fixture.provider);
+    GpuPreviewDisplayService service(scheduler, std::move(gpuStage), fixture.productionCpuStage(),
+                                     fixture.productionCpuFallback(displayPreparer),
+                                     serviceOptions(options.loader));
 
     // The document: a saved project, or the scenario's composition.
     ui::ProjectHost projectHost(scheduler);
@@ -473,9 +486,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     std::uint64_t baselineDispatches = 0;
     if (scenario != nullptr) {
-        // The baseline: the same composition, a plain source, without the node under test.
-        const auto baseline = present("baseline");
-        baselineDispatches = baseline.dispatches;
+        // The baseline: the same composition, a plain source, without the node under test. A cold
+        // run has none: the node's frame is the first the process prepares.
+        if (!options.cold)
+            baselineDispatches = present("baseline").dispatches;
         // Build the scenario's chain between the source and the Layer.
         const auto [layerNode, solid] = layerAndContent(session);
         checks.expect(layerNode.isValid() && solid.isValid(), "the layer's content is found");
@@ -511,8 +525,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     checks.expect(afterWarm.nativeDispatches == beforeWarm.nativeDispatches,
                   "the warm viewer refresh performed zero additional native dispatches");
 
+    if (options.cold)
+        checks.expect(ocioResolver->counters().resolves == 1,
+                      "cold: the first frame resolved the packaged tools on its own worker");
     std::cout << "NODE-VIEWER scenario="
               << (options.project.empty() ? options.scenario : options.project.filename().string())
+              << (options.cold ? " cold=1" : "")
               << " nodes=[" << composition << "] provider="
               << (cold.frame != nullptr &&
                           cold.frame->provenance().provider ==

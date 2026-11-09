@@ -2300,6 +2300,17 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             TIMEOUT 300
         )
     endforeach()
+    # #524: the node's frame as the process's first, through the application's lazily resolving
+    # viewer stage (no baseline, no tools resolved beforehand).
+    foreach(scenario IN ITEMS four-color-gradient denoise-temporal)
+        bloom_add_test(
+            NAME bloom.ui.gpu_node_viewer_evidence.cold-${scenario}
+            COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --cold
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args}
+            LABELS ui gpu viewer node-evidence
+            TIMEOUT 300
+        )
+    endforeach()
 
     add_executable(bloom_ui_gpu_ram_preview_route_proof_test
         gpu_ram_preview_route_proof_tests.cpp

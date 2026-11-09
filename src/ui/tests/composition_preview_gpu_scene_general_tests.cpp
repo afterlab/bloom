@@ -14,6 +14,9 @@
 //     binding and have distinct command identities;
 //   * a warm identical request adds no new compile (the shared preparer's cache is warm);
 //   * a missing-tools resolver yields no fabricated program (typed CPU fallback);
+//   * cold process (#524): the process's first request, a Four-Color Gradient (a field program the
+//     preparer compiles) through a fresh resolver, prepares on the GPU; with no tools the same
+//     request falls back to the CPU and names the unresolved tools as its first reason;
 //   * cancellation is typed.
 //
 // Without the pinned tools the test is a clean skip. Media leaves and CST effects are covered by
@@ -23,10 +26,13 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -209,6 +215,34 @@ parsePinnedDigest(const std::string_view text) {
     return std::make_shared<bloom::runtime::GpuOcioContextResolver>(std::move(request));
 }
 
+// A Four-Color Gradient feeding the project's first Layer (#524): a field program the shared
+// preparer has to compile, so its frame needs the resolved tools.
+[[nodiscard]] bool addFourColorLayer(bloom::ui::CompositionSession& session) {
+    if (!session.addSolidLayer(QStringLiteral("Layer"), bloom::core::Color4d{0.2, 0.2, 0.2, 1.0}))
+        return false;
+    bloom::document::NodeId layer;
+    for (const auto& edge : session.composition()->graph().edges())
+        if (const auto* input = std::get_if<bloom::document::NodeInputRef>(&edge.destination);
+            input != nullptr && input->port == bloom::document::kLayerOutputContentInputPort) {
+            const auto* node = session.composition()->graph().findNode(input->nodeId);
+            if (node != nullptr && node->typeId == "bloom.layer-output")
+                layer = input->nodeId;
+        }
+    bloom::commands::Transaction add("Add", session.snapshot().revision());
+    add.emplace<bloom::commands::AddNode>(session.compositionId(), "bloom.four-color-gradient",
+                                          bloom::document::Vec2d{});
+    const auto gradient = session.executeNodeTransaction(std::move(add))
+                              .outputId<bloom::document::NodeId>(bloom::commands::kAddNodeOutput);
+    if (!layer.isValid() || !gradient)
+        return false;
+    bloom::commands::Transaction connect("Connect", session.snapshot().revision());
+    connect.emplace<bloom::commands::ConnectPorts>(
+        session.compositionId(), bloom::document::OutputPortRef{*gradient, std::string(bloom::document::kFourColorGradientImagePort)},
+        bloom::document::NodeInputRef{layer,
+                                      std::string(bloom::document::kLayerOutputContentInputPort)});
+    return session.executeNodeTransaction(std::move(connect)).changed();
+}
+
 [[nodiscard]] bloom::document::ColorSettings
 acesColorSettings(const bloom::document::ColorSettings& base) {
     const auto revision = bloom::color::ocioBuiltInContentRevision(
@@ -234,6 +268,45 @@ int runTests(int argc, char** argv) {
     Expectations expectations;
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
     Fixture fixture;
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+
+    // --- Cold process (#524): the first request of the process is a field program --------------
+    {
+        auto coldProject = makeProject();
+        const auto coldComposition = coldProject.initialCompositionId;
+        bloom::document::Document coldDocument(std::move(coldProject.project));
+        bloom::commands::CommandStack coldCommands(coldDocument);
+        bloom::ui::CompositionSession coldSession(coldDocument, coldCommands, coldComposition);
+        expectations.expect(addFourColorLayer(coldSession), "cold: a Four-Color layer is added");
+        const auto coldSnapshot = coldSession.snapshot();
+        const auto coldIdentity =
+            identityFor(coldSnapshot, coldComposition, coldSession.colorIntent());
+        auto coldResolver = packagedResolver();
+        const auto coldOutcome =
+            runStage(fixture, coldResolver, coldIdentity, coldSnapshot, expectations, "cold");
+        expectations.expect(coldOutcome != nullptr &&
+                                coldOutcome->status == PreviewGpuSceneStageStatus::Prepared,
+                            "cold: the process's first Four-Color frame prepares on the GPU");
+        if (coldOutcome != nullptr && coldOutcome->status != PreviewGpuSceneStageStatus::Prepared)
+            for (const auto& diagnostic : coldOutcome->diagnostics)
+                std::cerr << "  cold diagnostic " << diagnostic.code << ": " << diagnostic.summary
+                          << '\n';
+        expectations.expect(coldResolver->counters().resolves == 1,
+                            "cold: the frame resolved the packaged tools itself");
+
+        // The same request with no tools: the CPU path, with the unresolved tools as the reason.
+        const auto bareOutcome =
+            runStage(fixture, std::make_shared<bloom::runtime::GpuOcioContextResolver>(),
+                     coldIdentity, coldSnapshot, expectations, "cold-no-tools");
+        expectations.expect(
+            bareOutcome != nullptr &&
+                bareOutcome->status == PreviewGpuSceneStageStatus::UnsupportedGpuSubset &&
+                !bareOutcome->diagnostics.empty() &&
+                bareOutcome->diagnostics.front().code ==
+                    "bloom.preview.gpu-scene.tools-unresolved" &&
+                bareOutcome->diagnostics.front().summary.find("tools") != std::string::npos,
+            "cold-no-tools: the CPU fallback names the unresolved tools as its reason");
+    }
 
     // --- Bloom Neutral project: solid + text -> Neutral-bound general program --------------------
     auto neutralProject = makeProject();
