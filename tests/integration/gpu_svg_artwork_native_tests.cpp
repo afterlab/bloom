@@ -852,6 +852,17 @@ int corpusParity(const CorpusRun& run, const Options& options) {
     for (std::uint32_t top = 0; top < height; top += kTileHeight)
         for (std::uint32_t left = 0; left < width; left += kTileWidth)
             origins.emplace_back(left, top);
+    // BLOOM_SVG_CORPUS_TILE_STRIDE=n compares every n-th tile (a stride coprime with the tile
+    // columns walks a diagonal spread over every row and column) when the whole frame would hold
+    // the CPU for too long.
+    const std::size_t allTiles = origins.size();
+    if (const char* stride = std::getenv("BLOOM_SVG_CORPUS_TILE_STRIDE")) {
+        const auto step = std::max<std::size_t>(1, std::strtoul(stride, nullptr, 10));
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> sampled;
+        for (std::size_t index = 0; index < origins.size(); index += step)
+            sampled.push_back(origins[index]);
+        origins = std::move(sampled);
+    }
     const char* threadSetting = std::getenv("BLOOM_SVG_CORPUS_THREADS");
     const std::size_t threadCount = std::clamp<std::size_t>(
         threadSetting ? std::strtoul(threadSetting, nullptr, 10) : 4, 1, 16);
@@ -934,7 +945,7 @@ int corpusParity(const CorpusRun& run, const Options& options) {
         return 1;
     }
     std::cout << file.filename().string() << ' ' << width << 'x' << height << ": " << tiles
-              << " CPU reference tiles, " << mismatched
+              << " of " << allTiles << " CPU reference tiles, " << mismatched
               << " pixels outside 2e-6, largest difference " << largest << '\n';
     if (mismatched != 0) {
         std::cerr << "FAIL: the GPU frame differs from the CPU reference\n";
