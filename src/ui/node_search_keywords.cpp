@@ -158,6 +158,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kToneMapNodeType)
         return QStringLiteral("soft clip highlight compression roll off shoulder knee hdr limiter "
                               "shadows highlights recovery gamut compress");
+    // #517.
+    if (typeId == document::kColorMatrixNodeType)
+        return QStringLiteral("channel mixer channel combiner matrix swap channels gray grey "
+                              "luminance sepia convert hsl hsv ycbcr lab color model");
     // #503: the names compositors search for.
     if (typeId == document::kAlphaAssociationNodeType)
         return QStringLiteral("unmult premultiply unpremultiply premult unpremult straight "

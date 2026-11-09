@@ -602,6 +602,14 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.tone-map")
         self.assertIn("ceiling", effect[2]["keys"], "every frame is new")
 
+    def test_color_matrix_scenario_keys_an_element_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["color-matrix-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.color-matrix")
+        self.assertIn("rg", effect[2]["keys"], "every frame is new")
+
     def test_histogram_compare_scenario_wires_its_second_plate_and_keys_both(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["histogram-compare-2k"]

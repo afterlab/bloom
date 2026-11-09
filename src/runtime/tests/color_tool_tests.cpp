@@ -31,6 +31,7 @@ namespace {
 
 using namespace bloom;
 namespace detail = runtime::detail;
+using color_tool_test::ColorMatrixSettings;
 using color_tool_test::ToneMapSettings;
 
 int failures = 0;
@@ -290,6 +291,169 @@ void testDomainAndIdentity() {
            "the one fixed program builds from the table");
 }
 
+
+// --- Color Matrix ---------------------------------------------------------------------------------
+
+Pixel runMatrix(const ColorMatrixSettings& settings, Pixel pixel) {
+    const auto grade = prepare(color_tool_test::colorMatrix(1, settings));
+    if (!grade)
+        throw std::logic_error("the matrix kernel prepares");
+    if (grade->identity)
+        return pixel;
+    expect(detail::colorToolPixel(grade->data, pixel), "a finite pixel always succeeds");
+    return pixel;
+}
+
+ColorMatrixSettings modelPair(const std::int64_t input, const std::int64_t output) {
+    ColorMatrixSettings settings;
+    settings.inputModel = input;
+    settings.outputModel = output;
+    return settings;
+}
+
+void testMatrixKnownAnswers() {
+    using document::kColorMatrixSize4;
+    ColorMatrixSettings gray;
+    gray.preset = 2;
+    expect(same(runMatrix(gray, {1.0F, 0.0F, 0.0F, 1.0F}), {0.2126F, 0.2126F, 0.2126F, 1.0F}),
+           "the gray preset gives red its luminance weight");
+    ColorMatrixSettings swap;
+    swap.preset = 3;
+    expect(same(runMatrix(swap, {0.1F, 0.2F, 0.3F, 1.0F}), {0.3F, 0.2F, 0.1F, 1.0F}),
+           "the swap preset exchanges red and blue");
+    swap.preset = 4;
+    expect(same(runMatrix(swap, {0.1F, 0.2F, 0.3F, 1.0F}), {0.2F, 0.1F, 0.3F, 1.0F}),
+           "the swap preset exchanges red and green");
+    swap.preset = 5;
+    expect(same(runMatrix(swap, {0.1F, 0.2F, 0.3F, 1.0F}), {0.1F, 0.3F, 0.2F, 1.0F}),
+           "the swap preset exchanges green and blue");
+    ColorMatrixSettings sepia;
+    sepia.preset = 6;
+    expect(same(runMatrix(sepia, {1.0F, 1.0F, 1.0F, 1.0F}), {1.351F, 1.203F, 0.937F, 1.0F}),
+           "the sepia preset sums its rows over white");
+    ColorMatrixSettings custom;
+    custom.matrix = {0.5, 0.5, 0, 0, 0, 1, 0, 0, 2, 0, -1, 0, 0, 0, 0, 1};
+    expect(same(runMatrix(custom, {0.2F, 0.4F, 0.6F, 1.0F}), {0.3F, 0.4F, -0.2F, 1.0F}),
+           "a custom 3 x 3 matrix mixes the straight channels, HDR and negative results kept");
+    expect(same(runMatrix(custom, premultiplied(0.2F, 0.4F, 0.6F, 0.5F)),
+                premultiplied(0.3F, 0.4F, -0.2F, 0.5F)),
+           "a 3 x 3 matrix mixes the straight color of a partly covered pixel");
+    // The alpha row and column count only at 4 x 4.
+    ColorMatrixSettings alpha;
+    alpha.matrix = {1, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0.2126, 0.7152, 0.0722, 0};
+    expect(same(runMatrix(alpha, premultiplied(0.2F, 0.4F, 0.6F, 0.5F)),
+                premultiplied(0.2F, 0.4F, 0.6F, 0.5F)),
+           "at 3 x 3 the alpha row and column are ignored");
+    alpha.size = kColorMatrixSize4;
+    const float luma = 0.2126F * 0.2F + 0.7152F * 0.4F + 0.0722F * 0.6F;
+    expect(same(runMatrix(alpha, premultiplied(0.2F, 0.4F, 0.6F, 0.5F)),
+                premultiplied(0.2F + 0.25F, 0.4F, 0.6F, luma)),
+           "at 4 x 4 alpha is made from color, color from alpha, and alpha stays in range");
+    alpha.matrix = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 5};
+    expect(near(runMatrix(alpha, {0.2F, 0.2F, 0.2F, 0.5F})[3], 1.0F),
+           "a result alpha above one is limited to one");
+    alpha.matrix = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1};
+    expect(same(runMatrix(alpha, {0.2F, 0.2F, 0.2F, 0.5F}), {0.0F, 0.0F, 0.0F, 0.0F}),
+           "a negative alpha is zero and transparent black");
+    expect(same(runMatrix(sepia, {3.0F, 2.0F, 1.0F, 0.0F}), {3.0F, 2.0F, 1.0F, 0.0F}),
+           "a pixel with alpha 0 is left as stored");
+}
+
+void testMatrixModels() {
+    // Known answers of each model for a few colors.
+    expect(same(runMatrix(modelPair(0, 2), {1.0F, 0.0F, 0.0F, 1.0F}), {0.0F, 1.0F, 1.0F, 1.0F}),
+           "HSV of red");
+    expect(same(runMatrix(modelPair(0, 2), {0.0F, 1.0F, 0.0F, 1.0F}), {1.0F / 3.0F, 1.0F, 1.0F, 1.0F}),
+           "HSV of green: a third of a turn");
+    expect(same(runMatrix(modelPair(0, 2), {0.5F, 0.25F, 0.25F, 1.0F}), {0.0F, 0.5F, 0.5F, 1.0F}),
+           "HSV of a muted red");
+    expect(same(runMatrix(modelPair(0, 2), {8.0F, 4.0F, 0.0F, 1.0F}),
+                {1.0F / 12.0F, 1.0F, 8.0F, 1.0F}),
+           "HSV keeps an HDR value");
+    expect(same(runMatrix(modelPair(0, 1), {1.0F, 0.0F, 0.0F, 1.0F}), {0.0F, 1.0F, 0.5F, 1.0F}),
+           "HSL of red");
+    expect(same(runMatrix(modelPair(0, 1), {0.5F, 0.25F, 0.25F, 1.0F}),
+                {0.0F, 1.0F / 3.0F, 0.375F, 1.0F}),
+           "HSL of a muted red");
+    expect(same(runMatrix(modelPair(0, 3), {1.0F, 0.0F, 0.0F, 1.0F}),
+                {0.2126F, -0.2126F / 1.8556F, 0.5F, 1.0F}),
+           "YCbCr of red: its Rec. 709 luma and Cr of one half");
+    expect(same(runMatrix(modelPair(0, 3), {1.0F, 1.0F, 1.0F, 1.0F}), {1.0F, 0.0F, 0.0F, 1.0F}, 3e-5F),
+           "YCbCr of white has no chroma");
+    // Lab, with L, a and b divided by 100: white is 1, red is L* 53.24, a* 80.09, b* 67.20.
+    expect(same(runMatrix(modelPair(0, 4), {1.0F, 1.0F, 1.0F, 1.0F}), {1.0F, 0.0F, 0.0F, 1.0F}, 3e-4F),
+           "Lab of white");
+    expect(same(runMatrix(modelPair(0, 4), {1.0F, 0.0F, 0.0F, 1.0F}),
+                {0.5324F, 0.8009F, 0.6720F, 1.0F}, 6e-4F),
+           "Lab of red");
+    expect(near(runMatrix(modelPair(0, 4), {0.18F, 0.18F, 0.18F, 1.0F})[0], 0.49496F, 3e-4F),
+           "Lab lightness of 18 percent gray");
+    // Each model back to RGB is the inverse, over a set that includes HDR for the models that
+    // extend (HSL limits to 0 to 1).
+    const std::vector<Pixel> colors{{0.5F, 0.25F, 0.125F, 1.0F}, {0.9F, 0.1F, 0.4F, 1.0F},
+                                    {0.2F, 0.7F, 0.3F, 1.0F},   {0.0F, 0.3F, 0.9F, 1.0F},
+                                    {0.3F, 0.3F, 0.3F, 1.0F},   {0.05F, 0.02F, 0.01F, 1.0F}};
+    const std::vector<Pixel> hdr{{4.0F, 2.0F, 0.5F, 1.0F}, {0.2F, 6.0F, 1.5F, 1.0F}};
+    for (const std::int64_t model : {1, 2, 3, 4}) {
+        bool back = true;
+        for (const auto& color : colors) {
+            const auto out = runMatrix(modelPair(0, model), color);
+            const auto round = runMatrix(modelPair(model, 0), out);
+            back = back && same(round, color, 2e-4F);
+        }
+        if (model != 1)
+            for (const auto& color : hdr) {
+                const auto out = runMatrix(modelPair(0, model), color);
+                const auto round = runMatrix(modelPair(model, 0), out);
+                back = back && same(round, color, 2e-4F);
+            }
+        expect(back, "converting to a model and back reproduces the color (model " +
+                         std::to_string(model) + ")");
+    }
+    // A hue is a turn: 1.25 is 0.25, so a hue outside the turn wraps.
+    expect(same(runMatrix(modelPair(2, 0), {1.25F, 1.0F, 1.0F, 1.0F}),
+                runMatrix(modelPair(2, 0), {0.25F, 1.0F, 1.0F, 1.0F})),
+           "a hue wraps around the turn");
+}
+
+void testMatrixDomainAndIdentity() {
+    using color_tool_test::colorMatrix;
+    const auto identity = prepare(colorMatrix(1, {}));
+    expect(identity && identity->identity, "an identity matrix between RGB and RGB aliases");
+    ColorMatrixSettings model;
+    model.outputModel = 2;
+    const auto notIdentity = prepare(colorMatrix(1, model));
+    expect(notIdentity && !notIdentity->identity, "a color model change is a pass");
+    ColorMatrixSettings preset;
+    preset.preset = 1;
+    preset.matrix[0] = 5.0;
+    const auto presetGrade = prepare(colorMatrix(1, preset));
+    expect(presetGrade && presetGrade->identity, "a preset replaces the matrix elements");
+    ColorMatrixSettings bad;
+    bad.matrix[3] = 101.0;
+    expect(!prepare(colorMatrix(1, bad)), "an element beyond the domain is refused");
+    bad = {};
+    bad.matrix[3] = std::numeric_limits<double>::quiet_NaN();
+    expect(!prepare(colorMatrix(1, bad)), "a NaN element is refused");
+    bad = {};
+    bad.preset = 7;
+    expect(!prepare(colorMatrix(1, bad)), "an unknown preset is refused");
+    bad = {};
+    bad.inputModel = 5;
+    expect(!prepare(colorMatrix(1, bad)), "an unknown model is refused");
+    ColorMatrixSettings a;
+    a.matrix[1] = 0.25;
+    ColorMatrixSettings b = a;
+    b.size = 1;
+    const auto ga = prepare(colorMatrix(1, a));
+    const auto gb = prepare(colorMatrix(1, b));
+    expect(ga && gb && detail::colorGradeIdentity(*ga) != detail::colorGradeIdentity(*gb) &&
+               detail::validColorToolProgramData(ga->data) &&
+               detail::buildColorGradeProgram(detail::ColorGradeKind::ColorTool, ga->data)
+                   .succeeded(),
+           "a changed size changes the cache identity and the table builds the program");
+}
+
 bloom::render::Rgba32fImage image(const std::uint32_t width, const std::uint32_t height,
                                   const Pixel& fill) {
     const auto window = render::ImageWindow::create(0, 0, width, height);
@@ -446,6 +610,9 @@ int main() {
         testGamut();
         testAlpha();
         testDomainAndIdentity();
+        testMatrixKnownAnswers();
+        testMatrixModels();
+        testMatrixDomainAndIdentity();
         testImageBudgetAndCancellation();
         writeCapture();
     } catch (const std::exception& error) {

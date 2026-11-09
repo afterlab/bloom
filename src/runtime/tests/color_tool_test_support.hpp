@@ -47,4 +47,22 @@ struct ToneMapSettings final {
     return kernel;
 }
 
+struct ColorMatrixSettings final {
+    std::int64_t preset = document::kColorMatrixCustom;
+    std::int64_t size = document::kColorMatrixSize3;
+    std::int64_t inputModel = document::kColorModelRgb;
+    std::int64_t outputModel = document::kColorModelRgb;
+    std::array<double, 16> matrix{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+};
+
+[[nodiscard]] inline ColorToolKernel colorMatrix(const std::uint64_t idBase,
+                                                 const ColorMatrixSettings& settings) {
+    ColorToolKernel kernel;
+    kernel.operation = ColorToolOperation::ColorMatrix;
+    kernel.choices = {settings.preset, settings.size, settings.inputModel, settings.outputModel};
+    for (std::size_t index = 0; index < settings.matrix.size(); ++index)
+        kernel.values[index] = scalar(idBase + 60 + index, settings.matrix[index]);
+    return kernel;
+}
+
 } // namespace bloom::color_tool_test

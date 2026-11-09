@@ -2303,6 +2303,15 @@ lowerImageEffect(const document::NodeRecord& node,
             choice("method", 0, document::kToneMapBrightestChannel);
             flag("gamutCompress", 1);
             scalars({"knee", "ceiling", "shadows", "shadowRange", "gamutThreshold", "gamutLimit"});
+        } else if (node.typeId == document::kColorMatrixNodeType) {
+            // #517 Color Matrix: the preset, size and two color models, then the sixteen elements.
+            kernel.operation = runtime::ColorToolOperation::ColorMatrix;
+            choice("preset", 0, document::kColorMatrixPresetCount - 1);
+            choice("matrixSize", 1, document::kColorMatrixSize4);
+            choice("inputModel", 2, document::kColorModelCount - 1);
+            choice("outputModel", 3, document::kColorModelCount - 1);
+            scalars({"rr", "rg", "rb", "ra", "gr", "gg", "gb", "ga", "br", "bg", "bb", "ba", "ar",
+                     "ag", "ab", "aa"});
         }
         if (!lowered) {
             addTopologyFailure(node.id, "Color tool parameters could not be lowered.");

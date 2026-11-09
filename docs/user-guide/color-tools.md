@@ -27,3 +27,22 @@ on the straight color of scene-linear values and never changes alpha.
 
 Every value can be keyed or driven through its socket. Connect a Mask to **Mask** to limit the node
 to part of the image.
+
+## Color Matrix
+
+**Color Matrix** mixes the red, green and blue of an image with a matrix, and converts between color
+models. Find it under **Color Correction** in the Add menu. The formulas are in
+[Image filters](../architecture/image-filters.md#color-matrix).
+
+- **Matrix size** is 3 x 3, which mixes color and leaves alpha alone, or 4 x 4, which also lets alpha
+  feed the color and color make alpha (a luminance matte from an image, for example). Each element is
+  named for what it does: **Red from green** is how much of the green goes into the red result. The
+  identity (1 on the diagonal) changes nothing; a row of three equal luminance weights gives gray.
+- **Preset** replaces the elements with Gray (luminance), a swap of two channels or Sepia. Choose
+  **Custom matrix** to use the elements again; with a preset chosen the elements are not read.
+- **Read input as** and **Write result as** convert color models. To change only a hue, write the result as
+  HSV, edit it, and read it back as HSV with a second Color Matrix. HSV, YCbCr and Lab keep values above
+  1; HSL works on 0 to 1. Hue is a fraction of a turn; Lab's channels are divided by 100.
+- Color is mixed as straight color, so a soft edge keeps its color. A pixel with alpha 0 is not changed.
+
+Every element can be keyed or driven through its socket.

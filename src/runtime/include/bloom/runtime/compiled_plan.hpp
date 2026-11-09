@@ -993,12 +993,16 @@ struct PixelMathKernel final {
 // forEachColorGradeOperand order (colorToolScalarCount of them).
 //   ToneMap  choices: method, gamut compression on; values: knee, ceiling, shadow recovery, shadow
 //            range, gamut threshold, gamut limit.
-enum class ColorToolOperation : std::uint8_t { ToneMap };
+//   ColorMatrix  choices: preset, size, input model, output model; values: the matrix row by row
+//            (output red, green, blue, alpha; each from red, green, blue, alpha).
+enum class ColorToolOperation : std::uint8_t { ToneMap, ColorMatrix };
 inline constexpr std::size_t kColorToolMaxScalars = 24;
 [[nodiscard]] constexpr std::size_t colorToolScalarCount(const ColorToolOperation operation) noexcept {
     switch (operation) {
     case ColorToolOperation::ToneMap:
         return 6;
+    case ColorToolOperation::ColorMatrix:
+        return 16;
     }
     return 0;
 }

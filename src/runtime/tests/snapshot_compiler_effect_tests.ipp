@@ -1427,6 +1427,76 @@ void testColorToolLowering(Expectations& expectations) {
     }
 }
 
+// #517 Color Matrix lowers to one color tool kernel with its four constant choices and sixteen
+// elements (with their parameter identities) in row order.
+void testColorMatrixLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(994);
+    const auto* definition = builtInNodeDefinitions().find(kColorMatrixNodeType, 1);
+    require(definition != nullptr, "the Color Matrix definition exists");
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    auto& graph = composition->graph();
+    std::vector<ParameterBinding> bindings;
+    std::map<std::string, ParameterId> ids;
+    std::uint64_t next = 2900;
+    for (const auto& parameter : definition->parameters) {
+        auto value = parameter.defaultValue;
+        if (parameter.role == "preset")
+            value = std::int64_t{6};
+        if (parameter.role == "matrixSize")
+            value = kColorMatrixSize4;
+        if (parameter.role == "inputModel")
+            value = kColorModelHsv;
+        if (parameter.role == "outputModel")
+            value = kColorModelLab;
+        if (parameter.role == "rg")
+            value = 0.25;
+        if (parameter.role == "aa")
+            value = 0.5;
+        const auto id = ParameterId::fromRaw(next++);
+        require(composition->parameters().insert({id, parameter.schemaKey, ConstantValueSource{value}}),
+                "Color Matrix parameter is valid");
+        ids[parameter.role] = id;
+        bindings.push_back({parameter.role, id});
+    }
+    require(graph.addNode({effectId, std::string(kColorMatrixNodeType), std::move(bindings), 1}),
+            "Color Matrix node is accepted");
+    require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+    require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                           NodeInputRef{effectId, "input"}}),
+            "source feeds Color Matrix");
+    require(graph.addEdge({EdgeId::fromRaw(994), {effectId, "image"},
+                           NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+            "Color Matrix feeds Layer");
+    expectations.expect(project.validate().ok(), "Color Matrix graph is valid document truth");
+    const auto result = compile(std::move(project), registry);
+    expectations.expect(result.plan != nullptr, "Color Matrix graph compiles");
+    if (!result.plan)
+        return;
+    const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+        const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+        return item && item->sourceNodeId == effectId;
+    });
+    require(effect != result.plan->operations().end(), "Color Matrix lowers to an image effect");
+    const auto* kernel = std::get_if<runtime::ColorToolKernel>(
+        &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+    const auto element = [&](const std::size_t slot, const char* role, const double value) {
+        const auto* source = kernel ? std::get_if<double>(&kernel->values[slot].source) : nullptr;
+        return source != nullptr && *source == value && kernel->values[slot].id == ids[role];
+    };
+    expectations.expect(
+        kernel && kernel->operation == runtime::ColorToolOperation::ColorMatrix &&
+            kernel->choices[0] == 6 && kernel->choices[1] == kColorMatrixSize4 &&
+            kernel->choices[2] == kColorModelHsv && kernel->choices[3] == kColorModelLab &&
+            element(0, "rr", 1.0) && element(1, "rg", 0.25) && element(5, "gg", 1.0) &&
+            element(15, "aa", 0.5),
+        "Color Matrix lowers its choices and sixteen elements with their identities");
+}
+
 // #504 Colorize lowers to one colorize kernel with its constant mode. Each mode keeps the
 // identities of only the operands it reads (Gradient Map also its source and cycle); every other
 // operand stays the kernel's constant default without an identity, so animating it neither claims

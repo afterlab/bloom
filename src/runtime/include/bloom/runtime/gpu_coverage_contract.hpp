@@ -203,7 +203,8 @@ BLOOM_GPU_REQUIRED_EFFECT(StatisticsKernel,
 
 BLOOM_GPU_REQUIRED_EFFECT(ColorToolKernel,
                           "Tone Map: gamut compression, shadow recovery and a smooth highlight "
-                          "roll-off of straight scene-linear color (#518)");
+                          "roll-off of straight scene-linear color (#518); Color Matrix: a 3 x 3 or "
+                          "4 x 4 channel mix between color models (#517)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

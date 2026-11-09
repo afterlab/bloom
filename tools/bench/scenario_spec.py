@@ -423,6 +423,19 @@ SCENARIOS["tone-map-2k"] = {
     ],
 }
 
+# #517: Color Matrix over a plate: a keyed 4 x 4 mix written as Lab, so every frame is new and the
+# cost is the conversion's pass. Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["color-matrix-2k"] = {
+    "description": "A PNG16 plate through Color Matrix written as Lab with a keyed element.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.color-matrix", {"outputModel": "Lab"},
+                      {"keys": {"rg": [[0, 0.0], [23, 0.5]]}}]]},
+    ],
+}
+
 # #349: Image Compare (a Split whose position is keyed, against a second plate) and then Histogram
 # (its range keyed), so every frame is new and the cost is the compare pass and the three Histogram
 # passes (the tile counts, their sums and the plot). Written, not run: it has no recorded numbers and

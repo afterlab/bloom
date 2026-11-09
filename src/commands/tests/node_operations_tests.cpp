@@ -1119,6 +1119,23 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tmLimit,
                                ConstantValueSource{1.0});
 
+    // #517 Color Matrix: its elements and choices edit within their domains and refuse outside them.
+    const auto colorMatrix = addRecipe("bloom.color-matrix");
+    const auto cmPreset = colorMatrix.outputId<ParameterId>("parameter.preset");
+    const auto cmModel = colorMatrix.outputId<ParameterId>("parameter.outputModel");
+    const auto cmElement = colorMatrix.outputId<ParameterId>("parameter.rg");
+    if (!cmPreset || !cmModel || !cmElement)
+        throw std::logic_error("Color Matrix exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *cmPreset, ConstantValueSource{std::int64_t{6}});
+    (void)exercise<SetParameterSource>(test, fixture, *cmModel, ConstantValueSource{std::int64_t{4}});
+    (void)exercise<SetParameterSource>(test, fixture, *cmElement, ConstantValueSource{-2.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *cmPreset,
+                               ConstantValueSource{std::int64_t{7}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *cmModel,
+                               ConstantValueSource{std::int64_t{5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *cmElement,
+                               ConstantValueSource{101.0});
+
     // #348 Corner Pin, ST Map and Displace: their corners, amounts and choices edit within their
     // domains and refuse outside them.
     const auto pin = addRecipe("bloom.corner-pin");

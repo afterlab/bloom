@@ -1550,9 +1550,16 @@ displayProofRunner(const bool customView) {
             shadows.shadows = 1.5;
             shadows.knee = 2.0;
             shadows.ceiling = 6.0;
-            return runGrades({toneMap({}), toneMap(brightest), toneMap(shadows)}, 518000,
-                             "production Tone Map: both roll-off methods and shadow recovery over "
-                             "HDR and signed values, full frame and ROI");
+            bloom::color_tool_test::ColorMatrixSettings gray;
+            gray.preset = 2;
+            return runGrades({toneMap({}), toneMap(brightest), toneMap(shadows),
+                              [gray](const std::uint64_t idBase) -> ImageEffectKernel {
+                                  return bloom::color_tool_test::colorMatrix(idBase, gray);
+                              }},
+                             518000,
+                             "production Tone Map and Color Matrix: both roll-off methods, shadow "
+                             "recovery and a gray mix over HDR and signed values, full frame and "
+                             "ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     add(
@@ -1569,6 +1576,40 @@ displayProofRunner(const bool customView) {
             return runGrades({toneMap(hard), toneMap(gamut)}, 518600,
                              "production Tone Map node: a hard clip, and gamut compression with a "
                              "brightest-channel roll-off and darkened shadows, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    // #517 Color Matrix: a 3 x 3 mix, a 4 x 4 mix that makes alpha from color, and every color model
+    // in and out through the production builder.
+    const auto colorMatrix = [](const bloom::color_tool_test::ColorMatrixSettings settings) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            return bloom::color_tool_test::colorMatrix(idBase, settings);
+        };
+    };
+    const auto matrixModels = [colorMatrix](const std::int64_t first, const std::int64_t last) {
+        std::vector<std::function<ImageEffectKernel(std::uint64_t)>> kernels;
+        for (std::int64_t model = first; model <= last; ++model) {
+            bloom::color_tool_test::ColorMatrixSettings out;
+            out.outputModel = model;
+            bloom::color_tool_test::ColorMatrixSettings in;
+            in.inputModel = model;
+            in.preset = 3;
+            kernels.push_back(colorMatrix(out));
+            kernels.push_back(colorMatrix(in));
+        }
+        return kernels;
+    };
+    add(
+        "node.bloom.color-matrix", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color tool tests",
+        [runGrades, colorMatrix, matrixModels] {
+            bloom::color_tool_test::ColorMatrixSettings four;
+            four.size = bloom::document::kColorMatrixSize4;
+            four.matrix = {0.5, 0.5, 0, 0.25, 0, 1, 0, 0, 2, 0, -1, 0, 0.2126, 0.7152, 0.0722, 0};
+            auto kernels = matrixModels(1, 4);
+            kernels.push_back(colorMatrix(four));
+            return runGrades(kernels, 517000,
+                             "production Color Matrix node: a 4 x 4 mix with alpha from color and "
+                             "every color model read and written, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from

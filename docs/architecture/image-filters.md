@@ -1792,6 +1792,57 @@ the CPU oracle with cold, warm and changed-value runs; `effect.ColorToolKernel` 
 prepare through the production builder in the coverage contract. [Benchmarks](../development/benchmarks.md)
 lists `tone-map-2k`, written and not yet run.
 
+## Color Matrix
+
+`bloom.color-matrix`, schema 1, under Color Correction (issue #517), mixes the channels of an image
+with a 3 x 3 or 4 x 4 matrix and converts between color models. It has one Image in, `input`, one
+Image out, `image`, and the optional effect mask, and lowers to the same `ColorToolKernel` image
+effect (grade kind `ColorTool`) as Tone Map.
+
+| Role | Default | Domain |
+|---|---|---|
+| `preset` | Custom matrix | Custom matrix, Identity, Gray (luminance), Swap red and blue, Swap red and green, Swap green and blue, Sepia |
+| `matrixSize` | 3 x 3 | 3 x 3 (color), 4 x 4 (color and alpha) |
+| `inputModel` | RGB | RGB, HSL, HSV, YCbCr, Lab |
+| `outputModel` | RGB | RGB, HSL, HSV, YCbCr, Lab |
+| `rr` ... `aa` | the identity | -100 to 100; `xy` is the share of input `y` in result `x` |
+
+The sixteen elements have sockets and can be keyed or driven; the choices are constants. A preset
+other than Custom replaces the elements with its own matrix (the elements are then not read); the
+alpha row and column of a preset are the identity's.
+
+**The pixel**, in binary32, on the straight color (stored color divided by alpha). A pixel with alpha
+0 is left as stored, so a matrix cannot make alpha from nothing.
+
+1. The input is read as `inputModel` and converted to RGB.
+2. Each result channel is `((m0 * r + m1 * g) + m2 * b)`, and at 4 x 4 also `+ m3 * a`, for the red,
+   green and blue rows; at 4 x 4 the alpha row is the same sum, limited to [0, 1]. At 3 x 3 alpha is
+   unchanged and the alpha column is not read.
+3. The result is converted from RGB to `outputModel`, multiplied by the result's alpha, and a result
+   alpha of 0 is transparent black.
+
+The models are on scene-linear values, with the hue a fraction of a turn. HSV is
+`(h, max - min over max, max)`, defined for HDR values, negatives limited to 0. HSL is the standard
+HSL and limits RGB and, going back, saturation and lightness, to [0, 1]: use HSV, YCbCr or Lab for
+values above 1. YCbCr uses the Rec. 709 luma weights on linear values (`Cb = (B - Y) / 1.8556`,
+`Cr = (R - Y) / 1.5748`, zero for gray). Lab is CIE Lab for linear Rec. 709 primaries and D65 white,
+with L, a and b divided by 100 so white is 1 and the other axes lie within about -1.3 to 1.3; its cube
+root is four Newton steps from a bit-level first guess, the same exact operations on both routes,
+and values below the linear segment of Lab's curve (including negatives) use its linear part. A
+non-RGB result is stored premultiplied like any color, so convert back before compositing a
+partly covered image.
+
+**Identity and cache.** An identity matrix between RGB and RGB aliases its input exactly. Otherwise the
+packed table (32 floats: the operation, size and two models, then the sixteen elements after any
+preset) is the cache identity. Every operation is exact in binary32 with correctly rounded division, so
+the CPU reference and the GPU program (the same fixed `bloom.render.color-tool.v1`) agree bit for bit.
+
+**Evidence.** `color_tool_tests.cpp` reads preset, custom, 3 x 3 and 4 x 4 results, known values of each
+model (red, white, gray, HDR) and the round trip of every model, the domains and the identity.
+`effect.ColorToolKernel` and `node.bloom.color-matrix` prepare through the production builder, and
+the native harness holds ten variants (each model out and back, a 4 x 4 mix and a preset) to the CPU
+oracle. [Benchmarks](../development/benchmarks.md) lists `color-matrix-2k`, written and not yet run.
+
 ## Histogram
 
 `bloom.histogram`, schema 1, under Tracking & Analysis (issue #349), has one Image in, `input`, and one

@@ -1315,6 +1315,24 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         }
         return bloom::runtime::ImageEffectKernel{bloom::color_tool_test::toneMap(id, settings)};
     };
+    // #517 Color Matrix: variants 0 to 3 write HSL, HSV, YCbCr and Lab, 4 to 7 read them back (a
+    // swap preset between), 8 is a 4 x 4 mix with alpha from color and 9 the sepia preset.
+    const auto colorMatrix = [](const std::uint64_t id, const int variant) {
+        bloom::color_tool_test::ColorMatrixSettings settings;
+        if (variant < 4) {
+            settings.outputModel = variant + 1;
+        } else if (variant < 8) {
+            settings.inputModel = variant - 3;
+            settings.preset = 3;
+        } else if (variant == 8) {
+            settings.size = bloom::document::kColorMatrixSize4;
+            settings.matrix = {0.5, 0.5, 0, 0.25, 0, 1, 0, 0, 2,
+                               0,   -1,  0, 0.2126, 0.7152, 0.0722, 0};
+        } else {
+            settings.preset = 6;
+        }
+        return bloom::runtime::ImageEffectKernel{bloom::color_tool_test::colorMatrix(id, settings)};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1335,8 +1353,14 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         if (auto* v = std::get_if<bloom::runtime::VignetteKernel>(&kernel))
             v->center.source = bloom::document::Vec2d{-3.0, 2.0};
         // #518: a moved ceiling changes the program's data in every variant.
-        if (auto* t = std::get_if<bloom::runtime::ColorToolKernel>(&kernel))
-            t->values[1].source = 3.5;
+        if (auto* t = std::get_if<bloom::runtime::ColorToolKernel>(&kernel)) {
+            if (t->operation == bloom::runtime::ColorToolOperation::ColorMatrix) {
+                t->choices[0] = 0;
+                t->values[1].source = 0.75;
+            } else {
+                t->values[1].source = 3.5;
+            }
+        }
         if (auto* a = std::get_if<bloom::runtime::AlphaAssociationKernel>(&kernel)) {
             if (a->mode == bloom::runtime::AlphaAssociationMode::RemoveMatting)
                 a->background.source = Color4d{0.75, 0.1, 0.3, 1.0};
@@ -1366,7 +1390,10 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
               colorize(id + 50, 18),   colorize(id + 50, 19),     vignette(id + 50, 0),
               vignette(id + 50, 1),    vignette(id + 50, 2),      vignette(id + 50, 3),
               toneMap(id + 50, 0),     toneMap(id + 50, 1),       toneMap(id + 50, 2),
-              toneMap(id + 50, 3)}) {
+              toneMap(id + 50, 3),     colorMatrix(id + 50, 0),   colorMatrix(id + 50, 1),
+              colorMatrix(id + 50, 2), colorMatrix(id + 50, 3),   colorMatrix(id + 50, 4),
+              colorMatrix(id + 50, 5), colorMatrix(id + 50, 6),   colorMatrix(id + 50, 7),
+              colorMatrix(id + 50, 8), colorMatrix(id + 50, 9)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;
