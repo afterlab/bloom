@@ -1,5 +1,6 @@
 #include "command_test_support.hpp"
 
+#include <bloom/commands/track_operations.hpp>
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -1120,6 +1121,63 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{5}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *stMapEdges,
                                ConstantValueSource{std::int64_t{4}});
+
+    // #513 Stabilize: its choices and points edit within their domains and refuse outside them, and
+    // a finished track is stored as one undo step: a Table block of the positions and the keys.
+    const auto stabilize = addRecipe("bloom.stabilize");
+    const auto stabilizeMode = stabilize.outputId<ParameterId>("parameter.mode");
+    const auto stabilizePosition = stabilize.outputId<ParameterId>("parameter.position");
+    const auto stabilizeNode = stabilize.outputId<NodeId>(kAddNodeOutput);
+    if (!stabilizeMode || !stabilizePosition || !stabilizeNode)
+        throw std::logic_error("Stabilize exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *stabilizeMode, ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *stabilizeMode,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *stabilizePosition,
+                               ConstantValueSource{Vec2d{0.0, 2.0e6}});
+    {
+        const std::vector<bloom::commands::TrackRow> rows{
+            {0, 10.0, -4.0, 1.0}, {1, 12.5, -3.0, 0.97}, {2, 15.0, -2.25, 0.95}};
+        bloom::commands::TrackStorage storage;
+        storage.composition = kCompositionId;
+        storage.node = *stabilizeNode;
+        storage.position = *stabilizePosition;
+        storage.settings = "pattern=16;search=32";
+        storage.createdAt = "2026-11-09T00:00:00Z";
+        const auto before = fixture.document.snapshot();
+        const auto historySize = fixture.stack.size();
+        auto transaction = bloom::commands::makeStoreTrackTransaction(storage, rows);
+        const auto result = fixture.stack.execute(std::move(transaction));
+        test.expect(result.status == CommandStatus::Succeeded && fixture.stack.size() == historySize + 1,
+                    "storing a track is one history entry");
+        const auto& project = fixture.document.snapshot().project();
+        const auto blocks = project.dataBlocks();
+        const document::DataBlockRecord* track = nullptr;
+        for (const auto& block : blocks)
+            if (block.typeId == bloom::commands::kTrackBlockTypeId)
+                track = &block;
+        const auto* table = track == nullptr ? nullptr : std::get_if<document::DataBlockTable>(&track->payload);
+        test.expect(table != nullptr, "the payload is a table");
+        test.expect(table != nullptr && table->columns.size() == 4 && table->columns[1].values.size() == 3,
+                    "four columns of three rows");
+        test.expect(track != nullptr && track->subject.has_value() &&
+                        std::holds_alternative<NodeId>(*track->subject) &&
+                        std::get<NodeId>(*track->subject) == *stabilizeNode,
+                    "the block is about the node");
+        test.expect(table != nullptr && table->columns.size() == 4 && table->columns[1].values.size() == 3 &&
+                        std::get<double>(table->columns[2].values[1]) == 12.5 &&
+                        std::get<std::int64_t>(table->columns[0].values[2]) == 2 &&
+                        track->subject == std::optional<document::ExtensionTarget>{*stabilizeNode},
+                    "the track is a Table of frame, score, x and y about the node");
+        const auto* composition = fixture.document.snapshot().project().findComposition(kCompositionId);
+        const auto* position = composition == nullptr ? nullptr : composition->parameters().find(*stabilizePosition);
+        test.expect(position != nullptr && std::holds_alternative<document::AnimationCurveSource>(position->source),
+                    "the position is keyed with the track");
+        test.expect(fixture.stack.undo().changed() && sameTruth(fixture.document.snapshot(), before) &&
+                        fixture.document.snapshot().project().dataBlocks().empty(),
+                    "undoing the track removes the block and the keys together");
+        test.expect(fixture.stack.redo().changed(), "the track redoes");
+    }
 
     // #486 Sharpen: its values edit within their domains and refuse outside them.
     const auto sharpen = addRecipe("bloom.sharpen");

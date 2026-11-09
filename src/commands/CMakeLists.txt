@@ -10,6 +10,7 @@ target_sources(
         parameter_source.cpp
         asset_operations.cpp
         data_block_operations.cpp
+        track_operations.cpp
         export_queue_operations.cpp
         asset_organization_operations.cpp
         footage_interpretation_operations.cpp
@@ -46,6 +47,7 @@ target_sources(
             include/bloom/commands/operations.hpp
             include/bloom/commands/asset_operations.hpp
             include/bloom/commands/data_block_operations.hpp
+            include/bloom/commands/track_operations.hpp
             include/bloom/commands/export_queue_operations.hpp
             include/bloom/commands/node_operations.hpp
             include/bloom/commands/entry_layer_operations.hpp
