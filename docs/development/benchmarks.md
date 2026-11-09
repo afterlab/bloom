@@ -424,6 +424,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `camera-shake-2k` | 1920×1080 | 24 | A PNG16 plate under a Handheld Camera Shake (#512) of 24 by 16 pixels and 1° of roll, three octaves, auto overscan on and its motion blur on, so every frame is new and resamples the plate once per shutter sample |
 | `frame-rate-hold-2k` | 1920×1080 | 24 | A PNG16 plate through Frame Rate Hold (#564) at 12 fps with a seeded irregular cadence, over a Transform 2D that moves the plate so every held picture is new. Written, not yet run: it has no recorded numbers and no budget |
 | `codec-degrade-2k` | 1920×1080 | 24 | A PNG16 plate under Codec Degrade (#563) with 16 px blocks, a 12-frame GOP and 75% P-frame persistence, its quality keyed from 60 to 15 so every frame is new and renders its chain from the last keyframe, optical flow included. Written, not yet run: it has no recorded numbers and no budget |
+| `corner-pin-2k` | 1920×1080 | 24 | A PNG16 plate under Corner Pin (#348), its top-right corner keyed so every frame is new. Written, not yet run: no recorded numbers and no budget |
 | `lens-distortion-2k` | 1920×1080 | 24 | A PNG16 plate under Lens Distortion (#486) in Redistort mode, its radial `k1` keyed from -0.1 to -0.3 so every frame is new. Only the warped image is read, so the ST map is not built. Written, not yet run: it has no recorded numbers and no budget |
 | `chromatic-aberration-2k` | 1920×1080 | 24 | A PNG16 plate under Chromatic Aberration (#486), its amount keyed from 1% to 4% so every frame is new. Written, not yet run: it has no recorded numbers and no budget |
 | `light-rays-2k` | 1920×1080 | 24 | A PNG16 plate under Light Rays (#508) from its luminance, its length keyed from 40% to 90% so every frame is new and each pixel gathers a different number of samples. Written, not yet run: it has no recorded numbers and no budget |
@@ -959,6 +960,13 @@ measure it end to end. A frame renders the chain from its keyframe, so its cost 
 length and with its position in the GOP: the worst frame in a GOP of `n` runs about `n` optical flow
 solves and `n` coded passes, plus one Encode and one Finish pass. The 16 px DCT does more work per
 pixel than the 8 px one. These are suspicions to check against the scenario, not findings.
+
+### Corner Pin, ST Map and Displace (#348)
+
+These have no recorded numbers and no budget. The scenario `corner-pin-2k` is written, not run. Read
+from the code: each node is one field raster pass; a region of interest reads the whole input; Bicubic
+reads sixteen texels per pixel against four for Bilinear; on the GPU the input sits beside the canvas in the
+raster's atlas, as for Lens Distortion.
 
 ### Lens Distortion (#486)
 

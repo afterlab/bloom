@@ -2329,3 +2329,39 @@ node cost bench (benchmarks.md, "Node cost") times every route cold, warm and pe
 and 2160p against a Grade and the closest existing nodes, and the `cryptomatte-mattes-2k` scenario
 of the real-world suite plays, fills and exports a Cryptomatte matte mask, a masked Grade and a
 node track matte on the bench EXR.
+
+## Corner Pin, ST Map and Displace
+
+Three nodes under **Distort** (#348) that move a picture by reading it somewhere else. Each is an
+inverse mapping: for every output pixel a position of the input is chosen and read. They differ only in
+where the position comes from. All three lower to one field raster (`fields.md`), so the CPU reference
+and the GPU run the same program, and none is a GPU coverage exception.
+
+| Node | Position read |
+| --- | --- |
+| Corner Pin (`bloom.corner-pin`) | The input's data window pinned to a quad of four corners, with perspective. Each corner is an animatable offset in pixels from where the input's own corner is (y down). The default is all zero, the identity. |
+| ST Map (`bloom.st-map`) | Absolute: two chosen channels of the `map` input hold the position as a fraction of the composition frame (0, 0 bottom left, 1, 1 top right). This is the map Lens Distortion writes. |
+| Displace (`bloom.displace`) | Relative: the pixel's own position plus `(value - midpoint) * amount` pixels per axis, from the chosen X and Y channels of the `map` input (None leaves an axis alone). |
+
+Common rules:
+
+- **Raw maps.** The map is read as the data it is: unclamped (values below zero and above one keep
+  their meaning), with no colour conversion, and never through an input colour space. The texel is read as
+  stored, so a map with partial alpha is not unpremultiplied.
+- **Filter** is Bilinear, Nearest (exactly one texel, for ID and data pictures) or Bicubic (Catmull-Rom).
+  **Edges** (ST Map, Displace) is Transparent, Extend, Repeat or Mirror. Corner Pin reads outside its
+  window as transparent.
+- The picture's colour is not changed: values above one, negatives and alpha keep their range.
+- Without a connected map, ST Map and Displace pass the picture through unchanged.
+- Corner Pin with a degenerate quad (collinear corners, or a fold through the horizon) shows nothing where
+  the map is undefined rather than a smear.
+- A huge map value cannot overflow: a position beyond a billion pixels reads transparent.
+- Because the position can point anywhere, a region of interest reads the whole input.
+
+Cost, from the code: one raster pass; Bicubic reads sixteen texels per pixel, Bilinear four, Nearest one.
+No timing is recorded; see [Benchmarks](../development/benchmarks.md#corner-pin-st-map-and-displace-348).
+
+Tests: `field_program_tests` (the Homography against an independent forward quad map, identity,
+degenerate quads, window mode, far-position guard), `snapshot_compiler_warp_tests` (lowering and pixels,
+tied to Lens Distortion's ST map), the three Required GPU coverage fixtures and the native CPU/GPU
+parity cases.

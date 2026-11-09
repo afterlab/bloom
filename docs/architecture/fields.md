@@ -110,6 +110,21 @@ that reads an image through a position it computes is evaluated over the whole i
 interest, since the position can point anywhere. These change no existing operation, so
 `kFieldProgramSemanticsVersion` stays.
 
+### Homography
+
+Corner Pin, ST Map and Displace (`image-filters.md`) share one inverse mapping: each output pixel picks
+the position of an input to read. ST Map and Displace build that position from existing instructions.
+Corner Pin adds one, `core::field::FieldOp::Homography` (a Required GPU coverage feature), a projective
+map `(x, y) -> (m0 x + m1 y + m2, m3 x + m4 y + m5) / (m6 x + m7 y + 1)` about a centre. Its matrix is
+solved on the host for the frame from the quad (`homographyFromQuads`, a centroid-normalised direct
+linear transform over an eight by eight system) and written into the table, so the kernel only
+evaluates it. In window mode the geometry pass places the quad against the data window of the slot's
+image, so the identity default holds for any input size on the CPU and in the GPU atlas. A map that is
+singular, or a position behind the horizon (w at or below a small epsilon), returns a position far
+outside any image, which reads as transparent. The sampler returns transparent for any position beyond
+a billion pixels, so a huge map value cannot overflow the sample arithmetic. These change no existing
+operation, so `kFieldProgramSemanticsVersion` stays.
+
 ### Rays
 
 Light Rays (`image-filters.md`) lowers to a field raster and adds one instruction to the vocabulary

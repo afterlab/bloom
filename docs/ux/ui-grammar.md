@@ -626,7 +626,7 @@ from the GPU route. The node editor background draws the same image in viewport 
 card and over the dot grid.
 
 A graphically edited node (#494: Grade and Levels; #498: Curves; #501: Hue/Saturation, Exposure,
-Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain and Sharpen; #563: Codec Degrade; #486: Lens Distortion and Chromatic Aberration; #587: Test Card; #508: Light Rays) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
+Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain and Sharpen; #563: Codec Degrade; #486: Lens Distortion and Chromatic Aberration; #587: Test Card; #508: Light Rays; #348: Corner Pin) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
 its transport rows and its parameter rows, inset by the card padding at the card's width. The same
 widget is the first thing in its Properties section, so every edit works on the card without
 Properties. Its controls follow the grading rules under "Live Value Editing": each gesture is one
@@ -1147,7 +1147,7 @@ group is waiting for:
 | Channels | Channel Copy, Pass, Select Channels, Shuffle, Separate Channels, Combine Channels, Image to Channel Set, + Image Math, + Image Map Range, + Image Clamp |
 | Keying & Mattes | Luma Key, Cryptomatte, Mask, Mask Combine, Image to Mask, Matte Blur, Matte Dilate, Matte Erode, + Channel Key, + Chroma Key, + Despill, + Matte Refine, + HSL Qualifier, + Transition/Wipe Matte |
 | Transform | Transform 2D, Crop, Pad, Fit, Resize, Flip, Rotate 90, + Camera Shake, + Tile & Mirror |
-| Distort | Lens Distortion, Chromatic Aberration, + Corner Pin, + ST Map, + Displace, + Procedural Warp |
+| Distort | Lens Distortion, Chromatic Aberration, Corner Pin, ST Map, Displace, + Procedural Warp |
 | Blur & Sharpen | Gaussian Blur, Box Blur, Z Defocus, Motion Blur, Vector Motion Blur, Optical Flow, Optical Flow Motion Blur, Directional Blur, Spin Blur, Zoom Blur, Sharpen, + Denoise |
 | Light & Shadow | Glow, Light Wrap, Drop Shadow, Depth Fog, Lens Flare, Light Rays, + Inner Shadow, + Inner Glow |
 | Stylize | Vignette, Film Grain, Codec Degrade, + Dither, + Quantize |
