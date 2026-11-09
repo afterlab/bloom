@@ -10,6 +10,7 @@
 #include "codec_degrade_recipes.hpp"
 #include "auto_exposure_recipes.hpp"
 #include "histogram_recipes.hpp"
+#include "statistics_recipes.hpp"
 #include <bloom/runtime/audio_analysis_source.hpp>
 #include "motion_shutter.hpp"
 #include "plan_time_scopes.hpp"
@@ -1261,6 +1262,9 @@ class CompilePass final {
     std::unordered_map<document::LayerId, runtime::OperationIndex> entryLayerOps_;
     std::unordered_set<document::LayerId> entryLayersInProgress_;
     mutable std::map<document::NodeId, std::vector<document::MergeEntryRef>> adjustmentTargetCache_;
+    // #349: the plan of each Image Statistics node, compiled once however many outputs read it.
+    std::map<document::NodeId, std::shared_ptr<const runtime::CompiledCompositionPlan>>
+        statisticsPlans_;
     // The stack below an entry (an Adjustment's image, memoized per Merge and slot) and each
     // adjustment entry's composite.
     std::map<std::pair<document::NodeId, document::LayerSlotId>, runtime::OperationIndex>

@@ -1,4 +1,5 @@
 #include <bloom/runtime/audio_analysis.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include "gpu_media_preparation.hpp"
@@ -200,6 +201,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     validationRequest.pixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
     // #347: an Audio Amplitude in the value graph prepares its analysis on this worker.
     const AudioAnalysisPreparation audioPreparation(media.assetBaseDirectory, cancellation);
+    // #349: Image Statistics are measured by a route that can run the picture's plan for this
+    // frame (a final render's device route installs one). A scene built where none is installed is
+    // not prepared: the frame takes the CPU reference path, which measures them itself.
+    if (planReadsImageStatistics(*plan) && !ImageStatisticsPreparation::installedHere())
+        return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                    "Image Statistics are measured by the CPU reference route here");
     auto checked = detail::preflight(plan, validationRequest, cancellation, {}, nullptr, nullptr);
     if (checked.cancelled || cancellation.isCancellationRequested()) {
         return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");

@@ -10,6 +10,7 @@
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_preview_resident_capacity.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
@@ -34,6 +35,11 @@
 #include <vector>
 
 namespace bloom::runtime {
+
+namespace {
+// #349: set by the statistics provider around its one nested evaluate().
+thread_local bool allowStatisticsNesting = false;
+} // namespace
 
 // One caller-visible request slot. The calling CPU worker builds the immutable `scene` BEFORE the
 // slot is enqueued; the owner thread owns native execution and writes `outcome`. The caller owns
@@ -992,7 +998,11 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     // the native-phase event, on the owner. Reject a nested evaluate() from either the same calling
     // thread or the owner thread before any wait, so it cannot deadlock on its own completion.
     static thread_local bool insideEvaluate = false;
-    if (insideEvaluate ||
+    // #349: the one nested evaluate that is permitted is the statistics plan of the frame being
+    // prepared, run by that frame's own preparation on the same calling worker. It is admitted like
+    // any request and completes before the frame's own scene is queued, so it cannot wait on it.
+    const bool nestedStatistics = insideEvaluate && allowStatisticsNesting;
+    if ((insideEvaluate && !nestedStatistics) ||
         impl_->ownerThreadId.load(std::memory_order_acquire) == std::this_thread::get_id()) {
         return failure(GpuProcessFrameStatus::Failed,
                        GpuProcessFrameDiagnosticCode::InternalInvariant,
@@ -1000,8 +1010,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     }
     struct InsideEvaluateGuard final {
         bool& flag;
-        ~InsideEvaluateGuard() { flag = false; }
-    } insideEvaluateGuard{insideEvaluate};
+        bool previous;
+        ~InsideEvaluateGuard() { flag = previous; }
+    } insideEvaluateGuard{insideEvaluate, insideEvaluate};
     insideEvaluate = true;
 
     // Bounded admission BEFORE any CPU preparation: `inFlightPreparations + queue.size()` is the
@@ -1061,6 +1072,34 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         // Prepare the immutable scene HERE, on the calling CPU worker, never on the GPU owner
         // thread. Media decode, OCIO configuration, and shader compilation all run on this thread;
         // the owner only performs native work on the finished scene.
+        // #349: the statistics of a picture are run through this device's own route for the same
+        // frame, and only their two-pixel result is read back (the statistics readback of
+        // docs/architecture/image-statistics.md), never the picture.
+        const ImageStatisticsPreparation statisticsPreparation(
+            imageStatisticsFrameKey(request, ImageStatisticsRoute::Device),
+            [this, &request, &assetBaseDirectory](
+                const ImageStatisticsQuery& query,
+                const CancellationToken& token) -> ImageStatisticsRun {
+                allowStatisticsNesting = true;
+                auto outcome = evaluate(query.plan, imageStatisticsRequest(request, query), token,
+                                        {}, nullptr, assetBaseDirectory);
+                allowStatisticsNesting = false;
+                if (outcome.status == GpuProcessFrameStatus::Cancelled)
+                    return {{ImageStatisticsOutcome::Cancelled, {}}, std::nullopt};
+                if (outcome.status != GpuProcessFrameStatus::Evaluated || outcome.frame == nullptr)
+                    return {{ImageStatisticsOutcome::Unavailable,
+                             "The device route could not measure the picture: " +
+                                 outcome.diagnostic.message},
+                            std::nullopt};
+                auto values = readImageStatistics(outcome.frame->processImage(),
+                                                  ImageStatisticsRoute::Device);
+                if (!values)
+                    return {{ImageStatisticsOutcome::Unavailable,
+                             "The statistics of the picture are not readable."},
+                            std::nullopt};
+                return {{ImageStatisticsOutcome::Ready, {}}, *values};
+            },
+            cancellation);
         auto preparation =
             detail::prepareExportScene(impl_->options, plan, request, cancellation,
                                        static_cast<bool>(outputCommand), assetBaseDirectory);

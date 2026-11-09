@@ -85,6 +85,10 @@ firstImageInput(const document::NodeRecord& node) const {
                                 const bool hideMatteSources = true) const {
     if (const auto* merge = composition_->graph().merge(node.id); merge && !merge->enabled())
         return false;
+    // #349: an Image Statistics node reads its picture through its own tap plan, so the picture is
+    // not part of this plan.
+    if (node.typeId == document::kImageStatisticsNodeType)
+        return false;
     if (isMuted(node.id)) {
         const auto input = firstImageInput(node);
         if (!input || *input != edge.destination)

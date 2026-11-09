@@ -725,6 +725,14 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     }
     case runtime::NodeLoweringKind::ValueFieldSample:
         return lowerFieldSample(node, definition);
+    case runtime::NodeLoweringKind::ValueImageStatistics: {
+        // #349 Image Statistics: the picture its `input` ends in, as a plan of its own.
+        const auto lowered = lowerStatisticsPlan(node);
+        if (!lowered.ok)
+            return std::nullopt;
+        return runtime::CompiledValueKernel{
+            runtime::CompiledValueImageStatistics{node.id, lowered.plan}};
+    }
     case runtime::NodeLoweringKind::ValueAudioAmplitude: {
         // #347 Audio Amplitude: the source its `audio` input ends in and its window and offset.
         const auto* measure =

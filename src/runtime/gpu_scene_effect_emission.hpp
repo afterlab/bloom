@@ -32,6 +32,7 @@
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
 #include "histogram_image_effect.hpp"
+#include "statistics_image_effect.hpp"
 #include "audio_plot_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
@@ -211,6 +212,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_auto_exposure_emission.ipp"
 #include "gpu_scene_pixel_math_emission.ipp"
 #include "gpu_scene_histogram_emission.ipp"
+#include "gpu_scene_statistics_emission.ipp"
 #include "gpu_scene_audio_plot_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
@@ -388,6 +390,15 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                         "Auto Exposure values are out of domain");
         return emitAutoExposureCommand(effect, *grade, operationIndex, ctx, ocioContext,
                                        cancellation, emit, charge, chargeCoverage, result);
+    }
+    // #349 Image Statistics: one pass of the tiles' reductions or their combination.
+    if (std::holds_alternative<StatisticsKernel>(effect.kernel)) {
+        const auto grade = prepareColorGrade(effect.kernel, {});
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Image Statistics values are out of domain");
+        return emitStatisticsCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
+                                     emit, charge, chargeCoverage, result);
     }
     // #349 Histogram: one pass of the tile counts, their sums or the plot.
     if (std::holds_alternative<HistogramKernel>(effect.kernel)) {

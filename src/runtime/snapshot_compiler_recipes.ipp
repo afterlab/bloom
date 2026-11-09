@@ -122,6 +122,39 @@ lowerAutoExposure(const document::NodeRecord& node,
     return lowered;
 }
 
+// #349 Image Statistics: the reduction of the picture an Image Statistics node reads, to the
+// two-pixel result its tap plan ends in.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerStatisticsReduction(const document::NodeId statisticsNode, const runtime::OperationIndex input,
+                         std::vector<runtime::CompiledOperation>& operations) {
+    const auto* node = findNode(statisticsNode);
+    if (node == nullptr) {
+        addTopologyFailure(statisticsNode, "The Image Statistics node disappeared before lowering.");
+        return std::nullopt;
+    }
+    const auto choice = [&](const std::string_view role, const std::int64_t high,
+                            std::int64_t& target) {
+        const auto* value = parameterConstant<std::int64_t>(findParameterBinding(*node, role));
+        if (value == nullptr || *value < 0 || *value > high)
+            return false;
+        target = *value;
+        return true;
+    };
+    runtime::detail::StatisticsOperands operands;
+    std::int64_t space = 0;
+    std::int64_t pixels = 0;
+    if (!choice("channel", document::kStatisticsAlpha, operands.channel) ||
+        !choice("space", document::kImagePixelStored, space) ||
+        !choice("pixels", document::kStatisticsOpaqueOnly, pixels)) {
+        addTopologyFailure(statisticsNode, "Image Statistics parameters could not be lowered.");
+        return std::nullopt;
+    }
+    operands.straight = space == document::kImagePixelStraight;
+    operands.opaqueOnly = pixels == document::kStatisticsOpaqueOnly;
+    runtime::detail::RecipeEmitter emitter(statisticsNode, operations, recipeValueSink());
+    return runtime::detail::appendStatistics(emitter, input, operands);
+}
+
 // #349 Histogram: the tile counts, their sum and the plot.
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerHistogram(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,

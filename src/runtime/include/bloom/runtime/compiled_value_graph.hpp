@@ -409,6 +409,20 @@ struct CompiledValueAudioAmplitude final {
                            const CompiledValueAudioAmplitude&) noexcept;
 };
 
+// #349 Image Statistics: the minimum, maximum, mean, standard deviation and count of one value of the
+// pixels of a picture, five Scalars. The picture is not part of the plan this kernel belongs to: it
+// has a plan of its own (`plan`, the picture followed by its reduction to two pixels), run for the
+// frame being evaluated before the frame is, and its result read here from the statistics cache
+// (image_statistics.hpp). A frame whose statistics are not ready reads as not ready: the outputs are
+// 0 and the evaluation says so. A null `plan` is an input with no picture wired: every output is 0.
+class CompiledCompositionPlan;
+struct CompiledValueImageStatistics final {
+    document::NodeId node;
+    std::shared_ptr<const CompiledCompositionPlan> plan;
+    friend bool operator==(const CompiledValueImageStatistics&,
+                           const CompiledValueImageStatistics&);
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
@@ -417,7 +431,8 @@ using CompiledValueKernel =
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
                  CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
-                 CompiledValueFunctionPlot, CompiledValueAudioAmplitude>;
+                 CompiledValueFunctionPlot, CompiledValueAudioAmplitude,
+                 CompiledValueImageStatistics>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -441,6 +456,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
             } else if constexpr (std::is_same_v<Step, CompiledValueAudioAmplitude>) {
                 visit(step.window);
                 visit(step.offset);
+            } else if constexpr (std::is_same_v<Step, CompiledValueImageStatistics>) {
+                // The statistics are of a picture: no operand of this plan.
             } else if constexpr (std::is_same_v<Step, CompiledValueShake>) {
                 visit(step.amplitudeX);
                 visit(step.amplitudeY);

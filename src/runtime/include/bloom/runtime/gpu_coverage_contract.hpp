@@ -196,6 +196,11 @@ BLOOM_GPU_REQUIRED_EFFECT(AudioPlotKernel,
                           "Audio Waveform and Audio Spectrum: the line or bars of a prepared audio "
                           "analysis drawn over a canvas (#347)");
 
+BLOOM_GPU_REQUIRED_EFFECT(StatisticsKernel,
+                          "Image Statistics: the per-tile reduction of a frame's values to their "
+                          "count, extremes, mean and squared deviations, and the combination of "
+                          "the tiles in order (#349)");
+
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
 
@@ -598,6 +603,19 @@ struct GpuCoverageContractDiagnostic final {
             "Final render may read the single composited image back once for CPU codec "
             "and file writing; per-node or per-operation full-frame roundtrips are not "
             "a GPU implementation."},
+        // Owner decision of 2026-11-09, recorded in docs/architecture/image-statistics.md. One
+        // named, bounded readback: the two-pixel result of an Image Statistics plan, on any device
+        // route. The whole frame is still GPU work, the reduction runs on the device, and no picture
+        // and no per-node full-frame roundtrip is ever read back.
+        GpuCoverageEntry{
+            "prep.statistics.result_readback",
+            "bounded readback of an Image Statistics result (two pixels) so its values can drive "
+            "the value graph",
+            GpuCoverageDisposition::ApprovedCpuHostPreparation,
+            "docs/architecture/image-statistics.md",
+            "A statistic has to reach the value graph from a frame's pixels. The device computes "
+            "it into a fixed two-pixel result and only that result is read back, never a "
+            "full frame or a per-node full-frame roundtrip."},
     };
 }
 
@@ -663,6 +681,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueImageStatistics:
         return false;
     }
     return false;
@@ -733,6 +752,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueImageStatistics:
         return "scope.value";
     case NodeLoweringKind::NodeGroup:
         return "scope.expansion";

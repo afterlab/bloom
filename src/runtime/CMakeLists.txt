@@ -114,6 +114,7 @@ target_sources(
         look_back_recipes.cpp
         auto_exposure_recipes.cpp
         histogram_recipes.cpp
+        statistics_recipes.cpp
         compositing_recipes.hpp
         missing_font_layers.cpp
         plan_time_scopes.cpp
@@ -221,7 +222,9 @@ target_sources(
         auto_exposure_image_effect.cpp
         pixel_math_image_effect.cpp
         histogram_image_effect.cpp
+        statistics_image_effect.cpp
         audio_analysis.cpp
+        image_statistics.cpp
         audio_plot_image_effect.cpp
         motion_blur_image_effect.cpp
         motion_blur_planner.cpp
@@ -318,6 +321,7 @@ target_sources(
             include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp
             include/bloom/runtime/audio_analysis.hpp
+            include/bloom/runtime/image_statistics.hpp
             include/bloom/runtime/audio_stream_key.hpp
             include/bloom/runtime/video_source_report.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp

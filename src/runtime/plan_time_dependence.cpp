@@ -42,6 +42,8 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
             (plot != nullptr && (plot->body == nullptr || plot->body->timeDependent)) ||
             // #347: the level of the audio at this time.
             std::holds_alternative<CompiledValueAudioAmplitude>(operation.kernel) ||
+            // #349: the statistics of the picture at this time.
+            std::holds_alternative<CompiledValueImageStatistics>(operation.kernel) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
               utility->operation == document::ValueUtilityKernel::LightFlicker ||

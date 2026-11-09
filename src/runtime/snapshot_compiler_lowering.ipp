@@ -963,6 +963,13 @@ lower(const std::vector<document::NodeId>& order) {
             addTopologyFailure(inspection.node, "The inspected output has no pixels.");
             return {};
         }
+        if (request_.statisticsTap) {
+            // #349: the picture an Image Statistics node reads, reduced to its statistics: the
+            // plan shows the two-pixel result.
+            shown = lowerStatisticsReduction(*request_.statisticsTap, *shown, operations);
+            if (!shown)
+                return {};
+        }
         const auto mergeIndex = runtime::OperationIndex::fromRaw(operations.size());
         operations.emplace_back(runtime::CompiledMerge{outputNodeId, {{{}, {}, *shown}}});
         planOutput = runtime::OperationIndex::fromRaw(operations.size());
@@ -1038,6 +1045,37 @@ lower(const std::vector<document::NodeId>& order) {
 }
 
 // The edge into `port` of node `nodeId`, if any.
+// #349: the plan of the picture an Image Statistics node reads, followed by the reduction. A node
+// with no picture wired has none (and every statistic is 0).
+struct StatisticsLowering final {
+    bool ok = true;
+    std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
+};
+[[nodiscard]] StatisticsLowering lowerStatisticsPlan(const document::NodeRecord& node) {
+    if (const auto found = statisticsPlans_.find(node.id); found != statisticsPlans_.end())
+        return {true, found->second};
+    const auto* edge = audioInputEdge(node.id, document::kImagePixelInputPort);
+    if (edge == nullptr || isMuted(node.id))
+        return {};
+    if (std::ranges::find(request_.statisticsStack, node.id) != request_.statisticsStack.end()) {
+        addTopologyFailure(node.id, "An Image Statistics node cannot read a picture that depends "
+                                    "on its own result.");
+        return {false, nullptr};
+    }
+    auto nested = request_;
+    nested.channelInspection = runtime::ChannelInspection{edge->source.nodeId, edge->source.port, {}};
+    nested.statisticsTap = node.id;
+    nested.statisticsStack.push_back(node.id);
+    auto compiled = CompilePass(registry_, nested, cancellation_, nullptr).run();
+    if (compiled.status != runtime::SnapshotCompileStatus::Compiled || compiled.plan == nullptr) {
+        addTopologyFailure(node.id, "The picture an Image Statistics node reads could not be "
+                                    "compiled.");
+        return {false, nullptr};
+    }
+    statisticsPlans_.emplace(node.id, compiled.plan);
+    return {true, std::move(compiled.plan)};
+}
+
 [[nodiscard]] const document::EdgeRecord* audioInputEdge(const document::NodeId nodeId,
                                                          const std::string_view port) const {
     const auto& edges = composition_->graph().edges();
@@ -1524,6 +1562,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueImageStatistics:
     // #342: Group Input and Group Output are value-pass nodes. A Node Group the expansion could
     // not replace is reported by resolveDefinitions() and never reaches publication.
     case NodeLoweringKind::GroupBoundary:

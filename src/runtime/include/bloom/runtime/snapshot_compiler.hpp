@@ -102,6 +102,13 @@ struct SnapshotCompileRequest {
     std::vector<SnapshotParameterOverride> parameterOverrides{};
     // ADR 0026: a viewer-only plan whose output shows these channels raw (see channel_inspection).
     std::optional<ChannelInspection> channelInspection{};
+    // #349: the statistics plan of this Image Statistics node. The compiler sets it, with
+    // `channelInspection` on the picture the node reads, to compile that picture followed by the
+    // node's reduction (docs/architecture/image-statistics.md). `statisticsStack` holds the
+    // Image Statistics nodes whose plans are being compiled around this one, so a node that reads
+    // its own result is refused.
+    std::optional<document::NodeId> statisticsTap{};
+    std::vector<document::NodeId> statisticsStack{};
     // Resolves the text fonts; null uses the process font resolver (docs/architecture/fonts.md).
     std::shared_ptr<fonts::FontResolver> fontResolver{};
     // The Viewer starts a missing Google font downloading and draws the fallback until it arrives;

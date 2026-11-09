@@ -2,8 +2,10 @@
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
 #include "histogram_image_effect.hpp"
+#include "statistics_image_effect.hpp"
 #include "audio_plot_image_effect.hpp"
 #include <bloom/runtime/audio_analysis.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -2350,6 +2352,29 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     }
     // #347: an Audio Amplitude in the value graph prepares its analysis on this worker.
     const AudioAnalysisPreparation audioPreparation(mediaBase, cancellation);
+    // #349: an Image Statistics in the value graph runs its picture's plan for this frame, on this
+    // worker, through the CPU reference, before the value is sampled.
+    const ImageStatisticsPreparation statisticsPreparation(
+        imageStatisticsFrameKey(request, ImageStatisticsRoute::CpuReference),
+        [this, &request](const ImageStatisticsQuery& query,
+                         const CancellationToken& token) -> ImageStatisticsRun {
+            auto result = evaluate(query.plan, imageStatisticsRequest(request, query), token);
+            if (result.status() == EvaluationStatus::Cancelled)
+                return {{ImageStatisticsOutcome::Cancelled, {}}, std::nullopt};
+            if (result.status() != EvaluationStatus::Evaluated || result.frame() == nullptr)
+                return {{ImageStatisticsOutcome::Unavailable,
+                         result.diagnostics().empty() ? std::string("The picture could not be evaluated.")
+                                                      : result.diagnostics().front().summary},
+                        std::nullopt};
+            auto values = readImageStatistics(result.frame()->processImage(),
+                                              ImageStatisticsRoute::CpuReference);
+            if (!values)
+                return {{ImageStatisticsOutcome::Unavailable,
+                         "The statistics of the picture are not readable."},
+                        std::nullopt};
+            return {{ImageStatisticsOutcome::Ready, {}}, *values};
+        },
+        cancellation);
     try {
         auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
@@ -2393,6 +2418,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<AutoExposureKernel>(effect->kernel) ||
                                // #349 a histogram counts the whole data window.
                                std::holds_alternative<HistogramKernel>(effect->kernel) ||
+                               // #349 statistics count the whole data window.
+                               std::holds_alternative<StatisticsKernel>(effect->kernel) ||
                                // #347 a plot is the size of its analysis, whatever region is asked
                                std::holds_alternative<AudioPlotKernel>(effect->kernel) ||
                                // #486 a field raster that reads images (Lens Distortion's warp)
@@ -3729,6 +3756,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                               progress)
                                     : gradeKind == detail::ColorGradeKind::AudioPlot
                                         ? detail::applyAudioPlot(
+                                              *preparedEffect->colorGrade, slots[index].get(),
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::Statistics
+                                        ? detail::applyStatistics(
                                               *preparedEffect->colorGrade, slots[index].get(),
                                               effectPixelBudget, cancellation, operationIndex,
                                               progress, rowBands)

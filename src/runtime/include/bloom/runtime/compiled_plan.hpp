@@ -1035,6 +1035,24 @@ struct AudioPlotKernel final {
     friend bool operator==(const AudioPlotKernel&, const AudioPlotKernel&) noexcept;
 };
 
+// #349 Image Statistics (docs/architecture/image-statistics.md): a tap plan lowers the node to two
+// passes over the picture it reads.
+//   Reduce  cuts the frame into at most `grid` by `grid` tiles and reduces each to its count,
+//           minimum, maximum, mean and sum of squared deviations: two pixels and a row per tile;
+//   Sum     combines the tiles in order into the frame's statistics: two pixels.
+// `channel` is the value measured (document::kStatistics*), `straight` says the color is divided by
+// alpha first and `opaqueOnly` that only pixels with alpha above zero count. A value that is not a
+// usable number is not counted.
+enum class StatisticsRole : std::uint8_t { Reduce, Sum };
+struct StatisticsKernel final {
+    StatisticsRole role = StatisticsRole::Reduce;
+    std::int64_t channel = 0;
+    bool straight = true;
+    bool opaqueOnly = false;
+    std::int64_t grid = 32;
+    friend bool operator==(const StatisticsKernel&, const StatisticsKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -1045,7 +1063,7 @@ using ImageEffectKernel =
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
-                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel,
+                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel, StatisticsKernel,
                  AudioPlotKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
@@ -1248,6 +1266,9 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(pixelMath->values[index]);
         return true;
     }
+    // #349: Image Statistics' parameters are all constants.
+    if (std::holds_alternative<StatisticsKernel>(kernel))
+        return true;
     // #349: a Histogram's Bin reads the range; its Sum and Plot have no operands.
     if (const auto* histogram = std::get_if<HistogramKernel>(&kernel)) {
         if (histogram->role == HistogramRole::Bin)
@@ -1286,6 +1307,7 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<AutoExposureKernel>(kernel) ||
            std::holds_alternative<PixelMathKernel>(kernel) ||
            std::holds_alternative<HistogramKernel>(kernel) ||
+           std::holds_alternative<StatisticsKernel>(kernel) ||
            std::holds_alternative<AudioPlotKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {

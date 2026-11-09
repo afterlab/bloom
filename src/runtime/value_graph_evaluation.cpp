@@ -7,6 +7,7 @@
 
 #include "field_raster.hpp"
 #include <bloom/runtime/audio_analysis.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include "gradient_source.hpp"
 #include "operation_key.hpp"
 #include <deque>
@@ -279,7 +280,9 @@ class Evaluator final {
                 !std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel) &&
                 // #347: the level is read from the analysis cache under its own identity (source
                 // revision and exact time), which a memoized value's key would not carry.
-                !std::holds_alternative<runtime::CompiledValueAudioAmplitude>(operation.kernel);
+                !std::holds_alternative<runtime::CompiledValueAudioAmplitude>(operation.kernel) &&
+                // #349: the statistics are read from their cache under the frame's own identity.
+                !std::holds_alternative<runtime::CompiledValueImageStatistics>(operation.kernel);
             const auto currentOperation = operationIndex++;
             if (cacheable) {
                 key.add(std::string("value"));
@@ -511,6 +514,8 @@ class Evaluator final {
                               const runtime::CompiledValueFunctionPlot& kernel);
     void evaluateAudioAmplitude(const runtime::CompiledValueOperation& operation,
                                 const runtime::CompiledValueAudioAmplitude& kernel);
+    void evaluateImageStatistics(const runtime::CompiledValueOperation& operation,
+                                 const runtime::CompiledValueImageStatistics& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -577,6 +582,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateFunctionPlot(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueAudioAmplitude>) {
                 evaluateAudioAmplitude(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueImageStatistics>) {
+                evaluateImageStatistics(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -638,6 +645,50 @@ void Evaluator::evaluateAudioAmplitude(const runtime::CompiledValueOperation& op
     write(operation, 0,
           kernel.unit == 1 ? std::max(kSilenceDecibels, 20.0 * std::log10(std::max(linear, 1.0e-6)))
                            : linear);
+}
+
+// #349: the statistics of this frame's picture. They were prepared on a worker before the value was
+// sampled; they are read from the cache here and never computed, so a frame sampled on the
+// interface thread never waits on pixels. A frame whose statistics are not prepared reads 0 for
+// every output and says so: it never reads another frame's statistics.
+void Evaluator::evaluateImageStatistics(const runtime::CompiledValueOperation& operation,
+                                        const runtime::CompiledValueImageStatistics& kernel) {
+    const auto zero = [&] {
+        for (std::size_t slot = 0; slot < 5; ++slot)
+            write(operation, slot, 0.0);
+    };
+    if (!kernel.plan) {
+        zero();
+        return;
+    }
+    const runtime::ImageStatisticsQuery query{kernel.node, kernel.plan, time_};
+    auto found = runtime::ImageStatisticsPreparation::findHere(query);
+    // A worker that evaluates the frame prepares the statistics here, for this frame; an evaluation
+    // outside a worker's preparation only reads what is prepared.
+    if (!found) {
+        if (const auto status = runtime::ImageStatisticsPreparation::prepareHere(query)) {
+            if (status->outcome == runtime::ImageStatisticsOutcome::Ready) {
+                found = runtime::ImageStatisticsPreparation::findHere(query);
+            } else {
+                if (status->outcome == runtime::ImageStatisticsOutcome::Unavailable)
+                    fail(operation, {}, "Image Statistics are unavailable", status->detail);
+                zero();
+                return;
+            }
+        }
+    }
+    if (!found) {
+        fail(operation, {}, "Image Statistics are not ready",
+             "The statistics of this frame's picture have not been computed yet; every output "
+             "reads 0 and is not a measured value.");
+        zero();
+        return;
+    }
+    write(operation, 0, found->minimum);
+    write(operation, 1, found->maximum);
+    write(operation, 2, found->mean);
+    write(operation, 3, found->deviation);
+    write(operation, 4, found->count);
 }
 
 void Evaluator::evaluateBoundsReadout(const runtime::CompiledValueOperation& operation,

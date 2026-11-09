@@ -66,7 +66,10 @@ enum class ColorGradeKind : std::uint8_t {
     Histogram,
     // #347: Audio Waveform and Audio Spectrum (audio_plot_image_effect.hpp), the prepared analysis
     // of the audio in its table.
-    AudioPlot
+    AudioPlot,
+    // #349: Image Statistics (statistics_image_effect.hpp), the geometry of the image it follows
+    // appended where it is applied.
+    Statistics
 };
 
 // The packed table, always a whole number of vec4s:

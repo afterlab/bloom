@@ -118,6 +118,12 @@ bool operator==(const CompiledValueAudioAmplitude& a, const CompiledValueAudioAm
            a.offset == b.offset && a.measure == b.measure && a.unit == b.unit;
 }
 
+// #349: two Image Statistics are equal when the plans they read are.
+bool operator==(const CompiledValueImageStatistics& a, const CompiledValueImageStatistics& b) {
+    return a.node == b.node && (a.plan == b.plan || (a.plan != nullptr && b.plan != nullptr &&
+                                                     *a.plan == *b.plan));
+}
+
 bool operator==(const AudioPlotKernel& a, const AudioPlotKernel& b) noexcept {
     return a.kind == b.kind && sameAudioAnalysisSource(a.source, b.source) && a.width == b.width &&
            a.height == b.height && a.separate == b.separate && a.fftSize == b.fftSize &&
