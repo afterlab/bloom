@@ -126,6 +126,18 @@ int main(int argc, char** argv) {
                     "the import is one undo step named Import SVG");
             require(harness.session.snapshot().project().assets().size() == assetsBefore + 1,
                     "the source file is recorded in the project");
+            // The record is a source file, not footage: the Assets panel does not mark an SVG
+            // that is on disk as missing or undecodable.
+            {
+                const auto& assets = harness.session.snapshot().project().assets();
+                require(!assets.empty(), "the source record exists");
+                const auto id = assets.back().id;
+                require(waitUntil([&] { return !harness.controller.busy(); }), "thumbnails settle");
+                require(waitUntil([&] { return harness.controller.fileSize(id).has_value(); }),
+                        "the SVG record's preview was computed");
+                require(!harness.controller.missing(id) && harness.controller.problem(id).isEmpty(),
+                        "an SVG source on disk is not flagged missing or unshowable");
+            }
 
             // The Jobs panel's lines are the finished task's diagnostics.
             // The Jobs panel lists the job's warnings: the task's diagnostics.

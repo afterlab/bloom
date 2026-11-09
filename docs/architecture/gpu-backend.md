@@ -1924,6 +1924,12 @@ slots. Each is now counted as what it is; no budget was raised.
   folding holds less, the CPU reference composites each Merge entry as it is ready and releases it
   (`detail::mergeFoldSteps`), so a CPU-only export of a few hundred layers holds a few frames.
 
+The viewer route is proved by `bloom.ui.viewer_export_svg_artwork`: an imported compound shape with
+a gradient fill, a clip matte, two nested opacity groups and a keyed corner and counter point is
+shown in the interactive Viewer from `GpuPreparedPacked` with no CPU fallback, and the GPU route's
+Viewer frames equal the CPU route's (RGB within one 8-bit code, exact alpha) at the first, a middle
+and the last frame, as do RAM preview (cold and warm) and still, range and movie export.
+
 Native batching still keeps up to eight kernels' outputs until their fence, bounded by
 `maxNativeBatchOutputBytes`; the live set itself is asserted with batching off.
 `bloom.runtime.gpu_svg_artwork_native` asserts each point as image sizes, never times. Results per

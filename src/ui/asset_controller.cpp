@@ -1928,6 +1928,17 @@ void AssetController::startThumbnails() {
                         preview.missing =
                             lut.error != color::LutError::None || lut.digest != asset.contentDigest;
                         results->assets.emplace(asset.id, std::move(preview));
+                    } else if (isSvgFile(asset.locator.path)) {
+                        // An imported SVG's record is its source file (#343), not footage: there is
+                        // no picture to decode. It is present when the file is, and missing like
+                        // any moved footage when it is not.
+                        Preview preview;
+                        std::error_code ignored;
+                        preview.missing = !std::filesystem::exists(
+                            media::resolveImagePath(asset.locator.path, asset.locator.relinkHint,
+                                                    directory),
+                            ignored);
+                        results->assets.emplace(asset.id, std::move(preview));
                     } else {
                         runtime::CompiledImageSource source;
                         source.asset = asset;

@@ -63,6 +63,19 @@ and writes the whole value back with the other contours, the fill rule and the g
 and an edit at a time other than a key's keys the value there. A frame-pivot entry layer is never
 compensated (its pivot does not follow the content). Contours are never dropped.
 
+`bloom.runtime.gpu_svg_artwork_native` proves it on a B with two counters and an O: a corner of the
+outline and a corner of the upper counter are dragged and keyed from frame 0; frame 0 equals the
+import, the moved corner and counter change, the other counter and the O do not, and the GPU frame
+equals the CPU reference. The same test wires Offset Path, Round Corners, Boolean Paths, Merge Paths
+and Path Stroke to a keyed compound ring and reads each result. An earlier hand proof that showed a B
+without counters had keyed Trim Path to 35 percent on the same path as well as moving both counters
+30 px; Trim Path keeps the first 35 percent of the total outline length, which is the outer contour,
+so the counters were trimmed away. Without the Trim they survive.
+
+The Assets record of the source file is a source, not footage: the Assets panel shows it as present
+when the file is on disk and missing, like moved footage, when it is not (it is never probed as an
+image).
+
 MCP, Python and the CLI key the same value: `bloom.animation.set-keyframe-at-time-for-parameter`
 (and `bloom.animation.set-keys`) take a whole path or gradient object as the value, so a script can
 move points of any contour of an imported shape at any time, on the Path node's `value` parameter.

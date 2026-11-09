@@ -1545,6 +1545,14 @@ target_compile_definitions(bloom_chrome_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_chrome_capture)
 
+# #343: the whole window with an imported SVG, for review captures (not a ctest).
+add_executable(bloom_svg_window_capture svg_window_capture.cpp)
+target_include_directories(bloom_svg_window_capture PRIVATE ..)
+target_link_libraries(bloom_svg_window_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_svg_window_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_svg_window_capture)
+
 add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
 target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_viewer_chrome_capture PRIVATE
