@@ -638,8 +638,11 @@ void testSearchKeyboardAndMenus() {
                  {"Combine XY", "Combine XYZ", "Reroute", "Separate XY", "Separate XYZ"},
                  "Utilities holds the plumbing");
         hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
-        hasGroup("Distort", {"Chromatic Aberration", "Lens Distortion", "Rolling Shutter"},
-                 "Distort holds the lens warp, the colour fringe and the shutter skew");
+        hasGroup("Distort",
+                 {"Chromatic Aberration", "Corner Pin", "Displace", "Lens Distortion",
+                  "Rolling Shutter", "ST Map"},
+                 "Distort holds the lens warp, the colour fringe, the shutter skew and the pins "
+                 "and maps");
         hasGroup("Tracking & Analysis", {"Histogram", "Image Compare"},
                  "Tracking & Analysis holds the analysis nodes");
         for (const auto* empty : {"Instances & Particles"})

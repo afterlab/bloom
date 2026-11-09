@@ -15,6 +15,7 @@
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -205,6 +206,17 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         return QCoreApplication::translate("PropertiesRow", "Camera Offset");
     if (schemaKey == document::kRollingShutterCameraRollSchemaKey)
         return QCoreApplication::translate("PropertiesRow", "Camera Roll");
+    // #348 Corner Pin, ST Map and Displace: their tables' own labels; the corners by name.
+    if (const auto* warp = document::warpParameterSpec(schemaKey); warp != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(warp->label).c_str());
+    if (document::isCornerPinCornerSchemaKey(schemaKey)) {
+        const auto roles = document::cornerPinCornerRoles();
+        const auto labels = document::cornerPinCornerLabels();
+        for (std::size_t index = 0; index < roles.size(); ++index)
+            if (schemaKey.ends_with(roles[index]))
+                return QCoreApplication::translate("PropertiesRow",
+                                                   std::string(labels[index]).c_str());
+    }
     // #486 Lens Distortion: its table's own labels.
     if (const auto* lens = document::lensDistortionParameterSpec(schemaKey); lens != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(lens->label).c_str());

@@ -321,7 +321,10 @@ PointPadRow::PointPadRow(CompositionSession& session, const document::NodeId nod
         std::vector<document::ParameterValue> values;
         for (std::size_t index = 0; index < spec_.points.size(); ++index) {
             auto at = pad_->value(index);
-            if (spec_.points[index].fromCentre)
+            if (spec_.points[index].corner)
+                at -= frame.center() + QPointF(spec_.points[index].corner->x() * frame.width(),
+                                               spec_.points[index].corner->y() * frame.height());
+            else if (spec_.points[index].fromCentre)
                 at -= frame.center();
             if (spec_.points[index].yUp)
                 at.setY(-at.y());
@@ -389,7 +392,10 @@ void PointPadRow::refresh(const bool locked) {
         const auto id = nodeRoleParameter(session_, node_, point.role);
         const auto value = id ? liveVector(session_, *id) : std::nullopt;
         editable = editable && id && value && scalarEditable(session_, *id);
-        const QPointF origin = point.fromCentre ? frame.center() : QPointF();
+        const QPointF origin =
+            point.corner ? frame.center() + QPointF(point.corner->x() * frame.width(),
+                                                    point.corner->y() * frame.height())
+                         : (point.fromCentre ? frame.center() : QPointF());
         const auto fallback = defaultVector(session_, node_, point.role);
         const double flip = point.yUp ? -1.0 : 1.0;
         kit::KPointPad::Point shown{point.label,

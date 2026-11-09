@@ -7,6 +7,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
@@ -20,6 +21,7 @@
 #include <bloom/ui/codec_degrade_widget.hpp>
 #include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
+#include <bloom/ui/corner_pin_widget.hpp>
 #include <bloom/ui/test_card_widget.hpp>
 #include <bloom/ui/light_rays_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
@@ -43,6 +45,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            typeId == document::kCodecDegradeNodeType ||
            typeId == document::kLensDistortionNodeType ||
            typeId == document::kChromaticAberrationNodeType ||
+           typeId == document::kCornerPinNodeType ||
            typeId == document::kTestCardNodeType ||
            typeId == document::kLightRaysNodeType ||
            document::isMotionBlurNodeType(typeId) ||
@@ -77,6 +80,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new LensDistortionCardWidget(session, node, card, parent);
     if (typeId == document::kChromaticAberrationNodeType)
         return new ChromaticAberrationCardWidget(session, node, card, parent);
+    if (typeId == document::kCornerPinNodeType)
+        return new CornerPinCardWidget(session, node, card, parent);
     if (typeId == document::kTestCardNodeType)
         return new TestCardCardWidget(session, node, card, parent);
     if (typeId == document::kLightRaysNodeType)

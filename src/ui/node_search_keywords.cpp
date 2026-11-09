@@ -6,6 +6,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -170,6 +171,15 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kRollingShutterNodeType)
         return QStringLiteral("rolling shutter jello skew wobble cmos readout sensor scan phone "
                               "camera shake distort");
+    if (typeId == document::kCornerPinNodeType)
+        return QStringLiteral("corner pin perspective four point quad keystone pin warp distort "
+                              "screen replacement sign billboard match move");
+    if (typeId == document::kStMapNodeType)
+        return QStringLiteral("st map stmap uv map lookup coordinates remap warp distort apply "
+                              "lens undistort");
+    if (typeId == document::kDisplaceNodeType)
+        return QStringLiteral("displace displacement map offset warp distort ripple heat haze "
+                              "vector pixels move");
     if (typeId == document::kLightFlickerNodeType)
         return QStringLiteral("light flicker flickering dropout bulb headlight sputter fluorescent "
                               "unsteady seeded noise exposure");

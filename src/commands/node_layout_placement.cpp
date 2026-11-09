@@ -13,6 +13,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
@@ -377,6 +378,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #508: the Light Rays card's centre pad, its three slider rows and its colour row.
     if (node->typeId == document::kLightRaysNodeType)
         thumbnail = kPadMaxHeight + kSmall + 4.0 * (kControl + kSmall) + kPadding;
+    // #348: the Corner Pin card's pad.
+    if (node->typeId == document::kCornerPinNodeType)
+        thumbnail = kPadMaxHeight + kPadding;
     // #563: the Codec Degrade card's two slider rows, each a value over a slider.
     if (node->typeId == document::kCodecDegradeNodeType)
         thumbnail = 2.0 * (kControl + kSmall) + kPadding;

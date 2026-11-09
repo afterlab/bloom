@@ -23,6 +23,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/document.hpp>
@@ -1157,6 +1158,80 @@ void autoExposureRows() {
     }
 }
 
+// #348 Corner Pin, ST Map and Displace in Properties: a row for every corner, choice and value, in
+// plain words, each label shown whole and nothing wider than the panel, at the widths of a wide, a
+// normal and a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width
+// (suffixed with the device pixel ratio).
+void warpRows() {
+    struct Spec final {
+        std::string_view type;
+        std::vector<std::pair<std::string, std::string>> rows;
+    };
+    const std::vector<Spec> specs{
+        {document::kCornerPinNodeType,
+         {{"topLeft", "Top Left"}, {"topRight", "Top Right"}, {"bottomRight", "Bottom Right"},
+          {"bottomLeft", "Bottom Left"}, {"filter", "Filter"}}},
+        {document::kStMapNodeType,
+         {{"uChannel", "U Channel"}, {"vChannel", "V Channel"}, {"filter", "Filter"},
+          {"edges", "Edges"}}},
+        {document::kDisplaceNodeType,
+         {{"xChannel", "X Channel"}, {"yChannel", "Y Channel"}, {"xAmount", "X Amount"},
+          {"yAmount", "Y Amount"}, {"midpoint", "Midpoint"}, {"filter", "Filter"},
+          {"edges", "Edges"}}}};
+    for (const auto& spec : specs) {
+        auto project = document::makeNewProject("Warp", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, spec.type);
+        session.selectNode(node);
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 900);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& [role, name] : spec.rows) {
+                auto* found = row(properties, role.c_str());
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "a warp presents every value");
+                if (found == nullptr)
+                    continue;
+                expect(found->property("rowLabel").toString() == QString::fromStdString(name),
+                       "a warp row is named in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == QString::fromStdString(name) &&
+                        candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "a warp row label is shown whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) &&
+                                   !field->isDisplayRounded(),
+                               "a warp value is shown whole");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "a warp's rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(
+                        directory + QStringLiteral("/") +
+                        QString::fromLatin1(spec.type.data(), static_cast<int>(spec.type.size())) +
+                        QStringLiteral("-properties-") + QString::number(width) + QLatin1Char('-') +
+                        suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the warp Properties capture\n";
+            }
+        }
+    }
+}
+
 // #569 audio effects in Properties: a row for every value of every effect, in plain words, each label
 // shown whole and nothing wider than the panel, at the widths of a wide, a normal and a narrow panel.
 // With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device
@@ -1430,6 +1505,7 @@ int main(int argc, char** argv) try {
     transform2DRows();
     frameRateHoldRows();
     autoExposureRows();
+    warpRows();
     audioEffectRows();
     cameraShakeRows();
     matteBlurRows();

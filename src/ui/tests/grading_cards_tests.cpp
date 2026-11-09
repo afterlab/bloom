@@ -55,6 +55,8 @@
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/ui/lens_distortion_widget.hpp>
 #include <bloom/ui/chromatic_aberration_widget.hpp>
+#include <bloom/ui/corner_pin_widget.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/test_card_widget.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/ui/light_rays_widget.hpp>
@@ -1280,6 +1282,9 @@ void pixelAndMotionCards() {
         std::vector<const char*> neighbors;
     };
     const std::vector<Spec> specs{
+        {"bloom.corner-pin", {"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.transform-2d"}},
+        {"bloom.st-map", {"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter"}},
+        {"bloom.displace", {"bloom.lens-distortion", "bloom.st-map", "bloom.rolling-shutter"}},
         {"bloom.image-math", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
         {"bloom.image-map-range", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
         {"bloom.image-clamp", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
@@ -1405,6 +1410,71 @@ void audioEffectCards() {
     QDir().mkpath(directory);
     if (!image.save(directory + QStringLiteral("/audio-effects-neighbors-card.png")))
         std::cerr << "could not write the audio effects neighbors capture\n";
+}
+
+// #348: the Corner Pin card paints inside its card with no label cut short, writes nothing of its
+// own, draws the four corners as points on one pad, each starting on a corner of the frame, and
+// leaves the corners' own X/Y rows and the filter to the node; dragging a point is one command that
+// moves that corner alone.
+void cornerPinCard() {
+    CardFixture fixture(document::kCornerPinNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::CornerPinCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Corner Pin draws its card widget");
+    if (card == nullptr)
+        return;
+    for (const auto role : document::cornerPinCornerRoles()) {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, std::string(role));
+        const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+        const auto* corner = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
+        expect(corner != nullptr && corner->x == 0.0 && corner->y == 0.0,
+               "a new Corner Pin card writes no value of its own");
+    }
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "corner-pin paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "corner-pin"))
+        ++failures;
+    capture(fixture, QStringLiteral("corner-pin"));
+    expect(card->showsRole("topLeft") && card->showsRole("filter") && card->padRow() != nullptr,
+           "the card shows the corners' rows and the filter as the node's own");
+    auto& pad = *card->padRow()->pad();
+    expect(pad.points().size() == 4 && pad.connected() &&
+               pad.points()[0].label == QStringLiteral("Top Left") &&
+               pad.points()[3].label == QStringLiteral("Bottom Left"),
+           "the pad has the four corners, named, joined into a quad");
+    // Each point starts on its corner of the frame.
+    const auto frame = pad.frame();
+    expect(std::abs(pad.value(0).x() - frame.left()) < 1e-6 &&
+               std::abs(pad.value(0).y() - frame.top()) < 1e-6 &&
+               std::abs(pad.value(2).x() - frame.right()) < 1e-6 &&
+               std::abs(pad.value(2).y() - frame.bottom()) < 1e-6,
+           "the points start on the frame's corners");
+    // Dragging the top right point inward is one command that moves that corner alone.
+    const auto commands = fixture.stack.size();
+    const QPointF from = pad.screenPoint(pad.value(1));
+    const QPointF to = from + QPointF(-pad.frameRect().width() * 0.25, pad.frameRect().height() * 0.2);
+    mouse(pad, QEvent::MouseButtonPress, from);
+    mouse(pad, QEvent::MouseMove, to);
+    mouse(pad, QEvent::MouseButtonRelease, to);
+    QApplication::processEvents();
+    const auto vector = [&](const char* role) {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
+        const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+        const auto* value = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
+        return value ? *value : document::Vec2d{1.0e9, 1.0e9};
+    };
+    const auto moved = vector("topRight");
+    expect(fixture.stack.size() == commands + 1 && moved.x < -100.0 && moved.y > 50.0 &&
+               vector("topLeft") == document::Vec2d{} && vector("bottomRight") == document::Vec2d{} &&
+               vector("bottomLeft") == document::Vec2d{},
+           "dragging a corner moves it, as one command, and leaves the others");
+    expect(fixture.session.undo() && vector("topRight") == document::Vec2d{},
+           "undo puts the corner back");
+    expect(fixture.session.redo() && vector("topRight") == moved, "redo moves it again");
+    capture(fixture, QStringLiteral("corner-pin-dragged"));
 }
 
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
@@ -2531,6 +2601,7 @@ int main(int argc, char** argv) {
     audioEffectCards();
     lensDistortionCard();
     chromaticAberrationCard();
+    cornerPinCard();
     testCardCard();
     lightRaysCard();
     cameraShakeCard();

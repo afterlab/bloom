@@ -456,7 +456,13 @@ void KPointPad::paintEvent(QPaintEvent*) {
         line.setWidthF(kHairlineWidth);
         line.setStyle(Qt::DashLine);
         painter.setPen(line);
-        painter.drawLine(placed(0), placed(1));
+        // Two points are joined by a line; three or more are closed into a polygon, in order.
+        if (points_.size() == 2) {
+            painter.drawLine(placed(0), placed(1));
+        } else {
+            for (std::size_t index = 0; index < points_.size(); ++index)
+                painter.drawLine(placed(index), placed((index + 1) % points_.size()));
+        }
     }
     painter.setFont(kit::font(TypeRole::UiSmall));
     for (std::size_t index = 0; index < points_.size(); ++index) {

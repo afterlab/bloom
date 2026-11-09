@@ -14,6 +14,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -253,6 +254,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         const char* name;
     };
     static const std::array kLibraryNames{
+        // #348: "St map" is the spelling an identifier gives.
+        LibraryName{document::kStMapNodeType, "ST Map"},
         LibraryName{document::kIntegerValueNodeType, "Integer"},
         LibraryName{document::kScalarValueNodeType, "Scalar"},
         LibraryName{document::kVector2ValueNodeType, "Vector 2"},

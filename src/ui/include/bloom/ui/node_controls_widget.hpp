@@ -149,6 +149,10 @@ class PointPadRow final : public QWidget {
         bool fromCentre = false;
         // #525: the value is a field position, +y up (the pad draws +y down).
         bool yUp = false;
+        // #348: the value is an offset from a corner of the frame, which the pad draws its point
+        // on: the corner as a fraction of the frame from its centre, y down ((-0.5, -0.5) the top
+        // left). Set, it takes the place of fromCentre.
+        std::optional<QPointF> corner{};
     };
     struct Spec final {
         std::vector<Point> points;

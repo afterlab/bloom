@@ -3,6 +3,7 @@
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -183,7 +184,7 @@ void blurNodeReopen() {
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
           "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure",
           "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
-          "bloom.test-card"}) {
+          "bloom.test-card", "bloom.corner-pin", "bloom.st-map", "bloom.displace"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -330,6 +331,16 @@ void blurNodeReopen() {
                     ? document::ParameterValue{document::Vec2d{3.5, -2.25}}
                 : parameter.schemaKey.starts_with("bloom.rolling-shutter.")
                     ? document::ParameterValue{0.375}
+                // #348 Corner Pin, ST Map and Displace: moved choices, moved corners and amounts.
+                : parameter.schemaKey.starts_with("bloom.corner-pin.") &&
+                        document::isCornerPinCornerSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{document::Vec2d{17.5, -9.25}}
+                : document::warpParameterSpec(parameter.schemaKey) != nullptr &&
+                        document::warpParameterSpec(parameter.schemaKey)->kind ==
+                            document::WarpParameterKind::Choice
+                    ? document::ParameterValue{std::int64_t{1}}
+                : document::warpParameterSpec(parameter.schemaKey) != nullptr
+                    ? document::ParameterValue{7.125}
                 // #587 Test Card: moved choices, whole numbers, scalars and switches.
                 : parameter.schemaKey.starts_with("bloom.test-card.")
                     ? (document::testCardParameterSpec(parameter.schemaKey)->kind ==

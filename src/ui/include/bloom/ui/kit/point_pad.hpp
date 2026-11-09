@@ -24,7 +24,7 @@ namespace bloom::ui::kit {
 // Ctrl (Cmd on macOS) moves it at a tenth of the speed. A Shift-press on bare pad jumps the active
 // point to the pointer, which it then follows. A double-click on a point resets every point to its
 // default. Two points can be joined by a line (setConnected), the way a gradient's start and end
-// are.
+// are; three or more are closed into a polygon, the way a corner pin's four corners are.
 //
 // A backdrop (setBackdrop) is a picture of what the points control, drawn into the frame under its
 // lines and points -- a vignette's falloff around its centre, say. It never takes input.

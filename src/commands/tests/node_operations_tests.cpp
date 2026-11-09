@@ -1091,6 +1091,36 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeLookBack,
                                ConstantValueSource{std::int64_t{3}});
 
+    // #348 Corner Pin, ST Map and Displace: their corners, amounts and choices edit within their
+    // domains and refuse outside them.
+    const auto pin = addRecipe("bloom.corner-pin");
+    const auto pinCorner = pin.outputId<ParameterId>("parameter.topRight");
+    const auto pinFilter = pin.outputId<ParameterId>("parameter.filter");
+    const auto displace = addRecipe("bloom.displace");
+    const auto displaceAmount = displace.outputId<ParameterId>("parameter.xAmount");
+    const auto displaceChannel = displace.outputId<ParameterId>("parameter.yChannel");
+    const auto stMap = addRecipe("bloom.st-map");
+    const auto stMapEdges = stMap.outputId<ParameterId>("parameter.edges");
+    if (!pinCorner || !pinFilter || !displaceAmount || !displaceChannel || !stMapEdges)
+        throw std::logic_error("the warp nodes expose registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *pinCorner,
+                                       ConstantValueSource{Vec2d{-120.0, 45.5}});
+    (void)exercise<SetParameterSource>(test, fixture, *pinFilter, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *displaceAmount, ConstantValueSource{-75.0});
+    (void)exercise<SetParameterSource>(test, fixture, *displaceChannel,
+                                       ConstantValueSource{std::int64_t{4}});
+    (void)exercise<SetParameterSource>(test, fixture, *stMapEdges, ConstantValueSource{std::int64_t{3}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *pinCorner,
+                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *pinFilter,
+                               ConstantValueSource{std::int64_t{3}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *displaceAmount,
+                               ConstantValueSource{2.0e5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *displaceChannel,
+                               ConstantValueSource{std::int64_t{5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *stMapEdges,
+                               ConstantValueSource{std::int64_t{4}});
+
     // #486 Sharpen: its values edit within their domains and refuse outside them.
     const auto sharpen = addRecipe("bloom.sharpen");
     const auto sharpenAmount = sharpen.outputId<ParameterId>("parameter.amount");
