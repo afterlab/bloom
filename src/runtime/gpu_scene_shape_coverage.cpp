@@ -116,7 +116,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
     const core::PixelAspectRatio fullPixelAspect, const double hScale, const double vScale,
     const double opacity, const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
     const GpuSceneChargeBytes& chargeBytes, const CancellationToken& cancellation,
-    GpuSceneShapeCoverage& out) {
+    GpuSceneShapeCoverage& out, const bool leafGrid) {
     const auto size = resolveParameter(shape.size, plan, resolved);
     const auto fillColor = resolveParameter(shape.fillColor, plan, resolved);
     const auto strokeColor = resolveParameter(shape.strokeColor, plan, resolved);
@@ -142,10 +142,20 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
                                     static_cast<render::PathStrokeAlign>(shape.strokeAlign),
                                     static_cast<render::PathStrokeJoin>(shape.strokeJoin),
                                     static_cast<render::PathStrokeCap>(shape.strokeCap)};
+    // On the integer device grid the CPU reference rasterizes the shape's own leaf (flattened at
+    // the render scale) and moves it by a whole pixel; a transformed raster flattens curves at the
+    // matrix norm instead, which is a different polygon even for the identity (#343). The leaf
+    // raster sampled at the window moved back by that whole-pixel step is the CPU leaf exactly.
     const auto matrixPath =
         render::PathMatrix{matrix.a, matrix.b, matrix.c, matrix.d, matrix.x, matrix.y};
-    auto raster = render::PathRaster::transformed(paths, stroke, matrixPath, hScale, vScale, cancel,
-                                                  std::nullopt);
+    auto raster = leafGrid ? render::PathRaster::create(std::span<const render::Path>(paths),
+                                                        stroke, hScale, vScale, cancel)
+                           : render::PathRaster::transformed(paths, stroke, matrixPath, hScale,
+                                                             vScale, cancel, std::nullopt);
+    const auto sampleOriginX =
+        layerWindow.originX() - (leafGrid ? static_cast<std::int64_t>(matrix.x * hScale) : 0);
+    const auto sampleOriginY =
+        layerWindow.originY() - (leafGrid ? static_cast<std::int64_t>(matrix.y * vScale) : 0);
     if (!raster) {
         if (cancellation.isCancellationRequested()) {
             return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
@@ -167,8 +177,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
             return std::nullopt;
         }
         auto built =
-            raster.value()->coverageGeometry(layerWindow.originX(), layerWindow.originY(),
-                                             windowWidth, windowHeight, rule, strokePass, cancel);
+            raster.value()->coverageGeometry(sampleOriginX, sampleOriginY, windowWidth,
+                                             windowHeight, rule, strokePass, cancel);
         if (!built) {
             if (cancellation.isCancellationRequested()) {
                 return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
@@ -193,6 +203,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         }
         OperationKey geometryKey;
         geometryKey.add(std::string{"gpu-shape-fill-coverage-v1"});
+        if (leafGrid)
+            geometryKey.add(std::string{"leaf-grid"});
         addShapeGeometryToKey(geometryKey, shape, size->value, *shapePath);
         geometryKey.add(matrix.a);
         geometryKey.add(matrix.b);
@@ -243,6 +255,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         }
         OperationKey geometryKey;
         geometryKey.add(std::string{"gpu-shape-stroke-coverage-v1"});
+        if (leafGrid)
+            geometryKey.add(std::string{"leaf-grid"});
         addShapeGeometryToKey(geometryKey, shape, size->value, *shapePath);
         geometryKey.add(shape.strokeAlign);
         geometryKey.add(shape.strokeJoin);

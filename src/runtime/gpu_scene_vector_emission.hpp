@@ -252,7 +252,8 @@ emitVectorLeafLayer(const CompiledOperation& inputOperation, const CompiledCompo
         if (const auto error =
                 buildShapeCoverage(*shapeInput, plan, resolved, matrix, layerWindow,
                                    fullDisplayWindow, fullPixelAspect, hScale, vScale, opacity,
-                                   coverageCache, charge, cancellation, shapeCoverage)) {
+                                   coverageCache, charge, cancellation, shapeCoverage,
+                                   nativeGrid)) {
             return error;
         }
         std::string composedKey;

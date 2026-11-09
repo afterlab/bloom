@@ -100,7 +100,8 @@ resolveShapeLeafWindow(const CompiledShape& shape, const CompiledCompositionPlan
 // Builds the native vector-coverage commands for a shape layer whose authored matrix is NOT on the
 // integer device grid. Fill and stroke coverage are the real render::PathRaster rasters of the same
 // shapePath the evaluator's vector arm uses; colours are the resolved premultiplied pixels. No CPU
-// RGBA frame is materialised.
+// RGBA frame is materialised. `leafGrid` is the CPU reference's leaf arm: a direct shape whose
+// matrix is a whole-pixel translation, rasterized as its own leaf and moved.
 [[nodiscard]] std::optional<GpuSceneLeafFailure>
 buildShapeCoverage(const CompiledShape& shape, const CompiledCompositionPlan& plan,
                    const ResolvedEvaluation& resolved, const LayerMatrix& matrix,
@@ -109,7 +110,7 @@ buildShapeCoverage(const CompiledShape& shape, const CompiledCompositionPlan& pl
                    const core::PixelAspectRatio fullPixelAspect, double hScale, double vScale,
                    double opacity, const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
                    const GpuSceneChargeBytes& chargeBytes, const CancellationToken& cancellation,
-                   GpuSceneShapeCoverage& coverage);
+                   GpuSceneShapeCoverage& coverage, bool leafGrid = false);
 
 // Builds the leaf-image coverage command for a text layer whose authored matrix IS on the integer
 // device grid. The CPU evaluator's integer arm rasterizes the text at the proxy-scaled em size into
