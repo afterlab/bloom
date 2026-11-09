@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace bloom::media::detail {
@@ -14,6 +15,10 @@ struct ImageInfo {
     bool sixteenBit = false;
     // Encoded components: 1 grey, 2 grey+alpha, 3 RGB, 4 RGBA.
     int channels = 0;
+    // The still is a TIFF (decoded by tiff_decoder, not the PNG/JPEG codec).
+    bool tiff = false;
+    // Plain-language reason a TIFF was refused, when imageInfo or imageSamples fails.
+    std::string refusal;
 };
 
 // Request-scoped live parser-allocation ceiling for the calling thread. The stb callbacks enforce
@@ -32,7 +37,7 @@ class ImageAllocationBudgetScope final {
     std::size_t previous_;
 };
 
-// Header-only PNG/JPEG inspection. Reads through a bounded callback stream and never buffers the
+// Header-only PNG/JPEG/TIFF inspection. Reads through a bounded callback stream and never buffers the
 // whole encoded file. Returns false for a non-image, an unreadable file, or a codec-rejected
 // header.
 [[nodiscard]] bool imageInfo(const std::filesystem::path& path, ImageInfo& info);

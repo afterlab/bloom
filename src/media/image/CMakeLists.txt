@@ -12,7 +12,7 @@ bloom_find_dependency(ZLIB)
 target_link_libraries(bloom_media_stb_image PRIVATE ZLIB::ZLIBSTATIC)
 
 add_library(bloom_media_image STATIC exr_backend.cpp exr_backend.hpp image.cpp image_budget.hpp
-    sequence.cpp)
+    sequence.cpp tiff_decoder.cpp tiff_decoder.hpp)
 target_sources(bloom_media_image PUBLIC FILE_SET HEADERS BASE_DIRS include
     FILES include/bloom/media/image.hpp)
 target_compile_features(bloom_media_image PUBLIC cxx_std_20)
@@ -33,6 +33,13 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR})
     bloom_enable_warnings(bloom_media_image_test)
     bloom_add_test(NAME bloom.media.image COMMAND bloom_media_image_test LABELS unit media)
+
+    add_executable(bloom_media_tiff_test tests/tiff_tests.cpp)
+    target_link_libraries(bloom_media_tiff_test PRIVATE bloom_media_image bloom_output
+        ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)
+    target_include_directories(bloom_media_tiff_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests)
+    bloom_enable_warnings(bloom_media_tiff_test)
+    bloom_add_test(NAME bloom.media.tiff COMMAND bloom_media_tiff_test LABELS unit media)
 
     add_executable(bloom_media_image_native_samples_test tests/image_native_samples_tests.cpp)
     target_link_libraries(bloom_media_image_native_samples_test PRIVATE bloom_media_image

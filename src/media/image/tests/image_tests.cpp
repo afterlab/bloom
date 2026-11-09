@@ -619,15 +619,17 @@ int main() {
                      (*jpg.value)->descriptor()->dataWindow().extent().width() == 2,
                  "generated JPEG decodes");
     {
-        const auto tiff = scratch.file("provider-missing.tiff");
+        // A TIFF header with nothing behind it is refused in plain language (decoding itself is
+        // covered by bloom.media.tiff).
+        const auto tiff = scratch.file("empty.tiff");
         std::ofstream file(tiff, std::ios::binary);
         file.write("II*\0", 4);
         file.close();
         const auto probe = media::probeImage(tiff);
         const auto decoded = media::decodeImage(tiff);
-        check.expect(!probe && probe.code == media::ImageDiagnosticCode::ProviderMissing &&
-                         !decoded && decoded.code == media::ImageDiagnosticCode::ProviderMissing,
-                     "TIFF magic reaches the provider seam and refuses without a provider");
+        check.expect(!probe && !decoded && probe.diagnostic.find("TIFF") != std::string::npos &&
+                         probe.diagnostic.find("provider") == std::string::npos,
+                     "a truncated TIFF is refused in plain language");
     }
     for (const auto fixture :
          {std::pair{"scanline-half.exr", false}, std::pair{"tiled-float.exr", true}}) {

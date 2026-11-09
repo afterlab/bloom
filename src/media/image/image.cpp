@@ -2,6 +2,7 @@
 #include "image_budget.hpp"
 #include "image_work_statistics.hpp"
 #include "stb_image_adapter.hpp"
+#include "tiff_decoder.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -92,16 +93,22 @@ constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
            static_cast<unsigned char>(bytes[3]) == 'G';
 }
 
-[[nodiscard]] bool isTiffMagic(const std::span<const std::byte> bytes) {
-    if (bytes.size() < 4)
-        return false;
-    const auto byte = [&](const std::size_t index) {
-        return static_cast<unsigned char>(bytes[index]);
-    };
-    return (byte(0) == 'I' && byte(1) == 'I' &&
-            ((byte(2) == 42U && byte(3) == 0U) || (byte(2) == 43U && byte(3) == 0U))) ||
-           (byte(0) == 'M' && byte(1) == 'M' &&
-            ((byte(2) == 0U && byte(3) == 42U) || (byte(2) == 0U && byte(3) == 43U)));
+[[nodiscard]] ImageFormat stillFormat(const std::span<const std::byte> bytes) {
+    if (detail::isTiffMagic(bytes))
+        return ImageFormat::Tiff;
+    return isPngMagic(bytes) ? ImageFormat::Png : ImageFormat::Jpeg;
+}
+
+// The plain-language reason a still header was refused: a TIFF's own reason, else the codec's.
+[[nodiscard]] std::string invalidStillMessage(const detail::ImageInfo& info) {
+    if (info.tiff)
+        return info.refusal.empty() ? "The TIFF file is damaged or truncated" : info.refusal;
+    return "Invalid PNG/JPEG header or image dimensions";
+}
+
+[[nodiscard]] std::string decodeFailedMessage(const detail::ImageInfo& info) {
+    return info.tiff ? "The TIFF image data is damaged, truncated or exceeds the pixel budget"
+                     : "PNG/JPEG decode failed or exceeded the pixel budget";
 }
 
 // ADR 0026: a still has one unnamed part whose channels are its decoded R, G, B and, when the file
@@ -137,118 +144,13 @@ constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
     return probe;
 }
 
-template <typename T> [[nodiscard]] ImageResult<T> providerMissing() {
+template <typename T> [[nodiscard]] ImageResult<T> encoderMissing() {
     return {{},
-            "TIFF provider is missing; MEDIA-3 must provide the worker adapter",
+            "TIFF export is not available in this build",
             false,
             ImageDiagnosticCode::ProviderMissing};
 }
 
-// A provider's premultiplied image as stored samples: its RGB unchanged, alpha biased.
-ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-storedSampleImage(const std::shared_ptr<const render::Rgba32fImage>& image,
-                  const std::size_t pixelBudget) {
-    if (!image || image->descriptor() == nullptr)
-        return {{},
-                "Image provider returned an invalid RGBA32F image",
-                false,
-                ImageDiagnosticCode::ProviderFailed};
-    auto builder = render::Rgba32fImageBuilder::create(*image->descriptor(), pixelBudget);
-    if (!builder)
-        return {{},
-                "Decoded image exceeds the pixel storage budget",
-                false,
-                ImageDiagnosticCode::PixelBudgetExceeded};
-    const auto window = image->descriptor()->dataWindow();
-    const auto width = window.extent().width();
-    for (std::uint64_t y = 0; y < window.extent().height(); ++y) {
-        auto row = builder.value()->row(window.originY() + static_cast<std::int64_t>(y));
-        if (!row)
-            return {
-                {}, "Image output row is unavailable", false, ImageDiagnosticCode::DecodeFailed};
-        for (std::uint64_t x = 0; x < width; ++x) {
-            const auto& pixel = image->pixels()[static_cast<std::size_t>(y * width + x)];
-            const auto stored = render::Rgba32f::fromPremultiplied(
-                pixel.red(), pixel.green(), pixel.blue(), storedSampleAlpha(pixel.alpha()));
-            if (!stored)
-                return {{},
-                        "Image provider returned an invalid pixel",
-                        false,
-                        ImageDiagnosticCode::ProviderFailed};
-            (*row.value())[static_cast<std::size_t>(x)] = *stored.value();
-        }
-    }
-    auto frozen = std::move(*builder.value()).freeze();
-    if (!frozen)
-        return {{},
-                "Image provider returned an invalid image",
-                false,
-                ImageDiagnosticCode::ProviderFailed};
-    return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}};
-}
-
-ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
-                    const std::shared_ptr<const color::CpuColorSpaceProcessor>& processor,
-                    const CancelImageWork& cancel, const std::size_t pixelBudget) {
-    // An identity transform keeps the decoded samples as they are (no alpha round trip, #545).
-    if (!processor || processor->isIdentity())
-        return {image, {}};
-    if (!image || image->descriptor() == nullptr)
-        return {{},
-                "Image provider returned an invalid RGBA32F image",
-                false,
-                ImageDiagnosticCode::ProviderFailed};
-    const auto descriptor = *image->descriptor();
-    auto builder = render::Rgba32fImageBuilder::create(descriptor, pixelBudget);
-    if (!builder)
-        return {{},
-                "Decoded image exceeds the pixel storage budget",
-                false,
-                ImageDiagnosticCode::PixelBudgetExceeded};
-    const auto extent = descriptor.dataWindow().extent();
-    const auto source = image->pixels();
-    std::vector<std::array<float, 4>> row(extent.width());
-    for (std::uint32_t y = 0; y < extent.height(); ++y) {
-        if (cancelled(cancel))
-            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
-        for (std::uint32_t x = 0; x < extent.width(); ++x) {
-            const auto& pixel = source[static_cast<std::size_t>(y) * extent.width() + x];
-            const auto alpha = pixel.alpha();
-            row[x] = {alpha > 0.0F ? pixel.red() / alpha : 0.0F,
-                      alpha > 0.0F ? pixel.green() / alpha : 0.0F,
-                      alpha > 0.0F ? pixel.blue() / alpha : 0.0F, alpha};
-        }
-        if (!processor->apply(row))
-            return {{},
-                    "Input color conversion failed",
-                    false,
-                    ImageDiagnosticCode::ColorSpaceUnavailable};
-        auto outputRow =
-            builder.value()->row(descriptor.dataWindow().originY() + static_cast<std::int64_t>(y));
-        if (!outputRow)
-            return {
-                {}, "Image output row is unavailable", false, ImageDiagnosticCode::DecodeFailed};
-        for (std::uint32_t x = 0; x < extent.width(); ++x) {
-            const auto& sample = row[x];
-            const auto output = render::Rgba32f::fromPremultiplied(
-                sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
-            if (!output)
-                return {{},
-                        "Input color conversion produced an invalid pixel",
-                        false,
-                        ImageDiagnosticCode::ColorSpaceUnavailable};
-            (*outputRow.value())[x] = *output.value();
-        }
-    }
-    auto output = std::move(*builder.value()).freeze();
-    if (!output)
-        return {{},
-                "Input color conversion produced an invalid image",
-                false,
-                ImageDiagnosticCode::ColorSpaceUnavailable};
-    return {std::make_shared<const render::Rgba32fImage>(std::move(*output.value())), {}};
-}
 } // namespace
 std::filesystem::path resolveImagePath(std::string_view relativePath, std::string_view relinkHint,
                                        const std::filesystem::path& projectDirectory) {
@@ -435,19 +337,11 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
         const auto view = std::span<const std::byte>(bytes);
         if (isExrMagic(view)) {
             probe = detail::probeExr(view, *digest, cancel);
-        } else if (isTiffMagic(view)) {
-            // Worker TIFF providers currently consume locators, not immutable byte revisions.
-            return providerMissing<std::shared_ptr<const ImageSourceRevision>>();
         } else {
             detail::ImageInfo info;
             if (!detail::imageInfo(view, info) || !validInfo(info))
-                return {{},
-                        "Invalid PNG/JPEG header or image dimensions",
-                        false,
-                        ImageDiagnosticCode::InvalidHeader};
-            probe = {
-                stillProbe(info, *digest, isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg),
-                {}};
+                return {{}, invalidStillMessage(info), false, ImageDiagnosticCode::InvalidHeader};
+            probe = {stillProbe(info, *digest, stillFormat(view)), {}};
         }
         detail::addImageWork(statistics.probeNanoseconds, detail::imageWorkNanoseconds(probeStart));
         if (!probe.value.has_value())
@@ -472,7 +366,7 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
 }
 
 ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const CancelImageWork& cancel,
-                                   const ImageProvider* provider) {
+                                   const ImageProvider* /*unused: TIFF is decoded natively*/) {
     try {
         auto digest = hashFile(path, cancel);
         if (!digest.value.has_value())
@@ -487,31 +381,10 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
         const auto view = std::span<const std::byte>(head.data(), headBytes);
         if (isExrMagic(view))
             return detail::probeExr(path, *digest.value, cancel);
-        if (isTiffMagic(view)) {
-            if (provider == nullptr || !provider->decode)
-                return providerMissing<ImageProbe>();
-            const auto response = provider->decode({.path = path,
-                                                    .interpretation = {},
-                                                    .pixelBudget = kMaxImageStorageBytes,
-                                                    .expectedDigest = digest.value});
-            if (!response.value.has_value())
-                return {{},
-                        response.diagnostic,
-                        response.cancelled,
-                        response.code == ImageDiagnosticCode::None
-                            ? ImageDiagnosticCode::ProviderFailed
-                            : response.code};
-            return {response.value->probe, {}};
-        }
         detail::ImageInfo info;
         if (!detail::imageInfo(path, info) || !validInfo(info))
-            return {{},
-                    "Invalid PNG/JPEG header or image dimensions",
-                    false,
-                    ImageDiagnosticCode::InvalidHeader};
-        return {stillProbe(info, *digest.value,
-                           isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg),
-                {}};
+            return {{}, invalidStillMessage(info), false, ImageDiagnosticCode::InvalidHeader};
+        return {stillProbe(info, *digest.value, stillFormat(view)), {}};
     } catch (const std::exception&) {
         return {{}, "Image probe allocation or I/O failed"};
     }
@@ -524,7 +397,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                 std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
                 const CancelImageWork& cancel, const ImageProgress& progress,
                 std::size_t pixelBudget, std::optional<core::Sha256Digest> expectedDigest,
-                const ImageProvider* provider, ImageChannelsAlongside* alongside = nullptr) {
+                ImageChannelsAlongside* alongside = nullptr) {
     try {
         if (progress)
             progress(0, 0);
@@ -557,66 +430,11 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
             return detail::decodeExr(path, interpretation, std::move(processor), cancel, progress,
                                      pixelBudget);
         }
-        if (isTiffMagic(view)) {
-            if (provider == nullptr || !provider->decode)
-                return providerMissing<std::shared_ptr<const render::Rgba32fImage>>();
-            if (!processor && !interpretation.inputColorSpaceId.empty()) {
-                const auto resolved = color::resolveBloomNeutralV1BuiltIn(
-                    color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
-                    color::kBloomNeutralV1ConfigDigest);
-                if (!resolved)
-                    return {{},
-                            "Bloom Neutral input config could not be resolved",
-                            false,
-                            ImageDiagnosticCode::ColorSpaceUnavailable};
-                auto prepared = color::CpuColorSpaceProcessor::prepare(
-                    *resolved.resolved(), interpretation.inputColorSpaceId,
-                    resolved.resolved()->processColorSpaceId());
-                if (!prepared)
-                    return {{},
-                            "Input color space is unavailable in the selected config",
-                            false,
-                            ImageDiagnosticCode::ColorSpaceUnavailable};
-                processor = std::move(prepared).takeProcessor();
-            }
-            if (interpretation.storedSamples) {
-                auto premultiplied = interpretation;
-                premultiplied.storedSamples = false;
-                premultiplied.alphaAssociation = ImageAlphaAssociation::Premultiplied;
-                const auto response = provider->decode({.path = path,
-                                                        .interpretation = premultiplied,
-                                                        .pixelBudget = pixelBudget,
-                                                        .expectedDigest = expectedDigest});
-                if (!response.value.has_value())
-                    return {{},
-                            response.diagnostic,
-                            response.cancelled,
-                            response.code == ImageDiagnosticCode::None
-                                ? ImageDiagnosticCode::ProviderFailed
-                                : response.code};
-                return storedSampleImage(response.value->image, pixelBudget);
-            }
-            const auto response = provider->decode({.path = path,
-                                                    .interpretation = interpretation,
-                                                    .pixelBudget = pixelBudget,
-                                                    .expectedDigest = expectedDigest});
-            if (!response.value.has_value())
-                return {{},
-                        response.diagnostic,
-                        response.cancelled,
-                        response.code == ImageDiagnosticCode::None
-                            ? ImageDiagnosticCode::ProviderFailed
-                            : response.code};
-            return applyInputProcessor(response.value->image, processor, cancel, pixelBudget);
-        }
         detail::ImageInfo info;
         if (!(revision ? detail::imageInfo(revision->bytes(), info)
                        : detail::imageInfo(path, info)) ||
             !validInfo(info))
-            return {{},
-                    "Invalid PNG/JPEG header or image dimensions",
-                    false,
-                    ImageDiagnosticCode::InvalidHeader};
+            return {{}, invalidStillMessage(info), false, ImageDiagnosticCode::InvalidHeader};
         const auto width = static_cast<std::uint64_t>(info.width);
         const auto height = static_cast<std::uint64_t>(info.height);
         std::uint64_t pixels = 0;
@@ -639,10 +457,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
         auto samples = revision ? detail::imageSamples(revision->bytes(), info, pixelBudget)
                                 : detail::imageSamples(path, info, pixelBudget);
         if (samples.empty())
-            return {{},
-                    "PNG/JPEG decode failed or exceeded the pixel budget",
-                    false,
-                    ImageDiagnosticCode::DecodeFailed};
+            return {{}, decodeFailedMessage(info), false, ImageDiagnosticCode::DecodeFailed};
         if (cancelled(cancel))
             return {{}, {}, true};
         const bool stored = interpretation.storedSamples;
@@ -742,11 +557,11 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
             std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
             const CancelImageWork& cancel, const ImageProgress& progress,
             const std::size_t pixelBudget, const std::optional<core::Sha256Digest> expectedDigest,
-            const ImageProvider* provider) {
+            const ImageProvider* /*unused: TIFF is decoded natively*/) {
     // The Profiler's decode stage (#423); a failed or cancelled decode records nothing.
     core::telemetry::StageTimer decodeTime(core::telemetry::Stage::Decode);
     auto decoded = decodeImageImpl(path, nullptr, interpretation, std::move(processor), cancel,
-                                   progress, pixelBudget, expectedDigest, provider);
+                                   progress, pixelBudget, expectedDigest);
     if (!decoded.value)
         decodeTime.cancel();
     return decoded;
@@ -774,7 +589,7 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
         const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
         return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel,
                                progress, hostByteBudget - revision.retainedBytes(),
-                               revision.probe().contentDigest, nullptr, alongside);
+                               revision.probe().contentDigest, alongside);
     }();
     if (!decoded.value)
         decodeTime.cancel();
@@ -850,22 +665,14 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision,
         result.repairedPixels = decoded.value->repairedPixels;
         return result;
     }
-    if (isTiffMagic(view))
-        return unavailable("TIFF stills are decoded by a provider");
     detail::ImageInfo info;
     if (!detail::imageInfo(bytes, info) || !validInfo(info))
-        return {{},
-                "Invalid PNG/JPEG header or image dimensions",
-                false,
-                ImageDiagnosticCode::InvalidHeader};
+        return {{}, invalidStillMessage(info), false, ImageDiagnosticCode::InvalidHeader};
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     auto decodedSamples = detail::imageSamples(bytes, info, pixelBudget);
     if (decodedSamples.empty())
-        return {{},
-                "PNG/JPEG decode failed or exceeded the pixel budget",
-                false,
-                ImageDiagnosticCode::DecodeFailed};
+        return {{}, decodeFailedMessage(info), false, ImageDiagnosticCode::DecodeFailed};
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     const auto width = static_cast<std::uint32_t>(info.width);
@@ -945,10 +752,7 @@ decodeStillChannels(const ImageSourceRevision& revision, const ImageChannelSelec
             return {{}, "Still images have one part", false, ImageDiagnosticCode::PartNotFound};
         detail::ImageInfo info;
         if (!detail::imageInfo(revision.bytes(), info) || !validInfo(info))
-            return {{},
-                    "Invalid PNG/JPEG header or image dimensions",
-                    false,
-                    ImageDiagnosticCode::InvalidHeader};
+            return {{}, invalidStillMessage(info), false, ImageDiagnosticCode::InvalidHeader};
         const bool hasAlpha = info.channels == 2 || info.channels == 4;
         std::vector<std::string> available{"R", "G", "B"};
         if (hasAlpha)
@@ -995,10 +799,7 @@ decodeStillChannels(const ImageSourceRevision& revision, const ImageChannelSelec
         // whole remaining budget so a small selection is not refused by a larger ceiling.
         const auto samples = detail::imageSamples(revision.bytes(), info, budget);
         if (samples.empty())
-            return {{},
-                    "PNG/JPEG decode failed or exceeded the pixel budget",
-                    false,
-                    ImageDiagnosticCode::DecodeFailed};
+            return {{}, decodeFailedMessage(info), false, ImageDiagnosticCode::DecodeFailed};
         if (cancelled(cancel))
             return {{}, {}, true, ImageDiagnosticCode::Cancelled};
         std::vector<std::vector<float>> planes(picked.size());
@@ -1042,7 +843,8 @@ decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelec
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     const auto format = revision.probe().format;
-    if (format != ImageFormat::Exr && format != ImageFormat::Png && format != ImageFormat::Jpeg)
+    if (format != ImageFormat::Exr && format != ImageFormat::Png && format != ImageFormat::Jpeg &&
+        format != ImageFormat::Tiff)
         return {{},
                 "This image format has no channel-set decoder",
                 false,
@@ -1062,7 +864,7 @@ decodeImageChannels(const ImageSourceRevision& revision, const ImageChannelSelec
 ImageResult<ImageProviderEncodeResponse> encodeImage(const ImageProviderEncodeRequest& request,
                                                      const ImageProvider* provider) {
     if (provider == nullptr || !provider->encode)
-        return providerMissing<ImageProviderEncodeResponse>();
+        return encoderMissing<ImageProviderEncodeResponse>();
     try {
         const auto response = provider->encode(request);
         if (!response.value.has_value())

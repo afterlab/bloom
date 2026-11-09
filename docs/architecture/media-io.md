@@ -131,11 +131,21 @@ bands.
   returns the same repaired pixels without repeating it. Preserving zero-alpha emission would change
   the process image contract for every operation and needs its own ADR.
 
-TIFF is content-probed by classic and BigTIFF magic, but its read and write operations are provider
-operations. `ImageProvider` carries explicit Decode and Encode callbacks matching the worker image
-product; no global registry is consulted. MEDIA-4 enables `TiffRgba16SrgbV1` export through the isolated FFmpeg worker on Linux.
-It writes RGBA16 little-endian, with the config display/view baked into straight RGB, and verifies every decoded sample before
-publication. The general `ImageProvider` read callback remains a separate intake seam.
+TIFF is content-probed by classic and large-offset magic. Reading is native and in-process, on every
+platform, through the same still path as PNG and JPEG: the decoder returns 16-bit RGBA samples, so
+probing, source revisions, the decoded and disk caches, channel sets and the GPU native-sample route
+need nothing TIFF-specific. It reads the first image of a classic TIFF: 8- and 16-bit unsigned
+integer grey, grey with alpha, RGB and RGBA (extra samples beyond the first are ignored), either byte
+order, strips or tiles, uncompressed, Lempel-Ziv-Welch, Deflate or PackBits, with or without the
+horizontal predictor. Associated (premultiplied) alpha is returned as straight samples. Anything else
+(large-offset files, palette, CMYK, YCbCr or Lab photometry, floating-point or signed samples, planar
+or rotated layouts, other compressions) is refused with a plain-language reason naming what to
+change, and truncated or malformed files are refused without reading outside the file. Embedded
+profiles are ignored: the Auto rule reads 8/16-bit TIFF through the config's sRGB-texture space.
+Writing is a provider operation: `ImageProvider` carries an explicit Encode callback matching the
+worker image product; no global registry is consulted. MEDIA-4 enables `TiffRgba16SrgbV1` export
+through the isolated FFmpeg worker on Linux. It writes RGBA16 little-endian, with the config
+display/view baked into straight RGB, and verifies every decoded sample before publication.
 Platforms without the process backend expose an unavailable preset with its reason.
 
 | Bound | v0 value |
@@ -1003,9 +1013,7 @@ Relink, changed locator/base directory or changed asset/member digest uses anoth
 `OperationCache::invalidateSourceRevisions()` is the neutral New/Open authority boundary. It
 advances the capture generation and detaches still tickets and video source sessions while preserving
 decoded/derived pixels and disk entries; the desktop rooted retirement worker releases their backing.
-New/Open document handling invokes it before session rebind and interactive reuse. These
-rules do not extend the still-image byte-vector ticket to TIFF's locator-based worker provider.
-Linux motion video uses the separate disk-backed revision described below.
+New/Open document handling invokes it before session rebind and interactive reuse. Linux motion video uses the separate disk-backed revision described below.
 
 Per-build GPU scene statistics expose encoded bytes read/hashed, revision captures/hits and monotonic
 nanosecond durations for source open/read/seek, SHA-256, metadata probe and actual image decoder
@@ -2099,10 +2107,10 @@ as a GPU effect. Media decode (container I/O, decompression and the worker's chr
 reconstruction to YUVA444P16) stays host preparation; the colour transform does not.
 
 Still images follow the same split. `media::decodeImageSamples` returns a raw decode's samples
-without widening them: the 16-bit RGBA samples of a PNG or JPEG, or the binary16 RGBA of an
+without widening them: the 16-bit RGBA samples of a PNG, JPEG or TIFF, or the binary16 RGBA of an
 OpenEXR colour layer whose channels are all HALF and unsubsampled (Y/YA layers replicate Y; a layer
 without alpha is opaque). Its repaired-pixel count is the float decode's, computed from the half
-bits. TIFF stills, FLOAT or UINT OpenEXR layers and subsampled layers report
+bits. FLOAT or UINT OpenEXR layers and subsampled layers report
 `NativeSamplesUnavailable` and the GPU route uploads their float decode. Regression tests:
 `bloom.media.image_native_samples` (PNG grey, grey+alpha, RGB and RGBA at 8 and 16 bits, JPEG,
 premultiplied, straight, unlabelled, alpha-free, luminance, tiled and repaired half OpenEXR, every
