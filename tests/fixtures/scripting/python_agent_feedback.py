@@ -58,6 +58,70 @@ class AgentFeedback(unittest.TestCase):
         self.assertIn('3..64', str(refused.exception))
         self.assertEqual(refused.exception.diagnostics[0]['operation_index'], 0)
 
+    def composition(self):
+        return next(c for c in bloom.data.snapshot()['compositions']
+                    if c['id'] == int(bloom.context.composition))
+
+    def test_set_key_columns_match_set_keys_rows(self):
+        # #604: times, values and interpolations as columns are the same edit as rows.
+        bloom.ops.layer.add_solid(name='Wash', color=(1, 0, 0, 1))
+        opacity = {'layer': 'Wash', 'role': 'opacity'}
+        columns = bloom.ops.animation.set_key_columns(
+            opacity, (0, 6, 12), (0.0, 0.5, 1.0), interpolations=('hold',), replace=True)
+        self.assertTrue(columns['succeeded'])
+        made = sum(o['name'] == 'keyframe' for o in columns['outputs'])
+        self.assertGreaterEqual(made, 3)
+        bloom.transactions.undo()
+        rows = bloom.ops.animation.set_keys(opacity, ((0, 0.0, 'hold'), (6, 0.5), (12, 1.0)),
+                                            replace=True)
+        self.assertEqual(sum(o['name'] == 'keyframe' for o in rows['outputs']), made)
+        # Exact times in seconds work in a column too.
+        seconds = bloom.ops.animation.set_key_columns(
+            opacity, ((0, 1), (1, 2)), (1.0, 0.0), replace=True)
+        self.assertTrue(seconds['succeeded'])
+        with self.assertRaises(bloom.OperationError) as refused:
+            bloom.ops.animation.set_key_columns(opacity, (0, 6), (0.0,))
+        self.assertIn('has 1 entries but times has 2', str(refused.exception))
+        with self.assertRaises(bloom.OperationError) as extra:
+            bloom.ops.animation.set_key_columns(opacity, (0,), (0.0,), interpolations=('a', 'b'))
+        self.assertIn('interpolations', str(extra.exception))
+
+    def test_scene_library_builds_wires_and_animates(self):
+        # #602: a scene is declared, then committed through transactions as two undo steps.
+        before = len(self.composition()['layers'])
+        scene = bloom.scene.Scene('Title card')
+        back = scene.solid('Backdrop', (0.1, 0.1, 0.2, 1))
+        title = scene.text('Title', 'Hello', position=(100, 100))
+        shape = scene.shape('Badge', 'star', position=(50, 50))
+        blur = scene.node('Soften', 'bloom.box-blur')
+        title.animate('opacity', [(0, 0.0), (12, 1.0)], ease='ease-in-out')
+        title.animate('position', [(0, (100, 140)), (24, (100, 100))])
+        title.parent_to(back)
+        shape.set('opacity', 0.5).matte_with(back)
+        with self.assertRaises(RuntimeError):
+            title.id
+        result = scene.commit()
+        self.assertEqual(result.steps, 2)
+        self.assertEqual(set(result.layers), {'Backdrop', 'Title', 'Badge'})
+        self.assertEqual(set(result.nodes), {'Soften'})
+        composition = self.composition()
+        self.assertEqual(len(composition['layers']), before + 3)
+        by_name = {layer['name']: layer for layer in composition['layers']}
+        self.assertEqual(by_name['Title']['parent'], result.layers['Backdrop'])
+        self.assertEqual(by_name['Badge']['track_matte']['source'], result.layers['Backdrop'])
+        self.assertGreaterEqual(len(composition['curves']), 2)
+        self.assertEqual(title.id, result.layers['Title'])
+        with self.assertRaises(RuntimeError):
+            scene.commit()
+        scene.undo()
+        self.assertEqual(len(self.composition()['layers']), before)
+        with self.assertRaises(ValueError):
+            bloom.scene.Scene().solid('A', (0, 0, 0, 1)).animate('opacity', [(0.5, 1.0)])
+        duplicate = bloom.scene.Scene()
+        duplicate.solid('A', (0, 0, 0, 1))
+        with self.assertRaises(ValueError):
+            duplicate.solid('A', (1, 1, 1, 1))
+
     def test_missing_font_file_is_a_compile_warning(self):
         # #442: a text layer whose system font file is gone draws the fallback face; the edit says so.
         added = bloom.ops.layer.add_text(name='T', text='Hi')

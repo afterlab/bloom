@@ -244,6 +244,39 @@ Operations inside a group return `None`; the group's `result` becomes available 
 created IDs in `outputs`. Outside a group, an operation returns its immutable command result.
 Headless authoring and history calls run on the host's creating thread.
 
+## Building a scene
+
+`bloom.scene` is a small library on top of transactions for scene setup, wiring and timed
+animation. You declare layers, parents, mattes, links and keys, then commit the plan:
+
+```python
+from bloom import scene
+
+plan = scene.Scene("Title card")
+backdrop = plan.solid("Backdrop", (0.04, 0.04, 0.08, 1))
+title = plan.text("Title", "Hello", position=(960, 540), size=96)
+badge = plan.shape("Badge", "star", position=(200, 200))
+title.animate("opacity", [(0, 0.0), (12, 1.0)], ease="ease-in-out")   # frames, layer time
+title.animate("position", [(0, (960, 600)), (1.0, (960, 540))], seconds=True)
+title.parent_to(backdrop)
+badge.set("opacity", 0.5).matte_with(backdrop)
+result = plan.commit()         # result.layers == {"Backdrop": 1, "Title": 2, "Badge": 3}
+plan.undo()                    # takes back every step the commit made
+```
+
+Nothing changes until `commit()`. It sends the plan through `bloom.transactions` in two steps,
+because wiring and keys need the ids of what the first step created: one transaction adds every
+layer and node, and a second sets values, parents, mattes, links and keys. Each is an ordinary
+undo step of the same commands every other edit uses, so `result.steps` says how many undos it
+took (`plan.undo()` does them all). Keys go out as columns in one `bloom.ops.animation.set_key_columns`
+call per parameter, so a long key list is one operation. `plan.node(name, node_type)` declares a node
+of any registered type; a node's `.set(role, value)`, `.animate(role, keys)` and
+`.feeds(other, port)` wire it. Layers and nodes are named in the plan; names must be unique
+within it. Times are composition frames unless you pass `seconds=True`.
+
+An agent connected over MCP can run this library through `script.run` when the artist has
+allowed it; see [Using Bloom from an agent](mcp.md).
+
 ## Rendering and tasks
 
 ```python
