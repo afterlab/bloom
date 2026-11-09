@@ -6,9 +6,14 @@
 #include <bloom/scripting/session.hpp>
 #include <bloom/scripting/value.hpp>
 
+#include <array>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -28,6 +33,63 @@ void expect(const bool condition, const std::string& message) {
 
 bool contains(const std::string& text, const std::string& part) {
     return text.find(part) != std::string::npos;
+}
+
+std::uint32_t crc32(const std::vector<std::uint8_t>& bytes) {
+    std::uint32_t crc = 0xFFFFFFFFU;
+    for (const auto byte : bytes) {
+        crc ^= byte;
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xEDB88320U & (0U - (crc & 1U)));
+    }
+    return ~crc;
+}
+
+void append32(std::vector<std::uint8_t>& out, const std::uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8)
+        out.push_back(static_cast<std::uint8_t>(value >> shift));
+}
+
+void appendChunk(std::vector<std::uint8_t>& out, const std::string& type,
+                 const std::vector<std::uint8_t>& data) {
+    append32(out, static_cast<std::uint32_t>(data.size()));
+    std::vector<std::uint8_t> body(type.begin(), type.end());
+    body.insert(body.end(), data.begin(), data.end());
+    out.insert(out.end(), body.begin(), body.end());
+    append32(out, crc32(body));
+}
+
+// A 2 by 2 opaque RGB PNG, written with a stored (uncompressed) deflate block.
+void writeSmallPng(const std::filesystem::path& path) {
+    std::vector<std::uint8_t> raw;
+    for (int row = 0; row < 2; ++row) {
+        raw.push_back(0);
+        for (int column = 0; column < 2; ++column)
+            raw.insert(raw.end(), {200, 100, 50});
+    }
+    std::uint32_t a = 1;
+    std::uint32_t b = 0;
+    for (const auto byte : raw) {
+        a = (a + byte) % 65521U;
+        b = (b + a) % 65521U;
+    }
+    std::vector<std::uint8_t> zlib{0x78, 0x01, 0x01};
+    zlib.push_back(static_cast<std::uint8_t>(raw.size() & 0xFFU));
+    zlib.push_back(static_cast<std::uint8_t>(raw.size() >> 8));
+    zlib.push_back(static_cast<std::uint8_t>(~raw.size() & 0xFFU));
+    zlib.push_back(static_cast<std::uint8_t>((~raw.size() >> 8) & 0xFFU));
+    zlib.insert(zlib.end(), raw.begin(), raw.end());
+    append32(zlib, (b << 16) | a);
+    std::vector<std::uint8_t> png{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    std::vector<std::uint8_t> header;
+    append32(header, 2);
+    append32(header, 2);
+    header.insert(header.end(), {8, 2, 0, 0, 0});
+    appendChunk(png, "IHDR", header);
+    appendChunk(png, "IDAT", zlib);
+    appendChunk(png, "IEND", {});
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
 }
 
 } // namespace
@@ -157,6 +219,38 @@ int main() {
     const auto relative = session->executeJsonOperation(
         "bloom.asset.import", {{"paths", Value{ValueArray{Value{"clip.exr"}}}}});
     expect(!relative.succeeded(), "relative import without a project folder is refused");
+    const auto refusal =
+        relative.command && !relative.command->operationFailures.empty()
+            ? relative.command->operationFailures.front().issue.message
+            : relative.diagnostic ? relative.diagnostic->message : std::string{};
+    expect(contains(refusal, "projectDirectory") && contains(refusal, "absolute path"),
+           "the refusal says what to pass instead: " + refusal);
+    expect(session->snapshot().project().assets().empty(), "a refused import adds nothing");
+
+    // An unsaved project has no folder, so an absolute path imports with an external locator.
+    const auto folder = std::filesystem::temp_directory_path() /
+                        ("bloom-unsaved-import-" +
+                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    const auto media = folder / "plate.png";
+    writeSmallPng(media);
+    const auto imported = session->executeJsonOperation(
+        "bloom.asset.import",
+        {{"paths", Value{ValueArray{Value{media.generic_string()}}}}});
+    expect(imported.succeeded(), "an absolute import into an unsaved project succeeds");
+    const auto& assets = session->snapshot().project().assets();
+    expect(assets.size() == 1 && assets.front().locator.portability == "external" &&
+               assets.front().locator.path.starts_with("file://"),
+           "the asset keeps an external file locator");
+    if (assets.size() == 1) {
+        const auto layer = session->executeJsonOperation(
+            "bloom.layer.add-image",
+            {{"composition", compositionId},
+             {"asset", Value{bloom::scripting::StableId{assets.front().id.value()}}}});
+        expect(layer.succeeded(), "the imported asset can be used as a layer");
+    }
+    std::error_code ignoredError;
+    std::filesystem::remove_all(folder, ignoredError);
 
     // #578: errors name the object.
     const auto badLayer = session->executeJsonOperation(

@@ -220,7 +220,11 @@ constexpr std::array kNotes{
         "bloom.layer.add-image bloom.layer.add-audio query:assets",
         "[operation-warning] A path cannot be read or is not a supported format => it is reported as a "
         "bloom.scripting.operation-warning diagnostic and skipped; fix the path and import it "
-        "again."},
+        "again.\n"
+        "[invalid-argument] A relative path in a project that has never been saved, with no "
+        "projectDirectory => refused before anything is imported, because there is no project "
+        "folder to resolve it against; pass an absolute path, or projectDirectory, or save the "
+        "project first."},
     OperationNotes{"bloom.asset.relink",
         "Points an asset at a different media file (Replace Footage), keeping every layer that "
         "uses it.",
@@ -955,9 +959,12 @@ constexpr std::array kSideEffects{
     SideEffectNote{"bloom.asset.import",
         "Files the project already holds are reused: no second asset is made and the existing "
         "asset's id is reported.\n"
-        "In a project that has never been saved there is no project folder, so the assets keep "
-        "external locators (the file's absolute location); a relative path then needs "
-        "projectDirectory."},
+        "A project that has never been saved is supported: it has no project folder, so an "
+        "absolute path imports and the assets keep external locators (the file's absolute "
+        "location, portability `external`) instead of project-relative ones. The file is "
+        "not copied, so the asset stays valid after Save As, and it stops resolving if the file "
+        "moves; relink it then. A relative path in that project is refused unless "
+        "projectDirectory is given, and nothing is imported."},
     SideEffectNote{"bloom.asset.relink",
         "The asset keeps its id, name, folder, tags and place in the list; only its file, size, "
         "duration and digest change, so every layer that uses it shows the new file."},
