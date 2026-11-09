@@ -953,7 +953,7 @@ class NodeItem final : public QGraphicsObject {
                 binding.role == "composition")
                 continue;
             // #342: which group a Node Group reads is chosen in Properties, like a source's.
-            if (node.typeId == document::kNodeGroupNodeType &&
+            if (document::usesGroupReference(node.typeId) &&
                 binding.role == document::kNodeGroupReferenceRole)
                 continue;
             // #364: the matte list is edited by name in Properties and by picking in the Viewer.

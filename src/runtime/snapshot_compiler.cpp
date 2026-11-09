@@ -1,5 +1,6 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/font_resolver.hpp>
+#include <bloom/runtime/function_body.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include "channel_static.hpp"
@@ -86,6 +87,14 @@ using FixedInputKey = std::pair<document::NodeId, std::string>;
 // like FixedInputKey above, and a std::map for the same reason: a NodeId orders, so the table is
 // deterministic without a hash of a pair.
 using ValueOutputKey = std::pair<document::NodeId, std::string>;
+
+// #590: the value program one function body is lowered into, beside the plan's main one.
+struct FunctionBodyBuild final {
+    std::vector<runtime::CompiledValueOperation> operations;
+    std::map<ValueOutputKey, runtime::ValueOutputIndex> outputs;
+    std::size_t outputCount = 0;
+    std::vector<std::uint8_t> postImage;
+};
 using LayerSlotInputKey = std::tuple<document::NodeId, document::LayerSlotId, std::string>;
 using DiagnosticKey = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
                                  std::uint64_t, std::uint64_t, std::string, int>;
@@ -158,6 +167,9 @@ class CompilePass final {
         expansion_ = document::expandNodeGroups(request_.snapshot.project(), *composition_);
         if (expansion_.composition.has_value())
             composition_ = &*expansion_.composition;
+        for (const auto& [consumer, body] : expansion_.functionBodies)
+            for (const auto id : body.nodes)
+                bodyOwner_.emplace(id, consumer);
         if (!indexSourceGraph() || !collectReachableGraph() || !indexReachableGraph() ||
             cancelled()) {
             return cancelled() ? result(runtime::SnapshotCompileStatus::Cancelled)
@@ -385,6 +397,10 @@ class CompilePass final {
                 continue;
             }
             reachableNodes.emplace(nodeId, node);
+            // #590: a function consumer reads its group's body, so the body is reached with it.
+            if (const auto body = expansion_.functionBodies.find(nodeId);
+                body != expansion_.functionBodies.end())
+                pending.push_back(body->second.output);
             if (const auto boundary = layerOutputs_.find(nodeId); boundary != layerOutputs_.end())
                 reachLayerRelations(*boundary->second, pending, reachableEdges);
             // #502: the Adjustment's output is the stack below its entry, which its target Merge
@@ -616,12 +632,17 @@ class CompilePass final {
                 continue;
             }
             definitions_.emplace(node->id, definition);
-            if (definition->lowering == runtime::NodeLoweringKind::NodeGroup) {
+            if (definition->lowering == runtime::NodeLoweringKind::NodeGroup ||
+                (definition->lowering == runtime::NodeLoweringKind::ValueFunction &&
+                 !expansion_.functionBodies.contains(node->id))) {
                 const auto reason = expansion_.unresolved.find(node->id);
+                const bool function =
+                    definition->lowering == runtime::NodeLoweringKind::ValueFunction;
                 addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
-                           subject(node->id, "parameter.group"), "Node Group cannot be expanded",
+                           subject(node->id, "parameter.group"),
+                           function ? "Function cannot read its group" : "Node Group cannot be expanded",
                            reason == expansion_.unresolved.end()
-                               ? "The group this Node Group names could not be expanded."
+                               ? "The group this node names could not be expanded."
                                : reason->second + ".");
             }
             if (definition->lowering == runtime::NodeLoweringKind::Unsupported &&
@@ -1189,6 +1210,10 @@ class CompilePass final {
     runtime::detail::CompileCheckpointObserver* checkpointObserver_ = nullptr;
     const document::Composition* composition_ = nullptr;
     document::NodeGroupExpansion expansion_;
+    // #590: the node ids of each function body, by the consumer that reads it, and the value program
+    // each body is lowered into while the value graph is compiled.
+    std::unordered_map<document::NodeId, document::NodeId> bodyOwner_;
+    std::map<document::NodeId, FunctionBodyBuild> functionBuilds_;
     std::unordered_map<document::NodeId, const document::NodeRecord*> nodes_;
     std::unordered_map<document::ParameterId, const document::ParameterRecord*> parameters_;
     // Request-local constant records make every lowering kind use the same override channel.

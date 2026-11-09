@@ -695,6 +695,52 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         }
         return runtime::CompiledValueKernel{std::move(boundary)};
     }
+    case runtime::NodeLoweringKind::ValueFunction: {
+        // #590: the group's body, lowered into a program of its own, run for this node's argument.
+        const auto body = expansion_.functionBodies.find(node.id);
+        const auto build = functionBuilds_.find(node.id);
+        const auto argument = operandOf(document::kFunctionArgumentRole);
+        if (body == expansion_.functionBodies.end() || build == functionBuilds_.end() ||
+            !argument.has_value())
+            return std::nullopt;
+        auto compiled = std::make_shared<runtime::CompiledFunctionBody>();
+        compiled->operations = build->second.operations;
+        compiled->outputCount = build->second.outputCount;
+        if (compiled->operations.size() > runtime::kMaximumFunctionOperations) {
+            addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                       subject(node.id, "parameter.group"), "Function group is too large",
+                       "A function group may hold at most " +
+                           std::to_string(runtime::kMaximumFunctionOperations) +
+                           " value operations, because it runs once per argument.");
+            return std::nullopt;
+        }
+        for (std::size_t index = 0; index < compiled->operations.size(); ++index) {
+            const auto& operation = compiled->operations[index];
+            if (operation.requiresPostImage ||
+                std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel)) {
+                addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                           subject(node.id, "parameter.group"), "Function group reads an image",
+                           "A function group computes numbers from its argument and cannot read "
+                           "an image result.");
+                return std::nullopt;
+            }
+            if (operation.sourceNodeId == body->second.input)
+                compiled->inputOperation = index;
+        }
+        compiled->inputSlot = static_cast<std::size_t>(
+            std::ranges::find(document::kNodeGroupSlots, document::kFunctionInputSlot,
+                              &document::NodeGroupSlot::name) -
+            document::kNodeGroupSlots.begin());
+        const auto result = build->second.outputs.find(
+            ValueOutputKey{body->second.output, std::string(document::kFunctionOutputSlot)});
+        if (result == build->second.outputs.end())
+            return std::nullopt;
+        compiled->result = result->second;
+        compiled->timeDependent =
+            runtime::valueOperationsTimeDependent(compiled->operations, compiled->outputCount);
+        return runtime::CompiledValueKernel{
+            runtime::CompiledValueFunction{*argument, std::move(compiled)}};
+    }
     case runtime::NodeLoweringKind::NodeGroup:
     case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
@@ -764,17 +810,43 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         if (cancelled()) {
             return false;
         }
+        // #590: a function body is lowered into a value program of its own, with its own output
+        // table. Swapping the program in and out around one node keeps every lowering below
+        // unaware of it.
+        const auto owner = bodyOwner_.find(nodeId);
+        if (owner == bodyOwner_.end()) {
+            if (!compileValueNode(nodeId))
+                return false;
+            continue;
+        }
+        auto& build = functionBuilds_[owner->second];
+        swapValueProgram(build);
+        const bool compiled = compileValueNode(nodeId);
+        swapValueProgram(build);
+        if (!compiled)
+            return false;
+    }
+    return true;
+}
+
+void swapValueProgram(FunctionBodyBuild& build) {
+    std::swap(valueOperations_, build.operations);
+    std::swap(valueOutputs_, build.outputs);
+    std::swap(valueOutputCount_, build.outputCount);
+    std::swap(postImageValueOutputs_, build.postImage);
+}
+
+[[nodiscard]] bool compileValueNode(const document::NodeId nodeId) {
+    {
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
         const bool shake = node != nullptr && node->typeId == document::kCameraShakeNodeType;
         if (node != nullptr && definition != definitions_.end() &&
             node->typeId == document::kRollingShutterNodeType) {
-            if (!appendRollingShutterSamples(*node, *definition->second))
-                return false;
-            continue;
+            return appendRollingShutterSamples(*node, *definition->second);
         }
         if (node == nullptr || definition == definitions_.end() || (!isValueNode(nodeId) && !shake)) {
-            continue;
+            return true;
         }
         auto kernel = shake ? lowerShakeKernel(*node, *definition->second)
                             : lowerValueKernel(*node, *definition->second);

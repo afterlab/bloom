@@ -187,7 +187,7 @@ void everyChoiceParameterHasValues() {
             // References (a composition, a data block, a part or layer name) are chosen from
             // the project, not from a closed list.
             const auto& key = parameter.schemaKey;
-            if (key == "bloom.composition-source.composition" || key == "bloom.data.block" ||
+            if (key == "bloom.composition-source.composition" || key == "bloom.node-group.group" || key == "bloom.data.block" ||
                 key == "bloom.ocio-file.lut" || contains(key, ".part") || contains(key, ".layer") ||
                 contains(key, "matte-id"))
                 continue;

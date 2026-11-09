@@ -398,6 +398,10 @@ enum class NodeLoweringKind {
     // #342: a group definition's Group Input or Group Output. Each republishes its value slots
     // through the value graph; its pixel slots are edges the expansion has already joined.
     GroupBoundary,
+    // #590: a node that evaluates a group as a function of one number (Function, and the plot and
+    // axes nodes that sample one). The group's body is cut out of the value graph and run per
+    // argument (runtime::CompiledValueFunction).
+    ValueFunction,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -424,6 +428,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::ValueFunction:
         return true;
     case NodeLoweringKind::NodeGroup:
         return false;

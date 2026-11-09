@@ -976,6 +976,7 @@ template <typename Definition>
     // #342: the generated shape of Group Input, Group Output and Node Group.
     case NodeLoweringKind::NodeGroup:
     case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::ValueFunction:
         return hasValidNodeGroupShape(definition);
     // The value lowerings share ONE shape contract rather than fifteen bespoke ones; see
     // value_node_definitions.cpp for what it requires and why the asymmetry with the five image

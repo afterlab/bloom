@@ -31,6 +31,11 @@ namespace bloom::document {
 inline constexpr std::string_view kGroupInputNodeType = "bloom.group-input";
 inline constexpr std::string_view kGroupOutputNodeType = "bloom.group-output";
 inline constexpr std::string_view kNodeGroupNodeType = "bloom.node-group";
+// #590: a node that evaluates a group as a function without an instance, so one definition serves
+// one value (Function) or many (Function Plot).
+inline constexpr std::string_view kFunctionNodeType = "bloom.function";
+inline constexpr std::string_view kFunctionArgumentRole = "x";
+inline constexpr std::string_view kFunctionResultPort = "y";
 inline constexpr std::uint32_t kNodeGroupNodeSchemaVersion = 1;
 
 // The parameter on an instance (and on Function Plot) that names the definition.
@@ -71,8 +76,13 @@ inline constexpr std::string_view kFunctionInputSlot = "scalar1";
 inline constexpr std::string_view kFunctionOutputSlot = "scalar1";
 
 [[nodiscard]] bool isNodeGroupBoundaryType(std::string_view typeId) noexcept;
+// Whether the node type names a group in its `group` parameter: a Node Group, and the nodes that
+// evaluate a group as a function.
+[[nodiscard]] bool usesGroupReference(std::string_view typeId) noexcept;
+// Whether the node type reads a group's function body rather than being replaced by the group.
+[[nodiscard]] bool isFunctionConsumerType(std::string_view typeId) noexcept;
 
-// The three registered definitions.
+// The registered definitions.
 [[nodiscard]] std::vector<NodeDefinition> nodeGroupNodeDefinitions();
 // Whether `definition` is exactly the generated shape of its type (the registry's shape check).
 [[nodiscard]] bool hasValidNodeGroupShape(const NodeDefinition& definition);
@@ -91,13 +101,16 @@ inline constexpr std::string_view kFunctionOutputSlot = "scalar1";
 struct NodeGroupBody final {
     NodeId input;
     NodeId output;
+    // Every node of the body that answers `scalar1`: the closure of what Group Output's scalar1
+    // reads, Group Output included. The compiler lowers exactly these into the body's own program.
+    std::vector<NodeId> nodes;
 };
 
 struct NodeGroupExpansion final {
     // The composition with every resolvable instance replaced by the nodes of its definition. Empty
     // when the composition holds no instance, so the caller keeps reading the original.
     std::optional<Composition> composition;
-    // A Function Plot's body, by the plot's node id.
+    // A function consumer's body, by the consumer's node id.
     std::unordered_map<NodeId, NodeGroupBody> functionBodies;
     // Why an instance stayed unexpanded: it names no group, or one that is missing or has no
     // Group Input and Group Output, or nesting went past the depth bound.

@@ -489,7 +489,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         validateExpectedBindings(node, parameters, registry, path, result);
         // #342: which group an instance reads is a choice, never a driven value, and a group
         // cannot contain an instance of itself.
-        if (node.typeId == kNodeGroupNodeType) {
+        if (usesGroupReference(node.typeId)) {
             for (const auto& binding : node.parameters) {
                 if (binding.role != kNodeGroupReferenceRole)
                     continue;

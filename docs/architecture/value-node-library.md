@@ -501,6 +501,33 @@ they placed deliberately, is better than a silent coercion whose rule they have 
 The current group order and which node sits in which group are owned by the tree in
 [UI grammar](../ux/ui-grammar.md).
 
+## Functions
+
+A function is a group definition (`layer-graph-model.md`, **Group Definitions**) used as `y = f(x)`:
+it reads `scalar1` on its Group Input and answers on `scalar1` of its Group Output, built from the
+ordinary Math nodes. The one definition serves every consumer, so a curve, a dot on it and a tangent
+are the same function and cannot disagree, and editing the definition (one undo step) updates all of
+them.
+
+| Consumer | What it does |
+| --- | --- |
+| Node Group | Expands in place; `scalar1` in, `scalar1` out, with the group's other slots beside it |
+| Function (`bloom.function`, Math) | `group` (Integer, a group's composition id), `x` (Scalar, 0) in; `y` (Scalar) out. The group is run as a function without an instance, so the card is one input and one output |
+
+The compiler lowers exactly the operations the answer depends on into a small program of the
+consumer's own (`CompiledFunctionBody`), apart from the plan's main value program, so a function's
+nodes never run for a frame unless a consumer asks. A consumer runs that program once per argument
+with the argument written into Group Input's `scalar1` operand; the group's other value slots hold
+what the definition's Group Input holds, so a function with a second number (an amplitude, say) is
+driven by the value set on its Group Input. A function that fails at an argument answers nothing
+there: a Function answers 0 and reports the node.
+
+The body is bounded at 512 operations. It cannot read image bounds or anything else the image pass
+produces. It is evaluated with the request time of the consumer, so a Time node or a keyed value in
+it moves the answer from frame to frame, and the plan's time dependence reads through the consumer.
+A Function's answer is memoized like any value operation, keyed by its argument, the document
+revision and (when the body reads time) the request time; the body's own operations run uncached.
+
 ## Color Image Effects
 
 These definitions operate on images and use `NodeLoweringKind::ImageEffect`, independently of the

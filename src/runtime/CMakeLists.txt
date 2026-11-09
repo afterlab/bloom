@@ -281,6 +281,7 @@ target_sources(
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
+        function_body.cpp
         value_utility_support.hpp
         value_utility_kernels.cpp
         value_utility_data_blocks.cpp
@@ -338,6 +339,7 @@ target_sources(
             include/bloom/runtime/reference_display_preparation.hpp
             include/bloom/runtime/view_adjust.hpp
             include/bloom/runtime/value_graph_evaluation.hpp
+            include/bloom/runtime/function_body.hpp
             include/bloom/runtime/value_utility_kernels.hpp
 )
 

@@ -1,17 +1,23 @@
 #include <algorithm>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/function_body.hpp>
 #include <optional>
 #include <type_traits>
 
 namespace bloom::runtime {
-void CompiledCompositionPlan::analyzeTimeDependence() {
-    std::vector<std::uint8_t> outputs(valueOutputCount_, 1);
-    valueTimeDependent_.reserve(valueOperations_.size());
-    for (const auto& operation : valueOperations_) {
+namespace {
+// One flag per operation: whether it can change with the frame's time. `outputs` is the same per
+// output of the table the operations fill, and is updated as the sweep goes.
+void analyzeValueOperations(const std::span<const CompiledValueOperation> operations,
+                            std::vector<std::uint8_t>& outputs,
+                            std::vector<std::uint8_t>& valueTimeDependent_) {
+    valueTimeDependent_.reserve(operations.size());
+    for (const auto& operation : operations) {
         // A Time node, and the one readout whose value is the FRAME rather than the composition.
         // The other three readouts were baked into constants by the compiler and never reach here.
         const auto* utility = std::get_if<CompiledValueUtility>(&operation.kernel);
         const auto* sample = std::get_if<CompiledValueGradientSample>(&operation.kernel);
+        const auto* function = std::get_if<CompiledValueFunction>(&operation.kernel);
         // #525: a Field Sample whose field reads the clock or a keyed curve.
         const auto* field = std::get_if<CompiledValueFieldSample>(&operation.kernel);
         bool fieldAnimated = field != nullptr && field->program != nullptr &&
@@ -30,6 +36,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
              std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
             std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||
             std::holds_alternative<CompiledValuePathCurve>(operation.kernel) ||
+            // #590: a Function is as time-dependent as the body it runs.
+            (function != nullptr && (function->body == nullptr || function->body->timeDependent)) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
               utility->operation == document::ValueUtilityKernel::LightFlicker ||
@@ -50,6 +58,20 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 outputs[index + slot] = dependent ? 1 : 0;
         }
     }
+}
+} // namespace
+
+bool valueOperationsTimeDependent(const std::span<const CompiledValueOperation> operations,
+                                  const std::size_t outputCount) {
+    std::vector<std::uint8_t> outputs(outputCount, 1);
+    std::vector<std::uint8_t> flags;
+    analyzeValueOperations(operations, outputs, flags);
+    return std::ranges::any_of(flags, [](const auto flag) { return flag != 0; });
+}
+
+void CompiledCompositionPlan::analyzeTimeDependence() {
+    std::vector<std::uint8_t> outputs(valueOutputCount_, 1);
+    analyzeValueOperations(valueOperations_, outputs, valueTimeDependent_);
     const auto parameter = [&](const auto& operand) {
         if (const auto* input = std::get_if<ValueOutputIndex>(&operand.source))
             return input->value() >= outputs.size() || outputs[input->value()] != 0;

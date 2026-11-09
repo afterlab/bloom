@@ -83,7 +83,9 @@ bool isClosedInteger(const document::ParameterDefinition& p) {
 // Properties rows built by PropertiesEditor itself rather than PropertiesRegistryRow (the
 // Composition source's composition dropdown).
 bool hasPurposeBuiltPropertiesRow(const document::ParameterDefinition& p) {
-    return p.schemaKey == "bloom.composition-source.composition";
+    // The group a Node Group or Function reads is chosen in a dedicated Properties row.
+    return p.schemaKey == "bloom.composition-source.composition" ||
+           p.schemaKey == "bloom.node-group.group";
 }
 
 const char* controlName(QWidget* w) {

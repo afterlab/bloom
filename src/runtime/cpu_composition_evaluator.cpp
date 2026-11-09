@@ -1528,11 +1528,10 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
     // referenced as any layer parameter's. Counted here, before the unreferenced-curve rule below
     // runs, so that rule keeps meaning "no compiled curve is dead" rather than "no curve outside
     // the image chain exists".
-    for (const auto& operation : plan->valueOperations()) {
-        if (cancellation.isCancellationRequested()) {
-            return PreflightOutcome::cancellation();
-        }
-        forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
+    // #590: a Function's body is a value program of its own, and the curves it reads are as
+    // referenced as any other.
+    const auto referenceValueCurves = [&](const auto& self, const CompiledValueKernel& kernel) -> void {
+        forEachValueOperand(kernel, [&](const CompiledValueOperand& operand) {
             if (const auto* scalar = std::get_if<ScalarCurveIndex>(&operand.source);
                 scalar != nullptr && scalar->value() < scalarCurveReferences.size()) {
                 scalarCurveReferences[scalar->value()] = 1;
@@ -1547,6 +1546,16 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                 vec3CurveReferences[vector3->value()] = 1;
             }
         });
+        if (const auto* function = std::get_if<CompiledValueFunction>(&kernel);
+            function != nullptr && function->body != nullptr)
+            for (const auto& inner : function->body->operations)
+                self(self, inner.kernel);
+    };
+    for (const auto& operation : plan->valueOperations()) {
+        if (cancellation.isCancellationRequested()) {
+            return PreflightOutcome::cancellation();
+        }
+        referenceValueCurves(referenceValueCurves, operation.kernel);
     }
     for (std::size_t index = 0; index < scalarCurveReferences.size(); ++index) {
         if (scalarCurveReferences[index] == 0) {

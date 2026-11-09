@@ -847,6 +847,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::NodeGroup:
     case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::ValueFunction:
         break;
     }
     return false;

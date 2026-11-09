@@ -180,7 +180,10 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
         if (category(definition.key.typeId) == "Utilities")
             expect(definition.key.typeId.starts_with("bloom.separate-") ||
                        definition.key.typeId.starts_with("bloom.combine-") ||
-                       document::isRerouteNodeType(definition.key.typeId),
+                       document::isRerouteNodeType(definition.key.typeId) ||
+                       // #342: the group boundary and the instance are structure, not effects.
+                       document::isNodeGroupBoundaryType(definition.key.typeId) ||
+                       definition.key.typeId == document::kNodeGroupNodeType,
                    window, "F24 Utilities contains only plumbing");
     if (auto* expand = window->findChild<KButton*>("propertiesSolidColorExpand")) {
         expand->setChecked(true);

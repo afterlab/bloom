@@ -367,6 +367,18 @@ struct CompiledValueGroupBoundary final {
                            const CompiledValueGroupBoundary&) = default;
 };
 
+struct CompiledFunctionBody;
+
+// #590: a Function node. It runs a group's cut-out body (compiled_value_graph.hpp, below) for one
+// argument. The body is shared by the plan's copies of this operation and is never edited once the
+// plan exists.
+struct CompiledValueFunction final {
+    CompiledValueOperand argument;
+    std::shared_ptr<const CompiledFunctionBody> body;
+
+    friend bool operator==(const CompiledValueFunction&, const CompiledValueFunction&);
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
@@ -374,7 +386,7 @@ using CompiledValueKernel =
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
-                 CompiledValuePathCurve, CompiledValueGroupBoundary>;
+                 CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -402,6 +414,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 visit(step.frequency);
                 visit(step.roughness);
                 visit(step.smoothing);
+            } else if constexpr (std::is_same_v<Step, CompiledValueFunction>) {
+                visit(step.argument);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {
@@ -468,5 +482,29 @@ struct CompiledValueOperation final {
 
     friend bool operator==(const CompiledValueOperation&, const CompiledValueOperation&) = default;
 };
+
+// #590: the part of a group that computes its answer, cut out of the value graph and kept as a small
+// program of its own with its own output table. The argument enters as operand `inputSlot` of the
+// Group Input operation `inputOperation`; a function that never reads its argument has none.
+struct CompiledFunctionBody final {
+    // Topologically ordered, with output indices local to this program.
+    std::vector<CompiledValueOperation> operations;
+    std::size_t outputCount = 0;
+    std::optional<std::size_t> inputOperation;
+    std::size_t inputSlot = 0;
+    // Where the answer is.
+    ValueOutputIndex result = ValueOutputIndex::fromRaw(0);
+    // Whether the answer can change with the time of the frame (a Time node or a keyed value in the
+    // body), so the plan's time-dependence analysis can see through a consumer.
+    bool timeDependent = false;
+
+    friend bool operator==(const CompiledFunctionBody&, const CompiledFunctionBody&) = default;
+};
+
+inline bool operator==(const CompiledValueFunction& left, const CompiledValueFunction& right) {
+    return left.argument == right.argument &&
+           (left.body == right.body ||
+            (left.body != nullptr && right.body != nullptr && *left.body == *right.body));
+}
 
 } // namespace bloom::runtime

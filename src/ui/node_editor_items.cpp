@@ -299,6 +299,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kGroupInputNodeType, "Group Input"},
         LibraryName{document::kGroupOutputNodeType, "Group Output"},
         LibraryName{document::kNodeGroupNodeType, "Node Group"},
+        // #590
+        LibraryName{document::kFunctionNodeType, "Function"},
         // #525 Fields. "Random Field" and "Gradient Field" say so beside the Random value and the
         // gradient generators.
         LibraryName{document::kFieldNoiseNodeType, "Noise"},

@@ -1,5 +1,6 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/function_body.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
 
@@ -499,6 +500,8 @@ class Evaluator final {
                            const runtime::CompiledValuePathCurve& kernel);
     void evaluateGroupBoundary(const runtime::CompiledValueOperation& operation,
                                const runtime::CompiledValueGroupBoundary& kernel);
+    void evaluateFunction(const runtime::CompiledValueOperation& operation,
+                          const runtime::CompiledValueFunction& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -559,6 +562,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluatePathCurve(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueGroupBoundary>) {
                 evaluateGroupBoundary(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFunction>) {
+                evaluateFunction(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -712,6 +717,30 @@ void Evaluator::evaluateGroupBoundary(const runtime::CompiledValueOperation& ope
         }
         write(operation, slot, *value);
     }
+}
+
+void Evaluator::evaluateFunction(const runtime::CompiledValueOperation& operation,
+                                 const runtime::CompiledValueFunction& kernel) {
+    const auto* argument = operandOf(kernel.argument);
+    const auto* x = argument == nullptr ? nullptr : std::get_if<double>(argument);
+    if (x == nullptr || kernel.body == nullptr) {
+        fail(operation, kernel.argument.id, "Function argument is unavailable",
+             "The function's argument is not a number the value graph computed.");
+        write(operation, 0, 0.0);
+        return;
+    }
+    runtime::FunctionEvaluator body(*kernel.body, time_, rate_, curves_, memoization_.cancellation);
+    const auto answer = body.at(*x);
+    if (!answer.has_value()) {
+        // Cancelled evaluations carry no diagnostic: the frame is being abandoned.
+        if (!(memoization_.cancellation && memoization_.cancellation->isCancellationRequested()))
+            fail(operation, {}, "Function could not be evaluated",
+                 body.diagnostics().empty() ? "The group's answer is not a number."
+                                            : body.diagnostics().front().detail);
+        write(operation, 0, 0.0);
+        return;
+    }
+    write(operation, 0, *answer);
 }
 
 void Evaluator::evaluateTime(const runtime::CompiledValueOperation& operation) {

@@ -98,6 +98,10 @@
         }
     }
 
+    // #590: a function consumer lowers its group's body, so after the body's last node.
+    for (const auto& [consumer, body] : expansion_.functionBodies)
+        orderBefore(body.output, consumer);
+
     auto laterId = [](const document::NodeId left, const document::NodeId right) {
         return left.value() > right.value();
     };
@@ -1452,6 +1456,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     // #342: Group Input and Group Output are value-pass nodes. A Node Group the expansion could
     // not replace is reported by resolveDefinitions() and never reaches publication.
     case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::NodeGroup:
         break;
     }

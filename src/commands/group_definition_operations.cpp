@@ -22,9 +22,9 @@ OperationResult CreateGroupDefinition::apply(document::Draft& draft) const {
     ParameterId instanceParameter;
     if (instance_.has_value()) {
         const auto* node = host->graph().findNode(*instance_);
-        if (node == nullptr || node->typeId != kNodeGroupNodeType)
+        if (node == nullptr || !usesGroupReference(node->typeId))
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "The node is not a Node Group");
+                                             "The node does not name a group");
         const auto binding =
             std::ranges::find(node->parameters, kNodeGroupReferenceRole, &ParameterBinding::role);
         if (binding == node->parameters.end())

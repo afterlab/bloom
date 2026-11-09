@@ -158,7 +158,7 @@ void PropertiesEditor::configureRegistryRows() {
                 });
             }
             // #342: a Node Group names the group it reads, opens it, or makes a new one.
-            if (node->typeId == document::kNodeGroupNodeType) {
+            if (document::usesGroupReference(node->typeId)) {
                 auto* label = kit::makePropertyRowLabel(tr("Group"), section->body());
                 auto* selector = new kit::KDropdown(section->body());
                 selector->setObjectName("propertiesNodeGroup");
@@ -342,7 +342,7 @@ void PropertiesEditor::configureRegistryRows() {
                 if (handcrafted ||
                     (node->typeId == document::kCompositionSourceNodeType &&
                      declared.role == "composition") ||
-                    (node->typeId == document::kNodeGroupNodeType &&
+                    (document::usesGroupReference(node->typeId) &&
                      declared.role == document::kNodeGroupReferenceRole) ||
                     // #493, #498: the curves are drawn and edited by the curve graph.
                     (node->typeId == document::kCurvesNodeType &&

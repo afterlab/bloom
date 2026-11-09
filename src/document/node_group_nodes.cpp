@@ -67,7 +67,28 @@ namespace {
             defaultValueOf(slot.socket)};
 }
 
+[[nodiscard]] NodeDefinition functionDefinition() {
+    NodeDefinition definition{{std::string(kFunctionNodeType), kNodeGroupNodeSchemaVersion},
+                              NodeLoweringKind::ValueFunction,
+                              {{std::string(kFunctionArgumentRole), SocketValueKind::Scalar, false}},
+                              {{std::string(kFunctionResultPort), SocketValueKind::Scalar}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Math};
+    definition.parameters.push_back({std::string(kNodeGroupReferenceRole),
+                                     std::string(kNodeGroupReferenceSchemaKey),
+                                     ParameterValueKind::Integer, true, false, std::int64_t{0}});
+    definition.parameters.push_back({std::string(kFunctionArgumentRole),
+                                     std::string(kScalarOperandParameterSchemaKey),
+                                     ParameterValueKind::Float64, true,
+                                     isAnimatableSchemaKey(kScalarOperandParameterSchemaKey), 0.0});
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition generatedDefinition(const std::string_view typeId) {
+    if (typeId == kFunctionNodeType)
+        return functionDefinition();
     NodeDefinition definition{{std::string(typeId), kNodeGroupNodeSchemaVersion},
                               typeId == kNodeGroupNodeType ? NodeLoweringKind::NodeGroup
                                                            : NodeLoweringKind::GroupBoundary,
@@ -116,7 +137,7 @@ namespace {
 }
 
 [[nodiscard]] bool isInstanceType(const std::string_view typeId) noexcept {
-    return typeId == kNodeGroupNodeType;
+    return usesGroupReference(typeId);
 }
 
 // What a definition's own composition holds that an instance must not bring along: the structure
@@ -135,7 +156,8 @@ class Expander final {
         for (std::size_t depth = 0; depth <= kMaximumNodeGroupDepth; ++depth) {
             std::vector<NodeId> instances;
             for (const auto& node : work_.graph().nodes())
-                if (isInstanceType(node.typeId) && !result_.unresolved.contains(node.id))
+                if (isInstanceType(node.typeId) && !result_.unresolved.contains(node.id) &&
+                    !result_.functionBodies.contains(node.id))
                     instances.push_back(node.id);
             if (instances.empty())
                 break;
@@ -147,6 +169,8 @@ class Expander final {
             for (const auto id : instances)
                 expandInstance(id);
         }
+        for (auto& [consumer, body] : result_.functionBodies)
+            collectBody(body);
         result_.composition = std::move(work_);
         return std::move(result_);
     }
@@ -255,6 +279,62 @@ class Expander final {
         const NodeId boundaryOutput = mapped.at(output->id);
         if (instance.typeId == kNodeGroupNodeType)
             spliceInstance(instance, boundaryInput, boundaryOutput);
+        else
+            result_.functionBodies.emplace(instanceId, NodeGroupBody{boundaryInput, boundaryOutput, {}});
+    }
+
+    // A function answers on scalar1 alone. Cut everything else off Group Output (its pixel inputs,
+    // and the drivers of its other value slots) so the body holds only what the answer reads, then
+    // gather those nodes.
+    void collectBody(NodeGroupBody& body) {
+        const auto* output = work_.graph().findNode(body.output);
+        if (output == nullptr)
+            return;
+        std::vector<EdgeId> incoming;
+        for (const auto& edge : work_.graph().edges())
+            if (const auto* destination = std::get_if<NodeInputRef>(&edge.destination);
+                destination != nullptr && destination->nodeId == body.output)
+                incoming.push_back(edge.id);
+        for (const auto id : incoming)
+            (void)work_.graph().eraseEdge(id);
+        std::optional<ParameterId> answer;
+        for (const auto& binding : output->parameters) {
+            if (binding.role == kFunctionOutputSlot) {
+                answer = binding.parameterId;
+                continue;
+            }
+            const auto slot = std::ranges::find(kNodeGroupSlots, binding.role, &NodeGroupSlot::name);
+            if (slot == kNodeGroupSlots.end() || slot->pixel)
+                continue;
+            if (const auto* record = work_.parameters().find(binding.parameterId);
+                record != nullptr && std::holds_alternative<DriverBindingSource>(record->source))
+                (void)work_.parameters().setSource(binding.parameterId,
+                                                   ConstantValueSource{defaultValueOf(slot->socket)});
+        }
+        std::unordered_set<NodeId> seen{body.output};
+        std::vector<NodeId> pending;
+        const auto follow = [&](const ParameterId parameter) {
+            if (const auto* record = work_.parameters().find(parameter))
+                if (const auto* driver = std::get_if<DriverBindingSource>(&record->source))
+                    if (seen.insert(driver->sourceNodeId).second)
+                        pending.push_back(driver->sourceNodeId);
+        };
+        if (answer)
+            follow(*answer);
+        body.nodes.push_back(body.output);
+        while (!pending.empty()) {
+            const auto id = pending.back();
+            pending.pop_back();
+            body.nodes.push_back(id);
+            if (const auto* node = work_.graph().findNode(id))
+                for (const auto& binding : node->parameters)
+                    follow(binding.parameterId);
+            for (const auto& edge : work_.graph().edges())
+                if (const auto* destination = std::get_if<NodeInputRef>(&edge.destination);
+                    destination != nullptr && destination->nodeId == id &&
+                    seen.insert(edge.source.nodeId).second)
+                    pending.push_back(edge.source.nodeId);
+        }
     }
 
     // The instance's own value sockets become the values Group Input publishes, its pixel inputs
@@ -366,15 +446,23 @@ bool isNodeGroupBoundaryType(const std::string_view typeId) noexcept {
     return typeId == kGroupInputNodeType || typeId == kGroupOutputNodeType;
 }
 
+bool isFunctionConsumerType(const std::string_view typeId) noexcept {
+    return typeId == kFunctionNodeType;
+}
+
+bool usesGroupReference(const std::string_view typeId) noexcept {
+    return typeId == kNodeGroupNodeType || isFunctionConsumerType(typeId);
+}
+
 std::vector<NodeDefinition> nodeGroupNodeDefinitions() {
     return {generatedDefinition(kGroupInputNodeType), generatedDefinition(kGroupOutputNodeType),
-            generatedDefinition(kNodeGroupNodeType)};
+            generatedDefinition(kNodeGroupNodeType), generatedDefinition(kFunctionNodeType)};
 }
 
 bool hasValidNodeGroupShape(const NodeDefinition& definition) {
     const auto typeId = definition.key.typeId;
     if (typeId != kGroupInputNodeType && typeId != kGroupOutputNodeType &&
-        typeId != kNodeGroupNodeType)
+        typeId != kNodeGroupNodeType && !isFunctionConsumerType(typeId))
         return false;
     return definition == generatedDefinition(typeId);
 }

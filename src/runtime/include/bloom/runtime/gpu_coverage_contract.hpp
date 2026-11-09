@@ -657,6 +657,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     // are lowered, and covered, like any other.
     case NodeLoweringKind::NodeGroup:
     case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::ValueFunction:
         return false;
     }
     return false;
@@ -725,6 +726,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ValueUtility:
     case NodeLoweringKind::ValueFieldSample:
     case NodeLoweringKind::GroupBoundary:
+    case NodeLoweringKind::ValueFunction:
         return "scope.value";
     case NodeLoweringKind::NodeGroup:
         return "scope.expansion";

@@ -280,3 +280,237 @@ void testNodeGroupRefusals(Expectations& expectations) {
     expectations.expect(!indirect.validateCompositionNesting().ok(),
                         "two groups that contain each other are refused");
 }
+
+// ---------------------------------------------------------------------------------------------
+// #590 shared function definitions: a Function node reads the same group a Node Group instance
+// does, as a function of one number.
+
+constexpr auto kDecayComposition = document::CompositionId::fromRaw(7);
+constexpr auto kDecayInput = document::NodeId::fromRaw(5601);
+constexpr auto kDecayOutput = document::NodeId::fromRaw(5602);
+constexpr auto kDecaySine = document::NodeId::fromRaw(5603);
+constexpr auto kDecayNegate = document::NodeId::fromRaw(5604);
+constexpr auto kDecayExp = document::NodeId::fromRaw(5605);
+constexpr auto kDecayProduct = document::NodeId::fromRaw(5606);
+constexpr auto kFunctionA = document::NodeId::fromRaw(6201);
+constexpr auto kFunctionB = document::NodeId::fromRaw(6202);
+constexpr auto kFunctionSum = document::NodeId::fromRaw(6203);
+
+void connectDriver(document::Composition& composition, const document::NodeId reader,
+                   const std::string_view role, const document::NodeId source,
+                   const std::string& port = std::string(document::kResultPortName)) {
+    require(composition.parameters().setSource(parameterOf(composition, reader, role),
+                                               document::DriverBindingSource{source, port}),
+            "the parameter reads its source");
+}
+
+// y = sin(x) * exp(-x), built from real Math nodes.
+[[nodiscard]] document::Composition makeDecayGroup(const core::primitives::ScalarPrimitive combine) {
+    using namespace document;
+    using core::primitives::ScalarPrimitive;
+    auto group = makeStackedComposition(kDecayComposition, "Decay", 5700);
+    std::uint64_t next = 5800;
+    addDefaultedNode(group, kDecayInput, kGroupInputNodeType, next);
+    addDefaultedNode(group, kDecayOutput, kGroupOutputNodeType, next);
+    for (const auto& [id, operation] :
+         {std::pair{kDecaySine, ScalarPrimitive::Sine}, std::pair{kDecayNegate, ScalarPrimitive::Negate},
+          std::pair{kDecayExp, ScalarPrimitive::Exp}, std::pair{kDecayProduct, combine}})
+        addDefaultedNode(group, id, kScalarMathNodeType, next,
+                         {{"operation", scalarOperationStoredValue(operation)}});
+    connectDriver(group, kDecaySine, "a", kDecayInput, "scalar1");
+    connectDriver(group, kDecayNegate, "a", kDecayInput, "scalar1");
+    connectDriver(group, kDecayExp, "a", kDecayNegate);
+    connectDriver(group, kDecayProduct, "a", kDecaySine);
+    connectDriver(group, kDecayProduct, "b", kDecayExp);
+    connectDriver(group, kDecayOutput, "scalar1", kDecayProduct);
+    return group;
+}
+
+// The main composition with two Function nodes reading Decay at `a` and `b`. Their sum drives the
+// first layer's opacity so both are reachable.
+[[nodiscard]] document::Project
+makeFunctionProject(const double a, const double b,
+                    const core::primitives::ScalarPrimitive combine =
+                        core::primitives::ScalarPrimitive::Multiply) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    require(project.addComposition(makeDecayGroup(combine)), "the function group is added");
+    auto* composition = project.findComposition(kCompositionId);
+    std::uint64_t next = 6300;
+    const auto group = static_cast<std::int64_t>(kDecayComposition.value());
+    addDefaultedNode(*composition, kFunctionA, kFunctionNodeType, next, {{"group", group}, {"x", a}});
+    addDefaultedNode(*composition, kFunctionB, kFunctionNodeType, next, {{"group", group}, {"x", b}});
+    addDefaultedNode(*composition, kFunctionSum, kScalarMathNodeType, next,
+                     {{"operation",
+                       scalarOperationStoredValue(core::primitives::ScalarPrimitive::Add)}});
+    connectDriver(*composition, kFunctionSum, "a", kFunctionA, "y");
+    connectDriver(*composition, kFunctionSum, "b", kFunctionB, "y");
+    require(composition->parameters().setSource(
+                kFirstOpacity, DriverBindingSource{kFunctionSum, std::string(kResultPortName)}),
+            "the layer opacity reads the sum");
+    const auto validation = project.validate();
+    for (const auto& issue : validation.issues())
+        std::cerr << "function fixture: " << issue.path << ": " << issue.message << '\n';
+    require(validation.ok(), "the function fixture is valid document truth");
+    return project;
+}
+
+[[nodiscard]] std::vector<const runtime::CompiledValueOperation*>
+functionOperations(const runtime::CompiledCompositionPlan& plan) {
+    std::vector<const runtime::CompiledValueOperation*> found;
+    for (const auto& operation : plan.valueOperations())
+        if (std::holds_alternative<runtime::CompiledValueFunction>(operation.kernel))
+            found.push_back(&operation);
+    return found;
+}
+
+void testFunctionGroups(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    const double kFirst = 0.5;
+    const double kSecond = 2.0;
+    const auto result = compile(makeFunctionProject(kFirst, kSecond), registry);
+    expectations.expect(result.plan != nullptr, "two Function nodes reading one group compile");
+    if (!result.plan)
+        return;
+    const auto functions = functionOperations(*result.plan);
+    expectations.expect(functions.size() == 2, "each Function node is one operation");
+    if (functions.size() != 2)
+        return;
+    // The group's own nodes live in the function's body, not in the plan's main value program.
+    expectations.expect(
+        std::ranges::none_of(result.plan->valueOperations(),
+                             [](const runtime::CompiledValueOperation& operation) {
+                                 return std::holds_alternative<runtime::CompiledValueGroupBoundary>(
+                                     operation.kernel);
+                             }) &&
+            result.plan->valueOperations().size() == 3,
+        "the group's nodes are cut out of the main value program");
+    const auto& body = *std::get<runtime::CompiledValueFunction>(functions[0]->kernel).body;
+    const auto& otherBody = *std::get<runtime::CompiledValueFunction>(functions[1]->kernel).body;
+    bool sameShape = otherBody.operations.size() == body.operations.size();
+    for (std::size_t index = 0; sameShape && index < body.operations.size(); ++index)
+        sameShape = body.operations[index].kernel.index() == otherBody.operations[index].kernel.index();
+    expectations.expect(sameShape && body.result == otherBody.result,
+                        "both Function nodes run a body of the same shape");
+    expectations.expect(body.operations.size() == 6 && body.inputOperation.has_value() &&
+                            !body.timeDependent,
+                        "the body is the six operations the group holds and does not read time");
+
+    // Values against the known answer, computed independently with the standard library.
+    const auto evaluation = runtime::evaluateValueGraph(
+        result.plan->valueOperations(), result.plan->valueOutputCount(),
+        core::RationalTime::fromInteger(0), result.plan->format().frameRate());
+    expectations.expect(evaluation.diagnostics.empty(), "the function graph evaluates cleanly");
+    const auto read = [&](const runtime::CompiledValueOperation* operation) {
+        const auto* value = std::get_if<double>(&evaluation.outputs.at(operation->firstOutput.value()));
+        return value == nullptr ? std::nan("") : *value;
+    };
+    const auto known = [](const double x) { return std::sin(x) * std::exp(-x); };
+    expectations.expect(std::abs(read(functions[0]) - known(kFirst)) < 1e-12 &&
+                            std::abs(read(functions[1]) - known(kSecond)) < 1e-12,
+                        "a Function node answers sin(x) * exp(-x) at its own argument");
+
+    // One evaluator serves many arguments, each matching the known answer.
+    runtime::FunctionEvaluator evaluator(body, core::RationalTime::fromInteger(0),
+                                         result.plan->format().frameRate(), {});
+    bool allMatch = true;
+    for (int index = 0; index < 256; ++index) {
+        const double x = -3.0 + 0.0625 * index;
+        const auto value = evaluator.at(x);
+        allMatch = allMatch && value.has_value() && std::abs(*value - known(x)) < 1e-12;
+    }
+    expectations.expect(allMatch && evaluator.diagnostics().empty(),
+                        "one body evaluator matches the known answer over 256 arguments");
+
+    // Editing the one definition reaches both consumers.
+    const auto edited = compile(makeFunctionProject(kFirst, kSecond, core::primitives::ScalarPrimitive::Add),
+                                registry);
+    expectations.expect(edited.plan != nullptr, "the edited function group compiles");
+    if (edited.plan) {
+        const auto editedFunctions = functionOperations(*edited.plan);
+        const auto editedEvaluation = runtime::evaluateValueGraph(
+            edited.plan->valueOperations(), edited.plan->valueOutputCount(),
+            core::RationalTime::fromInteger(0), edited.plan->format().frameRate());
+        const auto sum = [&](const double x) { return std::sin(x) + std::exp(-x); };
+        const auto at = [&](const std::size_t index) {
+            const auto* value = std::get_if<double>(
+                &editedEvaluation.outputs.at(editedFunctions.at(index)->firstOutput.value()));
+            return value == nullptr ? std::nan("") : *value;
+        };
+        expectations.expect(editedFunctions.size() == 2 && std::abs(at(0) - sum(kFirst)) < 1e-12 &&
+                                std::abs(at(1) - sum(kSecond)) < 1e-12,
+                            "editing the group changes every Function that reads it");
+    }
+
+    // A Function naming no group is refused with a diagnostic on that node.
+    auto unset = makeFunctionProject(kFirst, kSecond);
+    auto* composition = unset.findComposition(kCompositionId);
+    require(composition->parameters().setSource(parameterOf(*composition, kFunctionA, "group"),
+                                                ConstantValueSource{std::int64_t{0}}),
+            "the group is cleared");
+    const auto refused = compile(std::move(unset), registry);
+    expectations.expect(refused.plan == nullptr &&
+                            hasDiagnostic(refused, runtime::CompileDiagnosticCode::TopologyInvariant,
+                                          kFunctionA),
+                        "a Function naming no group is refused with a diagnostic on that node");
+}
+
+// A Node Group instance and a Function read the same group: the number the instance publishes is
+// the number the Function answers at the same argument, and the Function's body holds no pixels.
+void testFunctionSharesGroupWithInstance(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto project = makeGroupedProject(false, 1.0, false);
+    auto* composition = project.findComposition(kCompositionId);
+    std::uint64_t next = 6400;
+    addDefaultedNode(*composition, kFunctionA, kFunctionNodeType, next,
+                     {{"group", static_cast<std::int64_t>(kGroupComposition.value())}, {"x", 0.25}});
+    addDefaultedNode(*composition, kFunctionSum, kScalarMathNodeType, next,
+                     {{"operation",
+                       scalarOperationStoredValue(core::primitives::ScalarPrimitive::Add)}});
+    require(composition->parameters().setSource(parameterOf(*composition, kInstanceA, "scalar1"),
+                                                ConstantValueSource{0.25}),
+            "the instance is given 0.25");
+    connectDriver(*composition, kFunctionSum, "a", kInstanceA, "scalar1");
+    connectDriver(*composition, kFunctionSum, "b", kFunctionA, "y");
+    require(composition->parameters().setSource(
+                kFirstOpacity, DriverBindingSource{kFunctionSum, std::string(kResultPortName)}),
+            "the layer opacity reads the sum");
+    require(project.validate().ok(), "the shared-group fixture is valid document truth");
+    const auto withFunction = compile(std::move(project), registry);
+    const auto without = compile(makeGroupedProject(false, 1.0, false), registry);
+    expectations.expect(withFunction.plan != nullptr && without.plan != nullptr,
+                        "a group read by an instance and a Function compiles");
+    if (!withFunction.plan || !without.plan)
+        return;
+    expectations.expect(operationShape(*withFunction.plan) == operationShape(*without.plan),
+                        "the Function adds no image operation: its body holds no pixels");
+    const auto functions = functionOperations(*withFunction.plan);
+    require(functions.size() == 1, "the plan holds one Function");
+    const auto evaluation = runtime::evaluateValueGraph(
+        withFunction.plan->valueOperations(), withFunction.plan->valueOutputCount(),
+        core::RationalTime::fromInteger(0), withFunction.plan->format().frameRate());
+    const auto* answer =
+        std::get_if<double>(&evaluation.outputs.at(functions[0]->firstOutput.value()));
+    // The instance's Group Output is the last boundary operation in the main program.
+    const runtime::CompiledValueOperation* boundary = nullptr;
+    for (const auto& operation : withFunction.plan->valueOperations())
+        if (std::holds_alternative<runtime::CompiledValueGroupBoundary>(operation.kernel))
+            boundary = &operation;
+    require(boundary != nullptr, "the instance's boundary operations are in the main program");
+    // Group Output republishes its scalar slot; the instance's answer is the one number there.
+    std::vector<double> published;
+    for (std::size_t slot = 0; slot < boundary->outputCount; ++slot)
+        if (const auto* value = std::get_if<double>(
+                &evaluation.outputs.at(boundary->firstOutput.value() + slot)))
+            published.push_back(*value);
+    expectations.expect(evaluation.diagnostics.empty() && answer != nullptr && *answer == 0.75 &&
+                            std::ranges::count(published, 0.75) == 1,
+                        "the Function answers what the instance publishes at the same argument");
+}

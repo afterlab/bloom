@@ -123,7 +123,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.value-boolean", "Checkbox Control"},
     // Utilities
     {"bloom.reroute", "Dot|Elbow"},
-    {"bloom.node-group", "Subgraph|Nested Graph|Macro|Encapsulate|Function"},
+    {"bloom.node-group", "Subgraph|Nested Graph|Macro|Encapsulate"},
+    {"bloom.function", "Formula|Equation|f(x)|Graph Function"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},
     {"bloom.group-output", "Subgraph Output|Outputs|Function Output"},
     // Output

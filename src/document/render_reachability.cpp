@@ -434,7 +434,7 @@ RenderReachability RenderReachability::compute(const Composition& composition,
         }
         // #342: a Node Group reads the group it names. An unset group names nothing; one that is
         // not a constant may name any.
-        if (node->typeId == kNodeGroupNodeType) {
+        if (usesGroupReference(node->typeId)) {
             if (const auto target = nodeGroupReference(*node, composition.parameters()))
                 result.nested_.insert(*target);
             else if (const auto binding = std::ranges::find(node->parameters, kNodeGroupReferenceRole,

@@ -862,6 +862,15 @@ produce no pixels of their own (`scope.expansion`, `scope.value`): the nodes the
 pixel operations, each covered on its own. A muted node inside a group stays muted in every
 instance; mute on the instance itself is not read.
 
+### Functions
+
+A node that names a group but is not replaced by it reads the group as a function of one number: a
+Function node answers `y = f(x)` for the group's `scalar1` in and out (value-node-library.md,
+**Functions**). Its group is copied the same way, but only the nodes Group Output's `scalar1`
+depends on are kept, Group Output's other inputs are cut, and the copy is lowered into a value
+program of its own beside the plan's main one. Everything in this section about naming, nesting
+and cycles holds for these nodes too (`usesGroupReference`).
+
 ### Dependencies and cycles
 
 A Node Group names its group the way a Composition Source names a composition. The nesting check
