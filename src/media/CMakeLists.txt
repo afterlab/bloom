@@ -2,6 +2,7 @@
 # parent intentionally narrow: it only lists the subdirectories, so media is never a second
 # composition root.
 add_subdirectory(image)
+add_subdirectory(vector)
 add_subdirectory(audio)
 add_subdirectory(cache)
 
