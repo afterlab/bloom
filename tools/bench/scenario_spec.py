@@ -472,6 +472,9 @@ SCENARIOS["stabilize-2k"] = {
         {"name": "Plate", "media": "png16",
          "effects": [["bloom.stabilize", {},
                       {"keys": {"tracked": [[0, [0, 0]], [23, [60, -24]]]}}]]},
+    ],
+}
+
 # #347: Audio Waveform and Audio Spectrum of ten seconds of generated sound, each frame reading a new
 # window (the time is the frame), so the cost is the audio window read, the reduction and the plot
 # pass. Written, not run: it has no recorded numbers and no budget.
