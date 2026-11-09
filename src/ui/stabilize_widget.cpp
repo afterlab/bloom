@@ -4,6 +4,7 @@
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
 #include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -56,15 +57,11 @@ StabilizeCardWidget::StabilizeCardWidget(CompositionSession& session, const docu
     button_->setToolTip(tr("Follow the Track Point from this frame to the end"));
     progress_ = new kit::KProgressBar(this);
     progress_->setObjectName(QStringLiteral("stabilizeTrackProgress"));
-    status_ = new QLabel(this);
+    status_ = new kit::KLabel(QString(), this);
     status_->setObjectName(QStringLiteral("stabilizeTrackStatus"));
     status_->setWordWrap(true);
     status_->setTextInteractionFlags(Qt::NoTextInteraction);
-    {
-        auto palette = status_->palette();
-        palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
-        status_->setPalette(palette);
-    }
+    status_->setTone(kit::Color::Muted);
     connect(button_, &QAbstractButton::clicked, this, &StabilizeCardWidget::onButton);
 
     for (const auto signal :
