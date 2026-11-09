@@ -537,6 +537,9 @@ void testSequenceReadAhead(Expectations& expectations, const MediaFixture& fixtu
     asset.manifest.members = members;
     const auto plan = mediaPlan(format(8, 8), asset, LayerValues{}, 1800);
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    if (context.sequenceReadAhead)
+        context.sequenceReadAhead->setLocalStorage(
+            bloom::runtime::ImageSequenceReadAhead::LocalStorage::Capture);
     expectations.expect(context.sequenceReadAhead != nullptr,
                         "the evaluator's media context carries its sequence read-ahead");
     const CpuGpuSceneBuilder builder(nullptr, context);
@@ -599,6 +602,7 @@ void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& 
     const auto cache = std::make_shared<bloom::runtime::OperationCache>(std::size_t{1} << 30);
     using bloom::runtime::ImageSequenceReadAhead;
     ImageSequenceReadAhead readAhead(1);
+    readAhead.setLocalStorage(ImageSequenceReadAhead::LocalStorage::Capture);
     const auto capture = [](const std::filesystem::path& path, std::string key) {
         return ImageSequenceReadAhead::Request{
             .path = path,
@@ -650,4 +654,44 @@ void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& 
                             std::chrono::steady_clock::now() - claimStart <
                                 std::chrono::seconds(1),
                         "a cancelled frame stops waiting for the capture");
+}
+
+// #535: read-ahead follows the storage. A fixture folder sits on local storage (or on an
+// unclassifiable volume, which keeps read-ahead), so the default policy must queue nothing there
+// and count what it skipped; choosing Capture queues the same request.
+void testSequenceReadAheadFollowsStorage(Expectations& expectations, const MediaFixture& fixture) {
+    using bloom::platform::VolumeKind;
+    const auto member = fixture.directory / "storage_member.bin";
+    {
+        std::ofstream(member, std::ios::binary) << "member";
+    }
+    const auto kind = bloom::platform::volumeKind(member);
+    if (kind != VolumeKind::Local)
+        return; // the temporary folder is on a network or unclassifiable volume
+    const auto cache = std::make_shared<bloom::runtime::OperationCache>(std::size_t{1} << 30);
+    using bloom::runtime::ImageSequenceReadAhead;
+    const auto request = [&](std::string key) {
+        return ImageSequenceReadAhead::Request{.path = member,
+                                               .digest = {},
+                                               .stamp = std::nullopt,
+                                               .recordedDigest = std::nullopt,
+                                               .revisionKey = std::move(key),
+                                               .byteBudget = std::size_t{1} << 30,
+                                               .use = {},
+                                               .decode = std::nullopt,
+                                               .channels = {}};
+    };
+    ImageSequenceReadAhead readAhead(1);
+    readAhead.request(cache, {request("a"), request("b")});
+    auto statistics = readAhead.statistics();
+    expectations.expect(statistics.queued == 0 && statistics.started == 0 &&
+                            statistics.localSkipped == 2,
+                        "local storage: read-ahead queues nothing and counts the skipped files");
+    expectations.expect(!readAhead.claim("a", {}),
+                        "local storage: a frame finds nothing to claim and reads its own file");
+    readAhead.setLocalStorage(ImageSequenceReadAhead::LocalStorage::Capture);
+    readAhead.request(cache, {request("c")});
+    expectations.expect(readAhead.statistics().queued == 1 &&
+                            readAhead.statistics().localSkipped == 2,
+                        "choosing Capture queues the same request on local storage");
 }

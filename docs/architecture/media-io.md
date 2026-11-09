@@ -922,6 +922,16 @@ for example while they decode. Measured on 2026-11-04 (cold 2160p multilayer EXR
 frames on local NVMe, six interleaved runs each), first motion came at 1.22 s instead of 1.97 s.
 Captures still cost that shot cold frame rate on local storage: 6.1 frames/s against 7.0 with
 captures off.
+Read-ahead follows the storage (#535). `platform::volumeKind()` classifies the volume that holds a
+request's files (Linux: the file system type from `statfs`; macOS: the mount's local flag;
+Windows: a UNC root or the drive type), remembered per folder. A request for files on a Local
+volume queues nothing (`Statistics::localSkipped` counts them), so on local storage the frames read
+their own sources and nothing competes with them; Remote and Unknown volumes keep the behavior
+above, which was measured to help on shares. A user-space file system reads Unknown, so it keeps
+read-ahead. The rule is by volume type, not by measured throughput: a slow local disk is treated
+as local. The effect on the cold frame rate is not measured here. The Linux classification is
+tested; the macOS and Windows readings are written to the same contract and have not been built or
+run.
 Decode ahead (#386): when the frame that queues the captures is a GPU colour leaf (its upload
 carries native samples: PNG, JPEG and all-half OpenEXR), the worker that captured a member also
 decodes its native samples, with the raw interpretation and resolved colour layer the frame's own

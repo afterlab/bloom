@@ -70,7 +70,16 @@ class ImageSequenceReadAhead final {
         std::uint64_t decodesSkipped = 0;
         // Decodes not run because frames' own decodes already used the cores.
         std::uint64_t decodesYielded = 0;
+        // #535: captures not queued because the sequence is on local storage.
+        std::uint64_t localSkipped = 0;
     };
+
+    // #535: read-ahead follows the storage. On a network or remote volume, overlapping reads hide
+    // latency and were measured to help. On local storage they compete with the playhead's own
+    // cold reads, so by default (Skip) a request for files on a local volume queues nothing and
+    // the frames read their own sources. A volume that cannot be classified is treated as remote.
+    enum class LocalStorage : unsigned char { Skip, Capture };
+    void setLocalStorage(LocalStorage policy) noexcept;
 
     // A frame reading its own source file (#477). While any is held, workers start no capture
     // (a capture already reading continues), so the frames being prepared, the playhead frame

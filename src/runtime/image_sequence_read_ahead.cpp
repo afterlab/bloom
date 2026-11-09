@@ -1,6 +1,7 @@
 #include <bloom/runtime/image_sequence_read_ahead.hpp>
 
 #include <bloom/media/image.hpp>
+#include <bloom/platform/volume_kind.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
 #include "image_source.hpp"
@@ -45,6 +46,8 @@ struct ImageSequenceReadAheadState final {
     std::size_t aheadDecodes = 0;
     std::size_t decodeLimit = std::max<std::size_t>(1, std::thread::hardware_concurrency() / 2);
     ImageSequenceReadAhead::Statistics statistics;
+    std::atomic<ImageSequenceReadAhead::LocalStorage> localStorage{
+        ImageSequenceReadAhead::LocalStorage::Skip};
 
     void run() {
         for (;;) {
@@ -251,6 +254,14 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
                                      std::vector<Request> requests) {
     if (!cache || requests.empty())
         return;
+    // Classified before the lock: the first look at a folder may touch the volume, and the answer
+    // is remembered for the folder afterwards.
+    if (state_->localStorage.load() == LocalStorage::Skip &&
+        platform::volumeKind(requests.front().path) == platform::VolumeKind::Local) {
+        const std::lock_guard lock(state_->mutex);
+        state_->statistics.localSkipped += requests.size();
+        return;
+    }
     std::size_t added = 0;
     {
         const std::lock_guard lock(state_->mutex);
@@ -279,6 +290,10 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
     }
     if (added != 0)
         state_->ready.notify_all();
+}
+
+void ImageSequenceReadAhead::setLocalStorage(const LocalStorage policy) noexcept {
+    state_->localStorage.store(policy);
 }
 
 bool ImageSequenceReadAhead::claim(const std::string& revisionKey,

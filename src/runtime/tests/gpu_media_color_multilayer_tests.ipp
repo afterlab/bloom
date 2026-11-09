@@ -286,6 +286,9 @@ void testSequenceDecodeAhead(Expectations& expectations, const Fixture& fixture,
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
     const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    if (context.sequenceReadAhead)
+        context.sequenceReadAhead->setLocalStorage(
+            bloom::runtime::ImageSequenceReadAhead::LocalStorage::Capture);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto first = builder.build(plan, frameRequest(0));
     expectations.expect(first.hasValue() && first.scene->mediaStatistics().imageConversions == 1 &&
@@ -339,6 +342,7 @@ void testSequenceDecodeAhead(Expectations& expectations, const Fixture& fixture,
     using bloom::runtime::SourceWorkingSet;
     const auto cache = std::make_shared<bloom::runtime::OperationCache>(std::size_t{1} << 30);
     ImageSequenceReadAhead readAhead(1);
+    readAhead.setLocalStorage(ImageSequenceReadAhead::LocalStorage::Capture);
     std::vector<ImageSequenceReadAhead::Request> requests;
     const std::array<std::int64_t, 3> useFrames{9, 19, 11};
     bloom::media::ImageInterpretation raw;
@@ -506,6 +510,9 @@ void testChannelReadsShareColourDecode(Expectations& expectations, const Fixture
         CpuCompositionEvaluator evaluator;
         evaluator.setAssetBaseDirectory(fixture.directory);
         const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+        if (context.sequenceReadAhead)
+            context.sequenceReadAhead->setLocalStorage(
+                bloom::runtime::ImageSequenceReadAhead::LocalStorage::Capture);
         const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
         const auto first = builder.build(plan, frameRequest(0));
         expectations.expect(first.hasValue(), "shared channel read, " + order + ": prepares" +

@@ -3,6 +3,7 @@
 
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <bloom/platform/volume_kind.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/image_sequence_read_ahead.hpp>
 #include <bloom/runtime/operation_cache.hpp>
@@ -63,6 +64,7 @@ int main() {
         testLinearPassLayersShareOneCapture(expectations, fixture);
         testSequenceReadAhead(expectations, fixture);
         testSequenceReadAheadClaim(expectations, fixture);
+        testSequenceReadAheadFollowsStorage(expectations, fixture);
         testExrDataWindowRegistration(expectations);
         testExrNonFiniteRepair(expectations);
         testExrNoColourLayerStaysPrepared(expectations);
