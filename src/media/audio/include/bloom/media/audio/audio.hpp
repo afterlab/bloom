@@ -24,6 +24,8 @@ namespace bloom::media::audio {
 enum class AudioContainer : std::uint8_t {
     Wav,
     Mp3,
+    // An audio stream inside a video container, read through the media worker.
+    Video,
 };
 
 enum class AudioErrorCode : std::uint8_t {

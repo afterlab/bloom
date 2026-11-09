@@ -139,33 +139,8 @@ struct AudioStorageClaim final {
 };
 
 [[nodiscard]] std::optional<AudioStorageClaim>
-audioStorageClaim(const media::audio::AudioProbe& probe,
-                  const std::uint64_t chunkFrames = 4096) noexcept {
-    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
-    if (probe.frames == 0 || probe.channels == 0 || probe.frames > max / probe.channels ||
-        probe.frames > std::numeric_limits<std::size_t>::max())
-        return {};
-    const auto samples = probe.frames * probe.channels;
-    if (samples > std::numeric_limits<std::size_t>::max() / sizeof(float) ||
-        samples > max / sizeof(float))
-        return {};
-    const auto planes = static_cast<std::uint64_t>(probe.channels) * sizeof(std::vector<float>);
-    const auto payload = samples * sizeof(float);
-    if (payload > max - sizeof(media::audio::AudioBuffer) ||
-        planes > max - sizeof(media::audio::AudioBuffer) - payload)
-        return {};
-    const auto scratchSamples = std::min(chunkFrames, probe.frames) * probe.channels;
-    const auto retained = sizeof(media::audio::AudioBuffer) + planes + payload;
-    if (scratchSamples > (max - retained) / sizeof(float))
-        return {};
-    if (retained > std::numeric_limits<std::size_t>::max() - scratchSamples * sizeof(float))
-        return {};
-    return AudioStorageClaim{samples, retained, scratchSamples * sizeof(float)};
-}
-
-[[nodiscard]] std::optional<AudioStorageClaim>
-windowedAudioStorageClaim(const media::audio::AudioProbe& probe) noexcept {
-    constexpr auto window = media::audio::AudioStream::kWindowFrames;
+windowedAudioStorageClaim(const media::audio::AudioProbe& probe,
+                          const std::size_t window = media::audio::AudioStream::kWindowFrames) noexcept {
     constexpr std::uint64_t decoderAllowance = 256U * 1024U;
     const auto channels = static_cast<std::uint64_t>(probe.channels);
     if (probe.frames == 0 || channels == 0 ||
@@ -1614,18 +1589,16 @@ void AssetController::startThumbnails() {
                                 continue;
                             }
                             audioCounters->miss();
+                            // The audio is read through a bounded window (#329): only the window
+                            // is admitted, however long the stream is.
                             const auto* audioStream = media::video::audioStreamAt(probe, ordinal);
-                            const auto frames = audioStream == nullptr
-                                                    ? std::nullopt
-                                                    : media::video::audioClipFrameCount(*audioStream);
-                            const auto claim = frames
-                                                   ? audioStorageClaim(
-                                                         {.rate = audioStream->sampleRate,
-                                                          .channels = static_cast<std::uint32_t>(
-                                                              audioStream->channelLayout.size()),
-                                                          .frames = *frames},
-                                                         media::provider::Limits::audioSamples)
-                                                   : std::nullopt;
+                            const auto audioProbe = audioStream == nullptr
+                                                        ? std::nullopt
+                                                        : media::video::videoAudioProbe(*audioStream);
+                            const auto claim =
+                                audioProbe ? windowedAudioStorageClaim(
+                                                 *audioProbe, media::video::kVideoAudioWindowFrames)
+                                           : std::nullopt;
                             if (!claim) {
                                 preview.audioDiagnostic =
                                     "Video audio sample count exceeds addressable storage";
@@ -1661,9 +1634,12 @@ void AssetController::startThumbnails() {
                                     " processing bytes; admission was refused";
                                 continue;
                             }
-                            auto decoded = media::video::decodeAudioClip(
-                                video(), probe, claim->samples,
-                                [&] { return context.isCancellationRequested(); }, ordinal);
+                            const auto cancelAudio = [&context] {
+                                return context.isCancellationRequested();
+                            };
+                            auto decoded = media::video::openWindowedVideoAudio(
+                                std::make_shared<media::video::VideoDecodeSession>(path), probe,
+                                ordinal);
                             auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded);
                             if (audio == nullptr) {
                                 preview.audioDiagnostic =
@@ -1672,8 +1648,13 @@ void AssetController::startThumbnails() {
                             }
                             std::optional<media::audio::WaveformSummary> summary;
                             if (ordinal == 0) {
-                                const auto computed = media::audio::waveformSummary(*audio, 256);
-                                if (!computed.value()) {
+                                const auto computed =
+                                    media::audio::waveformSummary(*audio->stream, 256, cancelAudio);
+                                if (!computed) {
+                                    if (computed.error()->code ==
+                                        media::audio::AudioErrorCode::Cancelled)
+                                        return runtime::TaskResult<
+                                            std::shared_ptr<Thumbnails>>::cancelled();
                                     preview.audioDiagnostic =
                                         media::audio::describeAudioError(*computed.error());
                                     continue;

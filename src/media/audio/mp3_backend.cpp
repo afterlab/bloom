@@ -161,9 +161,17 @@ class Mp3Stream final : public bloom::media::audio::AudioStream {
             return MP3D_E_IOERROR;
         reader_.cancel = &cancel;
         io_ = fileIo(reader_);
-        const auto status =
-            mp3dec_ex_open_cb(&decoder_, &io_, MP3D_SEEK_TO_SAMPLE | MP3D_DO_NOT_SCAN);
+        auto status = mp3dec_ex_open_cb(&decoder_, &io_, MP3D_SEEK_TO_SAMPLE | MP3D_DO_NOT_SCAN);
+        // Build the frame index now, on the opening worker where it can be cancelled, by one pass
+        // over the frame headers (no audio is decoded). A seek to a nonzero sample builds it; a
+        // cancelled build fails the open instead of leaving a partial index behind.
+        if (status == 0)
+            status = mp3dec_ex_seek(&decoder_, 1);
+        if (status == 0 && !reader_.cancelled)
+            status = mp3dec_ex_seek(&decoder_, 0);
         reader_.cancel = nullptr;
+        if (reader_.cancelled && status == 0)
+            status = MP3D_E_USER;
         return status;
     }
     [[nodiscard]] bool wasCancelled() const noexcept { return reader_.cancelled; }
@@ -180,19 +188,12 @@ class Mp3Stream final : public bloom::media::audio::AudioStream {
         reader_.cancel = &cancel;
         reader_.cancelled = false;
         const auto firstSample = firstFrame * probe().channels;
+        // A read that does not continue where the last one ended jumps to the nearest earlier frame
+        // through the frame index built at open: the bit reservoir is refilled from the frames just
+        // before it, and no sample of the skipped span is decoded, backward or forward.
         bool seeked = true;
-        if (firstSample < decoder_.cur_sample) {
-            seeked = mp3dec_ex_seek(&decoder_, 0) == 0;
-            if (seeked)
-                decoder_.to_skip = decoder_.start_delay;
-        }
-        std::array<float, 4096> discard{};
-        while (seeked && decoder_.cur_sample < firstSample && !cancelled(reader_)) {
-            const auto remaining = firstSample - decoder_.cur_sample;
-            const auto wanted =
-                static_cast<std::size_t>(std::min<std::uint64_t>(remaining, discard.size()));
-            seeked = mp3dec_ex_read(&decoder_, discard.data(), wanted) == wanted;
-        }
+        if (firstSample != decoder_.cur_sample)
+            seeked = mp3dec_ex_seek(&decoder_, firstSample) == 0;
         const auto samples = seeked ? mp3dec_ex_read(&decoder_, output.data(), output.size()) : 0;
         reader_.cancel = nullptr;
         if (reader_.cancelled)

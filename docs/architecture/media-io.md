@@ -604,6 +604,15 @@ previews, while broader audio editing is a separate concern.
   and the claim is released afterward.
   Provider/decoder internal allocations are still opaque and are not credited as owned audio
   storage; complete accounting of those internals remains part of #304.
+- An MP3 window stream builds its frame index once, at open, by one cancellable pass over the frame
+  headers (no audio is decoded). A read that does not continue where the last one ended, backward
+  or forward, jumps to the nearest earlier frame and refills the bit reservoir from the frames just
+  before it; the skipped span is never decoded.
+- An audio stream inside a video container (#329) is read through the same bounded window
+  (`openWindowedVideoAudio`): the stream decodes forward through its own `VideoDecodeSession`
+  and retained worker, a backward or distant request repositions that worker, and only the
+  16,384-frame window plus a fixed decoder allowance is admitted and resident, in the asset
+  preview and in export alike. `decodeAudioClip` remains for callers that need every sample at once.
 - `waveformSummary(buffer, bucketCount)` derives per-bucket minimum and maximum values per channel
   from the immutable buffer. Waveforms are derived runtime state, never document truth.
 

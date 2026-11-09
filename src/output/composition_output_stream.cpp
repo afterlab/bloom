@@ -97,6 +97,14 @@ measuredAudioBacking(const media::audio::AudioBuffer& buffer) noexcept {
             !add(plane.size(), sizeof(float), bytes.initialized))
             return {};
     }
+    // A windowed buffer's samples live in its stream (the playback window), not in planes.
+    if (buffer.stream) {
+        const auto streamBytes = buffer.stream->retainedBytes();
+        if (streamBytes > max - bytes.allocated)
+            return {};
+        bytes.allocated += streamBytes;
+        bytes.initialized += streamBytes;
+    }
     return bytes;
 }
 
@@ -142,7 +150,7 @@ struct CompositionOutputStreamV1::State {
             // On every failure path the decoder retires before its scratch reservation.
             std::shared_ptr<ExportResourceReservationV1> retainedClaim;
             std::shared_ptr<ExportResourceReservationV1> scratchClaim;
-            std::optional<media::video::VideoDecodeSession> decoder(std::in_place, path);
+            const auto decoder = std::make_shared<media::video::VideoDecodeSession>(path);
             const auto probe = checked(decoder->probe(cancel));
             require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
                     Error::SourceChanged);
@@ -150,26 +158,20 @@ struct CompositionOutputStreamV1::State {
             require(stream != nullptr && stream->duration.denominator > 0,
                     "Audio stream unavailable", Error::Unavailable);
             codec = stream->codec;
-            const auto frames = media::video::audioClipFrameCount(*stream);
-            require(frames.has_value() && *frames <= std::numeric_limits<std::uint64_t>::max() /
-                                                         stream->channelLayout.size(),
-                    "Audio source sample count is not representable", Error::Oversized);
-            const auto decodedSampleCount = *frames * stream->channelLayout.size();
-            require(decodedSampleCount <= std::numeric_limits<std::size_t>::max() / sizeof(float),
-                    "Audio source exceeds addressable sample storage", Error::Oversized);
-            const auto metadata = sizeof(media::audio::AudioBuffer) +
-                                  stream->channelLayout.size() * sizeof(std::vector<float>);
-            require(decodedSampleCount <=
-                        (std::numeric_limits<std::uint64_t>::max() - metadata) / sizeof(float),
-                    "Audio source byte count overflows", Error::Oversized);
-            const auto scratchSamples =
-                std::min<std::uint64_t>(*frames, media::provider::Limits::audioSamples) *
-                stream->channelLayout.size();
-            const auto retained = decodedSampleCount * sizeof(float) + metadata;
-            require(scratchSamples <=
-                        (std::numeric_limits<std::uint64_t>::max() - retained) / sizeof(float),
-                    "Audio decode scratch byte count overflows", Error::Oversized);
-            const auto scratchBytes = scratchSamples * sizeof(float);
+            // Only the playback window is resident (#329), however long the audio is: the clip
+            // decodes forward through this session's retained worker as the mix reads it.
+            const auto audioProbe = media::video::videoAudioProbe(*stream);
+            require(audioProbe.has_value(), "Audio source sample count is not representable",
+                    Error::Oversized);
+            constexpr std::uint64_t decoderAllowance = 256U * 1024U;
+            const std::uint64_t windowBytes = static_cast<std::uint64_t>(
+                                                  media::video::kVideoAudioWindowFrames) *
+                                              audioProbe->channels * sizeof(float);
+            const std::uint64_t retained = windowBytes + decoderAllowance +
+                                           sizeof(media::audio::AudioBuffer) +
+                                           sizeof(media::audio::AudioStream) +
+                                           audioProbe->channels * sizeof(std::vector<float>);
+            const std::uint64_t scratchBytes = windowBytes;
             if (queueReservation->processingPolicy()) {
                 ExportResourceAdmissionStatusV1 status{};
                 retainedClaim = queueReservation->reserveOwnedHostBacking(retained, status,
@@ -195,9 +197,8 @@ struct CompositionOutputStreamV1::State {
                             ExportResourceAdmissionStatusV1::Reserved,
                         "Audio decode ledger reservation refused", Error::Oversized);
             }
-            auto buffer = checked(media::video::decodeAudioClip(*decoder, probe, decodedSampleCount,
-                                                                cancel, description.audioStream));
-            decoder.reset();
+            auto buffer = checked(
+                media::video::openWindowedVideoAudio(decoder, probe, description.audioStream));
             auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(buffer));
             std::shared_ptr<const media::audio::AudioBuffer> published;
             if (retainedClaim) {

@@ -382,6 +382,62 @@ void testMp3Fixture(Expectations& expectations) {
     }
 }
 
+// Seeks land on the exact requested frame, backward and forward, without decoding the span in
+// between: every probe of a windowed stream equals the sequential full decode.
+void testMp3Seeks(Expectations& expectations) {
+    for (const auto* name : {"sweep-stereo.mp3", "sweep-gapless.mp3"}) {
+        const auto path = std::filesystem::path{BLOOM_AUDIO_FIXTURE_DIR} / name;
+        const auto probe = bloom::media::audio::probeAudio(path);
+        expectations.expect(probe && probe.value()->frames > 100'000,
+                            std::string(name) + " probes as a multi-second stream");
+        if (!probe)
+            continue;
+        const auto decoded = bloom::media::audio::decodeAudio(
+            path, AudioDecodeLimits{.sampleBudget = probe.value()->frames * probe.value()->channels});
+        const auto windowed = bloom::media::audio::openWindowedAudio(
+            path, AudioDecodeLimits{.sampleBudget = 4096U * 2U});
+        expectations.expect(decoded && windowed && windowed.value()->stream,
+                            std::string(name) + " decodes and opens windowed");
+        if (!decoded || !windowed)
+            continue;
+        const auto frames = decoded.value()->frames;
+        expectations.expect(frames == probe.value()->frames, std::string(name) + " frame counts agree");
+        // Forward, then far backward, then to the very end, then back near the start, then a
+        // pseudo-random walk: every jump is a seek, none continues the previous window.
+        std::vector<std::uint64_t> probes{0,         frames / 2, frames - 1, 5000,     frames - 4097,
+                                          1,         frames / 3, 4096,       frames / 5, 90'000};
+        std::uint64_t state = 12345;
+        for (int step = 0; step < 40; ++step) {
+            state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+            probes.push_back((state >> 33U) % frames);
+        }
+        bool exact = true;
+        for (const auto frame : probes)
+            for (std::uint32_t channel = 0; channel < 2; ++channel) {
+                const auto sample = windowed.value()->stream->sample(frame, channel);
+                exact = exact && sample &&
+                        std::abs(*sample - decoded.value()->planes[channel][frame]) < 0.00001F;
+            }
+        expectations.expect(exact, std::string(name) + " seeks agree with the sequential decode");
+        // A read that spans a window and continues into the next one still equals the decode.
+        std::vector<float> chunk(4096U * 2U);
+        const auto read = windowed.value()->stream->readInterleaved(frames / 2 - 1000, chunk);
+        bool contiguous = read && *read.value() == 4096;
+        for (std::size_t i = 0; contiguous && i < 4096; ++i)
+            for (std::uint32_t channel = 0; channel < 2; ++channel)
+                contiguous = std::abs(chunk[i * 2 + channel] -
+                                      decoded.value()->planes[channel][frames / 2 - 1000 + i]) <
+                             0.00001F;
+        expectations.expect(contiguous, std::string(name) + " window read after a seek is exact");
+        // A cancelled open (the frame index is built there) fails instead of leaving a partial one.
+        const auto cancelled = bloom::media::audio::openWindowedAudio(
+            path, AudioDecodeLimits{.sampleBudget = 4096U * 2U}, bloom::media::audio::AudioStream::kWindowFrames,
+            [] { return true; });
+        expectations.expect(!cancelled && cancelled.error()->code == AudioErrorCode::Cancelled,
+                            std::string(name) + " cancelled open is a typed cancellation");
+    }
+}
+
 void testHostileInputsAndLimits(Expectations& expectations) {
     TemporaryFile wav{".wav"};
     const auto expected = writeSineWav(wav.path());
@@ -489,6 +545,7 @@ int main() {
     testWavRoundTripAndWaveform(expectations);
     testChannelLayoutsAndDownmix(expectations);
     testMp3Fixture(expectations);
+    testMp3Seeks(expectations);
     testHostileInputsAndLimits(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
