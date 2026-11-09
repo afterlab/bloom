@@ -104,7 +104,11 @@ from the existing field vocabulary, so it adds no instruction and no shader. Ove
 composition-sized canvas, each of the four points becomes a Transform translation of the coordinate (the
 field position minus the point, pixels from the center, +y up), its squared length (a dot product, so no
 square root, which a device may round differently from the CPU) in units of the squared frame diagonal and
-padded by a quarter pixel squared so a point's own pixel stays finite, raised to the power `-blend / 2`.
+padded by a quarter pixel squared so a point's own pixel stays finite, divided by the nearest point's (the minimum over the four) and raised to the power `-blend / 2`, so the
+nearest point weighs exactly 1 and the weight sum is at least 1: the unnormalized power underflows binary32
+(and flushes to zero on a device) when every point is far from the pixel, a small frame, points near the
+domain's limit or a high blend, which left 0 / 0. A new node's points are written at the composition's
+corners by the Add Node command, resolved from the composition's size at creation like a Solid's size.
 Each weight multiplies its color (a four-lane Constant of the color parameter, alpha included); the straight
 color is the weighted sum over the weight sum, premultiplied once by the swizzle `(a, a, a, 1)`. The
 unit-diagonal measure keeps a weight a normal binary32 number for the document's point and blend domains.

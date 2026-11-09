@@ -418,9 +418,13 @@ one author-space matrix. Opacity multiplies every premultiplied channel: the tra
 the affine command already took an opacity, and a pure move with an opacity stays on the translation
 pass. The identity needs no skew and full opacity, the operation key gains the three values only
 when set, and the output window is the bounding box of the skewed support. With the node's motion
-blur on, the shutter samples carry translate, pivot, scale and rotation only, so a skew or an
-opacity other than none is a named compile failure ("Transform 2D skew and opacity need motion blur
-off") rather than a silent omission.
+blur on, the shutter samples carry skew, skew axis and opacity with translate, pivot, scale and
+rotation: the prepared table holds ten values for the frame and ten for each shutter row, the planner
+resolves the skewed matrix of each row through the same geometry as the plain node, and a sample's
+weight is the shutter weight times the opacity at its row (the path sampler sums its samples, and an
+opacity multiplies the whole premultiplied pixel, so the two are the same product). Skew, skew axis and
+opacity count as animation when deciding whether the rows are sampled, so a fading opacity or a
+swinging skew is read per row.
 
 `extent` chooses the output data window. **Transformed** (0, default) keeps the full transformed
 support, including overscan outside the display window, like a Layer. **Input** (1) clips it to the

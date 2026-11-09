@@ -1651,7 +1651,9 @@ Denoise & Smooth (`bloom.denoise`, schema 1, issue #514) is a Filters node: one 
 and the effect mask every filter takes. Its roles are `mode` (Median, Bilateral, Spatial, Temporal;
 default Bilateral), `radius` (full-resolution pixels, 0 to 6, default 2, animatable), `strength` (0 to 10
 in linear scene values, default 0.1, animatable) and `frames` (Temporal only, 2 to 16, default 5). The
-radius and strength have sockets, so a value graph drives them.
+radius and strength have sockets, so a value graph drives them. Properties and the Timeline show `frames` only in
+Temporal mode and `radius` in every other (`propertiesRowInactive`, the same hook that hides Gaussian Blur's
+vertical radius until Separate axes is on and its channel radii until Per-channel radius is on). The temporal mean reads neither `radius` nor `strength`, so both are hidden in Temporal mode and an animated one is not lowered (a curve nothing reads would make the plan invalid).
 
 The three spatial modes are one kernel, `DenoiseKernel` (`denoise_image_effect.hpp`), whose host table is
 the whole interface to the CPU reference and to the one fixed GPU neighborhood program
@@ -1659,9 +1661,13 @@ the whole interface to the CPU reference and to the one fixed GPU neighborhood p
 square of radius (rx, ry) around each pixel, skipping texels outside the window, over the stored
 (associated) channels.
 
-- **Median** takes, per channel, the middle of the sorted values present (the upper middle on an even
-  count). A channel keeps its own value unless it differs from that median by more than `strength`, so
-  strength 0 is the plain median and a larger strength removes only outliers (Dust & Scratches).
+- **Median** takes the middle of the sorted values present (the upper middle on an even count). A
+  channel keeps its own value unless it differs from that median by more than `strength`, so strength 0 is
+  the plain median and a larger strength removes only outliers (Dust & Scratches). Alpha is its own channel.
+  Color is taken as straight (unassociated) values from the neighbors with alpha above 0 and then takes the
+  output alpha, so at a soft alpha edge the color stays the subject's color and a premultiplied value never
+  exceeds its alpha; a center that keeps its color and its alpha is returned bit for bit. Where the output
+  alpha is 0 (light that covers nothing) the premultiplied values take the same rule on their own.
 - **Bilateral** is `p + sum(w (q - p)) / sum(w)` over the neighbors q, with `w = ws(dx) ws(dy) wr`. The
   spatial weight is the compact biweight `(1 - (d / (r + 1))^2)^2`; the range weight is the same shape
   over the squared distance of the four channels to the center pixel's, divided by `strength^2`, so a
@@ -1703,8 +1709,7 @@ every sixteen pixels and every row. `tools/bench` has the cases (`denoise-<mode>
 marked unmeasured until a run replaces them.
 
 **Limits.** The radius stops at 6 so the Median sort and the Spatial search stay bounded in registers.
-Median acts on stored channels, so at a soft alpha edge it can move color against coverage; mask or
-Unpremultiply first for that. Spatial's patch is fixed at 3 x 3. Temporal has no motion rejection.
+Spatial's patch is fixed at 3 x 3. Temporal has no motion rejection.
 
 ## Sharpen
 
