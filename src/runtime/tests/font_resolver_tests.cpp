@@ -6,6 +6,7 @@
 #include <bloom/runtime/google_catalogue.hpp>
 #include <bloom/runtime/google_fonts.hpp>
 #include <bloom/runtime/headless_font_transport.hpp>
+#include <bloom/runtime/variable_font_instance.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -440,6 +441,56 @@ void headlessTransportFailsOfflineAndCancels() {
 #endif
 }
 
+// An installed variable font: the named instance in the face index and the font ID's recorded axis
+// values both take effect, so the resolved file is the instance, and its digest is its identity.
+void systemVariableFontAppliesInstanceAndAxes() {
+    const auto variablePath = kFixtures / "InterVariable.ttf";
+    const auto variableBytes = readBytes(variablePath);
+    platform::FontCatalogue installed;
+    installed.status = platform::FontCatalogueStatus::Available;
+    platform::FontFace bold;
+    bold.family = "Inter Variable";
+    bold.style = "Bold";
+    bold.weight = 700;
+    bold.path = variablePath;
+    bold.faceIndex = 7U << 16U; // The seventh named instance (weight 700).
+    bold.postscriptName = "InterVariable-Bold";
+    installed.faces.push_back(bold);
+    platform::FontFace staticFace;
+    staticFace.family = "Inter Static";
+    staticFace.style = "Regular";
+    staticFace.path = kFixtures / "Inter-Regular.ttf";
+    staticFace.faceIndex = 1U << 16U; // An instance index on a font that has none.
+    installed.faces.push_back(staticFace);
+    FontResolver resolver;
+    resolver.systemFonts().install(std::move(installed));
+
+    document::FontId id{document::FontSource::System, "Inter Variable", "Bold", 700, false, {},
+                        "InterVariable-Bold", {}};
+    const auto plain = resolver.resolve(id, FontFetch::CachedOnly);
+    const auto expectedBold = instantiateVariableFont(variableBytes, 7, {});
+    expect(plain.kind == FontResolutionKind::System && plain.faceIndex == 0 && plain.bytes != nullptr &&
+               *plain.bytes == expectedBold.bytes,
+           "a named instance of an installed variable font resolves to that instance");
+
+    id.axes = {{"opsz", 32.0}};
+    const std::vector<VariableFontAxisSetting> settings{{"opsz", 32.0}};
+    const auto withAxis = resolver.resolve(id, FontFetch::CachedOnly);
+    const auto expectedAxis = instantiateVariableFont(variableBytes, 7, settings);
+    expect(withAxis.kind == FontResolutionKind::System && withAxis.bytes != nullptr &&
+               *withAxis.bytes == expectedAxis.bytes && !(withAxis.digest == plain.digest),
+           "the recorded axis values change the resolved font and its identity");
+    const auto again = resolver.resolve(id, FontFetch::CachedOnly);
+    expect(again.bytes == withAxis.bytes, "the instance is reused, not rebuilt");
+
+    document::FontId plainStatic{document::FontSource::System, "Inter Static", "Regular", 400, false,
+                                 {}, {}, {}};
+    const auto fixed = resolver.resolve(plainStatic, FontFetch::CachedOnly);
+    expect(fixed.kind == FontResolutionKind::System && fixed.faceIndex == 0 && fixed.bytes != nullptr &&
+               *fixed.bytes == readBytes(kFixtures / "Inter-Regular.ttf"),
+           "an instance index on a static font drops to the font itself");
+}
+
 } // namespace
 
 int main() {
@@ -455,5 +506,6 @@ int main() {
     cancellationStopsTheWait();
     previewSubsetIsFetchedOnlyOnRequest();
     headlessTransportFailsOfflineAndCancels();
+    systemVariableFontAppliesInstanceAndAxes();
     return failures == 0 ? 0 : 1;
 }

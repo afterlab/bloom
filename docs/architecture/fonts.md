@@ -42,6 +42,15 @@ Migration).
 3. An on-demand download from Google Fonts into that cache.
 4. The fallback table.
 
+An installed variable font is drawn at the coordinates the ID records. The named instance a platform
+lists (on Linux the instance number in the high 16 bits of the face index) and the ID's `axes` values
+are applied by writing a static instance of the font (`variable_font_instance.cpp`): TrueType outlines
+with `gvar` deltas, `avar`, composite offsets, advance widths from `HVAR` (else the `gvar` phantom
+points) and glyph bounds follow the coordinates, an axis value outside the font's range is clamped,
+and a tag the font does not have is ignored. The file digest of the instance is the font's identity in
+plan and cache keys. A variable font that stores compact (CFF2) outlines is drawn at its default
+instance; hinting instructions are dropped.
+
 A `system` ID whose font is not installed but whose family exists on Google Fonts is fetched from
 Google Fonts, with a status-bar notice. When the cached or downloaded family version differs from the
 one the project recorded, the latest is used and a "font version changed" notice appears. The ID keeps

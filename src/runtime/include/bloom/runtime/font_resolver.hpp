@@ -7,6 +7,7 @@
 #include <bloom/runtime/font_transport.hpp>
 #include <bloom/runtime/google_catalogue.hpp>
 #include <bloom/runtime/system_font_index.hpp>
+#include <bloom/runtime/variable_font_instance.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -193,6 +194,17 @@ class FontResolver final {
     [[nodiscard]] std::shared_ptr<const std::vector<std::uint8_t>>
     loadFile(const std::filesystem::path& path) const;
 
+    // An installed face's file ready to draw. A named instance of a variable font (the face index
+    // carries it in its high 16 bits) and the font ID's variable-axis values are applied by writing
+    // a static instance of the font; anything else is the file as it is.
+    struct LoadedFace final {
+        std::shared_ptr<const std::vector<std::uint8_t>> bytes;
+        core::Sha256Digest digest;
+        std::uint32_t faceIndex = 0;
+    };
+    [[nodiscard]] std::optional<LoadedFace>
+    loadSystemFace(const platform::FontFace& face, const std::vector<document::FontAxisValue>& axes);
+
     std::filesystem::path root_;
     std::string endpoint_;
     SystemFontIndex system_;
@@ -205,6 +217,7 @@ class FontResolver final {
     std::map<std::string, std::shared_ptr<Job>> jobs_;
     std::deque<std::shared_ptr<Job>> queue_;
     std::map<std::string, CachedFace> memory_;
+    std::map<std::string, LoadedFace> instances_;
     std::vector<std::string> announced_;
     std::thread worker_;
     bool stopping_ = false;

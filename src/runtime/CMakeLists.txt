@@ -65,6 +65,7 @@ target_sources(
         google_fonts.cpp
         headless_font_transport.cpp
         system_font_index.cpp
+        variable_font_instance.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -76,6 +77,7 @@ target_sources(
             include/bloom/runtime/google_fonts.hpp
             include/bloom/runtime/headless_font_transport.hpp
             include/bloom/runtime/system_font_index.hpp
+            include/bloom/runtime/variable_font_instance.hpp
 )
 
 # The headless transport (command-line tools, MCP, Python) speaks through the system's HTTP client

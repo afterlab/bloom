@@ -3,6 +3,7 @@
 #include <bloom/platform/cache_directory.hpp>
 #include <bloom/core/safe_parse.hpp>
 #include <bloom/runtime/google_fonts.hpp>
+#include <bloom/runtime/variable_font_instance.hpp>
 
 #include <algorithm>
 #include <array>
@@ -396,6 +397,55 @@ void FontResolver::runJob(Job& job) {
                 quoteName(display) + " could not be downloaded: " + failureSentence(reason, error)});
 }
 
+std::optional<FontResolver::LoadedFace>
+FontResolver::loadSystemFace(const platform::FontFace& face,
+                             const std::vector<document::FontAxisValue>& axes) {
+    // fontconfig and FreeType put a variable font's named instance (1-based) in the high 16 bits of
+    // the face index and the face within a collection in the low 16.
+    const auto instance = face.faceIndex >> 16U;
+    const auto collectionIndex = face.faceIndex & 0xFFFFU;
+    const bool needsInstance = instance != 0 || !axes.empty();
+    std::string key;
+    if (needsInstance) {
+        key = face.path.string() + "|" + std::to_string(face.faceIndex);
+        for (const auto& axis : axes)
+            key += "|" + axis.tag + core::formatScalar(axis.value, std::int32_t{3}, true, std::int32_t{0});
+        std::lock_guard lock(mutex_);
+        if (const auto found = instances_.find(key); found != instances_.end())
+            return found->second;
+    }
+    auto bytes = loadFile(face.path);
+    if (!bytes)
+        return std::nullopt;
+    LoadedFace loaded;
+    loaded.faceIndex = collectionIndex;
+    if (needsInstance) {
+        std::vector<VariableFontAxisSetting> settings;
+        settings.reserve(axes.size());
+        for (const auto& axis : axes)
+            settings.push_back({axis.tag, axis.value});
+        auto made = instantiateVariableFont(*bytes, instance, settings);
+        if (made.status == VariableFontInstanceStatus::Instanced) {
+            bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(made.bytes));
+            loaded.faceIndex = 0;
+        }
+    }
+    const auto digest = core::Sha256Hasher::hash(std::as_bytes(std::span(*bytes)));
+    if (!digest)
+        return std::nullopt;
+    loaded.bytes = std::move(bytes);
+    loaded.digest = *digest;
+    if (needsInstance) {
+        std::lock_guard lock(mutex_);
+        // A handful of instances is the working set (one per styled text layer); the cap only stops
+        // a long session that sweeps an axis from growing without bound.
+        if (instances_.size() >= 32)
+            instances_.clear();
+        instances_[key] = loaded;
+    }
+    return loaded;
+}
+
 FontResolution FontResolver::fallbackFor(const document::FontId& id, const FontMissingReason reason,
                                          const std::function<bool()>& cancelled) {
     FontResolution result;
@@ -408,15 +458,12 @@ FontResolution FontResolver::fallbackFor(const document::FontId& id, const FontM
             const auto* face = closestSystemFace(*snapshot, family, id.weight, id.italic);
             if (face == nullptr)
                 continue;
-            auto bytes = loadFile(face->path);
-            if (!bytes)
+            auto loaded = loadSystemFace(*face, {});
+            if (!loaded)
                 continue;
-            const auto digest = core::Sha256Hasher::hash(std::as_bytes(std::span(*bytes)));
-            if (!digest)
-                continue;
-            result.bytes = std::move(bytes);
-            result.digest = *digest;
-            result.faceIndex = face->faceIndex;
+            result.bytes = std::move(loaded->bytes);
+            result.digest = loaded->digest;
+            result.faceIndex = loaded->faceIndex;
             result.usedFamily = face->family;
             result.usedStyle = face->style;
             break;
@@ -473,17 +520,15 @@ FontResolution FontResolver::resolve(const document::FontId& id, const FontFetch
     const auto snapshot = system_.snapshotBlocking(cancelled);
     if (snapshot)
         if (const auto* face = matchSystemFace(*snapshot, id)) {
-            if (auto bytes = loadFile(face->path)) {
-                if (const auto digest = core::Sha256Hasher::hash(std::as_bytes(std::span(*bytes)))) {
-                    FontResolution result;
-                    result.kind = FontResolutionKind::System;
-                    result.bytes = std::move(bytes);
-                    result.digest = *digest;
-                    result.faceIndex = face->faceIndex;
-                    result.usedFamily = face->family;
-                    result.usedStyle = face->style;
-                    return result;
-                }
+            if (auto loaded = loadSystemFace(*face, id.axes)) {
+                FontResolution result;
+                result.kind = FontResolutionKind::System;
+                result.bytes = std::move(loaded->bytes);
+                result.digest = loaded->digest;
+                result.faceIndex = loaded->faceIndex;
+                result.usedFamily = face->family;
+                result.usedStyle = face->style;
+                return result;
             }
         }
     if (cancelled && cancelled())

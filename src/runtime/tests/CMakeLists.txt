@@ -14,6 +14,16 @@ bloom_enable_warnings(bloom_runtime_font_resolver_test)
 bloom_add_test(NAME bloom.runtime.font_resolver COMMAND bloom_runtime_font_resolver_test
     LABELS runtime unit text TIMEOUT 60)
 
+add_executable(bloom_runtime_variable_font_test variable_font_instance_tests.cpp)
+target_compile_definitions(
+    bloom_runtime_variable_font_test
+    PRIVATE BLOOM_FONT_FIXTURE_DIRECTORY="${PROJECT_SOURCE_DIR}/src/ui/kit/third_party/inter"
+)
+target_link_libraries(bloom_runtime_variable_font_test PRIVATE bloom_runtime_fonts)
+bloom_enable_warnings(bloom_runtime_variable_font_test)
+bloom_add_test(NAME bloom.runtime.variable_font COMMAND bloom_runtime_variable_font_test
+    LABELS runtime unit text TIMEOUT 60)
+
 add_executable(bloom_runtime_task_test task_scheduler_tests.cpp)
 add_executable(bloom_runtime_completion_test task_completion_tests.cpp)
 add_executable(bloom_runtime_regression_test task_scheduler_regression_tests.cpp)
