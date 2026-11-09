@@ -54,6 +54,13 @@ int main() {
         if (face.source == bloom::platform::FontSource::System && face.family.starts_with("Inter"))
             ++systemFaces;
     expectations.expect(systemFaces >= 3, "installed fonts are listed from the fontconfig database");
+    // Weights are the CSS/OpenType ones (a fontconfig regular is 400, not its own 80).
+    bool weightsInRange = systemFaces > 0;
+    for (const auto& face : catalogue.faces)
+        if (face.source == bloom::platform::FontSource::System && face.family.starts_with("Inter") &&
+            (face.weight < 100 || face.weight > 900))
+            weightsInRange = false;
+    expectations.expect(weightsInRange, "installed faces report OpenType weights between 100 and 900");
     if (catalogue.faces.size() >= 4) {
         expectations.expect(catalogue.faces[0].source == bloom::platform::FontSource::Embedded,
                             "embedded faces sort before system faces");

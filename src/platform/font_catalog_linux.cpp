@@ -106,9 +106,9 @@ FontCatalogue enumerateSystemFonts(const FontCatalogueProvider::Cancellation& ca
         const auto slant = patternInteger(pattern, FC_SLANT, FC_SLANT_ROMAN);
         const auto weight = patternInteger(pattern, FC_WEIGHT, FC_WEIGHT_NORMAL);
         const auto width = patternInteger(pattern, FC_WIDTH, FC_WIDTH_NORMAL);
-        const auto normalizedWeight = weight >= FC_WEIGHT_THIN && weight <= FC_WEIGHT_EXTRABLACK
-                                          ? 100 + (weight - FC_WEIGHT_THIN) * 100
-                                          : weight;
+        // Fontconfig's weight scale (regular 80, bold 200) is not the CSS/OpenType one (400, 700)
+        // that the catalogue records; its own conversion keeps a face's weight inside 1..1000.
+        const auto normalizedWeight = FcWeightToOpenType(weight);
         const auto normalizedWidth =
             width >= FC_WIDTH_ULTRACONDENSED && width <= FC_WIDTH_ULTRAEXPANDED
                 ? 50 + (width - FC_WIDTH_ULTRACONDENSED) * 25
