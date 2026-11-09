@@ -267,8 +267,7 @@ void testSearchKeyboardAndMenus() {
            "the reroute is one of them");
     // Task S1, item 4: the list is sectioned, and carries a heading only for a section that has
     // results under it. #554: the owner's tree, in its order; the eight value groups stay sections
-    // of their own here, and Instances & Particles and Tracking & Analysis have no node
-    // yet so they do not show.
+    // of their own here, and Instances & Particles has no node yet so it does not show.
     expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources"),
                                                          QStringLiteral("Compositing"),
                                                          QStringLiteral("Channels"),
@@ -282,6 +281,7 @@ void testSearchKeyboardAndMenus() {
                                                          QStringLiteral("Color Management"),
                                                          QStringLiteral("Time"),
                                                          QStringLiteral("Text & Paths"),
+                                                         QStringLiteral("Tracking & Analysis"),
                                                          QStringLiteral("Fields"),
                                                          QStringLiteral("Values"),
                                                          QStringLiteral("Math"),
@@ -566,7 +566,7 @@ void testSearchKeyboardAndMenus() {
         expect(titles(addMenu) == QStringList{"Sources", "Compositing", "Channels",
                                               "Keying && Mattes", "Transform", "Distort", "Blur && Sharpen",
                                               "Light && Shadow", "Stylize", "Color Correction",
-                                              "Color Management", "Time", "Text && Paths", "Fields",
+                                              "Color Management", "Time", "Text && Paths", "Tracking && Analysis", "Fields",
                                               "Values", "Utilities", "Output"},
                "the Add menu's groups are the tree's, in order");
         auto* values = addMenu->findChild<QMenu*>(QStringLiteral("nodeAddValuesMenu"));
@@ -640,7 +640,9 @@ void testSearchKeyboardAndMenus() {
         hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
         hasGroup("Distort", {"Chromatic Aberration", "Lens Distortion", "Rolling Shutter"},
                  "Distort holds the lens warp, the colour fringe and the shutter skew");
-        for (const auto* empty : {"Instances & Particles", "Tracking & Analysis"})
+        hasGroup("Tracking & Analysis", {"Histogram", "Image Compare"},
+                 "Tracking & Analysis holds the analysis nodes");
+        for (const auto* empty : {"Instances & Particles"})
             expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +
                                               QString::fromUtf8(empty)) == nullptr,
                    "a group with no node yet does not show");
