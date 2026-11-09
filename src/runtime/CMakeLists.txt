@@ -115,6 +115,7 @@ target_sources(
     bloom_runtime_evaluator
     PRIVATE
         operation_cache.cpp
+        text_metrics.cpp
         cpu_layer_time_resolution.cpp
         video_source.cpp
         composite_frame_cache.cpp
@@ -257,6 +258,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/runtime/operation_cache.hpp
+            include/bloom/runtime/text_metrics.hpp
             include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp

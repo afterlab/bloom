@@ -6,6 +6,7 @@
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/runtime/text_metrics.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
 #include <array>
@@ -16,49 +17,12 @@
 
 namespace bloom::scripting {
 
-// ---- Text metrics
+// ---- Text metrics (implemented by the runtime module, which owns the render dependency)
 
-struct TextMetricsRequest final {
-    std::string text;
-    // The text layer's font choice: 0 DejaVu Sans, 1 Inter Regular, 2 Inter Medium, 3 Inter
-    // SemiBold (the `bloom.text.font` values).
-    std::int64_t font = 0;
-    // Pixels per em.
-    double size = 0.0;
-};
-
-struct TextMetricsLine final {
-    std::size_t index = 0;
-    // The line's box in layout pixels: x to the right of the text origin (the left edge of the
-    // first glyph's advance), y down from the top of the first line.
-    double x = 0.0;
-    double y = 0.0;
-    double advance = 0.0;
-    double height = 0.0;
-    // Half-open UTF-8 byte range of the text on this line.
-    std::size_t byteBegin = 0;
-    std::size_t byteEnd = 0;
-};
-
-struct TextMetricsResult final {
-    bool ok = false;
-    // When !ok: why (invalid UTF-8, a size out of range, a too-large block).
-    std::string diagnostic;
-    // The widest line's advance, in layout pixels, with kerning.
-    double advance = 0.0;
-    // The height of one line (the caret height).
-    double lineHeight = 0.0;
-    std::vector<TextMetricsLine> lines;
-    // The union of every glyph's ink, in whole pixels relative to the text origin; absent for
-    // text without ink (empty, or only spaces).
-    bool hasInk = false;
-    std::int64_t inkX = 0;
-    std::int64_t inkY = 0;
-    std::uint32_t inkWidth = 0;
-    std::uint32_t inkHeight = 0;
-};
-
-[[nodiscard]] TextMetricsResult measureText(const TextMetricsRequest& request);
+using runtime::TextMetricsLine;
+using runtime::TextMetricsRequest;
+using runtime::TextMetricsResult;
+using runtime::measureText;
 
 // ---- Layer bounds
 

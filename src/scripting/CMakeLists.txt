@@ -27,7 +27,6 @@ target_sources(
         merge_entry_view.cpp
         node_reference.cpp
         operation_docs.cpp
-        readings.cpp
         operation_docs.hpp
         operation_reference.cpp
         operation_registry.cpp

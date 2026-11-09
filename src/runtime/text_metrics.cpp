@@ -3,12 +3,12 @@
 
 #include <bloom/render/embedded_fonts.hpp>
 #include <bloom/render/text_raster.hpp>
-#include <bloom/scripting/readings.hpp>
+#include <bloom/runtime/text_metrics.hpp>
 
 #include <algorithm>
 #include <cmath>
 
-namespace bloom::scripting {
+namespace bloom::runtime {
 
 namespace {
 // A coverage bitmap larger than this is refused (about 8 million pixels).
@@ -70,4 +70,4 @@ TextMetricsResult measureText(const TextMetricsRequest& request) {
     return result;
 }
 
-} // namespace bloom::scripting
+} // namespace bloom::runtime
