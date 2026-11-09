@@ -4866,7 +4866,7 @@ class LayerOps:
         bloom.animation.set-keyframe-at-time-for-parameter, transact
         """
         ...
-    def add_svg(self, path: str, name: str = ..., fit: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_svg(self, path: str, name: str = ..., fit: bool = ..., projectDirectory: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-svg  (operation, layer)
         Imports an SVG file as native layers: every drawn element becomes a Shape layer driven by its
         own Path node (keyable points, Trim Path, Offset Path, Boolean Paths and the other path nodes
@@ -4889,6 +4889,11 @@ class LayerOps:
           fit  bool  optional
               Scale the artwork to fit inside the composition and center it (the default); false keeps
               its own pixel size, centered.
+          projectDirectory  str  optional
+              The project directory the source file's record is made relative to, and a relative path is
+              read under. Omit it when the path is absolute: the saved project's folder is used, and an
+              unsaved project records the file as external.
+              Unit: directory path; relative locators are made relative to it
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
