@@ -646,8 +646,10 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         indegree.try_emplace(node.id, 0);
     }
 
-    // Transform dependencies share the image/driver evaluation order. A mixed cycle is no more
-    // evaluable than a parent-only cycle, even when each relation is acyclic by itself.
+    // Transform dependencies share the image/driver evaluation order: a parent's transform needs
+    // the parent's content, so a mixed cycle through content is no more evaluable than a
+    // parent-only cycle. A track matte is applied after both layers and adds no order of its own,
+    // so a matte source may be a child of the layer it mattes.
     for (const auto& boundary : layerOutputs_) {
         const auto parent =
             boundary.parent ? boundariesByLayer.find(*boundary.parent) : boundariesByLayer.end();
@@ -656,16 +658,6 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             indegree.contains(parent->second->nodeId) &&
             parent->second->nodeId != boundary.nodeId) {
             adjacency[parent->second->nodeId].push_back(boundary.nodeId);
-            ++indegree[boundary.nodeId];
-        }
-        // A matte target evaluates after its source.
-        const auto matteSource = boundary.trackMatte
-                                     ? boundariesByLayer.find(boundary.trackMatte->source)
-                                     : boundariesByLayer.end();
-        if (matteSource != boundariesByLayer.end() && indegree.contains(boundary.nodeId) &&
-            indegree.contains(matteSource->second->nodeId) &&
-            matteSource->second->nodeId != boundary.nodeId) {
-            adjacency[matteSource->second->nodeId].push_back(boundary.nodeId);
             ++indegree[boundary.nodeId];
         }
         // #383: a node matte, or a matte mask's node, evaluates before the layer it mattes, so it

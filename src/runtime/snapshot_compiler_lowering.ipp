@@ -67,19 +67,6 @@
                 if (mask.matte)
                     orderBefore(mask.matte->nodeId, node->id);
 
-    // ADR 0028: a track-matte target is lowered after its source layer.
-    for (const auto* node : reachableNodes_) {
-        const auto boundary = layerOutputs_.find(node->id);
-        if (boundary == layerOutputs_.end() || !boundary->second->trackMatte)
-            continue;
-        const auto* source = composition_->graph().findLayer(boundary->second->trackMatte->source);
-        if (source && !source->entryOwned() && indegree.contains(source->nodeId) &&
-            source->nodeId != node->id) {
-            outgoing[source->nodeId].push_back(node->id);
-            ++indegree[node->id];
-        }
-    }
-
     // #502: a Merge lowers its entries' own layers, parents and track mattes on demand, and an
     // Adjustment lowers the entries below its entry, so each comes after what those need.
     for (const auto* node : reachableNodes_) {

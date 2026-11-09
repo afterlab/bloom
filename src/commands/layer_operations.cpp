@@ -63,10 +63,6 @@ OperationResult SetLayerParent::apply(document::Draft& draft) const {
         return OperationResult::noChange();
     const auto previous = layer->parent;
     layer->parent = parent_;
-    if (auto failure = detail::matteParentedToItsTarget(composition->graph())) {
-        layer->parent = previous;
-        return *std::move(failure);
-    }
     if (const auto failure = detail::validateGraph(*composition)) {
         layer->parent = previous;
         return *failure;

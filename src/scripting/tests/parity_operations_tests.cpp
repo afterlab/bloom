@@ -540,9 +540,8 @@ void exportPresetOutputs() {
            "an unknown preset without settings is refused by name");
 }
 
-// #434 O7: a layer's track matte cannot be its own child, because a parent link and a matte share
-// one evaluation order. Both ways of reaching that setup are refused with a refusal that names the
-// two layers and the way out, instead of the generic graph cycle.
+// #434 O7: parenting is a transform-only dependency, so a layer's track matte may be its own child.
+// Both ways of reaching that setup succeed.
 void matteParentedToItsTarget() {
     Fixture fixture;
     const auto solid = [&](const std::string& name) {
@@ -555,13 +554,6 @@ void matteParentedToItsTarget() {
     };
     const auto target = solid("Target");
     const auto matte = solid("Matte");
-    const auto refusal = [](const scripting::SessionCommandResult& result) {
-        if (result.diagnostic)
-            return result.diagnostic->message;
-        return result.command && !result.command->operationFailures.empty()
-                   ? result.command->operationFailures.front().issue.message
-                   : std::string{};
-    };
     const auto setMatte = [&] {
         return fixture.run("bloom.layer.set-track-matte",
                            {{"composition", Value(StableId{fixture.main.value()})},
@@ -577,19 +569,11 @@ void matteParentedToItsTarget() {
                             {"parent", Value(StableId{target.value()})}});
     };
     expect(setParent().succeeded(), "the matte layer is parented to the target");
-    const auto matteFirst = setMatte();
-    expect(!matteFirst.succeeded() &&
-               refusal(matteFirst).find("cannot be its own child") != std::string::npos &&
-               refusal(matteFirst).find("layer " + std::to_string(matte.value())) !=
-                   std::string::npos,
-           "a matte from the target's child is refused by name: " + refusal(matteFirst));
-    expect(fixture.session->undo().succeeded() && setMatte().succeeded(),
-           "an unparented layer can matte the target");
-    const auto parentAfter = setParent();
-    expect(!parentAfter.succeeded() &&
-               refusal(parentAfter).find("cannot be its own child") != std::string::npos,
-           "parenting a matte under the layer it mattes is refused by name: " +
-               refusal(parentAfter));
+    expect(setMatte().succeeded(), "a matte from the target's child is accepted");
+    expect(fixture.session->undo().succeeded() && fixture.session->undo().succeeded(),
+           "both edits undo");
+    expect(setMatte().succeeded() && setParent().succeeded(),
+           "parenting a matte under the layer it mattes is accepted");
 }
 
 void projectItems() {

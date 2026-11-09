@@ -121,6 +121,37 @@ void below(Builder& builder) {
     return builder.project();
 }
 
+// #434 O7: a track matte whose source is a child of the matted layer, as entry layers and as Layer
+// nodes; parenting is a transform-only dependency, so both route through the production GPU path.
+[[nodiscard]] bloom::document::Project childMatte(const bool entryLayersForm) {
+    Builder builder;
+    const auto target = builder.solid({0.1, 0.2, 0.9, 1.0}, 10.0, 8.0);
+    const auto matte = builder.solid({0.8, 0.1, 0.05, 1.0}, 6.0, 6.0);
+    const bloom::merge_entry_test::LayerValues targetValues{
+        .position = {8.0, 6.0}, .pivot = bloom::document::LayerPivot::Content};
+    const bloom::merge_entry_test::LayerValues matteValues{.position = {3.0, 2.0},
+                                                           .rotation = 20.0};
+    bloom::document::LayerId targetLayer;
+    bloom::document::LayerId matteLayer;
+    if (entryLayersForm) {
+        const auto targetSlot = builder.slot(builder.root(), target);
+        const auto matteSlot = builder.slot(builder.root(), matte);
+        targetLayer = builder.entryLayer(builder.root(), targetSlot, targetValues);
+        matteLayer = builder.entryLayer(builder.root(), matteSlot, matteValues);
+    } else {
+        const auto [targetNode, t] = builder.layerNode(target, targetValues);
+        const auto [matteNode, m] = builder.layerNode(matte, matteValues);
+        targetLayer = t;
+        matteLayer = m;
+        builder.slot(builder.root(), targetNode, t);
+        builder.slot(builder.root(), matteNode, m);
+    }
+    builder.boundary(matteLayer).parent = targetLayer;
+    builder.boundary(targetLayer).trackMatte = bloom::document::TrackMatte{
+        matteLayer, bloom::document::TrackMatteChannel::Alpha, false};
+    return builder.project();
+}
+
 // Consecutive raster Layer nodes (#502) concatenate into one resample on the CPU and the GPU: a
 // rotated, scaled, translucent Layer over raster content, then a parented, rotated Layer.
 [[nodiscard]] bloom::document::Project concatenatedLayers() {
@@ -195,7 +226,9 @@ int main(int argc, char** argv) {
          {std::pair{std::string("partial adjustment"), partialAdjustment()},
           std::pair{std::string("blended adjustment"), blendedAdjustment()},
           std::pair{std::string("entry layers"), entryLayers()},
-          std::pair{std::string("concatenated layers"), concatenatedLayers()}}) {
+          std::pair{std::string("concatenated layers"), concatenatedLayers()},
+          std::pair{std::string("child matte (entry layers)"), childMatte(true)},
+          std::pair{std::string("child matte (layer nodes)"), childMatte(false)}}) {
         const auto compiled = bloom::merge_entry_test::compile(project);
         expect(compiled.plan != nullptr, name + " compiles");
         if (!compiled.plan)

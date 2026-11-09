@@ -430,12 +430,7 @@ OperationResult SetTrackMatte::apply(document::Draft& draft) const {
         if (candidate && !candidate->node)
             if (const auto* source = graph.findLayer(candidate->source))
                 addSpan(ranges, *source, duration);
-    const auto previous = layer.trackMatte;
     layer.trackMatte = matte_;
-    if (auto failure = detail::matteParentedToItsTarget(graph)) {
-        layer.trackMatte = previous;
-        return *std::move(failure);
-    }
     auto result = OperationResult::applied();
     result.affectedTimes = normalizeAffectedTimeFootprint({composition_, std::move(ranges)});
     return result;
