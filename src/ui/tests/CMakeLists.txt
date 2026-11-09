@@ -2068,6 +2068,29 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Issue #343: imported SVG artwork (1,200 elements, a keyed path, gradient, clip, nested groups)
+# through the Viewer, a cold and warm RAM preview at Half, and the still, range and movie export
+# routes. The CPU half always runs; the GPU half runs with a Vulkan loader and a qualified device
+# and prints NotRun otherwise (--require-device fails instead).
+add_executable(bloom_ui_viewer_export_svg_artwork_test viewer_export_svg_artwork_tests.cpp)
+target_link_libraries(bloom_ui_viewer_export_svg_artwork_test PRIVATE bloom_ui bloom_host)
+if(TARGET bloom-media-worker)
+    add_dependencies(bloom_ui_viewer_export_svg_artwork_test bloom-media-worker)
+endif()
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_export_svg_artwork_test
+        PRIVATE BLOOM_UI_SVG_ARTWORK_ROUTES_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_export_svg_artwork_test)
+endif()
+bloom_enable_warnings(bloom_ui_viewer_export_svg_artwork_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_export_svg_artwork
+    COMMAND bloom_ui_viewer_export_svg_artwork_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 600
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Real Wayland device present/ack/resize/resume for the resident controller. Without a packaged
 # loader it skips cleanly (no --loader is passed by normal CTest, which stays offscreen); the
 # supervisor passes --loader/--require-device under QT_QPA_PLATFORM=wayland for the native run.
