@@ -149,7 +149,7 @@ lowerHistogram(const document::NodeRecord& node, std::vector<runtime::CompiledOp
     const bool valid =
         integer("channels", document::kHistogramAlpha, operands.channels) &&
         integer("space", document::kImagePixelStored, space) &&
-        integer("scale", document::kHistogramLogarithmic, scale) &&
+        integer("graphScale", document::kHistogramLogarithmic, scale) &&
         integer("bins", document::kHistogramBins.size() - 1, bins) &&
         integer("height", document::kHistogramHeights.size() - 1, height) && rangeMin && rangeMax;
     if (!valid) {

@@ -1725,6 +1725,122 @@ operation, mode, channel choice and second-image window to the CPU oracle with c
 value runs; `effect.PixelMathKernel` and the three `node.*` fixtures prepare through the production
 builder in the coverage contract. [Benchmarks](../development/benchmarks.md) lists `image-math-2k`.
 
+## Histogram
+
+`bloom.histogram`, schema 1, under Tracking & Analysis (issue #349), has one Image in, `input`, and one
+Image out, `image`: a bar graph of how many pixels of the input's data window have each value. It takes
+no effect mask, because it publishes a graph and not the input changed. It lowers to the three
+`HistogramKernel` passes below, which share one grade kind (`ColorGradeKind::Histogram`) and one GPU
+program (`bloom.render.histogram.v1`).
+
+| Role | Default | Domain |
+|---|---|---|
+| `channels` | Red, green and blue | Red, green and blue; Luminance; Red, green, blue and luminance; Red; Green; Blue; Alpha |
+| `space` | Straight color | Straight color, Stored values |
+| `rangeMin`, `rangeMax` | 0, 1 | -1,000,000 to 1,000,000; keyable and drivable |
+| `bins` | 256 | 64, 128, 256, 512 |
+| `height` | 128 | 64, 128, 256, 512 (the graph's height in pixels) |
+| `graphScale` | Linear | Linear, Logarithmic |
+
+**What is counted.** `bins` equal bins span `rangeMin` to `rangeMax`; a value is counted in bin
+`floor((v - rangeMin) * (bins / (rangeMax - rangeMin)))`, both ends of the range being in (the top end
+is the last bin). A value outside the range, or not finite, is not counted, and a reversed or empty
+range counts nothing. With Straight color the red, green and blue are divided by alpha first, and a
+pixel without alpha has no color and counts in none of the color channels (Alpha counts every pixel);
+with Stored values the premultiplied values are counted as they are. Luminance is the Rec. 709 weights
+`0.2126 r + 0.7152 g + 0.0722 b` of that color, added in that order. The input's data window is
+counted whole, whatever region of interest is rendered, so the graph does not change with the Viewer's
+region.
+
+**The graph** is `bins` wide and `height` tall at the input's origin, on a scene-linear background of
+0.02 with an opaque alpha. A channel's bar at a bin has the height `count / tallest * height`, where
+the tallest is the largest count of any counted channel and bin (Logarithmic: `log2(1 + count) /
+log2(1 + tallest)`), and the row it ends in is covered by its fraction. Red, green and blue bars are
+drawn in their own colors; luminance and alpha in gray; the channels are added over the background, so
+overlapping bars of the three channels go to white. With nothing counted the graph is the background.
+
+**The passes.** `Bin` cuts the frame into at most 32 by 32 tiles (cut as Auto Exposure's
+reduction cuts its frame) and counts each tile's pixels into bins, three bins to a pixel (an image's alpha is limited
+to [0, 1], so the counts use red, green and blue): one row of the result per tile, one pixel per group
+of three bins and counted channel. `Sum` adds the tiles' rows, in tile order, into one row. `Plot` draws
+the graph from that row. Each pass is its own operation, so a frame's counts are shared by every
+graph setting that reads the same pixels and range, and a changed `graphScale`, `height` or color choice
+re-runs only what it changes. A frame reads nothing but its own pixels: reaching it by playing,
+scrubbing or exporting gives the same graph, there is no state carried between frames, and a change
+to the input's pixels, the range, the channels or the space changes the passes' identity and so the
+graph.
+
+**On the CPU and the GPU.** `applyHistogram` and the GPU program run the same binary32 operations in
+the same order over the same table (`-ffp-contract=off`; the program's arithmetic is `precise`). The
+counts are whole numbers below 2^24 in `Bin`, and `Sum` adds them in a fixed order, so the two agree
+exactly; the plot's division is correctly rounded on both and only a logarithmic scale takes each
+backend's own `log2`, which agrees to within its last bits (2e-6 relative on color, alpha exact). The
+graph stays on the GPU: the three passes are resident dispatches over the frame and its counts, the
+tile counts are never read back, and the only readback is the composition's final image.
+Because a GPU has no atomic counter here, each `Bin` pixel counts its tile's pixels against its own
+three bins; the work is therefore about the bin count times the frame's pixels (a suspicion of cost,
+not a measurement; [Benchmarks](../development/benchmarks.md) lists `histogram-compare-2k`).
+
+**Evidence.** `src/runtime/tests/histogram_compare_tests.cpp` reads counts and bar heights from real
+pixels (bin edges, HDR and negative values, straight and stored values, luminance, alpha, a window not
+at the origin, tile independence against an independent count at five image sizes, linear and
+logarithmic bars, the refusals, the pixel budget and cancellation); `snapshot_compiler_effect_tests.ipp`
+holds the lowering; the native harness (`runHistograms`) holds every channel choice, scale, range and
+a source smaller than its tile counts to the CPU oracle with cold, warm and changed-value runs and three
+resident dispatches with no per-operation readback; `effect.HistogramKernel` and `node.bloom.histogram`
+prepare through the production builder in the coverage contract at full frame and ROI.
+
+## Image Compare
+
+`bloom.image-compare`, schema 1, under Tracking & Analysis (issue #349), has two required Images,
+`input` (A) and `second` (B), and one Image out, `image`, over A's data window; B is transparent black
+where it has no pixels. It takes no effect mask. It lowers to the `PixelMathKernel` of Image Math
+(`PixelMathOperation::Compare`) and so shares its program, its atlas for the second image and its
+table, which is 36 floats and 44 on the GPU (the second image's offset, then the dispatch window's
+place in the display window and the display window's size).
+
+| Role | Default | Domain |
+|---|---|---|
+| `mode` | Difference | Difference, Split, Checkerboard |
+| `gain` | 1 | 0 to 1,000,000 (Difference) |
+| `splitPosition` | 0.5 | 0 to 1 (Split) |
+| `angle` | 0 | -360 to 360 degrees, with a dial (Split) |
+| `cellSize` | 64 | 1 to 4,096 pixels, rounded to a whole pixel (Checkerboard) |
+
+**Difference** is `|A - B| * gain` on the stored (premultiplied) red, green and blue, with the larger
+of the two alphas; a result that is not finite is 0. **Split** shows A on one side of a line and B on
+the other: with the normal `n = (cos angle, sin angle)` in display pixels (angle 0 is a vertical line
+with A on the left, 90 a horizontal one with A above), a pixel center `p` shows A when
+`p . n < c . n + (position - 0.5) * (|n.x| * width + |n.y| * height)`, where `c` is the display
+window's center and `width` and `height` are its size, so `splitPosition` 0 shows B everywhere and 1 shows
+A everywhere. **Checkerboard** shows A where `floor(x / cell) + floor(y / cell)` is even, from the
+display window's corner. Split and Checkerboard are laid on the display window, not the data window, so
+the same pixel shows the same image whatever region or window is rendered.
+
+**On the GPU** the second image is placed beside A in the atlas as for Image Math and one dispatch
+computes inside the output window. Difference, the split's line test and the squares are additions,
+subtractions, multiplications and integer arithmetic in the same order as the CPU reference, so the
+two agree exactly (the table's cosine and sine are computed once, on the host, for both).
+
+**Evidence.** `histogram_compare_tests.cpp` reads Difference, the split at positions and angles, the
+squares, a second image of another window, a clipped data window against the full one, the refusals
+and the table's identity; the native harness (`runPixelMaths`) runs every mode against a second image
+of the same, a smaller and a larger window to the CPU oracle; `node.bloom.image-compare` and
+`effect.PixelMathKernel` prepare through the production builder at full frame and ROI.
+
+## Image Statistics
+
+Not built. Histogram and Image Compare are image nodes whose result stays on the GPU. Image
+Statistics is meant to give the value graph numbers (a minimum, a maximum, a mean) that drive other
+nodes, for instance a Map Range that normalizes a depth pass. That is not an image: the number would
+have to come from the frame's pixels. The value graph is evaluated before the image pass, and Layer
+Bounds is read after it only because bounds need no pixels. A GPU frame is rendered without
+returning any value to the host, and a value read back in the middle of a frame is neither the one
+final readback of the coverage contract nor a host-preparation step it lists. Making it so is a
+decision for the coverage contract and the GPU frame loop, not an addition to a node, and it also
+needs the image pass to follow a value that depends on its own pixels. The reduction by tiles of the
+Histogram's `Bin` and `Sum` passes (and of Auto Exposure's) is the part that carries over.
+
 ## Lens Distortion
 
 `bloom.lens-distortion`, schema 1, under Distort (issue #486), has one Image in, `input`, and two Image

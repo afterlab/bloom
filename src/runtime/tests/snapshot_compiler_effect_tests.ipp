@@ -1618,7 +1618,7 @@ void testHistogramCompareLowering(Expectations& expectations) {
                     auto value = parameter.defaultValue;
                     if (parameter.role == "mode")
                         value = kImageCompareSplit;
-                    if (parameter.role == "position")
+                    if (parameter.role == "splitPosition")
                         value = 0.25;
                     if (parameter.role == "angle")
                         value = 30.0;
@@ -1634,7 +1634,7 @@ void testHistogramCompareLowering(Expectations& expectations) {
                         value = std::int64_t{1};
                     if (parameter.role == "height")
                         value = std::int64_t{3};
-                    if (parameter.role == "scale")
+                    if (parameter.role == "graphScale")
                         value = kHistogramLogarithmic;
                     const auto id = ParameterId::fromRaw(next++);
                     require(composition->parameters().insert(
@@ -1690,7 +1690,7 @@ void testHistogramCompareLowering(Expectations& expectations) {
                             effects[0]->secondaryInput.has_value() &&
                             kernel->compareMode == kImageCompareSplit &&
                             kernel->values[0].id == ids.at("gain") &&
-                            kernel->values[1].id == ids.at("position") &&
+                            kernel->values[1].id == ids.at("splitPosition") &&
                             std::get<double>(kernel->values[1].source) == 0.25 &&
                             kernel->values[2].id == ids.at("angle") &&
                             std::get<double>(kernel->values[2].source) == 30.0 &&

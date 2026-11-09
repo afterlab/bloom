@@ -2087,7 +2087,7 @@ lowerImageEffect(const document::NodeRecord& node,
             lowered = lowered && integer("mode", document::kImageCompareCheckerboard,
                                          kernel.compareMode);
             std::size_t slot = 0;
-            for (const auto role : {"gain", "position", "angle", "cellSize"})
+            for (const auto role : {"gain", "splitPosition", "angle", "cellSize"})
                 scalar(role, slot++);
         } else if (node.typeId == document::kImageClampNodeType) {
             kernel.operation = runtime::PixelMathOperation::Clamp;

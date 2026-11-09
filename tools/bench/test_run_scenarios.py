@@ -544,6 +544,17 @@ class DepthScenario(unittest.TestCase):
                          ["bloom.image-math", "bloom.image-map-range", "bloom.image-clamp"])
         self.assertIn("inputMax", effects[1][2]["keys"], "every frame is new")
 
+    def test_histogram_compare_scenario_wires_its_second_plate_and_keys_both(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["histogram-compare-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16", "png16_mist"])
+        layer = scenario["layers"][0]
+        effects = layer["effects"]
+        self.assertEqual([effect[0] for effect in effects], ["bloom.image-compare", "bloom.histogram"])
+        self.assertEqual(list(effects[0][2]["inputs"].values()), list(layer["passes"]))
+        self.assertIn("splitPosition", effects[0][2]["keys"], "every frame is new")
+        self.assertIn("rangeMax", effects[1][2]["keys"], "the graph is new every frame too")
+
     def test_audio_effects_scenario_chains_every_effect_and_exports_wav(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["audio-effects-wav"]

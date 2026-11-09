@@ -18,7 +18,7 @@
 // #349 Image Compare (`bloom.image-compare`) takes two Images, `input` (A) and `second` (B), and gives
 // the Image `image` over A's data window, with B transparent black where it has no pixels. `mode` is
 // Difference (|A - B| of the stored values times `gain`, with the larger alpha), Split (A on one side
-// of a line, B on the other: `position` runs the line across the display window from B's side to A's
+// of a line, B on the other: `splitPosition` runs the line across the display window from B's side to A's
 // and `angle` turns it) or Checkerboard (A and B alternate in squares of `cellSize` pixels from the
 // display window's corner). Split and Checkerboard are laid on the display window, so the same pixel
 // shows the same image whatever region or data window is rendered. A result that is not finite is 0.
@@ -29,7 +29,7 @@
 // green and blue channels in their own colors with the luminance, Rec. 709 weights on the color,
 // beside them, the luminance alone, one color channel or alpha), `space` how premultiplication is
 // treated (the color is divided by alpha, and a pixel without alpha counts nowhere in a color
-// channel, or the stored values are counted as they are), and `scale` the bars' height against the
+// channel, or the stored values are counted as they are), and `graphScale` the bars' height against the
 // tallest bin: linear, or logarithmic in one plus the count. A value outside the range or not
 // finite is not counted. The graph does not depend on a region of interest: the whole data window
 // is counted.
@@ -170,7 +170,7 @@ inline constexpr std::array kImageClampParameters{
 inline constexpr std::array kImageCompareParameters{
     choice("mode", kCompareModes, kImageCompareDifference, "Mode"),
     scalar("gain", 1.0, 0.0, kV, "Difference gain", 0.0, 16.0, 0.1, 2),
-    scalar("position", 0.5, 0.0, 1.0, "Split position", 0.0, 1.0, 0.01, 3),
+    scalar("splitPosition", 0.5, 0.0, 1.0, "Split position", 0.0, 1.0, 0.01, 3),
     scalar("angle", 0.0, -360.0, 360.0, "Split angle", -180.0, 180.0, 1.0, 1, "°"),
     scalar("cellSize", 64.0, 1.0, kMaximumImageCompareCell, "Cell size", 1.0, 512.0, 1.0, 0, "px"),
 };
@@ -182,7 +182,7 @@ inline constexpr std::array kHistogramParameters{
     scalar("rangeMax", 1.0, -kV, kV, "Range maximum", -10.0, 10.0, 0.01, 3),
     choice("bins", kHistogramBinLabels, kHistogramDefaultBins, "Bins"),
     choice("height", kHistogramHeightLabels, kHistogramDefaultHeight, "Graph height"),
-    choice("scale", kHistogramScales, kHistogramLinear, "Scale"),
+    choice("graphScale", kHistogramScales, kHistogramLinear, "Scale"),
 };
 
 } // namespace image_pixel_parameters
