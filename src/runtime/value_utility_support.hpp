@@ -49,6 +49,12 @@ class ValueUtilityReader final {
         const auto* value = read<document::Vec2d>(index);
         return value == nullptr ? document::Vec2d{} : *value;
     }
+    // A path operand, shared and never copied. A malformed operand reads as the empty path.
+    [[nodiscard]] const document::PathValue& path(const std::size_t index) noexcept {
+        static const document::PathValue empty;
+        const auto* value = read<CompiledPathValue>(index);
+        return value == nullptr || value->value == nullptr ? empty : *value->value;
+    }
     [[nodiscard]] document::Vec3d vector3(const std::size_t index) noexcept {
         const auto* value = read<document::Vec3d>(index);
         return value == nullptr ? document::Vec3d{} : *value;
@@ -225,6 +231,8 @@ evaluateScalarPrimitive(const core::primitives::ScalarPrimitive operation,
 [[nodiscard]] ValueUtilityOutcome evaluateValueNumeric(const ValueUtilityInvocation& invocation);
 // #596: Axes and Axis Tick.
 [[nodiscard]] ValueUtilityOutcome evaluateValuePlot(const ValueUtilityInvocation& invocation);
+// #344 and #530: Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners.
+[[nodiscard]] ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueDataBlock(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

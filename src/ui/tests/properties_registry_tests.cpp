@@ -1296,7 +1296,8 @@ void audioEffectRows() {
     }
 }
 
-// #342, #590, #595, #596: the group nodes, Function, Function Plot, Axes and Axis Tick present every value in
+// #342, #590, #595, #596, #344, #530: the group nodes, Function, Function Plot, Axes, Axis Tick and the path
+// processing nodes present every value in
 // plain words at each width, a node that reads a group offers the group chooser, and every label is shown
 // whole. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device
 // pixel ratio).
@@ -1304,7 +1305,9 @@ void groupAndPlotRows() {
     for (const auto type :
          {document::kNodeGroupNodeType, document::kGroupInputNodeType, document::kGroupOutputNodeType,
           document::kFunctionNodeType, document::kFunctionPlotNodeType, document::kAxesNodeType,
-          document::kAxisTickNodeType}) {
+          document::kAxisTickNodeType, document::kTransformPathNodeType, document::kTrimPathNodeType,
+          document::kOffsetPathNodeType, document::kBooleanPathsNodeType, document::kMergePathsNodeType,
+          document::kRoundCornersNodeType}) {
         auto project = document::makeNewProject("Plot", "Main", core::RationalTime::fromInteger(10));
         document::Document document(std::move(project.project));
         commands::CommandStack stack(document);

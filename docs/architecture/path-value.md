@@ -2,8 +2,8 @@
 
 Status: built (#589). This document owns what a path is once it travels through the graph: the value,
 its socket, its keys, how it animates, how it is subdivided and measured, and how older projects open.
-The code that owns each part names this document. Path effects, merges and generators (#343, #344,
-#345, #509, #529, #530, #526) are built on this value and are not part of it.
+The code that owns each part names this document. Path effects, merges and generators (#343, #345, #509, #529, #526) are built on this value and are not part of it. The nodes that take
+and answer a Path (#344, #530) are in [path-processing.md](path-processing.md).
 
 ## The value
 

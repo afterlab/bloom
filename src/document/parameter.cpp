@@ -174,6 +174,23 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kRoundingModes, *stored).has_value();
     }
+    if (schemaKey == kTrimModeParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kTrimModes, *stored).has_value();
+    }
+    if (schemaKey == kOffsetJoinParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kOffsetJoins, *stored).has_value();
+    }
+    if (schemaKey == kPathCombineParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kPathCombines, *stored).has_value();
+    }
+    // #344: a path operand holds any valid path value, as a constant or a driver.
+    if (schemaKey == kPathOperandParameterSchemaKey) {
+        const auto* path = std::get_if<PathValue>(&constant.value);
+        return path != nullptr && path->isValid();
+    }
     if (schemaKey == kIntegerOperationParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr &&
@@ -667,7 +684,8 @@ constantMatchesSchema(const std::string_view schemaKey,
         return false;
     // #589: a shape's own path is a constant, or the Path socket's driver. Keys live on the Path
     // node.
-    if (schemaKey == "bloom.shape.path" &&
+    if ((schemaKey == "bloom.shape.path" ||
+         schemaKey == bloom::document::kPathOperandParameterSchemaKey) &&
         std::holds_alternative<bloom::document::AnimationCurveSource>(source))
         return false;
     // #543: a stop link holds its driver and nothing else.

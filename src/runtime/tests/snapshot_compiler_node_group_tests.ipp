@@ -811,3 +811,183 @@ void testPlotFrames(Expectations& expectations) {
     writeFrame(plot.plan, "function-plot");
     writeFrame(frame.plan, "axes");
 }
+
+// #344, #530: a chain of path nodes drives a shape, and the shape renders what a shape holding the
+// chain's answer renders (the production fill is the same on every route; the chain only supplies
+// the path).
+[[nodiscard]] document::PathValue polygonPathValue(const std::vector<document::Vec2d>& points) {
+    document::PathContour contour;
+    contour.closed = true;
+    for (const auto point : points)
+        contour.anchors.push_back({point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
+    document::PathValue value;
+    value.contours.push_back(std::move(contour));
+    return value;
+}
+
+[[nodiscard]] document::PathValue rectanglePathValue(const double left, const double top,
+                                                      const double right, const double bottom) {
+    return polygonPathValue({{left, top}, {right, top}, {right, bottom}, {left, bottom}});
+}
+
+struct PathStep final {
+    std::string_view type;
+    std::map<std::string, document::ParameterValue> values;
+};
+
+// The stroked shape project with a chain of path nodes between `source` and the shape's path.
+[[nodiscard]] document::Project makeChainProject(const PlotSettings& settings,
+                                                 const document::PathValue& source,
+                                                 const std::vector<PathStep>& steps) {
+    using namespace document;
+    auto project = makePlotProject(settings, source, false, true);
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "the composition is there");
+    std::uint64_t next = 8300;
+    std::uint64_t nodeId = 8200;
+    std::optional<NodeId> previous;
+    for (const auto& step : steps) {
+        const auto id = NodeId::fromRaw(++nodeId);
+        auto values = step.values;
+        const std::string inputRole = step.type == kBooleanPathsNodeType ? "first" : "path";
+        if (!previous)
+            values[inputRole] = source;
+        addDefaultedNode(*composition, id, step.type, next, values);
+        if (previous)
+            require(composition->parameters().setSource(parameterOf(*composition, id, inputRole),
+                                                        DriverBindingSource{*previous, "path"}),
+                    "a step reads the one before it");
+        previous = id;
+    }
+    require(previous.has_value() &&
+                composition->parameters().setSource(parameterOf(*composition, kPlotShape, "path"),
+                                                    DriverBindingSource{*previous, "path"}),
+            "the chain drives the shape");
+    const auto validation = project.validate();
+    for (const auto& issue : validation.issues())
+        std::cerr << "path chain fixture: " << issue.path << ": " << issue.message << '\n';
+    require(validation.ok(), "the path chain fixture is valid document truth");
+    return project;
+}
+
+// The last path any value operation answers at the first frame: the chain's result.
+[[nodiscard]] std::shared_ptr<const document::PathValue>
+chainResult(const runtime::CompiledCompositionPlan& plan) {
+    const auto evaluation =
+        runtime::evaluateValueGraph(plan.valueOperations(), plan.valueOutputCount(),
+                                    core::RationalTime::fromInteger(0), plan.format().frameRate());
+    std::shared_ptr<const document::PathValue> last;
+    for (const auto& output : evaluation.outputs)
+        if (const auto* path = std::get_if<runtime::CompiledPathValue>(&output))
+            last = path->value;
+    return last;
+}
+
+[[nodiscard]] document::Vec2d centerOfBounds(const document::PathValue& path) {
+    double left = 1e300, top = 1e300, right = -1e300, bottom = -1e300;
+    for (const auto& contour : path.contours)
+        for (const auto& anchor : contour.anchors) {
+            left = std::min(left, anchor.point.x);
+            right = std::max(right, anchor.point.x);
+            top = std::min(top, anchor.point.y);
+            bottom = std::max(bottom, anchor.point.y);
+        }
+    return {(left + right) / 2.0, (top + bottom) / 2.0};
+}
+
+void testPathProcessingDrivesShape(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    PlotSettings settings;
+    settings.position = {0.0, 0.0};
+    const auto source = rectanglePathValue(0, 0, 200, 150);
+
+    // Transform (move to 30, 20; half size) then Offset (grow 5): 30..130 by 20..95, grown to
+    // 25..135 by 15..100.
+    const auto drivenCompile = compile(
+        makeChainProject(settings, source,
+                         {{kTransformPathNodeType,
+                           {{"position", Vec2d{30.0, 20.0}}, {"scale", Vec2d{0.5, 0.5}}}},
+                          {kOffsetPathNodeType, {{"amount", 5.0}}}}),
+        registry);
+    const auto heldCompile =
+        compile(makePlotProject(settings, rectanglePathValue(25, 15, 135, 100), false, true), registry);
+    const auto unmovedCompile = compile(makePlotProject(settings, source, false, true), registry);
+    expectations.expect(drivenCompile.plan && heldCompile.plan && unmovedCompile.plan,
+                        "a shape driven by Transform Path and Offset Path compiles");
+    if (!drivenCompile.plan || !heldCompile.plan || !unmovedCompile.plan)
+        return;
+    const auto pixels = renderReference(drivenCompile.plan);
+    expectations.expect(!pixels.empty() && pixels == renderReference(heldCompile.plan),
+                        "the chain renders what a shape holding its answer renders");
+    expectations.expect(pixels != renderReference(unmovedCompile.plan),
+                        "the chain moves the shape");
+}
+
+// Each path node on a shape with a notch, as frames: the nodes working, drawn by the production fill.
+void testPathProcessingFrames(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    const auto notched = polygonPathValue(
+        {{300, 200}, {900, 200}, {900, 420}, {700, 420}, {700, 330}, {500, 330}, {500, 420}, {300, 420}});
+    const auto bar = rectanglePathValue(560, 150, 640, 500);
+    struct Frame final {
+        std::string name;
+        std::vector<PathStep> steps;
+    };
+    const std::vector<Frame> frames{
+        {"path-source", {{kTransformPathNodeType, {}}}},
+        {"transform-path",
+         {{kTransformPathNodeType,
+           {{"position", Vec2d{700.0, 520.0}}, {"anchor", Vec2d{600.0, 310.0}},
+            {"scale", Vec2d{0.7, 0.7}}, {"rotation", 20.0}}}}},
+        {"trim-path", {{kTrimPathNodeType, {{"start", 10.0}, {"end", 60.0}}}}},
+        {"offset-path", {{kOffsetPathNodeType, {{"amount", 24.0}}}}},
+        {"offset-path-round", {{kOffsetPathNodeType, {{"amount", 24.0}, {"join", std::int64_t{1}}}}}},
+        {"round-corners", {{kRoundCornersNodeType, {{"radius", 40.0}}}}},
+        {"merge-paths-subtract",
+         {{kMergePathsNodeType, {{"operation", std::int64_t{1}}}}}},
+    };
+    PathValue pair = notched;
+    pair.contours.push_back(bar.contours.front());
+    for (const auto& frame : frames) {
+        const auto& input = frame.name == "merge-paths-subtract" ? pair : notched;
+        PlotSettings settings;
+        const auto probe = compile(makeChainProject(settings, input, frame.steps), registry);
+        require(probe.plan != nullptr, "the frame's chain compiles");
+        const auto result = chainResult(*probe.plan);
+        require(result != nullptr && !result->contours.empty(), "the frame's chain answers a path");
+        settings.position = centerOfBounds(*result);
+        const auto drawn = compile(makeChainProject(settings, input, frame.steps), registry);
+        require(drawn.plan != nullptr, "the placed chain compiles");
+        writeFrame(drawn.plan, frame.name);
+    }
+    // Boolean Paths takes two paths: the notched shape less the bar.
+    {
+        PlotSettings settings;
+        auto project = makeChainProject(settings, notched, {{kBooleanPathsNodeType, {{"operation", std::int64_t{1}}}}});
+        auto* composition = project.findComposition(kCompositionId);
+        require(composition->parameters().setSource(
+                    parameterOf(*composition, NodeId::fromRaw(8201), "second"), ConstantValueSource{bar}),
+                "the second path is set");
+        const auto probe = compile(project, registry);
+        require(probe.plan != nullptr, "the boolean frame compiles");
+        const auto result = chainResult(*probe.plan);
+        require(result != nullptr && result->contours.size() == 2, "the bar cuts the shape in two");
+        settings.position = centerOfBounds(*result);
+        auto placed = makeChainProject(settings, notched, {{kBooleanPathsNodeType, {{"operation", std::int64_t{1}}}}});
+        auto* placedComposition = placed.findComposition(kCompositionId);
+        require(placedComposition->parameters().setSource(
+                    parameterOf(*placedComposition, NodeId::fromRaw(8201), "second"),
+                    ConstantValueSource{bar}),
+                "the second path is set");
+        const auto drawn = compile(placed, registry);
+        require(drawn.plan != nullptr, "the placed boolean compiles");
+        writeFrame(drawn.plan, "boolean-paths-subtract");
+    }
+    expectations.expect(true, "the path processing frames are written when asked for");
+}

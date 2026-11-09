@@ -137,6 +137,49 @@ constexpr std::array<ValueUtilityOutput, 4> kAxisTickOutputs{
     ValueUtilityOutput{"position", SocketValueKind::Vector2},
     ValueUtilityOutput{"label", SocketValueKind::String},
     ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
+// #344 and #530 path processing. Distances are pixels in the path's own space; a percentage runs 0 to
+// 100; a scale is a multiplier, as in Transform; an angle is degrees.
+constexpr std::array<ValueUtilityOperand, 5> kTransformPathOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "position", .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{.role = "anchor", .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{
+        .role = "scale", .kind = SocketValueKind::Vector2, .number = 1.0, .y = 1.0},
+    ValueUtilityOperand{.role = "rotation", .kind = SocketValueKind::Scalar}};
+constexpr std::array<ValueUtilityOutput, 1> kPathResult{
+    ValueUtilityOutput{"path", SocketValueKind::Path}};
+constexpr std::array<ValueUtilityOperand, 4> kTrimPathOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "start", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "end", .kind = SocketValueKind::Scalar, .number = 100.0},
+    ValueUtilityOperand{.role = "offset", .kind = SocketValueKind::Scalar, .number = 0.0}};
+constexpr std::array<ValueUtilitySelector, 1> kTrimModeSelector{ValueUtilitySelector{
+    "mode", bloom::document::kTrimModeParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::TrimMode::Simultaneously)}};
+constexpr std::array<ValueUtilityOutput, 2> kTrimPathOutputs{
+    ValueUtilityOutput{"path", SocketValueKind::Path},
+    ValueUtilityOutput{"length", SocketValueKind::Scalar}};
+constexpr std::array<ValueUtilityOperand, 4> kOffsetPathOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "amount", .kind = SocketValueKind::Scalar, .number = 10.0},
+    ValueUtilityOperand{.role = "miterLimit", .kind = SocketValueKind::Scalar, .number = 4.0},
+    ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
+constexpr std::array<ValueUtilitySelector, 1> kOffsetJoinSelector{ValueUtilitySelector{
+    "join", bloom::document::kOffsetJoinParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::OffsetJoin::Miter)}};
+constexpr std::array<ValueUtilityOperand, 3> kBooleanPathsOperands{
+    ValueUtilityOperand{.role = "first", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "second", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
+constexpr std::array<ValueUtilitySelector, 1> kPathCombineSelector{ValueUtilitySelector{
+    "operation", bloom::document::kPathCombineParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::PathCombine::Union)}};
+constexpr std::array<ValueUtilityOperand, 2> kMergePathsOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
+constexpr std::array<ValueUtilityOperand, 2> kRoundCornersOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "radius", .kind = SocketValueKind::Scalar, .number = 10.0}};
 constexpr std::array<ValueUtilityOutput, 2> kPointSetOutputs{
     ValueUtilityOutput{"count", SocketValueKind::Integer},
     ValueUtilityOutput{"point", SocketValueKind::Vector3}};
@@ -439,7 +482,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 72> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 78> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -659,6 +702,24 @@ constexpr std::array<ValueUtilityDescriptor, 72> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kAxisTickNodeType, "Axis Tick",
                            ValueUtilityKernel::AxisTick, NodeCategory::Values, kAxisTickOperands,
                            kNoSelectors, kAxisTickOutputs},
+    ValueUtilityDescriptor{bloom::document::kTransformPathNodeType, "Transform Path",
+                           ValueUtilityKernel::TransformPath, NodeCategory::Values,
+                           kTransformPathOperands, kNoSelectors, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kTrimPathNodeType, "Trim Path",
+                           ValueUtilityKernel::TrimPath, NodeCategory::Values, kTrimPathOperands,
+                           kTrimModeSelector, kTrimPathOutputs},
+    ValueUtilityDescriptor{bloom::document::kOffsetPathNodeType, "Offset Path",
+                           ValueUtilityKernel::OffsetPath, NodeCategory::Values,
+                           kOffsetPathOperands, kOffsetJoinSelector, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kBooleanPathsNodeType, "Boolean Paths",
+                           ValueUtilityKernel::BooleanPaths, NodeCategory::Values,
+                           kBooleanPathsOperands, kPathCombineSelector, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kMergePathsNodeType, "Merge Paths",
+                           ValueUtilityKernel::MergePaths, NodeCategory::Values,
+                           kMergePathsOperands, kPathCombineSelector, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kRoundCornersNodeType, "Round Corners",
+                           ValueUtilityKernel::RoundCorners, NodeCategory::Values,
+                           kRoundCornersOperands, kNoSelectors, kPathResult},
 };
 
 } // namespace

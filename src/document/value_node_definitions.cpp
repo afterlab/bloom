@@ -460,9 +460,10 @@ struct KindVocabulary final {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
-    case SocketValueKind::Path:
     case SocketValueKind::Scalar:
         break;
+    case SocketValueKind::Path:
+        return ParameterValueKind::Path; // #344: a path operand's own value.
     }
     return ParameterValueKind::Float64;
 }
@@ -493,9 +494,10 @@ struct KindVocabulary final {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
-    case SocketValueKind::Path:
     case SocketValueKind::Scalar:
         break;
+    case SocketValueKind::Path:
+        return kPathOperandParameterSchemaKey;
     }
     return kScalarOperandParameterSchemaKey;
 }
@@ -523,9 +525,10 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
-    case SocketValueKind::Path:
     case SocketValueKind::Scalar:
         break;
+    case SocketValueKind::Path:
+        return PathValue{};
     }
     return operand.number;
 }
@@ -630,6 +633,8 @@ bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
         schemaKey == kStringPadSideParameterSchemaKey ||
         schemaKey == kIntegerOperationParameterSchemaKey ||
         schemaKey == kBooleanOperationParameterSchemaKey ||
+        schemaKey == kTrimModeParameterSchemaKey || schemaKey == kOffsetJoinParameterSchemaKey ||
+        schemaKey == kPathCombineParameterSchemaKey ||
         schemaKey == kDataBlockParameterSchemaKey) {
         return true;
     }

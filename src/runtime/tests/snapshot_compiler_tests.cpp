@@ -2155,6 +2155,8 @@ int main() {
         testFunctionGroups(expectations);
         testFunctionSharesGroupWithInstance(expectations);
         testFunctionPlot(expectations);
+        testPathProcessingDrivesShape(expectations);
+        testPathProcessingFrames(expectations);
         testPlotFrames(expectations);
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);

@@ -609,6 +609,14 @@ index is outside the range, or whose range has no usable step, is not `valid` an
 so a label layer reading it shows nothing. A label that rounds to zero is written without a sign.
 Both nodes are pure functions of their operands and do not depend on time.
 
+### Path processing
+
+Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths and Round Corners
+(`bloom.transform-path`, `bloom.trim-path`, `bloom.offset-path`, `bloom.boolean-paths`,
+`bloom.merge-paths`, `bloom.round-corners`; Text & Paths) take a Path operand and answer a Path. A Path
+operand is a socket whose unconnected value is the empty path (schema `bloom.operand.path`): a constant or
+a driver, never keys. Their operands, limits and results are in [path-processing.md](path-processing.md).
+
 ## Color Image Effects
 
 These definitions operate on images and use `NodeLoweringKind::ImageEffect`, independently of the

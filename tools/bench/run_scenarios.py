@@ -614,6 +614,24 @@ class Builder:
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort="path")
+        if "pathChain" in layer:
+            chain = layer["pathChain"]
+            driver = self.transact("bloom.node.add", composition=self.composition,
+                                   nodeType="bloom.value-path")["node"]
+            self.set_keys(driver, {"value": chain["keys"]})
+            port = "value"
+            for step in chain["steps"]:
+                step_node = self.transact("bloom.node.add", composition=self.composition,
+                                          nodeType=step["type"])["node"]
+                self.set_values(step_node, step["type"], step.get("values") or {})
+                self.set_keys(step_node, step.get("keys") or {})
+                self.transact("bloom.parameter.set-source", composition=self.composition,
+                              parameter=self.parameter_id(step_node, "path"), driverNode=driver,
+                              driverPort=port)
+                driver, port = step_node, "path"
+            self.transact("bloom.parameter.set-source", composition=self.composition,
+                          parameter=self.parameter_id(source, "path"), driverNode=driver,
+                          driverPort=port)
         if "axesNode" in layer:
             axes = layer["axesNode"]
             driver = self.transact("bloom.node.add", composition=self.composition,

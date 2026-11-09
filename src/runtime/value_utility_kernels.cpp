@@ -17,6 +17,7 @@ enum class Family : std::uint8_t {
     Numeric,
     DataBlocks,
     Plot,
+    Path,
 };
 
 [[nodiscard]] Family familyOf(const Kernel kernel) noexcept {
@@ -96,6 +97,13 @@ enum class Family : std::uint8_t {
     case Kernel::Axes:
     case Kernel::AxisTick:
         return Family::Plot;
+    case Kernel::TransformPath:
+    case Kernel::TrimPath:
+    case Kernel::OffsetPath:
+    case Kernel::BooleanPaths:
+    case Kernel::MergePaths:
+    case Kernel::RoundCorners:
+        return Family::Path;
     case Kernel::DataSample:
     case Kernel::RampSample:
     case Kernel::TableLookup:
@@ -140,6 +148,9 @@ ValueUtilityOutcome evaluateValueUtility(const ValueUtilityInvocation& invocatio
         break;
     case Family::Plot:
         outcome = detail::evaluateValuePlot(invocation);
+        break;
+    case Family::Path:
+        outcome = detail::evaluateValuePath(invocation);
         break;
     case Family::Conversion:
         outcome = detail::evaluateValueConversion(invocation);

@@ -24,7 +24,9 @@ area, and its layers from the bottom up. A layer is one of:
   layer, with no media; "pathNode" drives its `path` from a keyed Path node, #589; "plotNode":
   {"function": name in FUNCTION_GROUPS, "values": {role: value}, "keys": {role: [[frame, value],
   ...]}} drives it from a Function Plot reading that group, #595; "axesNode": {"values": {...},
-  "keys": {...}} drives it from an Axes node, #596).
+  "keys": {...}} drives it from an Axes node, #596; "pathChain": {"keys": [[frame, path value],
+  ...], "steps": [{"type": node type, "values": {...}, "keys": {...}}, ...]} drives it from a keyed
+  Path node read by each path processing step in turn, #344, #530).
 
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
@@ -619,6 +621,32 @@ SCENARIOS["path-value-compound-2k"] = {
          "pathNode": {"keys": [
              [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}],
              [24, {"contours": [_ring(i, 40) for i in range(64)], "fillRule": "evenOdd"}]]}},
+    ],
+}
+
+# #344, #530: the path processing nodes in one chain: a keyed compound path of 64 contours is offset,
+# rounded, merged and trimmed before a Shape Source reads it. The cost is the polygon operations on
+# the flattened contours, then the fill. No media is read. Written, not run.
+SCENARIOS["path-processing-2k"] = {
+    "description": "A Shape Source reading 64 keyed contours offset, rounded, merged and trimmed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Shape",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "pathChain": {
+             "keys": [
+                 [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}],
+                 [24, {"contours": [_ring(i, 40) for i in range(64)], "fillRule": "evenOdd"}]],
+             "steps": [
+                 {"type": "bloom.offset-path", "values": {"amount": 12.0, "join": 1},
+                  "keys": {"amount": [[0, 4.0], [23, 24.0]]}},
+                 {"type": "bloom.round-corners", "values": {"radius": 16.0}},
+                 {"type": "bloom.merge-paths", "values": {"operation": 0}},
+                 {"type": "bloom.trim-path", "values": {"start": 0.0, "end": 100.0},
+                  "keys": {"end": [[0, 20.0], [23, 100.0]]}},
+                 {"type": "bloom.transform-path", "values": {"rotation": 0.0},
+                  "keys": {"rotation": [[0, 0.0], [23, 20.0]]}}]}},
     ],
 }
 

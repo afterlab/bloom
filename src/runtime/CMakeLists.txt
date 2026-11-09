@@ -311,6 +311,7 @@ target_sources(
         value_utility_strings.cpp
         value_utility_numeric.cpp
         value_utility_plot.cpp
+        value_utility_path.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -380,6 +381,35 @@ target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloo
                                                      bloom_color_ocio bloom_media_image
                                                      bloom_media_cache bloom_media_video bloom_color_video)
 target_link_libraries(bloom_runtime_evaluator PRIVATE bloom_color_gpu_shader)
+
+# The vendored polygon library behind Boolean Paths, Merge Paths and Offset Path (#344, #530). It is
+# compiled as one private object library without the project's warning set; its headers are system
+# headers to the translation unit that wraps it, and no public Bloom header names one of its types.
+add_library(
+    bloom_runtime_clipper2
+    OBJECT
+    third_party/clipper2/src/clipper.engine.cpp
+    third_party/clipper2/src/clipper.offset.cpp
+    third_party/clipper2/src/clipper.rectclip.cpp
+)
+target_include_directories(
+    bloom_runtime_clipper2
+    SYSTEM
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clipper2/include"
+)
+target_compile_features(bloom_runtime_clipper2 PRIVATE cxx_std_20)
+set_target_properties(bloom_runtime_clipper2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(bloom_runtime_clipper2 PRIVATE /w)
+else()
+    target_compile_options(bloom_runtime_clipper2 PRIVATE -w)
+endif()
+target_include_directories(
+    bloom_runtime_evaluator
+    SYSTEM
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clipper2/include"
+)
+target_link_libraries(bloom_runtime_evaluator PRIVATE bloom_runtime_clipper2)
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
 

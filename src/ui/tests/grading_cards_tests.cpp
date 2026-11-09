@@ -1305,7 +1305,14 @@ void pixelAndMotionCards() {
         {"bloom.function", {"bloom.math", "bloom.map-range", "bloom.oscillator"}},
         {"bloom.function-plot", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
         {"bloom.axes", {"bloom.text-source", "bloom.shape-source", "bloom.function-plot"}},
-        {"bloom.axis-tick", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}}};
+        {"bloom.axis-tick", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        // #344, #530
+        {"bloom.transform-path", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        {"bloom.trim-path", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        {"bloom.offset-path", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        {"bloom.boolean-paths", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        {"bloom.merge-paths", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}},
+        {"bloom.round-corners", {"bloom.text-source", "bloom.shape-source", "bloom.axes"}}};
     for (const auto& spec : specs) {
         CardFixture fixture(spec.type);
         expect(fixture.item != nullptr, "a new node draws a card");

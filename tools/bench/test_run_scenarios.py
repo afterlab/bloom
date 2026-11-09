@@ -566,6 +566,15 @@ class DepthScenario(unittest.TestCase):
             values = axes["values"]
             self.assertLessEqual((values[high] - values[low]) / values[step] + 1, 1024 + 1)
 
+    def test_path_processing_scenario_chains_every_path_node(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["path-processing-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        steps = scenario["layers"][0]["pathChain"]["steps"]
+        self.assertEqual([step["type"] for step in steps], [
+            "bloom.offset-path", "bloom.round-corners", "bloom.merge-paths", "bloom.trim-path",
+            "bloom.transform-path"])
+
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["auto-exposure-2k"]

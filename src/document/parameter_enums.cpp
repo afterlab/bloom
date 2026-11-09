@@ -352,6 +352,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kLoopValueModeParameterSchemaKey)
         return named(kLoopModes, {"Repeat", "Ping-pong"},
                      [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kTrimModeParameterSchemaKey)
+        return named(kTrimModes, {"Simultaneously", "Individually"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kOffsetJoinParameterSchemaKey)
+        return named(kOffsetJoins, {"Miter", "Round", "Bevel"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kPathCombineParameterSchemaKey)
+        return named(kPathCombines, {"Union", "Subtract", "Intersect", "Exclude"},
+                     [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kRoundingModeParameterSchemaKey)
         return named(kRoundingModes, {"Round", "Floor", "Ceiling", "Truncate"},
                      [](const auto value) { return selectorStoredValue(value); });

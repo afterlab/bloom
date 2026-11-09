@@ -48,6 +48,7 @@ add_executable(bloom_runtime_curve_compilation_test curve_compilation_tests.cpp)
 add_executable(bloom_runtime_qualified_display_preparation_test qualified_display_preparation_tests.cpp)
 add_executable(bloom_runtime_value_graph_test value_graph_tests.cpp)
 add_executable(bloom_runtime_value_conversion_test value_conversion_tests.cpp)
+add_executable(bloom_runtime_path_processing_test path_processing_tests.cpp)
 add_executable(bloom_runtime_string_node_test string_node_tests.cpp)
 add_executable(bloom_runtime_value_math_test value_math_tests.cpp)
 add_executable(bloom_runtime_data_block_reader_test data_block_reader_tests.cpp)
@@ -76,6 +77,7 @@ target_link_libraries(
 )
 target_link_libraries(bloom_runtime_value_graph_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_value_conversion_test PRIVATE bloom_runtime_evaluator)
+target_link_libraries(bloom_runtime_path_processing_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_string_node_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_value_math_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_data_block_reader_test PRIVATE bloom_runtime_evaluator)
@@ -98,12 +100,14 @@ bloom_enable_warnings(bloom_runtime_curve_compilation_test)
 bloom_enable_warnings(bloom_runtime_qualified_display_preparation_test)
 bloom_enable_warnings(bloom_runtime_value_graph_test)
 bloom_enable_warnings(bloom_runtime_value_conversion_test)
+bloom_enable_warnings(bloom_runtime_path_processing_test)
 bloom_enable_warnings(bloom_runtime_string_node_test)
 bloom_enable_warnings(bloom_runtime_value_math_test)
 bloom_enable_warnings(bloom_runtime_data_block_reader_test)
 bloom_enable_warnings(bloom_runtime_input_color_context_test)
 bloom_enable_strict_floating_point(bloom_runtime_value_graph_test)
 bloom_enable_strict_floating_point(bloom_runtime_value_conversion_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_processing_test)
 bloom_enable_strict_floating_point(bloom_runtime_value_math_test)
 bloom_enable_strict_floating_point(bloom_runtime_cpu_composition_evaluator_test)
 bloom_enable_strict_floating_point(bloom_runtime_animation_sampling_test)
@@ -189,6 +193,13 @@ bloom_add_test(
     NAME bloom.runtime.data_block_reader
     COMMAND bloom_runtime_data_block_reader_test
     LABELS runtime unit data
+    TIMEOUT 30
+)
+
+bloom_add_test(
+    NAME bloom.runtime.path_processing
+    COMMAND bloom_runtime_path_processing_test
+    LABELS runtime unit paths
     TIMEOUT 30
 )
 

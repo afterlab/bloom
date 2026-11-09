@@ -120,6 +120,13 @@ enum class ValueUtilityKernel : std::uint8_t {
     // #596: the axes of a plot, and the number, position and label of one tick on them.
     Axes,
     AxisTick,
+    // #344 and #530: Path in, Path out.
+    TransformPath,
+    TrimPath,
+    OffsetPath,
+    BooleanPaths,
+    MergePaths,
+    RoundCorners,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -203,6 +210,37 @@ inline constexpr std::string_view kWiggleNodeType = "bloom.wiggle";
 inline constexpr std::string_view kLoopValueNodeType = "bloom.loop-value";
 inline constexpr std::string_view kAxesNodeType = "bloom.axes";
 inline constexpr std::string_view kAxisTickNodeType = "bloom.axis-tick";
+inline constexpr std::string_view kTransformPathNodeType = "bloom.transform-path";
+inline constexpr std::string_view kTrimPathNodeType = "bloom.trim-path";
+inline constexpr std::string_view kOffsetPathNodeType = "bloom.offset-path";
+inline constexpr std::string_view kBooleanPathsNodeType = "bloom.boolean-paths";
+inline constexpr std::string_view kMergePathsNodeType = "bloom.merge-paths";
+inline constexpr std::string_view kRoundCornersNodeType = "bloom.round-corners";
+
+// #344 and #530 path processing (docs/architecture/path-processing.md). A Path operand is a socket
+// whose unconnected value is the empty path; it holds a constant or a driver, never keys (keys
+// belong to the Path node).
+inline constexpr std::string_view kPathOperandParameterSchemaKey = "bloom.operand.path";
+// The stored integers of the three path selectors are durable.
+inline constexpr std::string_view kTrimModeParameterSchemaKey = "bloom.path.trim-mode";
+inline constexpr std::string_view kOffsetJoinParameterSchemaKey = "bloom.path.offset-join";
+inline constexpr std::string_view kPathCombineParameterSchemaKey = "bloom.path.combine";
+
+// Trim Path trims every contour against the length of all of them together, or each against its own.
+enum class TrimMode : std::uint8_t { Simultaneously = 0, Individually = 1 };
+inline constexpr std::array<TrimMode, 2> kTrimModes{TrimMode::Simultaneously,
+                                                    TrimMode::Individually};
+// How Offset Path turns a corner.
+enum class OffsetJoin : std::uint8_t { Miter = 0, Round = 1, Bevel = 2 };
+inline constexpr std::array<OffsetJoin, 3> kOffsetJoins{OffsetJoin::Miter, OffsetJoin::Round,
+                                                        OffsetJoin::Bevel};
+// Boolean Paths and Merge Paths: what is kept of the shapes combined.
+enum class PathCombine : std::uint8_t { Union = 0, Subtract = 1, Intersect = 2, Exclude = 3 };
+inline constexpr std::array<PathCombine, 4> kPathCombines{
+    PathCombine::Union, PathCombine::Subtract, PathCombine::Intersect, PathCombine::Exclude};
+// The hard bounds of the processed value: a coordinate beyond this magnitude, or an offset or tolerance
+// that would make a result larger than a path value may be, is refused with a diagnostic.
+inline constexpr double kMaximumPathCoordinate = 1.0e9;
 
 // #596 Axes and Axis Tick. Tick `i` of an axis is at `min + i * step`, for every `i` whose value does
 // not pass `max`; Axes and Axis Tick use the same rule, so labels set against the same range land on
