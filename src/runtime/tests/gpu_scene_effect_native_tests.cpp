@@ -19,6 +19,7 @@
 #include "auto_exposure_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
+#include "pixel_math_test_support.hpp"
 #include "sharpen_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
@@ -1384,6 +1385,177 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
                     executor.executor->counters().ocioEffectDispatches ==
                         coldCounters.ocioEffectDispatches + 1,
                 "grade native: a changed value re-dispatches with CPU parity: " + detail);
+        }
+    }
+}
+
+// #481 Image Math (a number, then a second image of the same, a smaller and a larger window),
+// Image Map Range and Image Clamp, straight and stored, over signed/HDR/partial-alpha solids
+// against the CPU oracle (2e-6, exact alpha), one resident dispatch, warm zero dispatch and a
+// changed value that re-dispatches with parity. Power acts on colour only: alpha stays bit-exact.
+[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+pixelMathSecondPlan(const bloom::runtime::PixelMathKernel& kernel, const std::uint64_t idBase,
+                    const Color4d base, const Color4d second, const double secondWidth,
+                    const double secondHeight) {
+    constexpr std::uint64_t layerRaw = 1;
+    std::vector<CompiledOperation> operations;
+    operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 1),
+                                          {ParameterId::fromRaw(idBase + 2), base},
+                                          {ParameterId::fromRaw(idBase + 3), 12.0},
+                                          {ParameterId::fromRaw(idBase + 4), 10.0}});
+    operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 16),
+                                          {ParameterId::fromRaw(idBase + 17), second},
+                                          {ParameterId::fromRaw(idBase + 18), secondWidth},
+                                          {ParameterId::fromRaw(idBase + 19), secondHeight}});
+    operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(idBase + 5),
+                                                OperationIndex::fromRaw(0),
+                                                bloom::runtime::ImageEffectKernel{kernel}, false,
+                                                false, OperationIndex::fromRaw(1)});
+    operations.emplace_back(CompiledLayerOutput{
+        NodeId::fromRaw(idBase + 6), LayerId::fromRaw(layerRaw), OperationIndex::fromRaw(2),
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 7), bloom::document::Vec2d{6.0, 5.0}},
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 8), bloom::document::Vec2d{0.0, 0.0}},
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 9), bloom::document::Vec2d{1.0, 1.0}},
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 10), 0.0},
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 11), 1.0},
+        ParameterId::fromRaw(idBase + 12), bloom::core::kDefaultBlendMode});
+    operations.emplace_back(CompiledMerge{
+        NodeId::fromRaw(idBase + 13),
+        std::vector<CompiledMergeInput>{CompiledMergeInput{LayerSlotId::fromRaw(idBase + 14),
+                                                           LayerId::fromRaw(layerRaw),
+                                                           OperationIndex::fromRaw(3)}}});
+    operations.emplace_back(
+        CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), OperationIndex::fromRaw(4)});
+    CompiledCompositionPlanDefinition definition{bloom::document::Revision::fromRaw(kRevision),
+                                                 kProject,
+                                                 CompositionId::fromRaw(idBase + 100),
+                                                 format(12, 10),
+                                                 std::move(operations),
+                                                 OperationIndex::fromRaw(5)};
+    definition.duration = RationalTime::fromInteger(100);
+    return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+}
+
+void runPixelMaths(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    namespace pm = bloom::pixel_math_test;
+    namespace doc = bloom::document;
+    using Op = bloom::runtime::PixelMathOperation;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        bloom::runtime::PixelMathKernel kernel;
+        double secondWidth = 0.0;
+        double secondHeight = 0.0;
+    };
+    std::vector<Case> cases;
+    std::uint64_t kernelId = 0;
+    for (const auto op : {Op::Add, Op::Subtract, Op::Multiply, Op::Divide, Op::Power, Op::Minimum,
+                          Op::Maximum, Op::Absolute})
+        for (const bool straight : {true, false})
+            cases.push_back({pm::math(kernelId += 100, op, op == Op::Power ? 1.5 : -0.4,
+                                      op == Op::Power ? doc::kImagePixelColor
+                                                      : doc::kImagePixelColorAndAlpha,
+                                      straight)});
+    for (const auto channels : {doc::kImagePixelRed, doc::kImagePixelGreen, doc::kImagePixelBlue,
+                                doc::kImagePixelAlpha})
+        cases.push_back({pm::math(kernelId += 100, Op::Multiply, 0.5, channels, true)});
+    for (const auto op : {Op::Add, Op::Subtract, Op::Multiply, Op::Divide, Op::Minimum, Op::Maximum})
+        for (const auto& [w, h] : {std::pair{12.0, 10.0}, std::pair{8.0, 6.0},
+                                   std::pair{16.0, 14.0}}) {
+            cases.push_back({pm::math(kernelId += 100, op, 0.0, doc::kImagePixelColorAndAlpha,
+                                      op != Op::Maximum, true),
+                             w, h});
+        }
+    cases.push_back({pm::math(kernelId += 100, Op::Power, 0.0, doc::kImagePixelColor, true, true),
+                     8.0, 6.0});
+    cases.push_back({pm::mapRange(kernelId += 100, 0.0, 4.0, 0.0, 1.0, false, doc::kImagePixelColor,
+                                  true)});
+    cases.push_back({pm::mapRange(kernelId += 100, -1.0, 2.0, 5.0, -5.0, true,
+                                  doc::kImagePixelColorAndAlpha, false)});
+    cases.push_back({pm::mapRange(kernelId += 100, 1.0, 1.0, 0.25, 0.75, false,
+                                  doc::kImagePixelRed, true)});
+    cases.push_back({pm::clampKernel(kernelId += 100, {0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0},
+                                     true)});
+    cases.push_back({pm::clampKernel(kernelId += 100, {-0.5, 0.5, 0.25, 2.0, 1.0, 0.0, 0.1, 0.9},
+                                     false)});
+    std::uint64_t id = 11500;
+    const std::array<Color4d, 3> colors{Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
+                                        Color4d{0.3, 0.6, 0.2, 0.25}};
+    for (const auto color : colors) {
+        for (const auto& item : cases) {
+            cache.clear();
+            const auto plan =
+                item.kernel.second
+                    ? pixelMathSecondPlan(item.kernel, id, color,
+                                          Color4d{0.75, -0.25, 2.0, 0.6}, item.secondWidth,
+                                          item.secondHeight)
+                    : effectPlan(bloom::runtime::ImageEffectKernel{item.kernel}, id, std::nullopt,
+                                 color);
+            id += 100;
+            const auto request = requestFor(*plan);
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            const auto prepared = builder.build(plan, request);
+            expectations.expect(oracle.frame() && prepared,
+                                "pixel math native: CPU oracle and production scene prepare");
+            if (!oracle.frame() || !prepared)
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "pixel math native: executor creates");
+            if (!executor)
+                continue;
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            const auto coldCounters = executor.executor->counters();
+            std::string detail;
+            // A power's backend logarithm may differ in its last bits, which alpha never takes part
+            // in; every other operation is bit-exact in alpha.
+            expectations.expect(
+                cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                "pixel math native: HDR/partial-alpha CPU parity (2e-6, exact alpha): " + detail);
+            const auto& descriptor = *oracle.frame()->processImage().descriptor();
+            expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "pixel math native: data/display-window and PAR parity");
+            expectations.expect(coldCounters.ocioEffectDispatches == 1 &&
+                                    coldCounters.readbacks == 0,
+                                "pixel math native: one resident dispatch and no frame readback");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(
+                warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches,
+                "pixel math native: warm RAM reuse has identical pixels and zero dispatches");
+            // A changed value changes the program's data: its first operand, or for a second image
+            // the straight and stored choice.
+            auto changedDefinition = plan->copyDefinition();
+            auto& changedKernel = std::get<bloom::runtime::PixelMathKernel>(
+                std::get<CompiledImageEffect>(changedDefinition.operations[item.kernel.second ? 2 : 1])
+                    .kernel);
+            if (item.kernel.second)
+                changedKernel.straight = !changedKernel.straight;
+            else if (changedKernel.operation == Op::Absolute)
+                changedKernel.straight = !changedKernel.straight;
+            else
+                changedKernel.values[0].source = 0.7;
+            const auto changedPlan =
+                std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+            const auto changed = builder.build(changedPlan, request);
+            const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+            expectations.expect(changed && changedOracle.frame(),
+                                "pixel math native: changed value prepares");
+            if (!changed || !changedOracle.frame())
+                continue;
+            const auto rerun = runScene(*executor.executor, changed.scene);
+            expectations.expect(
+                rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches + 1,
+                "pixel math native: a changed value re-dispatches with CPU parity: " + detail);
         }
     }
 }
@@ -3095,6 +3267,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runLumaKeys(expectations, device, cache);
     runColorGrades(expectations, device, cache);
     runChannelSelects(expectations, device, cache);
+    runPixelMaths(expectations, device, cache);
     runRecipes(expectations, device, cache);
     runFields(expectations, device, cache);
     runDepthEffects(expectations, device, cache);

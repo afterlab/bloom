@@ -168,6 +168,7 @@ target_sources(
         film_grain_image_effect.cpp
         codec_degrade_image_effect.cpp
         auto_exposure_image_effect.cpp
+        pixel_math_image_effect.cpp
         motion_blur_image_effect.cpp
         motion_blur_planner.cpp
         sharpen_image_effect.cpp

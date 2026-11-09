@@ -54,6 +54,9 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.channel-shuffle", "Shuffle|Shuffle2|Shift Channels|Set Channels"},
     {"bloom.combine-channels", "ChannelMerge"},
     {"bloom.image-to-channel-set", "AddChannels"},
+    {"bloom.image-math", "Arithmetic|Expression|Add|Subtract|Multiply|Divide|Power|Min|Max|Abs"},
+    {"bloom.image-map-range", "Remap|Normalize|Normalise|Range|Z Normalize|Mist Normalize"},
+    {"bloom.image-clamp", "Limit|Min Max|HDR Clamp|Clip"},
     // Keying & Mattes
     {"bloom.luma-key", "Keyer|Extract|Linear Color Key|Keylight|Primatte"},
     {"bloom.mask", "Roto|RotoPaint|Rotoscope|Bezier"},

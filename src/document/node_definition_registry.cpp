@@ -14,6 +14,7 @@
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
+#include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -601,6 +602,9 @@ template <typename Definition>
         // #566 Auto Exposure: the exact generated shape.
         if (definition.key.typeId == kAutoExposureNodeType)
             return definition == autoExposureDefinition();
+        // #481 Image Math, Image Map Range and Image Clamp: the exact generated shapes.
+        if (isImagePixelNodeType(definition.key.typeId))
+            return definition == imagePixelDefinition(definition.key.typeId);
         // #484 the motion-blur nodes: the exact generated shapes.
         if (isMotionBlurNodeType(definition.key.typeId))
             return definition == motionBlurDefinition(definition.key.typeId);
@@ -1707,6 +1711,9 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         filmGrainDefinition(),
         codecDegradeDefinition(),
         autoExposureDefinition(),
+        imagePixelDefinition(kImageMathNodeType),
+        imagePixelDefinition(kImageMapRangeNodeType),
+        imagePixelDefinition(kImageClampNodeType),
         audioEffectDefinition(kAudioEqualizerNodeType),
         audioEffectDefinition(kAudioCompressorNodeType),
         audioEffectDefinition(kAudioAutoLevelNodeType),

@@ -535,6 +535,15 @@ class DepthScenario(unittest.TestCase):
         self.assertIn("stops", effects[0][2]["drives"], "the plate's brightness changes every frame")
         self.assertEqual(effects[1][1]["lookBack"], 48)
 
+    def test_image_math_scenario_chains_the_three_nodes(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["image-math-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effects = scenario["layers"][0]["effects"]
+        self.assertEqual([effect[0] for effect in effects],
+                         ["bloom.image-math", "bloom.image-map-range", "bloom.image-clamp"])
+        self.assertIn("inputMax", effects[1][2]["keys"], "every frame is new")
+
     def test_audio_effects_scenario_chains_every_effect_and_exports_wav(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["audio-effects-wav"]

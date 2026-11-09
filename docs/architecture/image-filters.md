@@ -1668,6 +1668,63 @@ passes again, each with parity.
 `effect.SharpenKernel` and `node.bloom.sharpen` prepare through the production builder at full frame and
 ROI. [Benchmarks](../development/benchmarks.md#sharpen-486) holds its cost.
 
+## Image Math, Map Range and Clamp
+
+`bloom.image-math`, `bloom.image-map-range` and `bloom.image-clamp`, schema 1, under Channels (issue
+#481), do arithmetic on pixels so render passes (mist, Z-depth, normals, motion vectors, IDs) can be
+normalized and limited as a single value can. Each has one Image in, `input`, one Image out, `image`,
+and the optional effect mask; Image Math also has an optional Image `second`. They lower to one
+`PixelMathKernel` image effect (a grade kind) with no new operation boundary.
+
+| Node | Role | Default | Domain |
+|---|---|---|---|
+| Image Math | `operation` | Multiply | Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Absolute |
+| | `value` | 1 | -1,000,000 to 1,000,000 (the operand when `second` is not connected) |
+| Image Map Range | `inputMin`, `inputMax` | 0, 1 | -1,000,000 to 1,000,000 |
+| | `outputMin`, `outputMax` | 0, 1 | -1,000,000 to 1,000,000, in either order |
+| | `clamp` | off | limits the result to the output range |
+| Image Clamp | `minRed` ... `maxBlue` | 0, 1 | -1,000,000 to 1,000,000 |
+| | `minAlpha`, `maxAlpha` | 0, 1 | 0 to 1 |
+| all | `channels` | Color (RGB) | Color (RGB), Red, Green, Blue, Alpha, Color and alpha (Clamp always limits all four) |
+| all | `space` | Straight color | Straight color, Stored values |
+
+Every scalar has a socket and can be keyed or driven; the choices and `clamp` are constants.
+
+**Premultiplication.** With Straight color the stored red, green and blue are divided by alpha (0 where
+alpha is 0), changed, and multiplied by the result's alpha, so a soft edge keeps its color and a changed
+alpha re-weights the color. With Stored values the premultiplied values are changed as they are, which is
+what a data pass wants. A channel that is not selected keeps its stored value exactly. Alpha is always
+limited to [0, 1]. Alpha passes through unless Alpha or Color and alpha is selected.
+
+**The pixel**, in binary32 and in this order. Non-finite input is read as 0. Add, Subtract and Multiply
+are the plain operations; Divide by 0 is 0; Minimum and Maximum are `min` and `max`; Absolute ignores the
+operand. Power is `0^0 = 1`, 0 to any other power 0, a negative base needs an integral exponent (an odd
+one keeps the sign) and is otherwise 0. A result that is not finite is 0. Map Range is
+`fma(x - inputMin, scale, outputMin)` with `scale = (outputMax - outputMin) / (inputMax - inputMin)`
+limited to 1e30 in size, an empty input range mapping everything to `outputMin`, and `clamp` limiting to
+the ordered output range. Clamp is `min(max(x, lo), hi)` per channel, a minimum above the maximum being
+the maximum. The second image's pixel is read at the same position, as straight color in Straight mode,
+and is transparent black outside its data window or when it has no pixels.
+
+**Identity and cache.** The pass is never an identity alias (it also replaces non-finite values), so
+there is no storage alias to a neighbor. The packed table (36 floats, 40 with a second image) is the
+cache identity; changing any value, the operation, channels or space changes it.
+
+**On the GPU.** One fixed program (`bloom.render.pixel-math.v1`) of the generic color grade dispatch
+reads the same table. With a second image, the input and the second image's window are placed in an
+atlas twice the output window's width (the second moved by one width and blended Normal into the empty
+half), one dispatch computes inside the output window, and the output window is cut back out. Power's
+logarithm and exponential are each backend's own, so the two agree to within their last bits (2e-6
+relative on RGB, alpha exact).
+
+**Evidence.** `src/runtime/tests/pixel_math_tests.cpp` reads real values for every operation, the
+failure rules, channels, both premultiplication modes, Map Range and Clamp, a second image over
+differing windows, the domains, the table's identity, the pixel budget and cancellation.
+`snapshot_compiler_effect_tests.ipp` holds the lowering; the native harness (`runPixelMaths`) holds every
+operation, mode, channel choice and second-image window to the CPU oracle with cold, warm and changed-
+value runs; `effect.PixelMathKernel` and the three `node.*` fixtures prepare through the production
+builder in the coverage contract. [Benchmarks](../development/benchmarks.md) lists `image-math-2k`.
+
 ## Lens Distortion
 
 `bloom.lens-distortion`, schema 1, under Distort (issue #486), has one Image in, `input`, and two Image

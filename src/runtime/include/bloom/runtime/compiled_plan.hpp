@@ -4,6 +4,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -948,6 +949,37 @@ struct AutoExposureKernel final {
     friend bool operator==(const AutoExposureKernel&, const AutoExposureKernel&) = default;
 };
 
+// #481 Image Math, Image Map Range and Image Clamp (docs/architecture/image-filters.md, "Image Math,
+// Map Range and Clamp"): one per-pixel function of the input and its operand. `channels` is the
+// node's stored choice of the channels it changes (document::kImagePixelColor ...), `straight` how
+// premultiplication is treated, `clamp` a Map Range's limit to its output range and `second` that
+// the operand is the pixel of the effect's second image (an Image Math with its `second` input
+// connected). `values` are the node's scalars in forEachColorGradeOperand order: an arithmetic
+// operation's one operand (none for Absolute or with a second image), a Map Range's input minimum,
+// input maximum, output minimum and output maximum, a Clamp's minimum and maximum of red, green,
+// blue and alpha.
+enum class PixelMathOperation : std::uint8_t {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Power,
+    Minimum,
+    Maximum,
+    Absolute,
+    MapRange,
+    Clamp
+};
+struct PixelMathKernel final {
+    PixelMathOperation operation = PixelMathOperation::Multiply;
+    std::int64_t channels = document::kImagePixelColor;
+    bool straight = true;
+    bool clamp = false;
+    bool second = false;
+    std::array<CompiledScalarParameter, 8> values{};
+    friend bool operator==(const PixelMathKernel&, const PixelMathKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -958,7 +990,7 @@ using ImageEffectKernel =
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
-                 CodecDegradeKernel, AutoExposureKernel>;
+                 CodecDegradeKernel, AutoExposureKernel, PixelMathKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1145,6 +1177,19 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
                 visit(value);
         return true;
     }
+    // #481: the operand an operation reads, or a Map Range's four, or a Clamp's eight.
+    if (const auto* pixelMath = std::get_if<PixelMathKernel>(&kernel)) {
+        std::size_t count = 0;
+        if (pixelMath->operation == PixelMathOperation::Clamp)
+            count = 8;
+        else if (pixelMath->operation == PixelMathOperation::MapRange)
+            count = 4;
+        else if (!pixelMath->second && pixelMath->operation != PixelMathOperation::Absolute)
+            count = 1;
+        for (std::size_t index = 0; index < count; ++index)
+            visit(pixelMath->values[index]);
+        return true;
+    }
     return isMotionKernel(kernel);
 }
 
@@ -1164,7 +1209,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<FilmGrainKernel>(kernel) ||
            std::holds_alternative<SharpenKernel>(kernel) ||
            std::holds_alternative<CodecDegradeKernel>(kernel) ||
-           std::holds_alternative<AutoExposureKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<AutoExposureKernel>(kernel) ||
+           std::holds_alternative<PixelMathKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

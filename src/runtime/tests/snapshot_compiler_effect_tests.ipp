@@ -1461,6 +1461,131 @@ void testColorizeLowering(Expectations& expectations) {
     }
 }
 
+// #481 Image Math, Image Map Range and Image Clamp lower to one pixel math kernel: the constant
+// operation, channels and premultiplication, and only the values the operation reads (an Image Math
+// whose `second` input is connected reads that image and keeps no value). A muted node passes its
+// Image through.
+void testPixelMathLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    struct Variant final {
+        std::string_view type;
+        std::int64_t operation = 0;
+        bool second = false;
+        bool muted = false;
+    };
+    const std::array<Variant, 8> variants{{{kImageMathNodeType, kImageMathPower, false, false},
+                                           {kImageMathNodeType, kImageMathAbsolute, false, false},
+                                           {kImageMathNodeType, kImageMathDivide, true, false},
+                                           {kImageMathNodeType, kImageMathAdd, false, true},
+                                           {kImageMapRangeNodeType, 0, false, false},
+                                           {kImageMapRangeNodeType, 0, false, true},
+                                           {kImageClampNodeType, 0, false, false},
+                                           {kImageClampNodeType, 0, false, true}}};
+    for (const auto& variant : variants) {
+        const auto effectId = NodeId::fromRaw(997);
+        const auto* definition = builtInNodeDefinitions().find(variant.type, 1);
+        require(definition != nullptr, "the pixel math definition exists");
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::vector<ParameterBinding> bindings;
+        std::map<std::string, ParameterId> ids;
+        std::uint64_t next = 2900;
+        for (const auto& parameter : definition->parameters) {
+            auto value = parameter.defaultValue;
+            if (parameter.role == "operation")
+                value = variant.operation;
+            if (parameter.role == "channels")
+                value = kImagePixelColorAndAlpha;
+            if (parameter.role == "space")
+                value = kImagePixelStored;
+            if (parameter.role == "value")
+                value = 2.5;
+            if (parameter.role == "clamp")
+                value = true;
+            if (parameter.role == "outputMax")
+                value = 9.0;
+            if (parameter.role == "maxGreen")
+                value = 3.0;
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{value}}),
+                    "pixel math parameter is valid");
+            ids[parameter.role] = id;
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({effectId, std::string(variant.type), std::move(bindings), 1}),
+                "pixel math node is accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{effectId, "input"}}),
+                "source feeds the pixel math node");
+        if (variant.second)
+            require(graph.addEdge({EdgeId::fromRaw(997), {kFirstSolidNode, "image"},
+                                   NodeInputRef{effectId, "second"}}),
+                    "the source also feeds the second input");
+        require(graph.addEdge({EdgeId::fromRaw(998), {effectId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "pixel math feeds Layer");
+        if (variant.muted)
+            composition->nodeLayout()[effectId].muted = true;
+        expectations.expect(project.validate().ok(), "pixel math graph is valid document truth");
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "pixel math graph compiles");
+        if (!result.plan)
+            continue;
+        const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+            const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+            return item && item->sourceNodeId == effectId;
+        });
+        if (variant.muted) {
+            expectations.expect(effect == result.plan->operations().end(),
+                                "a muted pixel math node passes its Image through");
+            continue;
+        }
+        require(effect != result.plan->operations().end(), "pixel math lowers to an image effect");
+        const auto& lowered = std::get<runtime::CompiledImageEffect>(*effect);
+        const auto* kernel = std::get_if<runtime::PixelMathKernel>(&lowered.kernel);
+        require(kernel != nullptr, "pixel math lowers to a pixel math kernel");
+        const auto owns = [&](const std::size_t slot, const char* role) {
+            return kernel->values[slot].id == ids.at(role);
+        };
+        const bool math = variant.type == kImageMathNodeType;
+        const bool range = variant.type == kImageMapRangeNodeType;
+        expectations.expect(kernel->straight == false &&
+                                (math ? kernel->operation == static_cast<runtime::PixelMathOperation>(
+                                                                 variant.operation)
+                                      : kernel->operation ==
+                                            (range ? runtime::PixelMathOperation::MapRange
+                                                   : runtime::PixelMathOperation::Clamp)) &&
+                                kernel->second == variant.second &&
+                                lowered.secondaryInput.has_value() == variant.second,
+                            "pixel math lowers its operation, space and second input");
+        if (math) {
+            const bool reads = !variant.second && variant.operation != kImageMathAbsolute;
+            expectations.expect(kernel->channels == kImagePixelColorAndAlpha &&
+                                    (reads ? owns(0, "value") &&
+                                                 std::get<double>(kernel->values[0].source) == 2.5
+                                           : !kernel->values[0].id.isValid()),
+                                "an Image Math lowers only the operand its operation reads");
+        } else if (range) {
+            expectations.expect(kernel->clamp && owns(0, "inputMin") && owns(1, "inputMax") &&
+                                    owns(2, "outputMin") && owns(3, "outputMax") &&
+                                    std::get<double>(kernel->values[3].source) == 9.0,
+                                "an Image Map Range lowers its range and clamp");
+        } else {
+            expectations.expect(owns(0, "minRed") && owns(1, "maxRed") && owns(3, "maxGreen") &&
+                                    std::get<double>(kernel->values[3].source) == 3.0 &&
+                                    owns(6, "minAlpha") && owns(7, "maxAlpha"),
+                                "an Image Clamp lowers every limit");
+        }
+    }
+}
+
 // #505 Vignette lowers to one vignette kernel with its constant shape and mode. The mode keeps the
 // identity of only the strength it reads (Multiply the amount, Exposure the stops); the other stays
 // the kernel's constant default without an identity. Every shared value and the centre keep theirs.

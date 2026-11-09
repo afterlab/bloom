@@ -14,6 +14,7 @@
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
+#include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -445,6 +446,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #566 Auto Exposure: every parameter within its document domain.
     if (autoExposureParameterSpec(schemaKey) != nullptr)
         return isAutoExposureParameterValueValid(schemaKey, constant.value);
+    // #481 Image Math, Image Map Range and Image Clamp: every parameter within its domain.
+    if (imagePixelParameterSpec(schemaKey) != nullptr)
+        return isImagePixelParameterValueValid(schemaKey, constant.value);
     // #484 the motion-blur nodes and Transform 2D's motion blur.
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionParameterValueValid(schemaKey, constant.value);
@@ -638,6 +642,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
+         bloom::document::isImagePixelConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
@@ -722,7 +727,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isChromaticAberrationScalarSchemaKey(schemaKey) ||
            isLightRaysScalarSchemaKey(schemaKey) ||
            isRollingShutterScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
-           isMotionScalarAnimatableSchemaKey(schemaKey) ||
+           isMotionScalarAnimatableSchemaKey(schemaKey) || isImagePixelScalarSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -807,6 +812,9 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
     // #566 Auto Exposure (auto_exposure_nodes.hpp).
     if (autoExposureParameterSpec(schemaKey) != nullptr)
         return isAutoExposureScalarWithinDomain(schemaKey, value);
+    // #481 Image Math, Image Map Range and Image Clamp (image_math_parameters.hpp).
+    if (imagePixelParameterSpec(schemaKey) != nullptr)
+        return isImagePixelScalarWithinDomain(schemaKey, value);
     // #484 the motion-blur nodes (motion_blur_parameters.hpp).
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionScalarWithinDomain(schemaKey, value);

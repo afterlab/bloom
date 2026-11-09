@@ -1,5 +1,6 @@
 #include <bloom/document/audio_effect_nodes.hpp>
 #include "auto_exposure_image_effect.hpp"
+#include "pixel_math_image_effect.hpp"
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -504,11 +505,16 @@ enum class ScalarDomain : std::uint8_t {
                        hasValidScalarCurveReference(mapping.scale, plan, index, failure);
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
+                // #481: an Image Math reads a second image exactly when its kernel says so.
+                const auto* pixelMath = std::get_if<PixelMathKernel>(&effect.kernel);
                 const bool validInputArity =
-                    effect.secondaryInput.has_value() ==
-                    (std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
-                     std::holds_alternative<ChannelCombineKernel>(effect.kernel) ||
-                     std::holds_alternative<TemporalAccumulateKernel>(effect.kernel));
+                    pixelMath != nullptr
+                        ? effect.secondaryInput.has_value() == pixelMath->second &&
+                              (!effect.secondaryInput || effect.secondaryInput->value() < index)
+                        : effect.secondaryInput.has_value() ==
+                              (std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
+                               std::holds_alternative<ChannelCombineKernel>(effect.kernel) ||
+                               std::holds_alternative<TemporalAccumulateKernel>(effect.kernel));
                 bool validKernel = true;
                 if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
                     validKernel =
@@ -3651,7 +3657,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     for (const auto image : effect.fieldImages)
                                         autoExposureSlots.push_back(slots[image.value()].get());
                                 auto result =
-                                    gradeKind == detail::ColorGradeKind::AutoExposure
+                                    gradeKind == detail::ColorGradeKind::PixelMath
+                                        ? detail::applyPixelMath(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              effect.secondaryInput
+                                                  ? slots[effect.secondaryInput->value()].get()
+                                                  : nullptr,
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress)
+                                    : gradeKind == detail::ColorGradeKind::AutoExposure
                                         ? detail::applyAutoExposure(
                                               *preparedEffect->colorGrade, slots[index].get(),
                                               std::span<const render::Rgba32fImage* const>(

@@ -3,6 +3,7 @@
 #include "discrete_image_effect.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
+#include "pixel_math_image_effect.hpp"
 #include "resize_fit_geometry.hpp"
 
 #include <algorithm>
@@ -509,6 +510,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.maskDistance)
         return applyMaskDistance(*effect.maskDistance, input, horizontalScale, verticalScale,
                                  pixelBudget, cancellation, operation, progress);
+    if (effect.colorGrade && effect.colorGrade->kind == ColorGradeKind::PixelMath)
+        return applyPixelMath(*effect.colorGrade, input, secondary, pixelBudget, cancellation,
+                              operation, progress);
     if (effect.colorGrade)
         return applyColorGrade(*effect.colorGrade, input, pixelBudget, cancellation, operation,
                                progress, horizontalScale, verticalScale);

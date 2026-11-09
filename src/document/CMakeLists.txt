@@ -16,6 +16,7 @@ target_sources(
         film_grain_nodes.cpp
         codec_degrade_nodes.cpp
         auto_exposure_nodes.cpp
+        image_math_nodes.cpp
         audio_effect_nodes.cpp
         lens_distortion_nodes.cpp
         rolling_shutter_nodes.cpp

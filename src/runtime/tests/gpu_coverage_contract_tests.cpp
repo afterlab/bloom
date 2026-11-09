@@ -38,6 +38,7 @@
 #include "lens_flare_test_support.hpp"
 #include "codec_degrade_test_support.hpp"
 #include "auto_exposure_test_support.hpp"
+#include "pixel_math_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -1880,6 +1881,117 @@ displayProofRunner(const bool customView) {
                              "exposure falloff, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #481 Image Math, Image Map Range and Image Clamp over the HDR, signed, partial-alpha linear
+    // gradient, full frame and through an ROI: the one resident program over its own table, and
+    // Image Math with a second image (a signed HDR solid) through the atlas of both.
+    const auto runPixelMath = [](const std::vector<bloom::runtime::PixelMathKernel>& kernels,
+                                 std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& kernel : kernels) {
+            auto definition = (kernel.second ? imageCombinePlan(bloom::runtime::ImageCombineMode::Mix,
+                                                                idBase)
+                                             : bloom::gpu_coverage_plans::effectPlan(
+                                                   ImageEffectKernel{kernel}, idBase))
+                                  ->copyDefinition();
+            definition.operations[0] = bloom::gpu_coverage_plans::gradient(false, idBase + 50);
+            if (kernel.second)
+                std::get<CompiledImageEffect>(definition.operations[2]).kernel = kernel;
+            const auto plan = std::make_shared<const bloom::runtime::CompiledCompositionPlan>(
+                std::move(definition));
+            idBase += 100;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 6, 4);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    {
+        namespace pm = bloom::pixel_math_test;
+        namespace doc = bloom::document;
+        using Op = bloom::runtime::PixelMathOperation;
+        const auto mathKernels = [] {
+            std::vector<bloom::runtime::PixelMathKernel> kernels;
+            std::uint64_t id = 481000;
+            for (const auto op : {Op::Add, Op::Subtract, Op::Multiply, Op::Divide, Op::Power,
+                                  Op::Minimum, Op::Maximum, Op::Absolute}) {
+                kernels.push_back(
+                    pm::math(id, op, op == Op::Power ? 2.0 : 0.5, doc::kImagePixelColor, true));
+                id += 100;
+            }
+            kernels.push_back(pm::math(id, Op::Multiply, 0.5, doc::kImagePixelColorAndAlpha, false));
+            kernels.push_back(pm::math(id + 100, Op::Add, 0.25, doc::kImagePixelAlpha, true));
+            kernels.push_back(pm::math(id + 200, Op::Subtract, 0.0, doc::kImagePixelGreen, true,
+                                       true));
+            kernels.push_back(pm::math(id + 300, Op::Divide, 0.0, doc::kImagePixelColor, false,
+                                       true));
+            return kernels;
+        };
+        const auto rangeKernels = [] {
+            return std::vector<bloom::runtime::PixelMathKernel>{
+                pm::mapRange(481800, 0.0, 4.0, 0.0, 1.0, false, doc::kImagePixelColor, true),
+                pm::mapRange(481900, -1.0, 2.0, 5.0, -5.0, true, doc::kImagePixelColorAndAlpha,
+                             false),
+                pm::mapRange(482000, 1.0, 1.0, 0.25, 0.75, false, doc::kImagePixelRed, true)};
+        };
+        const auto clampKernels = [] {
+            return std::vector<bloom::runtime::PixelMathKernel>{
+                pm::clampKernel(482100, {0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0}, true),
+                pm::clampKernel(482200, {-0.5, 0.5, 0.25, 2.0, 1.0, 0.0, 0.1, 0.9}, false)};
+        };
+        add(
+            "effect.PixelMathKernel", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime pixel math tests",
+            [runPixelMath, mathKernels, rangeKernels, clampKernels] {
+                auto kernels = mathKernels();
+                for (auto& kernel : rangeKernels())
+                    kernels.push_back(std::move(kernel));
+                for (auto& kernel : clampKernels())
+                    kernels.push_back(std::move(kernel));
+                return runPixelMath(kernels, 481000,
+                                    "production Image Math, Map Range and Clamp: every operation, "
+                                    "straight and stored values, each channel choice and a second "
+                                    "image over HDR and signed values, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.image-math", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime pixel math tests",
+            [runPixelMath, mathKernels] {
+                return runPixelMath(mathKernels(), 483000,
+                                    "production Image Math node: every operation with a number "
+                                    "and with a second image, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.image-map-range", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime pixel math tests",
+            [runPixelMath, rangeKernels] {
+                return runPixelMath(rangeKernels(), 484000,
+                                    "production Image Map Range node: a normalising map, a "
+                                    "reversed clamped map and an empty input range, full frame and "
+                                    "ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.image-clamp", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime pixel math tests",
+            [runPixelMath, clampKernels] {
+                return runPixelMath(clampKernels(), 485000,
+                                    "production Image Clamp node: the unit range and per-channel "
+                                    "limits, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
     // #483 Depth effects: Z Defocus and Depth Fog through the production chains (the depth map,
     // the tile maximum, the prefilter, the bokeh atlas and the gather; the fog factor and its Mix)
     // over the HDR, partial-alpha gradient beauty and three exact depth bands, full frame and ROI.

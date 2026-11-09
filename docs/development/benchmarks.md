@@ -434,6 +434,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `path-value-compound-2k` | 1920×1080 | 24 | A Shape Source whose `path` comes from a Path node (#589): 64 contours, keyed so every frame flattens and covers a new shape; no media is read. Written, not yet run. |
 | `audio-effects-wav` | 1280×720 | 240 | A test card with ten seconds of generated stereo sound through the five audio effects, exported as WAV as mixed and normalized to -16 LUFS (#569, #570). Written, not yet run: it has no recorded numbers and no budget |
 | `auto-exposure-2k` | 1920×1080 | 24 | A PNG16 plate under an Exposure driven by a seeded Light Flicker, then Auto Exposure (#566) over its 48-frame look-back, so every frame measures a window of changed frames. Written, not yet run: it has no recorded numbers and no budget |
+| `image-math-2k` | 1920×1080 | 24 | A PNG16 plate through Image Math, Image Map Range with a keyed input range, and Image Clamp (#481), so every frame is new and each node is one per-pixel program. Written, not yet run: it has no recorded numbers and no budget |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario

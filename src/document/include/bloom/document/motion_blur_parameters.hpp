@@ -26,6 +26,7 @@
 // shutter Curve is a constant.
 
 #include <bloom/document/depth_effect_parameters.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 
 #include <array>
 #include <cstdint>
@@ -412,11 +413,15 @@ motionParameterSpec(const std::string_view schemaKey) noexcept {
     return nullptr;
 }
 
-// The depth and motion tables together: the generic hooks every parameter-vocabulary site reads.
+// The depth, motion and image pixel tables together: the generic hooks every
+// parameter-vocabulary site reads.
 [[nodiscard]] constexpr const DepthParameterSpec*
 effectParameterSpec(const std::string_view schemaKey) noexcept {
     const auto* depth = depthParameterSpec(schemaKey);
-    return depth != nullptr ? depth : motionParameterSpec(schemaKey);
+    if (depth != nullptr)
+        return depth;
+    const auto* motion = motionParameterSpec(schemaKey);
+    return motion != nullptr ? motion : imagePixelParameterSpec(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isMotionScalarAnimatableSchemaKey(const std::string_view key) noexcept {

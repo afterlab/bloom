@@ -57,7 +57,10 @@ enum class ColorGradeKind : std::uint8_t {
     Motion,
     // #486: Sharpen (sharpen_image_effect.hpp), whose program is ImageCombineV1's Unsharp mode, not a
     // grade program of its own.
-    Sharpen
+    Sharpen,
+    // #481: Image Math, Image Map Range and Image Clamp (pixel_math_image_effect.hpp), the table of
+    // one per-pixel function, with a second image's atlas geometry appended where it is applied.
+    PixelMath
 };
 
 // The packed table, always a whole number of vec4s:

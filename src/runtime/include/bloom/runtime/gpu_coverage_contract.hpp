@@ -182,6 +182,11 @@ BLOOM_GPU_REQUIRED_EFFECT(AutoExposureKernel,
                           "the recursive attack/release filter of a look-back window's means and "
                           "its exposure and white balance gain (#566)");
 
+BLOOM_GPU_REQUIRED_EFFECT(PixelMathKernel,
+                          "Image Math, Image Map Range and Image Clamp: per-pixel arithmetic, "
+                          "range mapping and limits of straight or stored channels with a number "
+                          "or a second image as the operand (#481)");
+
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
 

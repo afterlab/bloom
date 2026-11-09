@@ -22,11 +22,11 @@ constexpr std::array<std::string_view, 14> kSources{
 constexpr std::array<std::string_view, 7> kCompositing{
     "bloom.layer-stack", "bloom.adjustment",     "bloom.layer-output",     "bloom.image-mix",
     "bloom.set-alpha",   "bloom.multiply-alpha", "bloom.alpha-association"};
-// Planned: Image Math, Image Map Range, Image Clamp.
-constexpr std::array<std::string_view, 7> kChannels{
+constexpr std::array<std::string_view, 10> kChannels{
     "bloom.channel-copy",        "bloom.channel-pass",      "bloom.channel-remove",
     "bloom.channel-shuffle",     "bloom.separate-channels", "bloom.combine-channels",
-    "bloom.image-to-channel-set"};
+    "bloom.image-to-channel-set", "bloom.image-math", "bloom.image-map-range",
+    "bloom.image-clamp"};
 // Planned: Channel Key, Chroma Key, Despill, Matte Refine, HSL Qualifier, Transition/Wipe Matte.
 constexpr std::array<std::string_view, 8> kKeyingMattes{
     "bloom.luma-key",      "bloom.cryptomatte", "bloom.mask",         "bloom.mask-combine",

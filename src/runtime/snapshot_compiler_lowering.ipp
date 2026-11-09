@@ -2059,6 +2059,70 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Vignette parameters could not be lowered.");
         return std::nullopt;
     }
+    // #481 Image Math, Image Map Range and Image Clamp: the constant operation, channels and
+    // premultiplication, and only the values the operation reads; an Image Math whose `second`
+    // input is connected reads that image instead of its value, which is then neither lowered nor
+    // part of the identity.
+    if (document::isImagePixelNodeType(node.typeId)) {
+        runtime::PixelMathKernel kernel;
+        const auto integer = [&](const std::string_view role, const std::int64_t high,
+                                 std::int64_t& target) {
+            const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+            if (value == nullptr || *value < 0 || *value > high)
+                return false;
+            target = *value;
+            return true;
+        };
+        std::int64_t space = 0;
+        bool lowered = integer("space", document::kImagePixelStored, space);
+        kernel.straight = space == document::kImagePixelStraight;
+        const auto scalar = [&](const std::string_view role, const std::size_t slot) {
+            const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
+            lowered = lowered && parameter.has_value();
+            if (parameter)
+                kernel.values[slot] = *parameter;
+        };
+        if (node.typeId == document::kImageClampNodeType) {
+            kernel.operation = runtime::PixelMathOperation::Clamp;
+            kernel.channels = document::kImagePixelColorAndAlpha;
+            std::size_t slot = 0;
+            for (const auto role : {"minRed", "maxRed", "minGreen", "maxGreen", "minBlue", "maxBlue",
+                                    "minAlpha", "maxAlpha"})
+                scalar(role, slot++);
+        } else if (node.typeId == document::kImageMapRangeNodeType) {
+            kernel.operation = runtime::PixelMathOperation::MapRange;
+            lowered = lowered && integer("channels", document::kImagePixelColorAndAlpha,
+                                         kernel.channels);
+            const auto* clamp = parameterConstant<bool>(findParameterBinding(node, "clamp"));
+            lowered = lowered && clamp != nullptr;
+            kernel.clamp = clamp != nullptr && *clamp;
+            std::size_t slot = 0;
+            for (const auto role : {"inputMin", "inputMax", "outputMin", "outputMax"})
+                scalar(role, slot++);
+        } else {
+            std::int64_t operation = 0;
+            lowered = lowered && integer("operation", document::kImageMathAbsolute, operation) &&
+                      integer("channels", document::kImagePixelColorAndAlpha, kernel.channels);
+            kernel.operation = static_cast<runtime::PixelMathOperation>(operation);
+            kernel.second = fixedInputEdge(node.id, document::kImagePixelSecondPort) != nullptr;
+            if (!kernel.second && kernel.operation != runtime::PixelMathOperation::Absolute)
+                scalar("value", 0);
+        }
+        if (!lowered) {
+            addTopologyFailure(node.id, "Image pixel math parameters could not be lowered.");
+            return std::nullopt;
+        }
+        runtime::CompiledImageEffect effect{node.id, *input, std::move(kernel)};
+        if (std::get<runtime::PixelMathKernel>(effect.kernel).second) {
+            const auto second = findInputOperation(node.id, document::kImagePixelSecondPort, indices);
+            if (!second) {
+                addTopologyFailure(node.id, "Image Math second input could not be lowered.");
+                return std::nullopt;
+            }
+            effect.secondaryInput = *second;
+        }
+        return effect;
+    }
     if (node.typeId == document::kHueSaturationNodeType) {
         const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
         const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));

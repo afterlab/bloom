@@ -7,6 +7,7 @@
 #include "film_grain_image_effect.hpp"
 #include "codec_degrade_image_effect.hpp"
 #include "auto_exposure_image_effect.hpp"
+#include "pixel_math_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gradient_source.hpp"
@@ -949,6 +950,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return autoExposureProgramText();
     case ColorGradeKind::Motion:
         return {}; // One program per pass: the caller asks with the pass (motionProgramText).
+    case ColorGradeKind::PixelMath:
+        return pixelMathProgramText();
     case ColorGradeKind::Sharpen: {
         // ImageCombineV1's Unsharp mode; buildColorGradeProgram refuses this kind.
         static const std::string none;
@@ -1135,6 +1138,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareAutoExposureGrade(*autoExposure, values);
     if (isMotionKernel(kernel))
         return prepareMotionGrade(kernel, values);
+    if (const auto* pixelMath = std::get_if<PixelMathKernel>(&kernel))
+        return preparePixelMathGrade(*pixelMath, values);
     if (const auto* sharpen = std::get_if<SharpenKernel>(&kernel))
         return prepareSharpenGrade(*sharpen, values);
     return std::nullopt;
@@ -1170,7 +1175,7 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
         grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::CodecDegrade ||
         grade.kind == ColorGradeKind::AutoExposure || grade.kind == ColorGradeKind::Motion ||
-        grade.kind == ColorGradeKind::Sharpen)
+        grade.kind == ColorGradeKind::Sharpen || grade.kind == ColorGradeKind::PixelMath)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1302,8 +1307,10 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::AutoExposure
                             ? validAutoExposureProgramData(data)
                         : kind == ColorGradeKind::Motion ? validMotionProgramData(data)
+                        : kind == ColorGradeKind::PixelMath ? validPixelMathProgramData(data)
                             : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) ||
+    if ((static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) &&
+         kind != ColorGradeKind::PixelMath) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1397,8 +1404,15 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         break;
     case ColorGradeKind::Sharpen:
         break; // Refused above.
+    case ColorGradeKind::PixelMath:
+        program.functionName = "bloom_pixel_math";
+        program.resourcePrefix = "bloom_pixel_math_";
+        program.semanticsId = "bloom.render.pixel-math.v1";
+        break;
     }
-    program.shaderText = kind == ColorGradeKind::Motion
+    program.shaderText = kind == ColorGradeKind::PixelMath
+                             ? pixelMathProgramText()
+                         : kind == ColorGradeKind::Motion
                              ? motionProgramText(static_cast<int>(data[0]))
                              : glslProgramText(kind);
     program.uniformBufferStorage = true;

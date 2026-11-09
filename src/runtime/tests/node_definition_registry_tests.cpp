@@ -157,8 +157,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, Directional Blur, Spin Blur and
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
-    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects.
-    expectations.expect(registry.definitions().size() == 203,
+    // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp.
+    expectations.expect(registry.definitions().size() == 206,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -1203,7 +1203,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 27>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 30>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
@@ -1213,13 +1213,14 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                                          "bloom.motion-blur", "bloom.echo", "bloom.frame-rate-hold", "bloom.directional-blur",
                                          "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur",
                                          "bloom.sharpen", "bloom.codec-degrade",
-                                         "bloom.auto-exposure"},
+                                         "bloom.auto-exposure", "bloom.image-math", "bloom.image-map-range",
+                                         "bloom.image-clamp"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 27,
+    expectations.expect(shaped && named && masked == 30,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);
