@@ -38,10 +38,16 @@ enum class ScalarPrimitive : std::uint8_t {
     Sine,
     Cosine,
     Power,
+    Log,
+    Exp,
+    Tangent,
+    SineDegrees,
+    CosineDegrees,
+    TangentDegrees,
     Invalid = 0xFF,
 };
 
-inline constexpr std::uint32_t kScalarPrimitiveSemanticsVersion = 3;
+inline constexpr std::uint32_t kScalarPrimitiveSemanticsVersion = 4;
 
 struct ScalarPrimitiveSignature final {
     ScalarPrimitive primitive;

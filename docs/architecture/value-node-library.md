@@ -316,15 +316,19 @@ conversions and the logic stayed in `Utilities`, because a predicate and a wire 
 | Hue Shift (Value) | `color` Color, `degrees` Scalar | `result` Color | Hue is periodic, so the shift wraps rather than clamping |
 | Luminance (Value) | `color` Color | `result` Scalar | Rec.709 weights through `bloom/core/color.hpp`, never retyped in a kernel. Alpha takes no part |
 
-### Sine, Cosine and Power
+### Trigonometry, Power, Log and Exp
 
-The existing `Math` node's `operation` selector offers Sine, Cosine and Power (stored values 24, 25
-and 26) beside the other scalar primitives, so they need no node type, command or schema of their
-own. Sine and Cosine read `angleRadians` as RADIANS (the other angle nodes here use degrees; wire a
-degrees value through Multiply by pi/180 first). Power reads `base` and `exponent`. Failures
-(negative base with a fractional exponent, zero to a negative power, overflow) take the same
-fallback path as every other Math failure. See the conformance policy in
-`evaluation-primitives.md`.
+The existing `Math` node's `operation` selector offers these beside the other scalar primitives, so
+they need no node type, command or schema of their own. Angles take the unit in the operation's
+name. The degrees forms are listed first and are what the other angle nodes here use: Sine
+(Degrees), Cosine (Degrees) and Tangent (Degrees). Sine (Radians), Cosine (Radians) and Tangent
+(Radians) stay available; stored values 24 and 25 are the radians forms, so a saved Sine or Cosine
+keeps its meaning. The degrees forms reduce the angle in degrees before converting, so 30, 60, 90
+and 180 degrees give their exact answers, and Tangent (Degrees) fails at the odd multiples of 90.
+Power reads `base` and `exponent`. Log is the natural logarithm and Exp is `e` to a power. Failures
+(negative base with a fractional exponent, zero to a negative power, Log of zero or a negative
+value, a tangent pole, overflow) take the same fallback path as every other Math failure. See the
+conformance policy in `evaluation-primitives.md`.
 
 ### One rounding rule
 

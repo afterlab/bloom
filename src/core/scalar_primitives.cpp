@@ -83,6 +83,23 @@ constexpr std::array kSignatures{
         ScalarPrimitive::Cosine, "bloom.core.scalar.cosine", {"angleRadians", "", "", "", ""}, 1},
     ScalarPrimitiveSignature{
         ScalarPrimitive::Power, "bloom.core.scalar.power", {"base", "exponent", "", "", ""}, 2},
+    ScalarPrimitiveSignature{ScalarPrimitive::Log, "bloom.core.scalar.log", {"value", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Exp, "bloom.core.scalar.exp", {"exponent", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Tangent, "bloom.core.scalar.tangent", {"angleRadians", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{ScalarPrimitive::SineDegrees,
+                             "bloom.core.scalar.sine-degrees",
+                             {"angleDegrees", "", "", "", ""},
+                             1},
+    ScalarPrimitiveSignature{ScalarPrimitive::CosineDegrees,
+                             "bloom.core.scalar.cosine-degrees",
+                             {"angleDegrees", "", "", "", ""},
+                             1},
+    ScalarPrimitiveSignature{ScalarPrimitive::TangentDegrees,
+                             "bloom.core.scalar.tangent-degrees",
+                             {"angleDegrees", "", "", "", ""},
+                             1},
 };
 
 template <bloom::core::primitives::PrimitiveFloat T> struct Evaluation final {
@@ -101,6 +118,59 @@ template <bloom::core::primitives::PrimitiveFloat T>
         return failure<T>(ScalarEvaluationError::NonFiniteResult);
     }
     return {value, ScalarEvaluationError::None};
+}
+
+// Sine of an angle in degrees, reduced exactly in degrees before the one multiplication by pi, so
+// the angles an artist types land on their exact answers: sin(180) is 0 and sin(30) is 0.5.
+template <bloom::core::primitives::PrimitiveFloat T>
+[[nodiscard]] T sineOfDegrees(const T degrees) noexcept {
+    T reduced = std::fmod(degrees, T{360});
+    if (reduced > T{180}) {
+        reduced -= T{360};
+    } else if (reduced < T{-180}) {
+        reduced += T{360};
+    }
+    // Fold the outer half-turns onto [-90, 90]: sin(180 - x) == sin(x).
+    if (reduced > T{90}) {
+        reduced = T{180} - reduced;
+    } else if (reduced < T{-90}) {
+        reduced = T{-180} - reduced;
+    }
+    if (reduced == T{0}) {
+        return reduced;
+    }
+    if (reduced == T{90} || reduced == T{-90}) {
+        return reduced > T{0} ? T{1} : T{-1};
+    }
+    if (reduced == T{30} || reduced == T{-30}) {
+        return reduced > T{0} ? T{0.5} : T{-0.5};
+    }
+    constexpr T kRadiansPerDegree = static_cast<T>(3.14159265358979323846264338327950288L / 180.0L);
+    return std::sin(reduced * kRadiansPerDegree);
+}
+
+template <bloom::core::primitives::PrimitiveFloat T>
+[[nodiscard]] T cosineOfDegrees(const T degrees) noexcept {
+    // cos(x) == sin(90 - |x|), with |x| reduced first so the subtraction stays exact.
+    return sineOfDegrees(T{90} - std::fmod(std::fabs(degrees), T{360}));
+}
+
+template <bloom::core::primitives::PrimitiveFloat T>
+[[nodiscard]] Evaluation<T> tangentOfDegrees(const T degrees) noexcept {
+    T reduced = std::fmod(degrees, T{180});
+    if (reduced > T{90}) {
+        reduced -= T{180};
+    } else if (reduced <= T{-90}) {
+        reduced += T{180};
+    }
+    // The poles are exactly the odd multiples of 90, which a degree value represents exactly.
+    if (reduced == T{90}) {
+        return failure<T>(ScalarEvaluationError::DivideByZero);
+    }
+    if (reduced == T{45} || reduced == T{-45}) {
+        return {reduced > T{0} ? T{1} : T{-1}, ScalarEvaluationError::None};
+    }
+    return finiteResult(sineOfDegrees(reduced) / cosineOfDegrees(reduced));
 }
 
 template <bloom::core::primitives::PrimitiveFloat T>
@@ -318,6 +388,26 @@ template <bloom::core::primitives::PrimitiveFloat T>
         }
         return finiteResult(std::pow(base, exponent));
     }
+    case ScalarPrimitive::Log:
+        // The natural logarithm: a negative value has no real logarithm; zero is its pole.
+        if (inputs[0] < T{0}) {
+            return failure<T>(ScalarEvaluationError::OutsideDomain);
+        }
+        if (inputs[0] == T{0}) {
+            return failure<T>(ScalarEvaluationError::DivideByZero);
+        }
+        return finiteResult(std::log(inputs[0]));
+    case ScalarPrimitive::Exp:
+        // Overflow is a non-finite result; underflow is a plain zero.
+        return finiteResult(std::exp(inputs[0]));
+    case ScalarPrimitive::Tangent:
+        return finiteResult(std::tan(inputs[0]));
+    case ScalarPrimitive::SineDegrees:
+        return finiteResult(sineOfDegrees(inputs[0]));
+    case ScalarPrimitive::CosineDegrees:
+        return finiteResult(cosineOfDegrees(inputs[0]));
+    case ScalarPrimitive::TangentDegrees:
+        return tangentOfDegrees(inputs[0]);
     case ScalarPrimitive::Invalid:
         return failure<T>(ScalarEvaluationError::UnknownPrimitive);
     }

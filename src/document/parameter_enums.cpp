@@ -93,6 +93,17 @@ std::string titleCase(const std::string_view id) {
     return label;
 }
 
+// A Math operation's name: the id in title case, with the angle unit spelled out in brackets for
+// the trigonometric operations ("sine" is radians; "sine-degrees" is degrees).
+std::string scalarOperationLabel(const std::string_view name) {
+    constexpr std::string_view kDegrees = "-degrees";
+    if (name.size() > kDegrees.size() && name.ends_with(kDegrees))
+        return titleCase(name.substr(0, name.size() - kDegrees.size())) + " (Degrees)";
+    if (name == "sine" || name == "cosine" || name == "tangent")
+        return titleCase(name) + " (Radians)";
+    return titleCase(name);
+}
+
 template <typename Array, typename Stored>
 Options named(const Array& members, const std::initializer_list<std::string_view> labels,
               const Stored stored) {
@@ -310,7 +321,8 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
             const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
             const auto id = signature == nullptr ? std::string_view{} : signature->id;
             options.push_back(
-                {titleCase(id.substr(id.rfind('.') + 1)), scalarOperationStoredValue(operation)});
+                {scalarOperationLabel(id.substr(id.rfind('.') + 1)),
+                 scalarOperationStoredValue(operation)});
         }
         return options;
     }

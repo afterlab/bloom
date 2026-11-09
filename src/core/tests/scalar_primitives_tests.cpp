@@ -72,6 +72,12 @@ static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Smootherstep) == 23);
 static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Sine) == 24);
 static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Cosine) == 25);
 static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Power) == 26);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Log) == 27);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Exp) == 28);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Tangent) == 29);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::SineDegrees) == 30);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::CosineDegrees) == 31);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::TangentDegrees) == 32);
 static_assert(static_cast<std::uint8_t>(ScalarEvaluationError::NonFiniteResult) == 8);
 static_assert(static_cast<std::uint8_t>(ScalarEvaluationError::OutsideDomain) == 9);
 
@@ -147,10 +153,10 @@ template <typename T, std::size_t Size>
 void testSignatures(Expectations& expectations) {
     using namespace bloom::core::primitives;
     const auto signatures = scalarPrimitiveSignatures();
-    expectations.expect(kScalarPrimitiveSemanticsVersion == 3,
+    expectations.expect(kScalarPrimitiveSemanticsVersion == 4,
                         "the extended scalar semantics revision is explicit");
-    expectations.expect(signatures.size() == 27,
-                        "the three tranches have exactly twenty-seven operations");
+    expectations.expect(signatures.size() == 33,
+                        "the four tranches have exactly thirty-three operations");
 
     constexpr std::array expected{
         ScalarPrimitiveSignature{
@@ -236,6 +242,26 @@ void testSignatures(Expectations& expectations) {
                                  1},
         ScalarPrimitiveSignature{
             ScalarPrimitive::Power, "bloom.core.scalar.power", {"base", "exponent", "", "", ""}, 2},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Log, "bloom.core.scalar.log", {"value", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Exp, "bloom.core.scalar.exp", {"exponent", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::Tangent,
+                                 "bloom.core.scalar.tangent",
+                                 {"angleRadians", "", "", "", ""},
+                                 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::SineDegrees,
+                                 "bloom.core.scalar.sine-degrees",
+                                 {"angleDegrees", "", "", "", ""},
+                                 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::CosineDegrees,
+                                 "bloom.core.scalar.cosine-degrees",
+                                 {"angleDegrees", "", "", "", ""},
+                                 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::TangentDegrees,
+                                 "bloom.core.scalar.tangent-degrees",
+                                 {"angleDegrees", "", "", "", ""},
+                                 1},
     };
 
     std::unordered_set<std::string_view> ids;
@@ -478,6 +504,12 @@ template <typename T> void testNonFiniteInputs(Expectations& expectations) {
         Case{ScalarPrimitive::Sine, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
         Case{ScalarPrimitive::Cosine, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
         Case{ScalarPrimitive::Power, {T{2}, T{3}, T{0}, T{0}, T{0}}, 2},
+        Case{ScalarPrimitive::Log, {T{2}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Exp, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Tangent, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::SineDegrees, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::CosineDegrees, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::TangentDegrees, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
     };
     constexpr std::array nonFinite{std::numeric_limits<T>::quiet_NaN(),
                                    std::numeric_limits<T>::infinity(),
@@ -821,6 +853,87 @@ template <typename T> void testTrigonometryAndPower(Expectations& expectations) 
         "power reports a negative base with a fractional exponent, a zero pole and overflow");
 }
 
+template <typename T> void testLogExpTangentAndDegrees(Expectations& expectations) {
+    const auto closeTo = [](const ScalarResult<T>& result, const T expected, const T tolerance) {
+        return result.hasValue() && std::abs(*result.value() - expected) <= tolerance;
+    };
+    const T ulps = T{8} * std::numeric_limits<T>::epsilon();
+    const auto one = [](const ScalarPrimitive primitive, const T value) {
+        return evaluate(primitive, std::array<T, 1>{value});
+    };
+    expectations.expect(
+        hasValue(one(ScalarPrimitive::Log, T{1}), T{0}) &&
+            closeTo(one(ScalarPrimitive::Log, std::exp(T{1})), T{1}, ulps) &&
+            closeTo(one(ScalarPrimitive::Log, T{100}), T{4.605170185988092L}, T{4} * ulps) &&
+            hasValue(one(ScalarPrimitive::Exp, T{0}), T{1}) &&
+            closeTo(one(ScalarPrimitive::Exp, T{1}), T{2.718281828459045L}, ulps) &&
+            closeTo(one(ScalarPrimitive::Exp, T{-1}), T{0.36787944117144233L}, ulps),
+        "log and exp hit their reference points, exactly at the identities");
+    expectations.expect(
+        hasError(one(ScalarPrimitive::Log, T{-1}), ScalarEvaluationError::OutsideDomain) &&
+            hasError(one(ScalarPrimitive::Log, T{0}), ScalarEvaluationError::DivideByZero) &&
+            hasError(one(ScalarPrimitive::Log, -T{0}), ScalarEvaluationError::DivideByZero) &&
+            hasError(one(ScalarPrimitive::Exp, T{1000}), ScalarEvaluationError::NonFiniteResult) &&
+            hasValue(one(ScalarPrimitive::Exp, T{-1000}), T{0}),
+        "log reports a negative value and the zero pole, exp reports overflow and underflows to zero");
+    // Degrees land on their exact answers; the radians forms stay radians.
+    expectations.expect(
+        hasValue(one(ScalarPrimitive::SineDegrees, T{0}), T{0}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{30}), T{0.5}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{90}), T{1}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{180}), T{0}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{270}), T{-1}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{-90}), T{-1}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{390}), T{0.5}) &&
+            hasValue(one(ScalarPrimitive::SineDegrees, T{-330}), T{0.5}) &&
+            hasSignedZero(one(ScalarPrimitive::SineDegrees, -T{0}), true) &&
+            closeTo(one(ScalarPrimitive::SineDegrees, T{45}), T{0.7071067811865476L}, ulps),
+        "sine takes degrees and is exact at the angles an artist types");
+    expectations.expect(
+        hasValue(one(ScalarPrimitive::CosineDegrees, T{0}), T{1}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{60}), T{0.5}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{90}), T{0}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{180}), T{-1}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{-180}), T{-1}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{360}), T{1}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{-60}), T{0.5}) &&
+            hasValue(one(ScalarPrimitive::CosineDegrees, T{120}), T{-0.5}),
+        "cosine takes degrees and is exact at the angles an artist types");
+    expectations.expect(
+        hasValue(one(ScalarPrimitive::TangentDegrees, T{0}), T{0}) &&
+            hasValue(one(ScalarPrimitive::TangentDegrees, T{45}), T{1}) &&
+            hasValue(one(ScalarPrimitive::TangentDegrees, T{-45}), T{-1}) &&
+            hasValue(one(ScalarPrimitive::TangentDegrees, T{225}), T{1}) &&
+            closeTo(one(ScalarPrimitive::TangentDegrees, T{60}), T{1.7320508075688772L}, ulps * T{2}) &&
+            hasError(one(ScalarPrimitive::TangentDegrees, T{90}),
+                     ScalarEvaluationError::DivideByZero) &&
+            hasError(one(ScalarPrimitive::TangentDegrees, T{-90}),
+                     ScalarEvaluationError::DivideByZero) &&
+            hasError(one(ScalarPrimitive::TangentDegrees, T{270}),
+                     ScalarEvaluationError::DivideByZero),
+        "tangent takes degrees, is exact at 45 and reports the poles at the odd multiples of 90");
+    const T pi = T{3.14159265358979323846L};
+    expectations.expect(
+        hasValue(one(ScalarPrimitive::Tangent, T{0}), T{0}) &&
+            closeTo(one(ScalarPrimitive::Tangent, pi / T{4}), T{1}, ulps) &&
+            closeTo(one(ScalarPrimitive::Tangent, -pi / T{4}), T{-1}, ulps) &&
+            closeTo(one(ScalarPrimitive::Sine, pi / T{6}), T{0.5}, ulps),
+        "tangent in radians matches the degrees form and sine/cosine in radians are unchanged");
+    // The degrees forms agree with the radian forms away from the exact angles.
+    bool agree = true;
+    for (int degrees = -720; degrees <= 720; degrees += 7) {
+        const T radians = static_cast<T>(degrees) * pi / T{180};
+        const auto a = one(ScalarPrimitive::SineDegrees, static_cast<T>(degrees));
+        const auto b = one(ScalarPrimitive::Sine, radians);
+        const auto c = one(ScalarPrimitive::CosineDegrees, static_cast<T>(degrees));
+        const auto d = one(ScalarPrimitive::Cosine, radians);
+        agree = agree && a.hasValue() && b.hasValue() && c.hasValue() && d.hasValue() &&
+                std::abs(*a.value() - *b.value()) <= T{64} * std::numeric_limits<T>::epsilon() &&
+                std::abs(*c.value() - *d.value()) <= T{64} * std::numeric_limits<T>::epsilon();
+    }
+    expectations.expect(agree, "sine and cosine in degrees follow the radian forms every 7 degrees");
+}
+
 template <typename T> void testGoldenBitPatterns(Expectations& expectations);
 
 template <> void testGoldenBitPatterns<float>(Expectations& expectations) {
@@ -877,6 +990,7 @@ template <typename T> void runTypedTests(Expectations& expectations) {
     testRoundingFractionAndModulo<T>(expectations);
     testStepAndSmoothIntervals<T>(expectations);
     testTrigonometryAndPower<T>(expectations);
+    testLogExpTangentAndDegrees<T>(expectations);
     testGoldenBitPatterns<T>(expectations);
 }
 

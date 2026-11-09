@@ -90,10 +90,10 @@ Durable scalar authoring values bind to Float64 until a checked conversion at an
 boundary. Canonical process pixels bind to Float32. Node registry parameter matching remains exact;
 type erasure and per-pixel string lookup are forbidden inside the hot evaluator.
 
-## Scalar Primitive Vocabulary Version 3
+## Scalar Primitive Vocabulary Version 4
 
-`bloom_core` defines checked Float32 and Float64 primitives. Semantics version `3` is an append-only
-extension of versions `1` and `2`: the original enum values, stable IDs, operand orders, formulas, and errors
+`bloom_core` defines checked Float32 and Float64 primitives. Semantics version `4` is an append-only
+extension of versions `1`, `2` and `3`: the original enum values, stable IDs, operand orders, formulas, and errors
 remain unchanged.
 
 The version 1 base is:
@@ -138,11 +138,23 @@ Version 3 adds the transcendental tranche. Angles are radians; the operand name 
 | `bloom.core.scalar.cosine` | Cosine | `angleRadians` | `cos` of the angle; every finite angle is in domain |
 | `bloom.core.scalar.power` | Power | `base`, `exponent` | `base` raised to `exponent`; `0^0` is `1`; a negative base needs an integral exponent (otherwise outside the domain); a zero base with a negative exponent is a divide-by-zero pole; overflow is a non-finite result |
 
+Version 4 adds Log, Exp, Tangent and the degrees forms of the three trigonometric operations.
+Every earlier operation, including Sine and Cosine in radians, is unchanged.
+
+| ID | Operation | Operands | Semantics |
+| --- | --- | --- | --- |
+| `bloom.core.scalar.log` | Log | `value` | natural logarithm; a negative value is outside the domain; zero is a divide-by-zero pole |
+| `bloom.core.scalar.exp` | Exp | `exponent` | `e` raised to the exponent; overflow is a non-finite result and a very negative exponent underflows to `0` |
+| `bloom.core.scalar.tangent` | Tangent | `angleRadians` | `tan` of the angle; `pi / 2` is not exactly representable, so its tangent is a very large finite number, not an error |
+| `bloom.core.scalar.sine-degrees` | Sine (Degrees) | `angleDegrees` | sine of an angle in degrees, reduced exactly in degrees first: `sin(0)`, `sin(180)` are `0`, `sin(30)` is `0.5`, `sin(90)` is `1`; `-0` produces `-0` |
+| `bloom.core.scalar.cosine-degrees` | Cosine (Degrees) | `angleDegrees` | cosine of an angle in degrees, exact at the multiples of 30 and 90 (`cos(60)` is `0.5`, `cos(90)` is `0`) |
+| `bloom.core.scalar.tangent-degrees` | Tangent (Degrees) | `angleDegrees` | tangent of an angle in degrees; `tan(45)` is `1`; the odd multiples of 90 are exact poles and report divide-by-zero |
+
 Sine, Cosine and Power call the platform C library in the operand's own precision. Their
 conformance policy is: the domain checks above and the exact identities (`sin(0)`, `cos(0)`,
 `x^0`, `x^1`, `0^positive`) are frozen and tested; interior results are accurate to within a few
 ulps and are not promised bit-identical across C libraries, so a value that feeds a cached render
-may differ in its last bits between platforms. Logarithm and Exponential remain deferred.
+may differ in its last bits between platforms. Log, Exp and Tangent follow the same policy.
 
 Primitive IDs identify evaluator kernels, not durable artist-facing node types. Adding an ID may
 extend the version; changing an existing operation's operand order, precision, formula, validation,
@@ -194,8 +206,7 @@ Version 2 freezes these additional details:
   are evaluated in the parenthesized order printed in the table, with separate unfused operations;
   the compiler may not contract them.
 
-Logarithm and Exponential remain deferred until their domain, overflow, and qualified
-transcendental-library conformance policy is frozen. Wrap is deferred until half-open endpoint and
+Wrap is deferred until half-open endpoint and
 extreme-range reduction behavior is frozen. Snap is deferred until its anchor, signed increment,
 halfway tie, and overflow rules are frozen. Omitting these operations is preferable to exposing
 backend-dependent math under a stable ID.
