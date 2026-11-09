@@ -1996,6 +1996,12 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                              bloom::runtime::FieldRasterKernel{
                                  bloom::field_test_programs::cornerPinProgram(id, filter), 1U});
         id += 100;
+        kernels.emplace_back("stabilize filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::stabilizeProgram(id, filter, filter % 2,
+                                                                              filter + 1),
+                                 1U});
+        id += 100;
         kernels.emplace_back("st map filter " + std::to_string(filter),
                              bloom::runtime::FieldRasterKernel{
                                  bloom::field_test_programs::stMapProgram(id, filter, filter + 1), 1U});

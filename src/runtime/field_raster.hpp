@@ -36,7 +36,9 @@
 //   Test Card choices [card, variant, option, flags (1 label, 2 animated), the label's glyph codes];
 //             scalars [width, height, center x, center y, four card values, frame rate]
 //   Rays      choices [source]; scalars [length, falloff, boost]; vectors [centre, y down]; slot
-//   Homography choices [mode]; mode 0 Corner Pin: the data window of image slot `slot`, vectors the
+//   Homography choices [mode, direction]; mode 1 Stabilize / Match Move (#513): vectors [held point,
+//             tracked position], pixels y down, direction 0 hold still, 1 carry along;
+//             mode 0 Corner Pin: the data window of image slot `slot`, vectors the
 //             four corner offsets, top left first [pixels, y down]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 

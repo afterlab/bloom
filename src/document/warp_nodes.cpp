@@ -15,7 +15,7 @@ std::string warpSchemaKey(const std::string_view nodeType, const std::string_vie
 }
 
 bool isWarpParameterValueValid(const std::string_view schemaKey, const ParameterValue& value) noexcept {
-    if (isCornerPinCornerSchemaKey(schemaKey)) {
+    if (isWarpPointSchemaKey(schemaKey)) {
         const auto* corner = std::get_if<Vec2d>(&value);
         return corner != nullptr && std::isfinite(corner->x) && std::isfinite(corner->y) &&
                std::abs(corner->x) <= kMaximumCornerPinOffset &&
@@ -71,6 +71,16 @@ NodeDefinition cornerPinDefinition() {
     for (const auto role : cornerPinCornerRoles()) {
         definition.parameters.push_back({std::string(role),
                                          warpSchemaKey(kCornerPinNodeType, role),
+                                         ParameterValueKind::Vec2d, true, true, Vec2d{}});
+        definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
+    }
+    return definition;
+}
+
+NodeDefinition stabilizeDefinition() {
+    auto definition = warpDefinition(kStabilizeNodeType, stabilizeParameters(), false);
+    for (const auto role : stabilizePointRoles()) {
+        definition.parameters.push_back({std::string(role), warpSchemaKey(kStabilizeNodeType, role),
                                          ParameterValueKind::Vec2d, true, true, Vec2d{}});
         definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
     }

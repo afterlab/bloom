@@ -209,9 +209,12 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #348 Corner Pin, ST Map and Displace: their tables' own labels; the corners by name.
     if (const auto* warp = document::warpParameterSpec(schemaKey); warp != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(warp->label).c_str());
-    if (document::isCornerPinCornerSchemaKey(schemaKey)) {
-        const auto roles = document::cornerPinCornerRoles();
-        const auto labels = document::cornerPinCornerLabels();
+    if (document::isWarpPointSchemaKey(schemaKey)) {
+        const bool stabilize = schemaKey.starts_with("bloom.stabilize.");
+        const auto roles =
+            stabilize ? document::stabilizePointRoles() : document::cornerPinCornerRoles();
+        const auto labels =
+            stabilize ? document::stabilizePointLabels() : document::cornerPinCornerLabels();
         for (std::size_t index = 0; index < roles.size(); ++index)
             if (schemaKey.ends_with(roles[index]))
                 return QCoreApplication::translate("PropertiesRow",

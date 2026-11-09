@@ -1756,6 +1756,19 @@ displayProofRunner(const bool customView) {
                  "production Corner Pin lowering: the data window pinned to a moved quad, "
                  "bilinear, nearest and bicubic, full frame and ROI");
         base += 1000;
+        // #513 Stabilize and Match Move: the picture moved by two points, both modes, every filter
+        // and edge rule, full frame and ROI.
+        addField("node.bloom.stabilize",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::stabilizeProgram(base, 0, 0, 1), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::stabilizeProgram(base + 100, 1, 1, 0), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::stabilizeProgram(base + 200, 2, 0, 3), 1}},
+                 base + 300,
+                 "production Stabilize lowering: the picture moved by a tracked point, held "
+                 "still or carried along, every filter and edge rule, full frame and ROI");
+        base += 1000;
         addField("node.bloom.st-map",
                  {bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::stMapProgram(base, 0, 1, 0, 1), 1},

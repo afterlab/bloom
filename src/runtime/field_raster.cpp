@@ -401,6 +401,16 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
                 p.offsets[2 * corner] = vector(corner).x;
                 p.offsets[2 * corner + 1] = -vector(corner).y;
             }
+        } else if (choiceAt(in, 0) == 1) {
+            // Stabilize and Match Move (#513): a move of the whole picture. The tracked position
+            // (vector 1) against the point it is held to (vector 0), pixels with y down; choice 1 is
+            // 0 to hold the picture still (undo the move), 1 to carry it along. The result is the
+            // similarity with that offset, no turn, no scale, and no window.
+            const auto held = vector(0);
+            const auto at = vector(1);
+            const double sign = choiceAt(in, 1) == 0 ? 1.0 : -1.0;
+            p = field::similarityHomography(sign * (held.x - at.x), -sign * (held.y - at.y), 0.0, 1.0,
+                                            0.0, 0.0);
         } else {
             return std::nullopt;
         }

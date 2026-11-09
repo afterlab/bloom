@@ -255,3 +255,46 @@ lowerDisplace(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
                                {*filter, warpEdge(*edges), 3, 4, 0, 1});
     return finishWarp(node, build, read, *input, operations, indices);
 }
+
+// #513 Stabilize and Match Move: the picture moved by the difference of two points. The track point
+// (the feature as chosen) and the position (where the track found it in this frame, keyed by the
+// tracking job) are Vec2 parameters; the Homography instruction's translation mode turns them into
+// the move (Stabilize holds the picture still, Match Move carries it along) and the picture is read
+// where that move came from. The canvas is the input, so the frame keeps its size.
+[[nodiscard]] bool
+lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+               std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+    const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
+    const auto* edges = parameterConstant<std::int64_t>(findParameterBinding(node, "edges"));
+    const auto held = compiledVec2Parameter(findParameterBinding(node, "trackPoint"));
+    const auto at = compiledVec2Parameter(findParameterBinding(node, "position"));
+    if (mode == nullptr || filter == nullptr || edges == nullptr || !held || !at ||
+        *mode < kStabilizeModeStabilize || *mode > kStabilizeModeMatchMove ||
+        *filter < kWarpFilterBilinear || *filter > kWarpFilterBicubic ||
+        *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror) {
+        addTopologyFailure(node.id, "Stabilize parameters could not be lowered.");
+        return false;
+    }
+    if (isMuted(node.id)) {
+        passWarpThrough(node, *input, indices);
+        return true;
+    }
+    FieldBuild build;
+    build.operations = &operations;
+    build.indices = &indices;
+    const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+    const auto slot = warpSlot(build, node, *input);
+    if (slot < 0)
+        return false;
+    const auto where = fieldEmit(build, FieldOp::Homography, {c, -1, -1, -1}, {1, *mode}, {},
+                                 {*held, *at});
+    const auto read = warpRead(build, where, slot, {*filter, warpEdge(*edges), 3, 4, 0, 1});
+    return finishWarp(node, build, read, *input, operations, indices);
+}

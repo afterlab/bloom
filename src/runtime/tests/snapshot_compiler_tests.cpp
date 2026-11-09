@@ -2068,6 +2068,7 @@ int main() {
         testStMapPixels(expectations);
         testDisplaceLowering(expectations);
         testDisplacePixels(expectations);
+        testStabilize(expectations);
         testLightRaysLowering(expectations);
         testLightRaysPixels(expectations);
         testRollingShutterLowering(expectations);

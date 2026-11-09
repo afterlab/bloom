@@ -32,9 +32,9 @@ constexpr std::array<std::string_view, 8> kKeyingMattes{
     "bloom.luma-key",      "bloom.cryptomatte", "bloom.mask",         "bloom.mask-combine",
     "bloom.image-to-mask", "bloom.matte-blur",  "bloom.matte-dilate", "bloom.matte-erode"};
 // Planned: Tile & Mirror.
-constexpr std::array<std::string_view, 8> kTransform{
-    "bloom.transform-2d", "bloom.camera-shake", "bloom.crop", "bloom.pad",
-    "bloom.fit",          "bloom.resize",       "bloom.flip", "bloom.rotate-90"};
+constexpr std::array<std::string_view, 9> kTransform{
+    "bloom.transform-2d", "bloom.camera-shake", "bloom.stabilize", "bloom.crop", "bloom.pad",
+    "bloom.fit",          "bloom.resize",       "bloom.flip",      "bloom.rotate-90"};
 // Planned: Procedural Warp.
 constexpr std::array<std::string_view, 6> kDistort{"bloom.lens-distortion",
                                                    "bloom.chromatic-aberration",

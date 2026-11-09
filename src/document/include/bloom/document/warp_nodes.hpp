@@ -34,6 +34,9 @@ namespace bloom::document {
 inline constexpr std::string_view kCornerPinNodeType = "bloom.corner-pin";
 inline constexpr std::string_view kStMapNodeType = "bloom.st-map";
 inline constexpr std::string_view kDisplaceNodeType = "bloom.displace";
+// #513 Stabilize and Match Move: the picture moved by what a track followed (docs/architecture/
+// point-tracking.md). It shares the inverse mapping and the filter and edge choices of the three above.
+inline constexpr std::string_view kStabilizeNodeType = "bloom.stabilize";
 inline constexpr std::uint32_t kWarpNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kWarpImagePort = "image";
@@ -57,6 +60,10 @@ inline constexpr std::int64_t kDisplaceChannelNone = 0;
 inline constexpr double kMaximumCornerPinOffset = 1.0e6;
 inline constexpr double kMaximumDisplaceAmount = 1.0e5;
 inline constexpr double kMaximumDisplaceMidpoint = 1.0e3;
+
+// Stabilize's mode: hold the picture still against the tracked move, or carry it along with it.
+inline constexpr std::int64_t kStabilizeModeStabilize = 0;
+inline constexpr std::int64_t kStabilizeModeMatchMove = 1;
 
 enum class WarpParameterKind : std::uint8_t { Choice, Scalar };
 
@@ -88,6 +95,16 @@ inline constexpr std::array<std::string_view, 4> kChannels{"Red", "Green", "Blue
 inline constexpr std::array<std::string_view, 5> kOptionalChannels{"None", "Red", "Green", "Blue",
                                                                    "Alpha"};
 
+inline constexpr std::array<std::string_view, 2> kStabilizeModes{"Stabilize", "Match Move"};
+inline constexpr std::array<std::string_view, 3> kPatternSizes{"Small", "Medium", "Large"};
+inline constexpr std::array<std::string_view, 3> kSearchSizes{"Narrow", "Normal", "Wide"};
+inline constexpr std::array kStabilize{
+    WarpParameterSpec{"mode", Kind::Choice, 0.0, 0.0, 1.0, kStabilizeModes, "Mode"},
+    WarpParameterSpec{"pattern", Kind::Choice, 1.0, 0.0, 2.0, kPatternSizes, "Pattern"},
+    WarpParameterSpec{"search", Kind::Choice, 1.0, 0.0, 2.0, kSearchSizes, "Search"},
+    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
+};
 inline constexpr std::array kCornerPin{
     WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
 };
@@ -116,8 +133,28 @@ inline constexpr std::array<std::string_view, 4> kCornerRoles{"topLeft", "topRig
 inline constexpr std::array<std::string_view, 4> kCornerLabels{"Top Left", "Top Right",
                                                                "Bottom Right", "Bottom Left"};
 
+// Stabilize's two points, in pixels from the frame's centre, y down: the feature as chosen, and
+// where the track found it in each frame.
+inline constexpr std::array<std::string_view, 2> kStabilizePointRoles{"trackPoint", "position"};
+inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Point", "Position"};
 } // namespace warp_parameters
 
+[[nodiscard]] constexpr std::span<const WarpParameterSpec> stabilizeParameters() noexcept {
+    return warp_parameters::kStabilize;
+}
+[[nodiscard]] constexpr std::span<const std::string_view> stabilizePointRoles() noexcept {
+    return warp_parameters::kStabilizePointRoles;
+}
+[[nodiscard]] constexpr std::span<const std::string_view> stabilizePointLabels() noexcept {
+    return warp_parameters::kStabilizePointLabels;
+}
+// The half side, in pixels, of the pattern and of the search a choice names.
+[[nodiscard]] constexpr int stabilizePatternRadius(const std::int64_t choice) noexcept {
+    return choice <= 0 ? 8 : (choice == 1 ? 16 : 32);
+}
+[[nodiscard]] constexpr int stabilizeSearchRadius(const std::int64_t choice) noexcept {
+    return choice <= 0 ? 16 : (choice == 1 ? 32 : 64);
+}
 [[nodiscard]] constexpr std::span<const WarpParameterSpec> cornerPinParameters() noexcept {
     return warp_parameters::kCornerPin;
 }
@@ -151,18 +188,27 @@ inline constexpr std::array<std::string_view, 4> kCornerLabels{"Top Left", "Top 
         return spec;
     if (const auto* spec = find("bloom.st-map.", warp_parameters::kStMap))
         return spec;
+    if (const auto* spec = find("bloom.stabilize.", warp_parameters::kStabilize))
+        return spec;
     return find("bloom.displace.", warp_parameters::kDisplace);
 }
 
-// Whether `key` is one of Corner Pin's four corner offsets.
-[[nodiscard]] constexpr bool isCornerPinCornerSchemaKey(const std::string_view key) noexcept {
-    constexpr std::string_view prefix = "bloom.corner-pin.";
-    if (!key.starts_with(prefix))
-        return false;
-    const auto role = key.substr(prefix.size());
-    for (const auto corner : warp_parameters::kCornerRoles)
-        if (corner == role)
-            return true;
+// Whether `key` is a point in pixels: one of Corner Pin's four corner offsets, or one of Stabilize's
+// two points.
+[[nodiscard]] constexpr bool isWarpPointSchemaKey(const std::string_view key) noexcept {
+    constexpr std::string_view corner = "bloom.corner-pin.";
+    constexpr std::string_view stabilize = "bloom.stabilize.";
+    if (key.starts_with(corner)) {
+        const auto role = key.substr(corner.size());
+        for (const auto name : warp_parameters::kCornerRoles)
+            if (name == role)
+                return true;
+    } else if (key.starts_with(stabilize)) {
+        const auto role = key.substr(stabilize.size());
+        for (const auto name : warp_parameters::kStabilizePointRoles)
+            if (name == role)
+                return true;
+    }
     return false;
 }
 

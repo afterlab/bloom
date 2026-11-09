@@ -448,7 +448,7 @@ constantMatchesSchema(const std::string_view schemaKey,
         schemaKey == kRollingShutterCameraRollSchemaKey)
         return isRollingShutterParameterValueValid(schemaKey, constant.value);
     // #348 Corner Pin, ST Map and Displace: every parameter and corner within its document domain.
-    if (warpParameterSpec(schemaKey) != nullptr || isCornerPinCornerSchemaKey(schemaKey))
+    if (warpParameterSpec(schemaKey) != nullptr || isWarpPointSchemaKey(schemaKey))
         return isWarpParameterValueValid(schemaKey, constant.value);
     // #563 Codec Degrade: every parameter within its document domain.
     if (codecDegradeParameterSpec(schemaKey) != nullptr)
@@ -705,7 +705,7 @@ bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kChromaticAberrationCenterSchemaKey ||
            schemaKey == kLightRaysCenterSchemaKey ||
            schemaKey == kRollingShutterCameraOffsetSchemaKey ||
-           isCornerPinCornerSchemaKey(schemaKey) ||
+           isWarpPointSchemaKey(schemaKey) ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }

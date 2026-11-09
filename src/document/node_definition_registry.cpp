@@ -597,6 +597,8 @@ template <typename Definition>
             return definition == cornerPinDefinition();
         if (definition.key.typeId == kStMapNodeType)
             return definition == stMapDefinition();
+        if (definition.key.typeId == kStabilizeNodeType)
+            return definition == stabilizeDefinition();
         if (definition.key.typeId == kDisplaceNodeType)
             return definition == displaceDefinition();
         // #486 Chromatic Aberration: the exact generated shape.
@@ -1735,6 +1737,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         rollingShutterDefinition(),
         cornerPinDefinition(),
         stMapDefinition(),
+        stabilizeDefinition(),
         displaceDefinition(),
         testCardDefinition(),
         lightRaysDefinition(),

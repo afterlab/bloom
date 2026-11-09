@@ -860,3 +860,116 @@ void testDisplacePixels(Expectations& expectations) {
         expectations.expect(scheduler.isQuiescent(), "the cancelled Displace shuts down safely");
     }
 }
+
+// #513 Stabilize and Match Move: one raster; the picture moved by the difference of the two points,
+// against an independent nearest reading, in both modes; no difference is the picture itself; a
+// keyed position moves the picture frame by frame; muting is the input.
+void testStabilize(Expectations& expectations) {
+    using namespace document;
+    using core::field::FieldOp;
+    constexpr double kWidth = 1920.0;
+    constexpr double kHeight = 1080.0;
+    const auto bare = warpBarePlan();
+    const auto input = lensEvaluate(bare, 240, 135);
+    require(input.frame() != nullptr, "the bare checker evaluates");
+    const auto& source = input.frame()->processImage();
+
+    // The track point at the origin, the feature found at (32, -24) pixels from the centre, y down
+    // (a whole number of the 8 pixel proxy steps so the nearest reading is exact).
+    for (const std::int64_t mode : {kStabilizeModeStabilize, kStabilizeModeMatchMove}) {
+        const std::unordered_map<std::string, ParameterValue> values{
+            {"mode", mode}, {"filter", std::int64_t{1}}, {"trackPoint", Vec2d{0.0, 0.0}},
+            {"position", Vec2d{32.0, -24.0}}};
+        auto fixture = warpFixture(kStabilizeNodeType, values);
+        const auto node = fixture.recipe.node;
+        const auto result = compileRecipe(std::move(fixture.recipe.project));
+        require(result.plan != nullptr, "Stabilize compiles");
+        const auto ops = recipeOperations(*result.plan, node);
+        require(ops.size() == 1, "Stabilize lowers to one raster");
+        const auto* raster = lensRaster(*result.plan, ops[0]);
+        require(raster != nullptr, "the raster is a field raster");
+        bool homography = false;
+        for (const auto& instruction : raster->program.instructions)
+            homography = homography || instruction.op == static_cast<std::uint8_t>(FieldOp::Homography);
+        expectations.expect(homography && raster->program.instructions.size() == 3,
+                            "Stabilize is a coordinate, the homography and the image read");
+        const auto moved = lensEvaluate(result.plan, 240, 135);
+        require(moved.frame() != nullptr, "Stabilize evaluates");
+        // Stabilize holds the feature still: the picture moves by (held - position), here (-32, +24)
+        // y down. Match Move carries it along: the reverse.
+        const double sign = mode == kStabilizeModeStabilize ? 1.0 : -1.0;
+        const double moveX = sign * (0.0 - 32.0);
+        const double moveY = sign * -(0.0 + 24.0); // field, y up
+        double worst = 0.0;
+        for (std::uint32_t j = 0; j < 135; ++j)
+            for (std::uint32_t i = 0; i < 240; ++i) {
+                const auto fx = (i + 0.5) * kWidth / 240.0 - kWidth / 2.0;
+                const auto fy = kHeight / 2.0 - (j + 0.5) * kHeight / 135.0;
+                const auto want = warpNearest(source, kWidth, kHeight, fx - moveX, fy - moveY);
+                const auto got = lensPixel(moved.frame()->processImage(), i, j);
+                for (std::size_t c = 0; c < 4; ++c)
+                    worst = std::max(worst, std::abs(static_cast<double>(got[c]) - want[c]));
+            }
+        expectations.expect(worst < 1.0e-6,
+                            mode == kStabilizeModeStabilize
+                                ? "Stabilize moves the picture by the held point less the position"
+                                : "Match Move carries the picture along with the position");
+    }
+
+    // The feature where it was chosen: the picture itself.
+    {
+        auto fixture = warpFixture(kStabilizeNodeType, {{"trackPoint", Vec2d{40.0, 16.0}},
+                                                        {"position", Vec2d{40.0, 16.0}}});
+        const auto result = compileRecipe(std::move(fixture.recipe.project));
+        require(result.plan != nullptr, "the still Stabilize compiles");
+        const auto same = lensEvaluate(result.plan, 240, 135);
+        require(same.frame() != nullptr, "the still Stabilize evaluates");
+        double worst = 0.0;
+        for (std::uint32_t j = 0; j < 135; ++j)
+            for (std::uint32_t i = 0; i < 240; ++i) {
+                const auto got = lensPixel(same.frame()->processImage(), i, j);
+                const auto want = lensPixel(source, i, j);
+                for (std::size_t c = 0; c < 4; ++c)
+                    worst = std::max(worst, std::abs(static_cast<double>(got[c]) - static_cast<double>(want[c])));
+            }
+        expectations.expect(worst < 2.0e-3, "no move leaves the picture as it was");
+    }
+
+    // A keyed position keeps the raster and varies with time.
+    {
+        auto fixture = warpFixture(kStabilizeNodeType);
+        auto* composition = fixture.recipe.project.findComposition(kCompositionId);
+        constexpr auto curveId = AnimationCurveId::fromRaw(1700);
+        Vec2AnimationCurve curve{curveId};
+        curve.components[0].keyframes = {
+            {KeyframeId::fromRaw(1701), core::RationalTime::fromInteger(0), 0.0,
+             KeyframeInterpolation::Linear},
+            {KeyframeId::fromRaw(1702), core::RationalTime::fromInteger(1), 64.0,
+             KeyframeInterpolation::Linear}};
+        require(composition->animationCurves().insert(std::move(curve)), "the curve is publishable");
+        require(composition->parameters().setSource(fixture.recipe.parameters.at("position"),
+                                                    AnimationCurveSource{curveId}),
+                "the position animates");
+        const auto node = fixture.recipe.node;
+        const auto result = compileRecipe(std::move(fixture.recipe.project));
+        expectations.expect(result.plan != nullptr, "a keyed Stabilize compiles");
+        if (result.plan) {
+            const auto ops = recipeOperations(*result.plan, node);
+            expectations.expect(ops.size() == 1 && result.plan->operationTimeDependent(
+                                                       runtime::OperationIndex::fromRaw(ops[0])),
+                                "a keyed position keeps the raster and varies with time");
+        }
+    }
+
+    // Muted: the input.
+    {
+        auto fixture = warpFixture(kStabilizeNodeType, {{"position", Vec2d{80.0, 0.0}}});
+        fixture.recipe.project.findComposition(kCompositionId)
+            ->nodeLayout()[fixture.recipe.node]
+            .muted = true;
+        const auto node = fixture.recipe.node;
+        const auto result = compileRecipe(std::move(fixture.recipe.project));
+        expectations.expect(result.plan != nullptr && recipeOperations(*result.plan, node).empty(),
+                            "a muted Stabilize passes its input through");
+    }
+}

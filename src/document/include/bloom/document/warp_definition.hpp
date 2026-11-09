@@ -16,6 +16,7 @@ namespace bloom::document {
                                              const ParameterValue& value) noexcept;
 [[nodiscard]] NodeDefinition cornerPinDefinition();
 [[nodiscard]] NodeDefinition stMapDefinition();
+[[nodiscard]] NodeDefinition stabilizeDefinition();
 [[nodiscard]] NodeDefinition displaceDefinition();
 
 } // namespace bloom::document

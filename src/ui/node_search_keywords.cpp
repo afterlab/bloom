@@ -174,6 +174,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kCornerPinNodeType)
         return QStringLiteral("corner pin perspective four point quad keystone pin warp distort "
                               "screen replacement sign billboard match move");
+    if (typeId == document::kStabilizeNodeType)
+        return QStringLiteral("stabilize stabilise track tracker tracking match move steady shake "
+                              "motion follow lock point");
     if (typeId == document::kStMapNodeType)
         return QStringLiteral("st map stmap uv map lookup coordinates remap warp distort apply "
                               "lens undistort");

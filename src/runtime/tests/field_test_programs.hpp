@@ -242,7 +242,7 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     case FieldOp::Homography: {
         // The source position of a Corner Pin of a 16 x 12 frame with its corners moved off the
         // frame, as a vector raster.
-        const auto pinned = b.add(FieldOp::Homography, {c}, {0}, {16.0, 12.0},
+        const auto pinned = b.add(FieldOp::Homography, {c}, {0}, {},
                                   {Vec2d{-2.0, 1.0}, Vec2d{1.0, -1.5}, Vec2d{-1.0, 2.0},
                                    Vec2d{2.5, 0.5}});
         b.last().slot = 0;
@@ -426,6 +426,21 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
                              {Vec2d{-2.0, 1.0}, Vec2d{1.0, -1.5}, Vec2d{-1.0, 2.0}, Vec2d{2.5, 0.5}});
     b.last().slot = 0;
     const auto read = b.add(FieldOp::Image, {where}, {filter, 1, 3, 4, 0, 1});
+    b.last().slot = 0;
+    return b.finish(read, FieldResultKind::Premultiplied);
+}
+
+// #513 Stabilize and Match Move: the picture moved by the difference of the held point and the
+// tracked position (the Homography instruction's translation mode), `mode` 0 holding the picture
+// still and 1 carrying it along.
+[[nodiscard]] inline FieldProgram stabilizeProgram(const std::uint64_t idBase,
+                                                   const std::int64_t filter = 0,
+                                                   const std::int64_t mode = 0,
+                                                   const std::int64_t edge = 1) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const auto where = b.add(FieldOp::Homography, {c}, {1, mode}, {}, {Vec2d{3.0, -2.0}, Vec2d{-4.5, 1.5}});
+    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
     b.last().slot = 0;
     return b.finish(read, FieldResultKind::Premultiplied);
 }

@@ -159,7 +159,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Zoom Blur; #564 adds Frame Rate Hold; #512 adds Camera Shake; #563 adds Codec Degrade; #486 adds Lens
     // Distortion and Chromatic Aberration; #587 adds Test Card; #508 adds Light Rays; #567 adds Light
     // Flicker; #568 adds Rolling Shutter; #589 adds Path; #566 adds Auto Exposure; #569 adds the five audio effects; #481 adds Image Math, Image Map Range and Image Clamp; #341 adds Oscillator, Wiggle and Loop Value; #349 adds Histogram and Image Compare.
-    expectations.expect(registry.definitions().size() == 214,
+    expectations.expect(registry.definitions().size() == 215,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -482,6 +482,15 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             pin->parameters[1].supportsAnimation && pin->outputs.size() == 1 &&
             pin->outputs[0].name == "image",
         "#348: Corner Pin has a socket per corner and a constant filter");
+    const auto* stabilize = registry.find("bloom.stabilize", 1);
+    expectations.expect(
+        stabilize != nullptr && stabilize->inputs.size() == 3 && stabilize->inputs[0].name == "input" &&
+            stabilize->parameters.size() == 7 && stabilize->parameters[0].role == "mode" &&
+            !stabilize->parameters[0].supportsAnimation && stabilize->parameters[5].role == "trackPoint" &&
+            stabilize->parameters[5].supportsAnimation && stabilize->parameters[6].role == "position" &&
+            stabilize->parameters[6].supportsAnimation && stabilize->outputs.size() == 1 &&
+            stabilize->outputs[0].name == "image",
+        "#513: Stabilize has constant choices and an animatable track point and position");
     const auto* stMap = registry.find("bloom.st-map", 1);
     expectations.expect(
         stMap != nullptr && !document::hasEffectMask(*stMap) && stMap->inputs.size() == 2 &&

@@ -333,7 +333,7 @@ void blurNodeReopen() {
                     ? document::ParameterValue{0.375}
                 // #348 Corner Pin, ST Map and Displace: moved choices, moved corners and amounts.
                 : parameter.schemaKey.starts_with("bloom.corner-pin.") &&
-                        document::isCornerPinCornerSchemaKey(parameter.schemaKey)
+                        document::isWarpPointSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{document::Vec2d{17.5, -9.25}}
                 : document::warpParameterSpec(parameter.schemaKey) != nullptr &&
                         document::warpParameterSpec(parameter.schemaKey)->kind ==

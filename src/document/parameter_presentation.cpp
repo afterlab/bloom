@@ -584,7 +584,7 @@ std::optional<ParameterPresentation> rollingShutterPresentation(const std::strin
 // #348 Corner Pin, ST Map and Displace: one presentation per parameter, from its table; a corner a
 // pixel offset.
 std::optional<ParameterPresentation> warpPresentation(const std::string_view schemaKey) {
-    if (isCornerPinCornerSchemaKey(schemaKey))
+    if (isWarpPointSchemaKey(schemaKey))
         return pixels(-kMaximumCornerPinOffset, kMaximumCornerPinOffset, 4096.0);
     const auto* spec = warpParameterSpec(schemaKey);
     if (spec == nullptr)
