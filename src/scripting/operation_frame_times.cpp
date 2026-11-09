@@ -32,6 +32,15 @@ constexpr std::array<NestedTime, 3> kNestedTimes{{
     {"bloom.animation.set-keys", "keys", 0},
 }};
 
+// Times in a flat list argument: {operation, argument}.
+struct TimeList final {
+    std::string_view operation;
+    std::string_view argument;
+};
+constexpr std::array<TimeList, 1> kTimeLists{{
+    {"bloom.animation.set-key-columns", "times"},
+}};
+
 bool isFrameCount(const Value& value) {
     if (std::holds_alternative<std::int64_t>(value.storage))
         return true;
@@ -63,6 +72,18 @@ void forEachFrameTime(const OperationSchema& schema, Arguments& arguments, Visit
                 isFrameCount((*entry)[nested.index]))
                 visit((*entry)[nested.index]);
         }
+    }
+    for (const auto& flat : kTimeLists) {
+        if (flat.operation != schema.typeId)
+            continue;
+        const auto found = arguments.find(flat.argument);
+        auto* list =
+            found == arguments.end() ? nullptr : std::get_if<ValueArray>(&found->second.storage);
+        if (list == nullptr)
+            continue;
+        for (auto& item : *list)
+            if (isFrameCount(item))
+                visit(item);
     }
 }
 

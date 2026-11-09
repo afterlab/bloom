@@ -2,6 +2,7 @@
 // apps/bloom-mcp/tools.cpp and server.cpp).
 #include "core_internal.hpp"
 
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/scripting/command_diagnostics.hpp>
@@ -11,7 +12,12 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <map>
+#include <memory>
+#include <span>
 
 namespace bloom::mcp {
 namespace {
@@ -367,6 +373,73 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
     throw InvalidInput("Operation arguments require scalars, arrays, paths or gradients");
 }
 
+// An argument written {"fromFile": "<absolute .json path>"} is read from that file by the server,
+// so a large column of numbers never passes through the conversation. The file must be a regular
+// JSON file; its size and value count are bounded, and nothing but the parsed JSON is used.
+constexpr std::uintmax_t kFromFileBytes = std::uintmax_t{16} * 1024U * 1024U;
+constexpr std::size_t kFromFileValues = 2'000'000;
+constexpr std::size_t kFromFilesPerCall = 16;
+
+struct DataFiles final {
+    struct Release {
+        void operator()(yyjson_doc* document) const noexcept { yyjson_doc_free(document); }
+    };
+    std::vector<std::unique_ptr<yyjson_doc, Release>> documents;
+};
+
+[[nodiscard]] bool isFromFile(yyjson_val* item) {
+    return yyjson_is_obj(item) && yyjson_obj_size(item) == 1 &&
+           yyjson_obj_get(item, "fromFile") != nullptr;
+}
+
+void countValues(yyjson_val* item, const std::size_t depth, std::size_t& total) {
+    if (depth > 16 || ++total > kFromFileValues)
+        throw InvalidInput("The data file is nested too deeply or holds too many values");
+    if (yyjson_is_arr(item)) {
+        yyjson_arr_iter iterator = yyjson_arr_iter_with(item);
+        while (auto* child = yyjson_arr_iter_next(&iterator))
+            countValues(child, depth + 1, total);
+    } else if (yyjson_is_obj(item)) {
+        yyjson_obj_iter iterator = yyjson_obj_iter_with(item);
+        while (auto* key = yyjson_obj_iter_next(&iterator))
+            countValues(yyjson_obj_iter_get_val(key), depth + 1, total);
+    }
+}
+
+[[nodiscard]] yyjson_val* readDataFile(yyjson_val* reference, DataFiles& held,
+                                       const std::string& at) {
+    if (held.documents.size() == kFromFilesPerCall)
+        throw InvalidInput(at + ": a call reads at most " + std::to_string(kFromFilesPerCall) +
+                           " data files");
+    auto* path = yyjson_obj_get(reference, "fromFile");
+    if (!yyjson_is_str(path))
+        throw InvalidInput(at + ": fromFile is the absolute path of a .json file");
+    const std::filesystem::path file(string(path, 4096));
+    std::error_code error;
+    if (!file.is_absolute() || file.extension() != ".json")
+        throw InvalidInput(at + ": fromFile is the absolute path of a .json file");
+    if (!std::filesystem::is_regular_file(file, error))
+        throw InvalidInput(at + ": fromFile is not a regular file Bloom can read");
+    const auto size = std::filesystem::file_size(file, error);
+    if (error || size == 0 || size > kFromFileBytes)
+        throw InvalidInput(at + ": the data file must be between 1 byte and 16 MiB");
+    std::string bytes(static_cast<std::size_t>(size), '\0');
+    {
+        std::ifstream stream(file, std::ios::binary);
+        if (!stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
+            throw InvalidInput(at + ": the data file could not be read");
+    }
+    std::unique_ptr<yyjson_doc, DataFiles::Release> document(
+        yyjson_read(bytes.data(), bytes.size(), 0));
+    if (!document || yyjson_doc_get_root(document.get()) == nullptr)
+        throw InvalidInput(at + ": the data file is not valid JSON");
+    std::size_t total = 0;
+    countValues(yyjson_doc_get_root(document.get()), 0, total);
+    auto* root = yyjson_doc_get_root(document.get());
+    held.documents.push_back(std::move(document));
+    return root;
+}
+
 bool matches(yyjson_val* value, const scripting::ValueKind kind) {
     using Kind = scripting::ValueKind;
     switch (kind) {
@@ -579,13 +652,44 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
     return failures;
 }
 
+
+// response "summary": the created ids replaced by how many there are per output name and one
+// SHA-256 digest over the full list (operation index, name and id of each, in order), so a large
+// edit answers in a few lines and the full list can still be compared.
+void summarizeOutputs(Json& out, yyjson_mut_val* value, const commands::CommandResult& result) {
+    core::Sha256Hasher hasher;
+    std::map<std::string, std::uint64_t> counts;
+    for (const auto& output : result.outputs) {
+        ++counts[output.output.name];
+        const auto line =
+            std::to_string(output.operationIndex) + ":" + output.output.name + ":" +
+            std::to_string(std::visit([](const auto& id) { return id.value(); }, output.output.id)) +
+            "\n";
+        static_cast<void>(hasher.update(std::as_bytes(std::span(line.data(), line.size()))));
+    }
+    const auto hex = hasher.finalize().toLowercaseHex();
+    yyjson_mut_obj_remove_str(value, "outputs");
+    auto* summary = out.object();
+    out.set(summary, "count", out.number(result.outputs.size()));
+    auto* byName = out.object();
+    for (const auto& [name, count] : counts)
+        out.set(byName, name, out.number(count));
+    out.set(summary, "byName", byName);
+    out.set(summary, "digest", out.text("sha256:" + std::string(hex.data(), hex.size())));
+    out.set(value, "outputSummary", summary);
+}
 } // namespace
 
 yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& call,
                              yyjson_val* arguments) {
-    members(arguments, {"expectedRevision", "operations", "label"},
+    members(arguments, {"expectedRevision", "operations", "label", "response"},
             {"expectedRevision", "operations"});
     const auto revision = integer(member(arguments, "expectedRevision"));
+    // "full" lists every created id; "summary" counts them by name and gives one digest.
+    const auto response = member(arguments, "response") ? string(member(arguments, "response"), 16)
+                                                         : std::string("full");
+    if (response != "full" && response != "summary")
+        throw InvalidInput("response is \"full\" or \"summary\"");
     const auto label = member(arguments, "label") ? string(member(arguments, "label"))
                        : call.live != nullptr     ? "Agent edit"
                                                   : "MCP transaction";
@@ -597,6 +701,7 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     const auto& registry = call.session.operations();
     std::string operationIds;
     std::size_t operationIndex = 0;
+    DataFiles dataFiles;
     yyjson_arr_iter iterator = yyjson_arr_iter_with(operations);
     for (auto* operation = yyjson_arr_iter_next(&iterator); operation != nullptr;
          operation = yyjson_arr_iter_next(&iterator), ++operationIndex) {
@@ -622,6 +727,8 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
             const auto schema = std::ranges::find(descriptor->schema.arguments, name,
                                                   &scripting::ArgumentSchema::name);
             auto* item = yyjson_obj_iter_get_val(key);
+            if (isFromFile(item))
+                item = readDataFile(item, dataFiles, at + " (" + id + "): argument \"" + name + "\"");
             // null is the same as leaving the argument out, as None is in Python: an optional
             // argument takes its default (`"parent": null` clears a parent) and a required one is
             // reported missing.
@@ -673,6 +780,8 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     if (!result.command)
         throwUnavailable(call, result);
     auto* value = commandResult(out, *result.command);
+    if (response == "summary")
+        summarizeOutputs(out, value, *result.command);
     auto* warnings = out.array();
     out.set(value, "compileFailures",
             result.command->changed() && result.command->renderAffecting

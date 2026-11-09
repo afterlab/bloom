@@ -300,13 +300,25 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .summary = "The undo step's name (Edit > Undo <label>).",
           .range = "at most 4096 bytes",
           .defaultValue = "\"Agent edit\" in the desktop application, \"MCP transaction\" on "
-                          "stdio"}});
+                          "stdio"},
+         {.name = "response",
+          .type = "string",
+          .summary = "\"full\" lists every id the operations created in `outputs`; \"summary\" "
+                     "replaces that list with `outputSummary` {count, byName, digest}: how many "
+                     "ids each output name made and one SHA-256 over the full list (MCP only). "
+                     "Use it for edits that create hundreds of keys.",
+          .defaultValue = "\"full\"",
+          .choices = {{"full", "Every created id in `outputs`"},
+                      {"summary", "`outputSummary`: counts by output name and one digest"}}}});
     transact.prerequisites = {"Read the current revision (any query result)."};
     transact.result =
         "{succeeded, revision, diagnostics:[{code, severity?, operationIndex, operation, "
         "argument?, message}], outputs:[{operationIndex, name, id}]}. `revision` is the new "
         "revision; `outputs` lists every id the operations created, by the zero-based index of "
-        "the operation that made it (an operation's reference names its outputs).";
+        "the operation that made it (an operation's reference names its outputs). Over MCP any "
+        "operation argument may be {\"fromFile\": \"<absolute .json path>\"}: the server reads "
+        "that JSON file (regular file, at most 16 MiB) as the argument's value, so a large column "
+        "of keys never passes through the conversation.";
     transact.errors = {
         makeError("bloom.scripting.invalid-argument",
                   "an argument is missing, of the wrong kind or out of range",

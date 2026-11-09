@@ -879,6 +879,59 @@ locator(const Arguments& arguments, const std::string& operationId, OperationCre
             .summary = std::move(summary)};
 }
 
+// The keys of bloom.animation.set-keys and set-key-columns, parsed from [time, value] or
+// [time, value, interpolation] rows. `argument` names the argument a refusal points at.
+[[nodiscard]] OperationCreateResult
+setKeysOperation(const std::string& op, const std::uint64_t composition,
+                 const std::uint64_t parameter, const ValueArray& entries, const bool replace,
+                 const std::string& argument = "keys") {
+            std::vector<commands::ParameterKey> keys;
+            keys.reserve(entries.size());
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                const auto where = argument + "[" + std::to_string(index) + "]";
+                const auto* entry = std::get_if<ValueArray>(&entries[index].storage);
+                if (entry == nullptr || entry->size() < 2 || entry->size() > 3) {
+                    return failure(op, argument,
+                                   where + " expects [time, value] or [time, value, interpolation]");
+                }
+                commands::ParameterKey key;
+                const auto time = rationalOf((*entry)[0]);
+                if (!time) {
+                    return failure(op, argument,
+                                   where + " time expects a whole frame or an exact "
+                                           "(numerator, denominator) time");
+                }
+                key.time = *time;
+                if (const auto* path = std::get_if<document::PathValue>(&(*entry)[1].storage)) {
+                    key.value = *path;
+                } else if (const auto* gradient =
+                               std::get_if<document::GradientValue>(&(*entry)[1].storage)) {
+                    key.value = *gradient;
+                } else if (const auto authoredValue = animationValueOf((*entry)[1])) {
+                    std::visit([&](const auto& held) { key.value = held; }, *authoredValue);
+                } else {
+                    return failure(op, argument,
+                                   where + " value expects a number, (x, y), (x, y, z), "
+                                           "(r, g, b, a), a path or a gradient");
+                }
+                if (entry->size() == 3) {
+                    const auto mode = interpolationOf((*entry)[2]);
+                    if (!mode) {
+                        return failure(op, argument,
+                                       where + " interpolation expects \"hold\", \"linear\", "
+                                               "\"ease-in-out\" or an easing equation name");
+                    }
+                    key.interpolation = *mode;
+                }
+                keys.push_back(std::move(key));
+            }
+    return OperationCreateResult(
+        std::make_unique<commands::SetParameterKeys>(
+            document::CompositionId::fromRaw(composition),
+            document::ParameterId::fromRaw(parameter), std::move(keys), replace),
+        std::nullopt);
+}
+
 [[nodiscard]] ArgumentSchema fromContext(std::string name, const ValueKind kind,
                                          const ContextSource source, Value example,
                                          std::string summary) {
@@ -1225,52 +1278,59 @@ OperationRegistry OperationRegistry::builtIn() {
             if (!composition || !parameter || !entries || error) {
                 return error;
             }
-            std::vector<commands::ParameterKey> keys;
-            keys.reserve(entries->size());
-            for (std::size_t index = 0; index < entries->size(); ++index) {
-                const auto where = "keys[" + std::to_string(index) + "]";
-                const auto* entry = std::get_if<ValueArray>(&(*entries)[index].storage);
-                if (entry == nullptr || entry->size() < 2 || entry->size() > 3) {
-                    return failure(op, "keys",
-                                   where + " expects [time, value] or [time, value, interpolation]");
-                }
-                commands::ParameterKey key;
-                const auto time = rationalOf((*entry)[0]);
-                if (!time) {
-                    return failure(op, "keys",
-                                   where + " time expects a whole frame or an exact "
-                                           "(numerator, denominator) time");
-                }
-                key.time = *time;
-                if (const auto* path = std::get_if<document::PathValue>(&(*entry)[1].storage)) {
-                    key.value = *path;
-                } else if (const auto* gradient =
-                               std::get_if<document::GradientValue>(&(*entry)[1].storage)) {
-                    key.value = *gradient;
-                } else if (const auto authoredValue = animationValueOf((*entry)[1])) {
-                    std::visit([&](const auto& held) { key.value = held; }, *authoredValue);
-                } else {
-                    return failure(op, "keys",
-                                   where + " value expects a number, (x, y), (x, y, z), "
-                                           "(r, g, b, a), a path or a gradient");
-                }
-                if (entry->size() == 3) {
-                    const auto mode = interpolationOf((*entry)[2]);
-                    if (!mode) {
-                        return failure(op, "keys",
-                                       where + " interpolation expects \"hold\", \"linear\", "
-                                               "\"ease-in-out\" or an easing equation name");
-                    }
-                    key.interpolation = *mode;
-                }
-                keys.push_back(std::move(key));
+            return setKeysOperation(op, *composition, *parameter, *entries,
+                                    replace.value_or(false));
+        });
+
+    add("bloom.animation.set-key-columns",
+        {compositionArgument(),
+         need("parameter", ValueKind::Id, StableId{1}, "The parameter to key."),
+         need("times", ValueKind::Array,
+              ValueArray{Value(std::int64_t{0}), Value(std::int64_t{12}), Value(std::int64_t{24})},
+              "The key times as one column, in the unit of set-keys: layer time for a layer's own "
+              "parameters (the composition frame minus the layer's start), composition time for "
+              "every other parameter. A time is a whole frame or an exact [numerator, "
+              "denominator] time in seconds."),
+         need("values", ValueKind::Array,
+              ValueArray{Value(0.0), Value(0.5), Value(1.0)},
+              "The key values as one column, one per time, each with the parameter's own width "
+              "(a number, [x, y], [x, y, z] or [r, g, b, a])."),
+         maybe("interpolations", ValueKind::Array, ValueArray{Value("linear"), Value("hold")},
+               "Optional column of the interpolation leaving each key, one per time or fewer: "
+               "missing entries are linear. The last key's is always linear."),
+         maybe("replace", ValueKind::Boolean, true,
+               "Clear the existing keys first, returning the parameter to the constant it was "
+               "animated from. Default false: keys at existing times are updated and the others "
+               "added.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto parameter = id(args, op, "parameter", error);
+            const auto times = list(args, op, "times", error, "expects a list of times");
+            const auto values = list(args, op, "values", error, "expects a list of values");
+            const auto modes = list(args, op, "interpolations", error,
+                                    "expects a list of interpolations", false);
+            const auto replace = boolean(args, op, "replace", error, false);
+            if (!composition || !parameter || !times || !values || error)
+                return error;
+            if (times->size() != values->size())
+                return failure(op, "values",
+                               "has " + std::to_string(values->size()) + " entries but times has " +
+                                   std::to_string(times->size()) + "; give one value per time");
+            if (modes && modes->size() > times->size())
+                return failure(op, "interpolations",
+                               "has " + std::to_string(modes->size()) + " entries but times has " +
+                                   std::to_string(times->size()));
+            ValueArray rows;
+            rows.reserve(times->size());
+            for (std::size_t index = 0; index < times->size(); ++index) {
+                ValueArray row{(*times)[index], (*values)[index]};
+                if (modes && index < modes->size())
+                    row.push_back((*modes)[index]);
+                rows.emplace_back(std::move(row));
             }
-            return OperationCreateResult(
-                std::make_unique<commands::SetParameterKeys>(
-                    document::CompositionId::fromRaw(*composition),
-                    document::ParameterId::fromRaw(*parameter), std::move(keys),
-                    replace.value_or(false)),
-                std::nullopt);
+            return setKeysOperation(op, *composition, *parameter, rows, replace.value_or(false),
+                                    "values");
         });
 
     add("bloom.animation.create-for-parameter",
