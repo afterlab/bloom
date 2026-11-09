@@ -51,18 +51,28 @@ lowerDenoise(const document::NodeRecord& node, std::vector<runtime::CompiledOper
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
     }
-    const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
-    const auto strength = compiledScalarParameter(findParameterBinding(node, "strength"));
     const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
     const auto* frames = parameterConstant<std::int64_t>(findParameterBinding(node, "frames"));
-    if (!radius || !strength || mode == nullptr || frames == nullptr || *mode < 0 ||
-        *mode >= document::kDenoiseModeCount || *frames < document::kMinimumDenoiseFrames ||
-        *frames > document::kMaximumDenoiseFrames) {
+    if (mode == nullptr || frames == nullptr || *mode < 0 || *mode >= document::kDenoiseModeCount ||
+        *frames < document::kMinimumDenoiseFrames || *frames > document::kMaximumDenoiseFrames) {
+        addTopologyFailure(node.id, "Denoise parameters could not be lowered.");
+        return std::nullopt;
+    }
+    const bool temporal = *mode == static_cast<std::int64_t>(document::DenoiseNodeMode::Temporal);
+    // The temporal mean reads neither the radius nor the strength, so an animated one must not
+    // register a curve nothing reads (a plan with an unreferenced animation curve is refused).
+    const auto radius = temporal ? std::optional<runtime::CompiledScalarParameter>{
+                                       runtime::CompiledScalarParameter{}}
+                                 : compiledScalarParameter(findParameterBinding(node, "radius"));
+    const auto strength = temporal ? std::optional<runtime::CompiledScalarParameter>{
+                                         runtime::CompiledScalarParameter{}}
+                                   : compiledScalarParameter(findParameterBinding(node, "strength"));
+    if (!radius || !strength) {
         addTopologyFailure(node.id, "Denoise parameters could not be lowered.");
         return std::nullopt;
     }
     runtime::detail::RecipeEmitter emitter(node.id, operations, recipeValueSink());
-    if (*mode != static_cast<std::int64_t>(document::DenoiseNodeMode::Temporal))
+    if (!temporal)
         return emitter.effect(*input, runtime::DenoiseKernel{static_cast<runtime::DenoiseMode>(*mode),
                                                               *radius, *strength});
     const auto samples = runtime::detail::appendLookBackSamples(emitter, *input, *frames);
@@ -113,7 +123,12 @@ lowerChannelBlur(const document::NodeRecord& node,
     const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
     const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
     const auto* separate = parameterConstant<bool>(findParameterBinding(node, "separate"));
-    const auto radiusY = compiledScalarParameter(findParameterBinding(node, "radiusY"));
+    // The vertical radius is read only with separate axes: an animated one with the switch off
+    // must not register a curve nothing reads.
+    const auto radiusY = separate != nullptr && *separate
+                             ? compiledScalarParameter(findParameterBinding(node, "radiusY"))
+                             : std::optional<runtime::CompiledScalarParameter>{
+                                   runtime::CompiledScalarParameter{}};
     bool lowered = radius && edge && *edge >= 0 && *edge <= 1 && separate && radiusY;
     constexpr std::array<const char*, 4> roles{"redScale", "greenScale", "blueScale",
                                                "alphaScale"};

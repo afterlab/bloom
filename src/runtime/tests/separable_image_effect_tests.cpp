@@ -152,6 +152,49 @@ void denoiseTests() {
         require(near(denoiseAt(*out, 0, 0)[0], 1.0) && near(denoiseAt(*out, 3, 3)[0], 3.0),
                 "the median is the upper middle of the values present");
     }
+    // Median at a soft alpha edge: a red subject whose coverage ramps from 0 to 1 across the frame
+    // (premultiplied: color = coverage), with a transparent speck of dust in the covered half. The
+    // straight color stays red wherever there is coverage, the alpha is the median of the
+    // coverage, and a premultiplied value never exceeds its alpha.
+    {
+        const auto soft = denoiseImage([](const int x, const int y) {
+            const float coverage = static_cast<float>(x) / 7.0F;
+            if (x == 5 && y == 4)
+                return std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F};
+            return std::array<float, 4>{coverage, 0.0F, 0.0F, coverage};
+        });
+        const auto out = apply(soft, DenoiseMode::Median, 1.0, 0.0);
+        bool consistent = true;
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                const auto p = denoiseAt(*out, x, y);
+                consistent = consistent && p[0] <= p[3] + 1e-6F && p[1] == 0.0F && p[2] == 0.0F;
+                // Straight color: red wherever anything is covered.
+                if (p[3] > 0.0F)
+                    consistent = consistent && near(p[0] / p[3], 1.0, 1e-5);
+            }
+        require(consistent, "a median at a soft edge keeps the straight color and never lets "
+                            "color exceed coverage");
+        // The speck takes its coverage and its color with it: the neighbors' median is a covered
+        // red, not a half-transparent dark one.
+        const auto speck = denoiseAt(*out, 5, 4);
+        require(near(speck[3], 5.0 / 7.0, 1e-5) && near(speck[0], 5.0 / 7.0, 1e-5),
+                "a transparent speck is filled with the neighbors' coverage and their red");
+        // Away from the speck the plain premultiplied median is the same picture, since there the
+        // two rules agree.
+        require(near(denoiseAt(*out, 2, 2)[3], 2.0 / 7.0, 1e-5),
+                "a median of a clean ramp keeps its coverage");
+        // A transparent region stays transparent, and a threshold above a lone covered pixel's
+        // excess keeps the pixel exactly as it is (color and alpha, bit for bit).
+        const auto lone = denoiseImage([](const int x, const int y) {
+            return x == 3 && y == 4 ? std::array<float, 4>{0.25F, 0.125F, 0.0625F, 0.5F}
+                                    : std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F};
+        });
+        const auto kept = apply(lone, DenoiseMode::Median, 1.0, 0.9);
+        require(denoiseAt(*kept, 3, 4) == std::array<float, 4>{0.25F, 0.125F, 0.0625F, 0.5F} &&
+                    denoiseAt(*kept, 0, 0) == std::array<float, 4>{0.0F, 0.0F, 0.0F, 0.0F},
+                "a median that keeps a pixel returns it exactly and leaves transparency alone");
+    }
     // Bilateral: a step edge keeps its sides apart while the noise on each side is averaged, and
     // the result at a pixel is the weighted mean of the closed form.
     {

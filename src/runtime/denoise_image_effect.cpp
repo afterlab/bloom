@@ -111,24 +111,45 @@ float rangeWeight(const float distance, const float inverseVariance) {
     return t * t;
 }
 
+// Dust & Scratches on associated pixels without moving color against coverage. Alpha is a channel
+// of its own; color is taken as straight (unassociated) values from the neighbors that cover
+// anything, since a premultiplied value says as much about how much the pixel covers as about its
+// color. The straight color then takes the output alpha, so a soft edge keeps its color and a
+// removed speck takes its coverage with it. A center that keeps both its color and its alpha is
+// returned untouched, bit for bit. Where no coverage is left the pixel is transparent (an image
+// stores no color where alpha is 0).
 Texel median(const PreparedDenoise& d, const Source& source, const std::int64_t x,
              const std::int64_t y, const Texel& center) {
-    std::array<std::array<float, 169>, 4> values{};
+    std::array<std::array<float, 169>, 3> straights{};
+    std::array<float, 169> alphas{};
+    std::size_t covered = 0;
     std::size_t count = 0;
     for (int dy = -d.radiusY; dy <= d.radiusY; ++dy)
         for (int dx = -d.radiusX; dx <= d.radiusX; ++dx) {
             const auto texel = source.read(x + dx, y + dy);
             if (!texel)
                 continue;
-            for (std::size_t c = 0; c < 4; ++c)
-                values[c][count] = (*texel)[c];
-            ++count;
+            alphas[count++] = (*texel)[3];
+            if ((*texel)[3] > 0.0F) {
+                for (std::size_t c = 0; c < 3; ++c)
+                    straights[c][covered] = (*texel)[c] / (*texel)[3];
+                ++covered;
+            }
         }
-    Texel out = center;
-    for (std::size_t c = 0; c < 4; ++c) {
-        std::sort(values[c].begin(), values[c].begin() + static_cast<std::ptrdiff_t>(count));
-        const float middle = values[c][count / 2];
-        out[c] = std::abs(center[c] - middle) > d.threshold ? middle : center[c];
+    std::sort(alphas.begin(), alphas.begin() + static_cast<std::ptrdiff_t>(count));
+    const float middleAlpha = alphas[count / 2];
+    const float alpha = std::abs(center[3] - middleAlpha) > d.threshold ? middleAlpha : center[3];
+    Texel out{0.0F, 0.0F, 0.0F, alpha};
+    if (!(alpha > 0.0F))
+        return out;
+    const bool centerCovered = center[3] > 0.0F;
+    for (std::size_t c = 0; c < 3; ++c) {
+        std::sort(straights[c].begin(), straights[c].begin() + static_cast<std::ptrdiff_t>(covered));
+        const float middle = straights[c][covered / 2];
+        const float own = centerCovered ? center[c] / center[3] : middle;
+        const bool kept = centerCovered && !(std::abs(own - middle) > d.threshold);
+        // Kept color and alpha: the stored premultiplied value, exactly.
+        out[c] = kept ? center[c] * (alpha / center[3]) : middle * alpha;
     }
     return out;
 }
@@ -268,25 +289,41 @@ render::OcioGpuProgramResult buildDenoiseProgram(const std::vector<float>& data)
         " vec4 center = imageLoad(bloom_ocio_input, c);\n"
         " vec4 result = center;\n"
         " if (mode == 0) {\n"
-        "  float v[4][169];\n"
+        "  float s[3][169];\n"
+        "  float al[169];\n"
         "  int count = 0;\n"
+        "  int covered = 0;\n"
         "  for (int dy = -ry; dy <= ry; ++dy) {\n"
         "   for (int dx = -rx; dx <= rx; ++dx) {\n"
         "    ivec2 p = c + ivec2(dx, dy);\n"
         "    if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) continue;\n"
         "    vec4 t = imageLoad(bloom_ocio_input, p);\n"
-        "    for (int ch = 0; ch < 4; ++ch) {\n"
-        "     float x = t[ch];\n"
-        "     int j = count;\n"
-        "     while (j > 0 && v[ch][j - 1] > x) { v[ch][j] = v[ch][j - 1]; --j; }\n"
-        "     v[ch][j] = x;\n"
+        "    int ja = count;\n"
+        "    while (ja > 0 && al[ja - 1] > t.a) { al[ja] = al[ja - 1]; --ja; }\n"
+        "    al[ja] = t.a;\n"
+        "    if (t.a > 0.0) {\n"
+        "     for (int ch = 0; ch < 3; ++ch) {\n"
+        "      float x = bloom_ocio_cpu_div(t[ch], t.a);\n"
+        "      int j = covered;\n"
+        "      while (j > 0 && s[ch][j - 1] > x) { s[ch][j] = s[ch][j - 1]; --j; }\n"
+        "      s[ch][j] = x;\n"
+        "     }\n"
+        "     ++covered;\n"
         "    }\n"
         "    ++count;\n"
         "   }\n"
         "  }\n"
-        "  for (int ch = 0; ch < 4; ++ch) {\n"
-        "   float middle = v[ch][count / 2];\n"
-        "   result[ch] = abs(center[ch] - middle) > knob.x ? middle : center[ch];\n"
+        "  float middle_alpha = al[count / 2];\n"
+        "  float alpha = abs(center.a - middle_alpha) > knob.x ? middle_alpha : center.a;\n"
+        "  result = vec4(0.0, 0.0, 0.0, alpha);\n"
+        "  if (alpha > 0.0) {\n"
+        "   bool covered_center = center.a > 0.0;\n"
+        "   for (int ch = 0; ch < 3; ++ch) {\n"
+        "    float middle = s[ch][covered / 2];\n"
+        "    float own = covered_center ? bloom_ocio_cpu_div(center[ch], center.a) : middle;\n"
+        "    bool kept = covered_center && !(abs(own - middle) > knob.x);\n"
+        "    result[ch] = kept ? center[ch] * bloom_ocio_cpu_div(alpha, center.a) : middle * alpha;\n"
+        "   }\n"
         "  }\n"
         " } else {\n"
         "  precise vec4 sum = vec4(0.0);\n"

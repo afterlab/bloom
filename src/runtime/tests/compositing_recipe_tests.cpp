@@ -505,6 +505,9 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
             input, evaluated(evaluator, recipe, values, Published::Background), values);
     case Recipe::EdgeExtend:
         return edgeExtendReference(input, values.extendDistance, values.extendAmount);
+    case Recipe::ChannelBlur:
+    case Recipe::Denoise:
+        return {}; // held to the CPU reference by the separable blur tests, and on a device
     }
     return {};
 }

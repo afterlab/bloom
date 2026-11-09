@@ -25,7 +25,7 @@ using runtime::CompiledColorParameter;
 using runtime::CompiledScalarParameter;
 using runtime::OperationIndex;
 
-enum class Recipe : std::uint8_t { DropShadow, Glow, LightWrap, EdgeExtend };
+enum class Recipe : std::uint8_t { DropShadow, Glow, LightWrap, EdgeExtend, ChannelBlur, Denoise };
 
 // Which image the plan's Composition Output publishes: the recipe, or one of the images it reads
 // (an evaluation request may only name the terminal output).
@@ -75,6 +75,15 @@ struct RecipeValues final {
     // #516 Edge Extend
     double extendDistance = 4.0;
     double extendAmount = 1.0;
+    // #524 Gaussian Blur with a radius per channel (five blurs and four channel combines): the
+    // radius, the vertical radius with separate axes, and each channel's share of them.
+    double blurRadius = 3.0;
+    double blurRadiusY = 1.5;
+    bool blurSeparate = false;
+    std::array<double, 4> channelScale{1.0, 0.4, 0.0, 0.7};
+    // #514 Denoise & Smooth Median: the radius and the threshold.
+    double denoiseRadius = 2.0;
+    double denoiseStrength = 0.0;
     // An animated Drop Shadow distance (0 at t = 0 to `distance` at t = 1) or Glow intensity.
     bool animated = false;
     // The input is an HDR, partial-alpha solid instead of the gradient. Luma Key's coverage is a
@@ -237,6 +246,23 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                 detail::appendLightWrap(emitter, result.input, result.background,
                                         {scalar(idBase + 41, values.radius),
                                          scalar(idBase + 42, values.amount), values.wrapOnly});
+            break;
+        case Recipe::ChannelBlur: {
+            detail::ChannelBlurOperands operands;
+            operands.radius = scalar(idBase + 73, values.blurRadius);
+            operands.radiusY = scalar(idBase + 74, values.blurRadiusY);
+            operands.separate = values.blurSeparate;
+            for (std::size_t channel = 0; channel < 4; ++channel)
+                operands.scales[channel] =
+                    scalar(idBase + 75 + channel, values.channelScale[channel]);
+            result.recipe = detail::appendChannelBlur(emitter, result.input, operands);
+            break;
+        }
+        case Recipe::Denoise:
+            result.recipe = emitter.effect(
+                result.input,
+                DenoiseKernel{DenoiseMode::Median, scalar(idBase + 81, values.denoiseRadius),
+                              scalar(idBase + 82, values.denoiseStrength)});
             break;
         case Recipe::EdgeExtend:
             result.recipe =

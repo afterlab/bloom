@@ -14,7 +14,14 @@ dust and scratches. Pick a mode:
   cleaner by the square root of the frame count; anything that moves leaves a trail, so use it on locked-off
   shots.
 
-**Radius** is how far, in pixels, each pixel looks (0 to 6). It is relative to the full-size picture, so a
+Median, at a soft edge (a feathered matte, motion blur, antialiasing), treats the picture's color and coverage
+separately: it picks the color from the neighbors that cover something and the coverage from all of them, so
+the color of a soft edge stays the color of the subject instead of darkening or brightening with its coverage.
+
+**Radius** (0 to 6, in pixels) and **Strength** show in every mode but Temporal, where the plain mean reads
+neither; **Frames** shows only in Temporal. A row that would do nothing is hidden.
+
+**Radius** is how far, in pixels, each pixel looks. It is relative to the full-size picture, so a
 preview at reduced size looks the same. **Strength** is in the picture's linear values; a noisy plate
 usually needs 0.02 to 0.2.
 

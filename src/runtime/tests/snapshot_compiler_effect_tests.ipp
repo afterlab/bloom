@@ -2373,7 +2373,7 @@ void testDenoiseLowering(Expectations& expectations) {
     const auto* definition = builtInNodeDefinitions().find(kDenoiseNodeType, 1);
     require(definition != nullptr && definition->parameters.size() == 5,
             "Denoise has mode, radius, strength, frames and the effect mask channel");
-    for (int scenario = 0; scenario != 5; ++scenario) {
+    for (int scenario = 0; scenario != 6; ++scenario) {
         auto project = makeProject(singleLayerOptions());
         auto* composition = project.findComposition(kCompositionId);
         auto& graph = composition->graph();
@@ -2384,7 +2384,7 @@ void testDenoiseLowering(Expectations& expectations) {
             const auto id = ParameterId::fromRaw(next++);
             auto value = parameter.defaultValue;
             if (parameter.role == "mode")
-                value = std::int64_t{scenario <= 3 ? scenario : 1};
+                value = std::int64_t{scenario <= 3 ? scenario : (scenario == 5 ? 3 : 1)};
             if (parameter.role == "radius")
                 value = 3.0;
             if (parameter.role == "strength")
@@ -2439,6 +2439,31 @@ void testDenoiseLowering(Expectations& expectations) {
                                                         DriverBindingSource{stats, "deviation"}),
                     "the deviation drives strength");
         }
+        if (scenario == 5) {
+            // Temporal reads neither the radius nor the strength: keys on them (left from another
+            // mode) must not leave a curve nothing reads, which would refuse the whole plan.
+            std::uint64_t curve = 1500;
+            for (const char* role : {"radius", "strength"}) {
+                const auto owner = std::ranges::find_if(graph.nodes(), [&](const auto& candidate) {
+                    return candidate.id == node;
+                });
+                const auto binding = std::ranges::find_if(owner->parameters, [&](const auto& b) {
+                    return b.role == role;
+                });
+                const auto curveId = AnimationCurveId::fromRaw(curve);
+                require(composition->animationCurves().insert(ScalarAnimationCurve{
+                            curveId,
+                            {{KeyframeId::fromRaw(curve + 1), core::RationalTime::fromInteger(0), 0.0,
+                              KeyframeInterpolation::Linear},
+                             {KeyframeId::fromRaw(curve + 2), core::RationalTime::fromInteger(1), 1.0,
+                              KeyframeInterpolation::Linear}}}),
+                        "a denoise curve is publishable");
+                require(composition->parameters().setSource(binding->parameterId,
+                                                            AnimationCurveSource{curveId}),
+                        "the denoise value animates");
+                curve += 10;
+            }
+        }
         expectations.expect(project.validate().ok(), "denoise document validates");
         runtime::NodeDefinitionRegistry registry;
         require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
@@ -2463,7 +2488,7 @@ void testDenoiseLowering(Expectations& expectations) {
             if (const auto* combine = std::get_if<runtime::ImageCombineKernel>(&effect->kernel))
                 mixes += combine->mode == runtime::ImageCombineMode::Mix ? 1U : 0U;
         }
-        if (scenario == 3) {
+        if (scenario == 3 || scenario == 5) {
             expectations.expect(denoises == 0 && samples == 3 && mixes == 3,
                                 "Temporal lowers to the look-back window and a running mean");
         } else {
