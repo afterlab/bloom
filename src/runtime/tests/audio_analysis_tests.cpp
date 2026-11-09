@@ -7,9 +7,15 @@
 
 #include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/prepared_gpu_scene.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -34,6 +40,7 @@ using Pixel = std::array<float, 4>;
 
 struct Rendered final {
     bool evaluated = false;
+    bool cancelled = false;
     std::string diagnostic;
     std::int64_t left = 0, top = 0;
     std::uint32_t width = 0, height = 0;
@@ -61,6 +68,7 @@ Rendered render(const std::shared_ptr<const runtime::CompiledCompositionPlan>& p
         request.resolution = *proxy;
     const auto result = evaluator.evaluate(plan, request, cancellation);
     Rendered out;
+    out.cancelled = result.status() == runtime::EvaluationStatus::Cancelled;
     for (const auto& diagnostic : result.diagnostics())
         out.diagnostic += diagnostic.summary + " " + diagnostic.detail + "; ";
     if (result.frame() == nullptr)
@@ -312,6 +320,105 @@ void reducedRenderScale() {
     }
 }
 
+// A token of a scheduler task that has been cancelled while it ran.
+runtime::CancellationToken makeCancelledToken() {
+    using namespace runtime;
+    TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    TaskScheduler scheduler(config);
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    CancellationToken token;
+    auto submission = scheduler.submit<void>(
+        TaskRequest("audio analysis cancel token",
+                    {.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(347)}),
+        [&](TaskContext& context) {
+            {
+                std::lock_guard lock(mutex);
+                token = context.cancellation();
+                entered = true;
+            }
+            condition.notify_all();
+            std::unique_lock lock(mutex);
+            condition.wait(lock, [&] { return release; });
+            return TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted())
+        throw std::logic_error("the cancel token task was refused");
+    {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [&] { return entered; });
+    }
+    submission.handle.cancel();
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    condition.notify_all();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!submission.handle.tryTakeResult().has_value() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    return token;
+}
+
+// #347: a cancelled preparation ends as cancelled and publishes nothing: no frame, no failure text, no
+// cached analysis, and the same plan then evaluates in full on a live token (nothing stale or half
+// built was left behind). The device route's builder reports Cancelled the same way.
+void cancellation() {
+    const auto cancelled = makeCancelledToken();
+    expect(cancelled.isCancellationRequested(), "the test token is cancelled");
+    runtime::clearAudioAnalysis();
+    const auto plan = apt::audioPlotPlan(apt::spectrumValues(), 348000);
+
+    runtime::AudioAnalysisQuery query;
+    query.kind = runtime::AudioAnalysisKind::Spectrum;
+    query.source = apt::audioSource(apt::sharedAudioFixture(), -12);
+    query.time = core::RationalTime::fromInteger(0);
+    query.columns = 48;
+    query.spectrum.fftSize = 2048;
+    query.spectrum.lowHz = 20.0;
+    query.spectrum.highHz = 20000.0;
+    query.spectrum.floorDb = -90.0;
+    query.spectrum.ceilingDb = 0.0;
+    const auto direct = runtime::prepareAudioAnalysis(query, scratch, cancelled);
+    expect(direct.outcome == runtime::AudioAnalysisOutcome::Cancelled, "a cancelled preparation is Cancelled");
+    expect(!runtime::findAudioAnalysis(query), "a cancelled preparation caches nothing");
+
+    const auto cpu = render(plan, scratch, std::nullopt, std::nullopt, cancelled);
+    expect(!cpu.evaluated && cpu.cancelled, "a cancelled evaluation ends as cancelled, with no frame");
+    expect(cpu.diagnostic.empty(), "a cancelled evaluation reports no failure: " + cpu.diagnostic);
+
+    runtime::CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(scratch);
+    auto media = runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
+    media.assetBaseDirectory = scratch;
+    const runtime::CpuGpuSceneBuilder builder(nullptr, media);
+    runtime::EvaluationRequest request{core::RationalTime::fromInteger(0), plan->output(),
+                                       runtime::CompositionFormatResolution{}};
+    request.pixelStorageByteLimit = 1U << 28U;
+    const auto scene = builder.build(plan, request, cancelled);
+    expect(!scene.hasValue() &&
+               scene.diagnostic.code == runtime::PreparedGpuSceneDiagnosticCode::Cancelled,
+           "a cancelled scene preparation reports Cancelled");
+
+    const auto statistics = runtime::audioAnalysisStatistics();
+    expect(statistics.entries == 0 && statistics.bytes == 0,
+           "nothing was published by the cancelled preparations");
+
+    const auto after = render(plan, scratch);
+    expect(after.evaluated, "the same plan then evaluates: " + after.diagnostic);
+    const auto box = canvasOf(after);
+    expect(same(after.at(box.x0 + 2, box.y1), kLine), "the frame after a cancellation is the known answer");
+    expect(runtime::audioAnalysisStatistics().computed == 1, "it computed its analysis once, itself");
+    runtime::clearAudioAnalysis();
+}
+
 void amplitude() {
     runtime::clearAudioAnalysis();
     runtime::CompiledValueAudioAmplitude kernel;
@@ -376,6 +483,7 @@ int main() {
     regionOfInterest();
     amplitude();
     reducedRenderScale();
+    cancellation();
     retirement();
     if (failures == 0)
         std::cout << "audio analysis tests passed\n";
