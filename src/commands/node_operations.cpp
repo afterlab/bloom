@@ -160,7 +160,9 @@ OperationResult AddNode::apply(document::Draft& draft) const {
                 core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
                 1'000'000ULL);
         // #567: a new Light Flicker's seed is its own too (its seed is an Integer operand).
-        else if (nodeTypeId_ == document::kLightFlickerNodeType && parameter.role == "seed")
+        else if ((nodeTypeId_ == document::kLightFlickerNodeType ||
+                  nodeTypeId_ == document::kWiggleNodeType) &&
+                 parameter.role == "seed")
             value = static_cast<std::int64_t>(
                 core::primitives::hashWord(static_cast<std::int64_t>(nodeId->value())) %
                 1'000'000ULL);

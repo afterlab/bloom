@@ -337,6 +337,12 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kRangeInterpolationParameterSchemaKey)
         return named(kRangeInterpolations, {"Linear", "Smoothstep", "Smootherstep"},
                      [](const auto value) { return rangeInterpolationStoredValue(value); });
+    if (schemaKey == kOscillatorWaveParameterSchemaKey)
+        return named(kOscillatorWaves, {"Sine", "Triangle", "Square", "Sawtooth"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kLoopValueModeParameterSchemaKey)
+        return named(kLoopModes, {"Repeat", "Ping-pong"},
+                     [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kRoundingModeParameterSchemaKey)
         return named(kRoundingModes, {"Round", "Floor", "Ceiling", "Truncate"},
                      [](const auto value) { return selectorStoredValue(value); });

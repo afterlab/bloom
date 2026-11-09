@@ -88,14 +88,12 @@ constexpr std::array<std::string_view, 16> kValues{
     "bloom.value-path",           "bloom.value-scalar",     "bloom.value-string",
     "bloom.value-vector2",        "bloom.value-vector3",    "bloom.value.layer-bounds",
     "bloom.light-flicker"};
-// Planned: Oscillator, Wiggle, Loop Value.
-constexpr std::array<std::string_view, 14> kMath{"bloom.clamp",        "bloom.degrees-to-radians",
-                                                 "bloom.integer-math", "bloom.map-range",
-                                                 "bloom.math",         "bloom.mix",
-                                                 "bloom.ping-pong",    "bloom.radians-to-degrees",
-                                                 "bloom.random",       "bloom.rounding",
-                                                 "bloom.sign",         "bloom.smoothstep",
-                                                 "bloom.snap",         "bloom.wrap"};
+constexpr std::array<std::string_view, 17> kMath{
+    "bloom.clamp",       "bloom.degrees-to-radians", "bloom.integer-math", "bloom.loop-value",
+    "bloom.map-range",   "bloom.math",               "bloom.mix",          "bloom.oscillator",
+    "bloom.ping-pong",   "bloom.radians-to-degrees", "bloom.random",       "bloom.rounding",
+    "bloom.sign",        "bloom.smoothstep",         "bloom.snap",         "bloom.wiggle",
+    "bloom.wrap"};
 constexpr std::array<std::string_view, 20> kConvert{
     "bloom.boolean-to-integer", "bloom.boolean-to-scalar",  "bloom.boolean-to-string",
     "bloom.color-to-string",    "bloom.color-to-vector3",   "bloom.integer-to-boolean",

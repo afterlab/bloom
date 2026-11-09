@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/motion_values.hpp>
 #include <bloom/core/safe_parse.hpp>
 #include <bloom/document/data_block.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -112,6 +113,10 @@ enum class ValueUtilityKernel : std::uint8_t {
     PointSetRead,
     // #567 Light Flicker: a seeded gain of the time.
     LightFlicker,
+    // #341 motion utilities: pure functions of the request time.
+    Oscillator,
+    Wiggle,
+    LoopValue,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -190,6 +195,12 @@ inline constexpr std::string_view kRampSampleNodeType = "bloom.ramp-sample";
 inline constexpr std::string_view kTableLookupNodeType = "bloom.table-lookup";
 inline constexpr std::string_view kPointSetReadNodeType = "bloom.point-set-read";
 inline constexpr std::string_view kLightFlickerNodeType = "bloom.light-flicker";
+inline constexpr std::string_view kOscillatorNodeType = "bloom.oscillator";
+inline constexpr std::string_view kWiggleNodeType = "bloom.wiggle";
+inline constexpr std::string_view kLoopValueNodeType = "bloom.loop-value";
+// The two motion selectors' schema keys and vocabularies. The stored integers are durable.
+inline constexpr std::string_view kOscillatorWaveParameterSchemaKey = "bloom.oscillator.wave";
+inline constexpr std::string_view kLoopValueModeParameterSchemaKey = "bloom.loop-value.mode";
 inline constexpr std::string_view kDataBlockParameterSchemaKey = "bloom.data.block";
 inline constexpr std::string_view kDataBlockParameterRole = "block";
 
@@ -257,6 +268,14 @@ inline constexpr std::array<RoundingMode, 4> kRoundingModes{
     RoundingMode::Round, RoundingMode::Floor, RoundingMode::Ceiling, RoundingMode::Truncate};
 
 inline constexpr RoundingMode kDefaultRoundingMode = RoundingMode::Round;
+
+// The Oscillator's waveform and the Loop Value's mode: core::motion_values' enums, which are the
+// stored integers.
+inline constexpr std::array<core::motion_values::Wave, 4> kOscillatorWaves{
+    core::motion_values::Wave::Sine, core::motion_values::Wave::Triangle,
+    core::motion_values::Wave::Square, core::motion_values::Wave::Sawtooth};
+inline constexpr std::array<core::motion_values::LoopMode, 2> kLoopModes{
+    core::motion_values::LoopMode::Repeat, core::motion_values::LoopMode::PingPong};
 
 // Case mapping is ASCII-only, and the vocabulary says so by having exactly these three members: a
 // Unicode case mapping is locale-sensitive, context-sensitive and tied to a table version, so a

@@ -160,6 +160,14 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && compareOperationFromStoredValue(*stored).has_value();
     }
+    if (schemaKey == kOscillatorWaveParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kOscillatorWaves, *stored).has_value();
+    }
+    if (schemaKey == kLoopValueModeParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kLoopModes, *stored).has_value();
+    }
     if (schemaKey == kRoundingModeParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kRoundingModes, *stored).has_value();

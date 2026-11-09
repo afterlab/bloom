@@ -170,6 +170,15 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kLightFlickerNodeType)
         return QStringLiteral("light flicker flickering dropout bulb headlight sputter fluorescent "
                               "unsteady seeded noise exposure");
+    if (typeId == document::kOscillatorNodeType)
+        return QStringLiteral("oscillator oscillate sine wave triangle square sawtooth lfo "
+                              "pulse cycle frequency amplitude phase animate loop motion");
+    if (typeId == document::kWiggleNodeType)
+        return QStringLiteral("wiggle wiggler shake jitter noise random seeded smooth drift "
+                              "perlin value noise handheld motion");
+    if (typeId == document::kLoopValueNodeType)
+        return QStringLiteral("loop value repeat cycle ping pong pingpong sawtooth ramp "
+                              "looping timer countdown motion");
     if (typeId == document::kSharpenNodeType)
         return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     if (typeId == document::kFrameRateHoldNodeType)

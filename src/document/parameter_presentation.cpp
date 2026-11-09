@@ -364,6 +364,8 @@ constexpr std::array kChoiceSchemas{
     std::string_view("bloom.image-preview.display"),
     std::string_view("bloom.compare.operation"),
     std::string_view("bloom.convert.rounding-mode"),
+    std::string_view("bloom.oscillator.wave"),
+    std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),
     std::string_view("bloom.map-range.interpolation"),

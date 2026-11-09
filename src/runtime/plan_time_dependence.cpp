@@ -32,7 +32,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
             std::holds_alternative<CompiledValuePathCurve>(operation.kernel) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
-              utility->operation == document::ValueUtilityKernel::LightFlicker));
+              utility->operation == document::ValueUtilityKernel::LightFlicker ||
+              utility->operation == document::ValueUtilityKernel::Oscillator ||
+              utility->operation == document::ValueUtilityKernel::Wiggle ||
+              utility->operation == document::ValueUtilityKernel::LoopValue));
         forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
             if (const auto* input = std::get_if<ValueOutputIndex>(&operand.source))
                 dependent =

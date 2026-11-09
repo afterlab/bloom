@@ -413,6 +413,43 @@ scrubbing and export, with no state carried from earlier frames; a value is host
 that it drives (Exposure) carries the pixel route. The value cache identity is the node's operands and the
 request time (the graph's usual time dependence).
 
+## Motion utilities
+
+`bloom.oscillator`, `bloom.wiggle` and `bloom.loop-value` (#341, group Values, listed under Math) are
+the motion utilities. Like Light Flicker each is a pure function of its operands and the request time
+(`core/motion_values.hpp`): no state is carried from earlier frames, so a frame is the same in preview,
+scrubbing and export, any time can be asked for in any order, and each is marked time dependent. There is
+no expression engine; each node is one closed-form function. Out-of-domain operands are clamped and
+non-finite ones take their defaults, never refused. `timeOffset` (seconds, default 0) is added to the
+request time, which reads the value at an arbitrary time without stepping to it. Every operand has a
+socket and can be driven, except the two selectors.
+
+| Node | Operands (default) | Outputs |
+| --- | --- | --- |
+| Oscillator | `wave` selector (Sine, Triangle, Square, Sawtooth; Sine), `frequency` Hz (1, limited to +-1000; a negative one runs backwards), `amplitude` (1), `offset` (0), `phase` degrees (0), `timeOffset` | `result` Scalar: `offset + amplitude * wave(frequency * t + phase / 360)` |
+| Wiggle | `frequency` (2 lattice points a second of the first octave), `amplitude` (1), `offset` (0), `octaves` Integer (1, limited to 1 to 8), `roughness` (0.5, limited to 0 to 1), `seed` Integer (1 in the definition; AddNode stores one hashed from the node id), `timeOffset` | `result` Scalar in `offset +- amplitude` |
+| Loop Value | `mode` selector (Repeat, Ping-pong; Repeat), `start` (0), `end` (1), `duration` seconds (1, at least 0.001), `timeOffset` | `value` Scalar, `cycle` Integer (whole cycles elapsed, negative before time zero) |
+
+The waves start at their zero crossing and rise: the sine and triangle go 0, 1, 0, -1 across a cycle, the
+square is `+1` for the first half and `-1` for the second, and the sawtooth rises from `-1` to `1`. The
+cycle position is the fractional part of `frequency * t + phase / 360`, taken before the wave, so a time
+a billion seconds in is as exact as one near zero. Loop Value is a ramp from `start` to `end`
+(either order) that repeats, or runs back and forth in Ping-pong, forward on even cycles; it is not a
+loop of an arbitrary driven value, because a value graph is evaluated at one time.
+
+**Noise version 1.** Wiggle's noise is versioned (`kNoiseVersion`), because a stored seed stores the
+motion it produces; changing the hash, the blend or the octave rule is a new version, never an edit. The
+level at integer lattice index `i` of octave `k` is `hashUnitValue(mix(seed, k, i))` mapped to [-1, 1], with
+the same versioned value hash (`hashWord`) Light Flicker uses and no dependence on evaluation order;
+between lattice points the level blends with a smootherstep; octave `k` runs at `frequency * 2^k` with
+weight `roughness^k`, and the sum is divided by the sum of the weights, so the result stays within
+`offset +- amplitude` for any octave count.
+
+Values are host parameter resolution (`prep.parameter.resolution`) with no pixel work, so they add no
+GPU coverage entry. Evidence: `src/core/tests/motion_values_tests.cpp` reads the waves at their quarter
+points, phase and negative frequency, a large time, the wiggle's range, continuity, seed dependence and
+order independence, and the loop's cycles; `value_math_tests.cpp` reads the three through the kernel.
+
 ### Three of these are constants in the plan
 
 `Frame Rate`, `Composition Duration` and `Composition Size` describe the COMPOSITION, and a plan is

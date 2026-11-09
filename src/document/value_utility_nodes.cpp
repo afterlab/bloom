@@ -73,6 +73,34 @@ constexpr std::array<ValueUtilityOperand, 7> kLightFlickerOperands{
 constexpr std::array<ValueUtilityOutput, 2> kLightFlickerOutputs{
     ValueUtilityOutput{"value", SocketValueKind::Scalar},
     ValueUtilityOutput{"stops", SocketValueKind::Scalar}};
+// #341 motion utilities. Every operand is a Scalar (or an Integer) with a socket, so any can be driven;
+// `timeOffset` moves the evaluation time, which is how a value at an arbitrary time is read.
+constexpr std::array<ValueUtilityOperand, 5> kOscillatorOperands{
+    ValueUtilityOperand{.role = "frequency", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "amplitude", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "offset", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "phase", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "timeOffset", .kind = SocketValueKind::Scalar, .number = 0.0}};
+constexpr std::array<ValueUtilitySelector, 1> kOscillatorWaveSelector{ValueUtilitySelector{
+    "wave", bloom::document::kOscillatorWaveParameterSchemaKey, 0}};
+constexpr std::array<ValueUtilityOperand, 7> kWiggleOperands{
+    ValueUtilityOperand{.role = "frequency", .kind = SocketValueKind::Scalar, .number = 2.0},
+    ValueUtilityOperand{.role = "amplitude", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "offset", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "octaves", .kind = SocketValueKind::Integer, .integer = 1},
+    ValueUtilityOperand{.role = "roughness", .kind = SocketValueKind::Scalar, .number = 0.5},
+    ValueUtilityOperand{.role = "seed", .kind = SocketValueKind::Integer, .integer = 1},
+    ValueUtilityOperand{.role = "timeOffset", .kind = SocketValueKind::Scalar, .number = 0.0}};
+constexpr std::array<ValueUtilityOperand, 4> kLoopValueOperands{
+    ValueUtilityOperand{.role = "start", .kind = SocketValueKind::Scalar, .number = 0.0},
+    ValueUtilityOperand{.role = "end", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "duration", .kind = SocketValueKind::Scalar, .number = 1.0},
+    ValueUtilityOperand{.role = "timeOffset", .kind = SocketValueKind::Scalar, .number = 0.0}};
+constexpr std::array<ValueUtilitySelector, 1> kLoopValueModeSelector{ValueUtilitySelector{
+    "mode", bloom::document::kLoopValueModeParameterSchemaKey, 0}};
+constexpr std::array<ValueUtilityOutput, 2> kLoopValueOutputs{
+    ValueUtilityOutput{"value", SocketValueKind::Scalar},
+    ValueUtilityOutput{"cycle", SocketValueKind::Integer}};
 constexpr std::array<ValueUtilityOutput, 2> kPointSetOutputs{
     ValueUtilityOutput{"count", SocketValueKind::Integer},
     ValueUtilityOutput{"point", SocketValueKind::Vector3}};
@@ -375,7 +403,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 67> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 70> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -582,6 +610,14 @@ constexpr std::array<ValueUtilityDescriptor, 67> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kLightFlickerNodeType, "Light Flicker",
                            ValueUtilityKernel::LightFlicker, NodeCategory::Values,
                            kLightFlickerOperands, kNoSelectors, kLightFlickerOutputs},
+    ValueUtilityDescriptor{bloom::document::kOscillatorNodeType, "Oscillator",
+                           ValueUtilityKernel::Oscillator, NodeCategory::Values,
+                           kOscillatorOperands, kOscillatorWaveSelector, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kWiggleNodeType, "Wiggle", ValueUtilityKernel::Wiggle,
+                           NodeCategory::Values, kWiggleOperands, kNoSelectors, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kLoopValueNodeType, "Loop Value",
+                           ValueUtilityKernel::LoopValue, NodeCategory::Values, kLoopValueOperands,
+                           kLoopValueModeSelector, kLoopValueOutputs},
 };
 
 } // namespace

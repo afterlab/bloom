@@ -622,7 +622,9 @@ valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor
 namespace bloom::document::detail {
 
 bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
-    if (schemaKey == kRoundingModeParameterSchemaKey ||
+    if (schemaKey == kOscillatorWaveParameterSchemaKey ||
+        schemaKey == kLoopValueModeParameterSchemaKey ||
+        schemaKey == kRoundingModeParameterSchemaKey ||
         schemaKey == kNumberRadixParameterSchemaKey || schemaKey == kStringCaseParameterSchemaKey ||
         schemaKey == kStringPadSideParameterSchemaKey ||
         schemaKey == kIntegerOperationParameterSchemaKey ||

@@ -475,9 +475,74 @@ void testLightFlicker(Expectations& expectations) {
                         "stops is the log2 of the gain");
 }
 
+// #341 Oscillator, Wiggle and Loop Value through the kernel, reading real values: a quarter cycle of
+// a sine, the time offset reaching an arbitrary time, a seeded wiggle that repeats and follows its
+// seed, and a ping-pong loop with its cycle count.
+void testMotionUtilities(Expectations& expectations) {
+    const auto& registry = document::builtInNodeDefinitions();
+    for (const auto typeId :
+         {document::kOscillatorNodeType, document::kWiggleNodeType, document::kLoopValueNodeType}) {
+        const auto* definition = registry.find(typeId, document::kValueNodeSchemaVersion);
+        expectations.expect(definition != nullptr &&
+                                definition->category == document::NodeCategory::Values,
+                            "a motion utility is a Values node");
+    }
+    const auto run = [](const Kernel kernel, const std::vector<CompiledValue>& values,
+                        const std::vector<std::int64_t>& selectors, const core::RationalTime time) {
+        std::vector<const CompiledValue*> operands;
+        for (const auto& value : values)
+            operands.push_back(&value);
+        return runtime::evaluateValueUtility({kernel, operands, selectors, time,
+                                              document::FrameRate::framesPerSecond24()});
+    };
+    const auto scalar = [](const runtime::ValueUtilityOutcome& outcome, const std::size_t slot) {
+        const auto* value = std::get_if<double>(&outcome.outputs[slot]);
+        return value == nullptr ? -1.0e300 : *value;
+    };
+    // Sine, 1 Hz, amplitude 2, offset 5, phase 0, no time offset: a quarter second is the peak.
+    const std::vector<CompiledValue> sine{1.0, 2.0, 5.0, 0.0, 0.0};
+    const auto quarter = run(Kernel::Oscillator, sine, {0}, *core::RationalTime::create(1, 4));
+    expectations.expect(!quarter.failed && std::fabs(scalar(quarter, 0) - 7.0) < 1e-12,
+                        "an oscillator peaks at a quarter cycle");
+    const auto square = run(Kernel::Oscillator, sine, {2}, *core::RationalTime::create(3, 4));
+    expectations.expect(std::fabs(scalar(square, 0) - 3.0) < 1e-12, "a square holds its bottom");
+    const std::vector<CompiledValue> shifted{1.0, 2.0, 5.0, 0.0, 0.25};
+    const auto early = run(Kernel::Oscillator, shifted, {0}, core::RationalTime::fromInteger(0));
+    expectations.expect(std::fabs(scalar(early, 0) - 7.0) < 1e-12,
+                        "the time offset reads an arbitrary time without stepping to it");
+    const std::vector<CompiledValue> wiggleValues{2.0, 1.0, 0.0, std::int64_t{2}, 0.5,
+                                                  std::int64_t{11}, 0.0};
+    const std::vector<CompiledValue> otherSeed{2.0, 1.0, 0.0, std::int64_t{2}, 0.5,
+                                               std::int64_t{12}, 0.0};
+    bool seedMatters = false;
+    bool repeats = true;
+    bool bounded = true;
+    for (std::int64_t frame = 0; frame < 48; ++frame) {
+        const auto time = *core::RationalTime::create(frame, 24);
+        const auto a = run(Kernel::Wiggle, wiggleValues, {}, time);
+        const auto b = run(Kernel::Wiggle, wiggleValues, {}, time);
+        const auto c = run(Kernel::Wiggle, otherSeed, {}, time);
+        repeats = repeats && scalar(a, 0) == scalar(b, 0);
+        seedMatters = seedMatters || scalar(a, 0) != scalar(c, 0);
+        bounded = bounded && std::fabs(scalar(a, 0)) <= 1.0 + 1e-12;
+    }
+    expectations.expect(repeats && seedMatters && bounded,
+                        "a wiggle repeats, follows its seed and stays within its amplitude");
+    const std::vector<CompiledValue> loopValues{10.0, 20.0, 2.0, 0.0};
+    const auto pong = run(Kernel::LoopValue, loopValues, {1}, *core::RationalTime::create(5, 2));
+    const auto* cycle = std::get_if<std::int64_t>(&pong.outputs[1]);
+    expectations.expect(pong.outputCount == 2 && std::fabs(scalar(pong, 0) - 17.5) < 1e-12 &&
+                            cycle != nullptr && *cycle == 1,
+                        "a ping-pong loop at 2.5 s comes back to 17.5 in its second cycle");
+    const auto repeat = run(Kernel::LoopValue, loopValues, {0}, *core::RationalTime::create(5, 2));
+    expectations.expect(std::fabs(scalar(repeat, 0) - 12.5) < 1e-12,
+                        "a repeating loop at 2.5 s is a quarter of the way up its second cycle");
+}
+
 int main() {
     Expectations expectations;
     testLightFlicker(expectations);
+    testMotionUtilities(expectations);
     testMathSectionMembership(expectations);
     testIntegerMath(expectations);
     testShapingOperations(expectations);

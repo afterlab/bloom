@@ -2,6 +2,7 @@
 
 #include <bloom/core/color.hpp>
 #include <bloom/core/light_flicker.hpp>
+#include <bloom/core/motion_values.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 
 #include <array>
@@ -254,6 +255,44 @@ ValueUtilityOutcome evaluateValueNumeric(const ValueUtilityInvocation& invocatio
         const double gain = core::light_flicker::evaluate(settings, invocation.time.toSeconds());
         outcome.outputs[0] = gain;
         outcome.outputs[1] = core::light_flicker::stopsOf(gain);
+        break;
+    }
+    case Kernel::Oscillator: {
+        // #341: a pure function of the settings and the time (plus the time offset).
+        core::motion_values::OscillatorSettings settings;
+        settings.wave = selectorAt(invocation, 0, document::kOscillatorWaves,
+                                   core::motion_values::Wave::Sine);
+        settings.frequency = reader.scalar(0);
+        settings.amplitude = reader.scalar(1);
+        settings.offset = reader.scalar(2);
+        settings.phase = reader.scalar(3);
+        outcome.outputs[0] =
+            core::motion_values::oscillate(settings, invocation.time.toSeconds() + reader.scalar(4));
+        break;
+    }
+    case Kernel::Wiggle: {
+        core::motion_values::WiggleSettings settings;
+        settings.frequency = reader.scalar(0);
+        settings.amplitude = reader.scalar(1);
+        settings.offset = reader.scalar(2);
+        settings.octaves = reader.integer(3);
+        settings.roughness = reader.scalar(4);
+        settings.seed = reader.integer(5);
+        outcome.outputs[0] =
+            core::motion_values::wiggle(settings, invocation.time.toSeconds() + reader.scalar(6));
+        break;
+    }
+    case Kernel::LoopValue: {
+        core::motion_values::LoopSettings settings;
+        settings.mode = selectorAt(invocation, 0, document::kLoopModes,
+                                   core::motion_values::LoopMode::Repeat);
+        settings.start = reader.scalar(0);
+        settings.end = reader.scalar(1);
+        settings.duration = reader.scalar(2);
+        const auto looped =
+            core::motion_values::loop(settings, invocation.time.toSeconds() + reader.scalar(3));
+        outcome.outputs[0] = looped.value;
+        outcome.outputs[1] = looped.cycle;
         break;
     }
     case Kernel::SeparateHsv: {
