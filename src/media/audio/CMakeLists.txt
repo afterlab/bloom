@@ -70,6 +70,7 @@ endif()
 add_library(
     bloom_media_audio
     STATIC
+    analysis.cpp
     audio.cpp
     channel_layout.cpp
     effects.cpp
@@ -82,6 +83,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include playback/include
         FILES
+            include/bloom/media/audio/analysis.hpp
             include/bloom/media/audio/audio.hpp
             include/bloom/media/audio/channel_layout.hpp
             include/bloom/media/audio/effects.hpp
@@ -118,6 +120,16 @@ if(BUILD_TESTING)
         playback/tests/audio_engine_tests.cpp
     )
     add_executable(bloom_media_audio_effects_test tests/effects_tests.cpp)
+    add_executable(bloom_media_audio_analysis_test tests/analysis_tests.cpp)
+    target_link_libraries(bloom_media_audio_analysis_test PRIVATE bloom_media_audio)
+    bloom_enable_warnings(bloom_media_audio_analysis_test)
+    bloom_enable_strict_floating_point(bloom_media_audio_analysis_test)
+    bloom_add_test(
+        NAME bloom.media.audio-analysis
+        COMMAND bloom_media_audio_analysis_test
+        LABELS unit media audio analysis
+        TIMEOUT 120
+    )
     add_executable(bloom_media_loudness_test tests/loudness_tests.cpp)
     target_link_libraries(bloom_media_loudness_test PRIVATE bloom_media_audio)
     bloom_enable_warnings(bloom_media_loudness_test)
