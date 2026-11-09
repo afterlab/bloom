@@ -146,7 +146,7 @@ Independent foundation; schedule after existing correctness fixes.
 
 ### 12. [#343: Static SVG Vector Asset import and Vector Source](https://github.com/kinetik-gg/bloom/issues/343)
 
-Adopt a bounded static artwork profile and qualified Qt-free reference library; preserve source/dependencies. Produce through native geometry/coverage/composite paths where qualified; CPU-rasterize/upload is not GPU pixel implementation. Editable conversion follows later.
+Delivered as native layers rather than a picture: every element a Shape layer driven by its own Path node, groups as nested Merges, gradients, clips, masks and dashes from existing nodes, text as Text layers, imported by a bounded Qt-free reader. Design, profile, limits and what is reported: [`architecture/vector-artwork.md`](../architecture/vector-artwork.md).
 
 Independent foundation; schedule after existing correctness fixes.
 
