@@ -27,8 +27,9 @@ class ScriptPanelRuntime final : public QObject {
                        std::shared_ptr<host::GpuExportProvider> provider);
     ~ScriptPanelRuntime() override;
     [[nodiscard]] bool submit(const QString& source);
-    // As submit, and `done` is called once on the UI thread (from the runtime's poll) with the
-    // script's output and whether it succeeded: the agent route's completion (script.run).
+    // The agent route (script.run): `source` runs as a whole program, as a script file does, so a
+    // block of statements needs no exec() wrapper; `done` is called once on the UI thread (from the
+    // runtime's poll) with the script's output and whether it succeeded.
     [[nodiscard]] bool submit(const QString& source,
                               std::function<void(const QString& output, bool succeeded)> done);
     void cancel();
@@ -42,6 +43,9 @@ class ScriptPanelRuntime final : public QObject {
   private:
     struct State;
     void poll();
+    [[nodiscard]] bool enqueue(const QString& source,
+                               std::function<void(const QString& output, bool succeeded)> done,
+                               bool program);
     static void work(const std::shared_ptr<State>& state);
     std::shared_ptr<State> state_;
     std::jthread worker_;

@@ -22,6 +22,9 @@ struct ScriptPanelRuntime::State {
         std::string source;
         std::uint64_t cancellation = 0;
         std::function<void(const QString&, bool)> done;
+        // An agent's script (script.run) is a whole program run as a file would be; the console's
+        // own input is one interactive entry.
+        bool program = false;
     };
     struct Output {
         std::string source;
@@ -63,9 +66,16 @@ ScriptPanelRuntime::~ScriptPanelRuntime() {
     if (worker_.joinable())
         worker_.join();
 }
-bool ScriptPanelRuntime::submit(const QString& source) { return submit(source, {}); }
+bool ScriptPanelRuntime::submit(const QString& source) {
+    return enqueue(source, {}, false);
+}
 bool ScriptPanelRuntime::submit(const QString& source,
                                 std::function<void(const QString&, bool)> done) {
+    return enqueue(source, std::move(done), true);
+}
+bool ScriptPanelRuntime::enqueue(const QString& source,
+                                 std::function<void(const QString&, bool)> done,
+                                 const bool program) {
     if (source.isEmpty() || source.size() > 65536 || !state_->alive)
         return false;
     {
@@ -73,7 +83,7 @@ bool ScriptPanelRuntime::submit(const QString& source,
         if (state_->scripts.size() == 16)
             return false;
         state_->scripts.push_back(
-            {source.toStdString(), state_->cancellation.load(), std::move(done)});
+            {source.toStdString(), state_->cancellation.load(), std::move(done), program});
     }
     if (!worker_.joinable())
         worker_ = std::jthread([state = state_] { work(state); });
@@ -195,7 +205,7 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
                     lease->setControl({.stop = state->scriptStop.get_token(),
                                        .deadline = std::chrono::steady_clock::time_point::max()});
                 }
-                result = python->execute(work.source, true);
+                result = python->execute(work.source, !work.program);
                 if (result.incomplete) {
                     result.succeeded = false;
                     result.output =

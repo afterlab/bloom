@@ -1807,6 +1807,18 @@ bloom_add_test(NAME bloom.ui.mcp-live-ui-application COMMAND bloom_ui_mcp_live_u
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 if(BLOOM_BUILD_PYTHON)
+    # #603: script.run end to end against the live Script runtime, over Streamable HTTP.
+    add_executable(bloom_ui_mcp_script_run_test mcp_script_run_tests.cpp)
+    target_include_directories(bloom_ui_mcp_script_run_test PRIVATE ..)
+    target_link_libraries(bloom_ui_mcp_script_run_test PRIVATE bloom_ui bloom_runtime_compiler
+        bloom_mcp_testing Qt6::Test)
+    target_compile_definitions(bloom_ui_mcp_script_run_test PRIVATE
+        BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+    bloom_enable_warnings(bloom_ui_mcp_script_run_test)
+    bloom_add_test(NAME bloom.ui.mcp-script-run COMMAND bloom_ui_mcp_script_run_test
+        LABELS ui mcp scripting python integration TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
     add_executable(bloom_script_panel_test script_panel_tests.cpp)
     target_include_directories(bloom_script_panel_test PRIVATE ..)
     target_link_libraries(bloom_script_panel_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
