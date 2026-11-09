@@ -444,10 +444,13 @@ yyjson_mut_val* routeText(Json& out, const std::optional<McpRouteKind> route) {
 // preview service's running count of frames that fell back to the CPU, by reason.
 yyjson_mut_val* renderRouteQuery(McpServerCore::State& core, Json& out, McpCall& call,
                                  yyjson_val* arguments) {
-    members(arguments, {"kind"}, {"kind"});
+    members(arguments, {"kind", "composition"}, {"kind"});
     const auto& ui = core.dependencies.ui;
     if (core.liveHost() == nullptr || !ui.viewerRoute)
         return notLive(out, "render-route");
+    const auto wanted = member(arguments, "composition") != nullptr
+                            ? std::optional(integer(member(arguments, "composition")))
+                            : std::nullopt;
     McpViewerRoute route;
     auto sample = std::make_unique<runtime::ProfilerSnapshot>();
     bool sampled = false;
@@ -501,6 +504,29 @@ yyjson_mut_val* renderRouteQuery(McpServerCore::State& core, Json& out, McpCall&
         out.set(fallbacks, "byReason", reasons);
     }
     out.set(result, "cpuFallbacks", fallbacks);
+    // The newest render, export or capture job, which ran apart from the Viewer's frame: its own
+    // route and, when it ran on the CPU, the reason its log recorded. With `composition`, only a
+    // job of that composition counts.
+    std::optional<McpServerCore::State::JobRoute> job;
+    {
+        const std::lock_guard lock(core.jobRouteMutex);
+        if (core.lastJobRoute && (!wanted || core.lastJobRoute->composition == *wanted))
+            job = core.lastJobRoute;
+    }
+    if (job) {
+        auto* value = out.object();
+        out.set(value, "composition", out.number(job->composition));
+        out.set(value, "job", out.text(std::to_string(job->job)));
+        out.set(value, "gpuFrames", out.number(job->gpuFrames));
+        out.set(value, "cpuReferenceFrames", out.number(job->cpuReferenceFrames));
+        out.set(
+            value, "provenance",
+            out.text(job->cpuReferenceFrames == 0 && job->gpuFrames > 0 ? "gpu" : "cpu-reference"));
+        out.set(value, "why", job->why.empty() ? out.null() : out.text(job->why));
+        out.set(result, "lastJob", value);
+    } else {
+        out.set(result, "lastJob", out.null());
+    }
     return result;
 }
 

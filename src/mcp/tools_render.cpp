@@ -51,6 +51,30 @@ struct RenderDestination final {
     std::optional<std::string> pattern;
 };
 
+// The render and export presets, by the name the tools have always taken and by the export
+// queue's built-in id (the vocabulary of export.presets and the queue operations). Either spelling
+// is accepted; the built-in id is the one the guide and the schema lead with.
+struct PresetMapping final {
+    std::string_view preset;
+    std::string_view builtIn;
+    bool still;
+};
+constexpr std::array<PresetMapping, 6> kPresetMappings{{
+    {"PngRgba8SrgbV1", "builtin:png-sequence", true},
+    {"FlatExrRgba32fLinRec709SceneV1", "builtin:exr-sequence", true},
+    {"TiffRgba16SrgbV1", "builtin:tiff-sequence", true},
+    {"ProResMovV1", "builtin:prores-422hq-mov", false},
+    {"DnxhrMxfV1", "builtin:dnxhr-hq-mxf", false},
+    {"PcmWavV1", "builtin:wav", false},
+}};
+
+std::string canonicalPresetName(std::string name) {
+    for (const auto& mapping : kPresetMappings)
+        if (name == mapping.builtIn)
+            return std::string(mapping.preset);
+    return name;
+}
+
 std::string_view presetExtension(const std::string_view preset) {
     if (preset == "PngRgba8SrgbV1")
         return "png";
@@ -180,6 +204,37 @@ void reportJobRoute(Json& out, yyjson_mut_val* value, const TransientResult& job
                          "that was replaced and failed)."));
 }
 
+// The destination with `{name}`, `{job}`, `{format}` and `{date}` expanded. A frame number pattern
+// stays for renderDestination; a token that is not one of these is refused rather than written.
+std::string expandedDestination(const std::string& text, const document::Composition& composition,
+                                const std::string_view builtInPreset,
+                                const std::string_view jobName) {
+    const auto preset = host::builtInExportPreset(builtInPreset);
+    if (!preset)
+        throw std::runtime_error("The export preset is not available");
+    host::ExportDestinationContext context;
+    context.compositionName = composition.name();
+    const auto now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    context.year = static_cast<std::uint16_t>(local.tm_year + 1900);
+    context.month = static_cast<std::uint8_t>(local.tm_mon + 1);
+    context.day = static_cast<std::uint8_t>(local.tm_mday);
+    auto expanded = host::expandDestinationTokens(text, context, jobName, preset->settings.format);
+    if (!expanded)
+        throw InvalidInput("the destination uses an unknown token or a value with a path "
+                           "separator; use {name}, {job}, {format}, {date} or a frame number "
+                           "pattern (#### or {frame})");
+    if (const auto at = expanded->find('{');
+        at != std::string::npos && expanded->compare(at, 7, "{frame}") != 0)
+        throw InvalidInput("the destination uses an unknown token");
+    return *expanded;
+}
+
 yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& call,
                                yyjson_val* arguments, const bool compositionExport) {
     auto& scheduler = core.dependencies.scheduler;
@@ -194,19 +249,33 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
     const auto id = integer(member(arguments, "composition"));
-    const auto presetName = string(member(arguments, "preset"), 128);
-    const auto requested = string(member(arguments, "destination"));
-    const bool range = member(arguments, "frame") == nullptr;
-    if (requested.empty() || (!range && (member(arguments, "first") || member(arguments, "last"))))
+    const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
+    const auto requestedText = string(member(arguments, "destination"));
+    const bool frameGiven = member(arguments, "frame") != nullptr;
+    if (requestedText.empty() ||
+        (frameGiven && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
-    const auto first = integer(member(arguments, range ? "first" : "frame"));
-    const auto last = range ? integer(member(arguments, "last")) : first;
+    const auto first = integer(member(arguments, frameGiven ? "frame" : "first"));
+    const auto last = frameGiven ? first : integer(member(arguments, "last"));
     if (first > last || last - first >= 10000)
         throw InvalidInput("Range must contain 1..10000 frames");
-    const bool stillPreset = presetName == "PngRgba8SrgbV1" ||
-                             presetName == "FlatExrRgba32fLinRec709SceneV1" ||
-                             presetName == "TiffRgba16SrgbV1";
+    // A one-frame range is a still: one file named as given, not a sequence.
+    const bool range = !frameGiven && first != last;
+    const auto mapping = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
+    if (mapping == kPresetMappings.end())
+        throw InvalidInput("Unknown preset");
+    const bool stillPreset = mapping->still;
+    const auto source = session.renderSourceSnapshot();
+    const auto& snapshot = source.snapshot;
+    const auto* composition =
+        snapshot.project().findComposition(document::CompositionId::fromRaw(id));
+    if (!composition)
+        throw InvalidInput("Composition does not exist");
+    // {name}, {job}, {format} and {date} expand here, as the export queue expands them, so a file
+    // is never written with a token in its name.
+    const auto requested = expandedDestination(requestedText, *composition, mapping->builtIn,
+                                               compositionExport ? "MCP export" : "MCP render");
     const auto destination =
         renderDestination(requested, presetName, range, first, stillPreset, false).path;
     std::optional<output::OutputPresetV1> preset;
@@ -256,12 +325,6 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         else
             refuseExisting(destination);
     }
-    const auto source = session.renderSourceSnapshot();
-    const auto& snapshot = source.snapshot;
-    const auto* composition =
-        snapshot.project().findComposition(document::CompositionId::fromRaw(id));
-    if (!composition)
-        throw InvalidInput("Composition does not exist");
     const auto colorIntent = scripting::captureRenderColorIntent(source, *composition);
     if (!colorIntent)
         throw std::runtime_error("Project color settings are unavailable for export");
@@ -418,31 +481,21 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
     const auto id = integer(member(arguments, "composition"));
-    const auto presetName = string(member(arguments, "preset"), 128);
+    const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
     const auto requested = string(member(arguments, "destination"));
-    const bool range = member(arguments, "frame") == nullptr;
-    if (requested.empty() || (!range && (member(arguments, "first") || member(arguments, "last"))))
+    const bool frameGiven = member(arguments, "frame") != nullptr;
+    if (requested.empty() ||
+        (frameGiven && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
-    const auto first = integer(member(arguments, range ? "first" : "frame"));
-    const auto last = range ? integer(member(arguments, "last")) : first;
+    const auto first = integer(member(arguments, frameGiven ? "frame" : "first"));
+    const auto last = frameGiven ? first : integer(member(arguments, "last"));
+    // A one-frame range is a still: one file named as given, not a sequence.
+    const bool range = !frameGiven && first != last;
     if (first > last || last - first >= core.dependencies.limits.renderFrames)
         throw InvalidInput("Range must contain 1..10000 frames");
-    struct Mapping {
-        std::string_view preset;
-        std::string_view builtIn;
-        bool still;
-    };
-    constexpr std::array<Mapping, 6> mappings{{
-        {"PngRgba8SrgbV1", "builtin:png-sequence", true},
-        {"FlatExrRgba32fLinRec709SceneV1", "builtin:exr-sequence", true},
-        {"TiffRgba16SrgbV1", "builtin:tiff-sequence", true},
-        {"ProResMovV1", "builtin:prores-422hq-mov", false},
-        {"DnxhrMxfV1", "builtin:dnxhr-hq-mxf", false},
-        {"PcmWavV1", "builtin:wav", false},
-    }};
-    const auto found = std::ranges::find(mappings, presetName, &Mapping::preset);
-    if (found == mappings.end())
+    const auto found = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
+    if (found == kPresetMappings.end())
         throw InvalidInput("Unknown preset");
     if (!compositionExport && !found->still)
         throw InvalidInput("Use export for media presets and encoding settings");
@@ -455,8 +508,9 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         throw std::runtime_error("The export preset is not available");
     host::ExportTransientJobRequest request;
     request.composition = document::CompositionId::fromRaw(id);
-    request.range = range ? document::ExportRange{document::ExportRangeKind::Custom, first, last}
-                          : document::ExportRange{document::ExportRangeKind::Frame, first, first};
+    request.range = range || !found->still
+                        ? document::ExportRange{document::ExportRangeKind::Custom, first, last}
+                        : document::ExportRange{document::ExportRangeKind::Frame, first, first};
     request.settings = preset->settings;
     request.presetId = preset->id;
     request.name = "MCP " + std::string(compositionExport ? "export" : "render");

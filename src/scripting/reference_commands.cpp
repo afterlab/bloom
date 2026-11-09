@@ -400,11 +400,21 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "native-failure, native-timeout); it is a running total, not this frame's reason, and "
          "reads null without a GPU preview service. Renders, exports and captures report their "
          "own route: render, export and capture carry `gpuFrames`, `cpuReferenceFrames`, "
-         "`provenance` and `routeNote`.",
+         "`provenance` and `routeNote`. A capture, render or export does not change the "
+         "Viewer's frame, so `lastJob` answers for the newest of them: its frame counts and, "
+         "for a CPU route, the reason its log recorded. `composition` limits `lastJob` to a "
+         "job of that composition.",
          "{revision, available, hasFrame, freshness (current|stale|none), time:[n, d]|null, "
          "scene (gpu|cpu)|null, display (gpu|cpu)|null, provider|null, label|null, why|null, "
-         "cpuFallbacks:{total, byReason:{reason: count|null}}|null}",
-         {}, R"({"name":"query","arguments":{"kind":"render-route"}})");
+         "cpuFallbacks:{total, byReason:{reason: count|null}}|null, "
+         "lastJob:{composition, job, gpuFrames, cpuReferenceFrames, provenance, why|null}|null}",
+         {{.name = "composition",
+           .type = "integer",
+           .summary = "Limits lastJob to a job of this composition.",
+           .unit = "composition id (query:compositions)",
+           .range = ">= 1",
+           .defaultValue = "the newest job of any composition"}},
+         R"({"name":"query","arguments":{"kind":"render-route"}})");
     kind("context", "The editor context omitted contextual arguments fall back to.",
          "In the desktop application: the Viewer's composition, the playhead, the selection and "
          "the Viewer's display and view. On stdio: the session defaults (concept:context).",

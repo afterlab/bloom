@@ -124,6 +124,19 @@ struct McpServerCore::State {
     std::mutex captureMutex;
     std::uint64_t captureCounter = 0;
 
+    // The route the newest render, export or capture job took, read by query kind render-route
+    // (the Viewer's own frame records nothing about a job that ran apart from it).
+    struct JobRoute final {
+        std::uint64_t composition = 0;
+        std::uint64_t job = 0;
+        std::uint64_t gpuFrames = 0;
+        std::uint64_t cpuReferenceFrames = 0;
+        // The first CPU-reference reason the job's log recorded; empty when it recorded none.
+        std::string why;
+    };
+    std::mutex jobRouteMutex;
+    std::optional<JobRoute> lastJobRoute;
+
     // Project files other than the open project (the `projectFile` argument), each in its own
     // headless session kept between calls so edits, undo history and unsaved changes persist
     // until project.save and project.close. One call at a time holds fileMutex.

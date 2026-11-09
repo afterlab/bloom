@@ -447,8 +447,13 @@ void addTools(std::vector<ReferenceEntry>& out) {
     addRelated(events, {"concept:revisions"});
     out.push_back(std::move(events));
 
+    // The export queue's built-in ids (the vocabulary of export.presets) lead; the older names
+    // name the same presets and are still accepted.
     const auto stillPresets = Choices{
-        {"PngRgba8SrgbV1", "PNG, 8-bit RGBA, sRGB"},
+        {"builtin:png-sequence", "PNG, 8-bit RGBA, sRGB"},
+        {"builtin:exr-sequence", "OpenEXR, 32-bit float RGBA, linear Rec.709 scene"},
+        {"builtin:tiff-sequence", "TIFF, 16-bit RGBA, sRGB"},
+        {"PngRgba8SrgbV1", "PNG, 8-bit RGBA, sRGB (same as builtin:png-sequence)"},
         {"FlatExrRgba32fLinRec709SceneV1", "OpenEXR, 32-bit float RGBA, linear Rec.709 scene"},
         {"TiffRgba16SrgbV1", "TIFF, 16-bit RGBA, sRGB"}};
     auto render = makeEntry(
@@ -562,8 +567,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
          {.name = "preset",
           .type = "string",
           .required = true,
-          .summary = "The output format.",
-          .choices = {{"PngRgba8SrgbV1", "PNG, 8-bit RGBA, sRGB"},
+          .summary = "The output format: the id export.presets lists, or the older name of the "
+                     "same preset.",
+          .choices = {{"builtin:png-sequence", "PNG, 8-bit RGBA, sRGB"},
+                      {"builtin:exr-sequence", "OpenEXR, 32-bit float RGBA, linear Rec.709 scene"},
+                      {"builtin:tiff-sequence", "TIFF, 16-bit RGBA, sRGB"},
+                      {"builtin:prores-422hq-mov", "ProRes in QuickTime (preview)"},
+                      {"builtin:dnxhr-hq-mxf", "DNxHR in MXF"},
+                      {"builtin:wav", "PCM WAV audio"},
+                      {"PngRgba8SrgbV1", "PNG, 8-bit RGBA, sRGB"},
                       {"FlatExrRgba32fLinRec709SceneV1",
                        "OpenEXR, 32-bit float RGBA, linear Rec.709 scene"},
                       {"TiffRgba16SrgbV1", "TIFF, 16-bit RGBA, sRGB"},

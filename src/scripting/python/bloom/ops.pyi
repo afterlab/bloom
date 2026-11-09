@@ -4793,7 +4793,8 @@ class LayerOps:
         ...
     def add_solid(self, name: str, color: tuple[float, float, float, float], position: tuple[float, float] = ..., opacity: float = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-solid  (operation, layer)
-        Adds a composition-sized solid colour layer on top of the layer stack.
+        Adds a composition-sized solid colour layer on top of the layer stack. `name` and `color` are
+        required; `position` and `opacity` are optional.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -7636,7 +7637,7 @@ class NodeOps:
               Range: >= 1
           source  id  required
               Id. The composition the node renders; not the target composition.
-              Unit: layer id (query:layers .id)
+              Unit: composition id (query:compositions)
               Range: >= 1
           position  vec2  optional
               Vec2 [x, y] in Node canvas units. Default [0, 0].

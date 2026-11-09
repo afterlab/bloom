@@ -694,8 +694,15 @@ transparent exactly as a sequence or a video format that carries alpha does, on 
 the CPU reference alike. For an opaque backdrop in the output, add a full-frame solid layer at the
 bottom of the composition.
 
-Still presets are `PngRgba8SrgbV1`, `FlatExrRgba32fLinRec709SceneV1` and `TiffRgba16SrgbV1`. MEDIA-4
-presets are `ProResMovV1`, `DnxhrMxfV1` and `PcmWavV1`. ProRes output retains its existing
+`preset` takes the ids that `export.presets` and the queue operations use. Still presets are
+`builtin:png-sequence`, `builtin:exr-sequence` and `builtin:tiff-sequence`. MEDIA-4 presets are
+`builtin:prores-422hq-mov`, `builtin:dnxhr-hq-mxf` and `builtin:wav`. The older names
+`PngRgba8SrgbV1`, `FlatExrRgba32fLinRec709SceneV1`, `TiffRgba16SrgbV1`, `ProResMovV1`,
+`DnxhrMxfV1` and `PcmWavV1` name the same presets and are still accepted. In `destination`,
+`{name}` (the composition name), `{job}`, `{format}` and `{date}` expand as they do for a queued
+output, and a name with any other `{...}` token is refused instead of written. A frame, or a range
+whose first and last frames are the same, writes one file named as given; a longer range of a still
+preset needs one `####` or `{frame}`. ProRes output retains its existing
 non-authorized preview status. Worker exports currently have a Linux implementation; macOS and
 Windows return the host provider's unavailable diagnostic. See [Exporting video](exporting-video.md)
 for profiles and preservation limits. The destination directory must exist.

@@ -252,6 +252,20 @@ ExportResolvedDestination resolveDestination(const document::ExportJob& job,
     return result;
 }
 
+std::optional<std::string> expandDestinationTokens(const std::string_view text,
+                                                   const ExportDestinationContext& context,
+                                                   const std::string_view jobName,
+                                                   const document::ExportFormat format) {
+    const TokenValues values{.name = context.compositionName,
+                             .job = std::string(jobName),
+                             .format = std::string(exportFormatShortName(format)),
+                             .date = dateText(context)};
+    std::string expanded;
+    if (expand(text, values, expanded, true) != Expansion::Ok)
+        return std::nullopt;
+    return expanded;
+}
+
 namespace detail {
 std::optional<std::filesystem::path> exportFramePath(const document::ExportJob& job,
                                                      const ExportRunOutput& output,

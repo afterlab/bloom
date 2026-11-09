@@ -87,6 +87,9 @@ returns the frame as a PNG image. Output keeps alpha; the composition background
 display-only and not rendered. `render` writes reference files with SHA-256 digests and `export`
 writes movies.
 
+To undo or redo a step, call `history` with `action` and `expectedRevision`, the current
+revision from any query or edit result; a stale revision changes nothing.
+
 ## 5. Save
 
 The in-app server edits the artist's open project; the artist saves it (File > Save), and the

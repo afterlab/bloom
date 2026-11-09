@@ -132,6 +132,11 @@ used; the panel does not edit them.
   the frame shows over black). The header carries a linear transfer and Rec.709 primaries or
   unspecified primaries; the output color space is recorded by the job, not the file.
 
+**Include audio** is on by default, and a movie then always carries an audio stream, silent when
+the composition has no audio layer, because players and delivery specifications commonly expect a
+track. Turn **Include audio** off (the `audio` argument of the `export` tool) for a movie without
+one.
+
 MP4 movies carry AAC audio; WebM movies carry Opus (shipped with Bloom) at 48 kHz, whatever the
 output's audio sample rate; MOV and MXF carry PCM. Movie containers are tagged from the output's
 color intent: an sRGB display is tagged with the sRGB transfer, a Rec.1886/Rec.709 display with

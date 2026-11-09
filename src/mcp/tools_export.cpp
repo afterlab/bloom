@@ -512,6 +512,7 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                 host::ExportTransientJobRequest request,
                                 const WorkerLimitArguments& limits) {
     const auto& stop = call.control.stop;
+    const auto routeComposition = request.composition.value();
     host::ExportTransientSubmitResult submitted;
     std::optional<host::ExportQueueSubscription> sub;
     std::uint64_t generation = 0;
@@ -629,6 +630,21 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                     result.files.push_back(std::move(file));
             }
             result.frames = std::max<std::uint64_t>(result.frames, view->progress.framesCompleted);
+            if (result.routeKnown) {
+                McpServerCore::State::JobRoute route;
+                route.composition = routeComposition;
+                route.job = result.job;
+                route.gpuFrames = result.gpuFrames;
+                route.cpuReferenceFrames = result.cpuReferenceFrames;
+                for (const auto& entry : result.log)
+                    if (entry.code.find("cpu-reference") != std::string::npos &&
+                        entry.code.find("check") == std::string::npos) {
+                        route.why = entry.message;
+                        break;
+                    }
+                const std::lock_guard lock(core.jobRouteMutex);
+                core.lastJobRoute = std::move(route);
+            }
             return result;
         }
         if (stop.stop_requested() && !stopping) {

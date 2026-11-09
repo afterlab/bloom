@@ -460,6 +460,14 @@ struct ExportResolvedDestination final {
                                                            const document::ExportOutput& output,
                                                            const ExportDestinationContext& context);
 
+// Expands only the value tokens `{name}`, `{job}`, `{format}` and `{date}` of a destination text
+// (a frame token, `####` or `{frame}`, is left for the caller), sanitizing each value for file
+// names as resolveDestination does. Empty when a token is unknown or a value would add a path
+// separator. Pure.
+[[nodiscard]] std::optional<std::string>
+expandDestinationTokens(std::string_view text, const ExportDestinationContext& context,
+                        std::string_view jobName, document::ExportFormat format);
+
 // ---------------------------------------------------------------------------------------------
 // Copy as command (pure)
 

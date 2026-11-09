@@ -871,6 +871,18 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
 }
 
 namespace {
+// The composition omitted contextual arguments fall back to: the context's, else the project's
+// first. Never 0, which names no composition.
+std::optional<std::uint64_t> contextComposition(const McpCall& call,
+                                                const document::Snapshot& snapshot) {
+    if (call.context.composition && *call.context.composition != 0)
+        return call.context.composition;
+    const auto compositions = snapshot.project().compositions();
+    if (compositions.empty())
+        return std::nullopt;
+    return compositions.front().id().value();
+}
+
 // query kind "context": the live editor context (or the headless session defaults).
 yyjson_mut_val* contextProjection(Json& out, McpCall& call, const document::Snapshot& snapshot) {
     auto* result = out.object();
@@ -881,8 +893,8 @@ yyjson_mut_val* contextProjection(Json& out, McpCall& call, const document::Snap
     out.set(project, "name", out.text(snapshot.project().name()));
     out.set(result, "project", project);
     const auto& context = call.context;
-    out.set(result, "composition",
-            context.composition ? out.number(*context.composition) : out.null());
+    const auto composition = contextComposition(call, snapshot);
+    out.set(result, "composition", composition ? out.number(*composition) : out.null());
     auto* selection = out.array();
     for (const auto node : context.selection)
         out.append(selection, out.number(node));
@@ -963,9 +975,11 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         out.set(result, "project", project);
         return result;
     }
-    if (individualParameter &&
-        (!member(arguments, "composition") || !member(arguments, "parameter")))
-        throw InvalidInput("Individual parameter queries require composition and parameter IDs");
+    if (individualParameter && !member(arguments, "parameter"))
+        throw InvalidInput("Individual parameter queries require a parameter ID");
+    const auto defaultedComposition = contextComposition(call, snapshot);
+    if (individualParameter && !member(arguments, "composition") && !defaultedComposition)
+        throw InvalidInput("Individual parameter queries need a composition: the project has none");
     if (individualParameter && member(arguments, "expectedRevision") &&
         integer(member(arguments, "expectedRevision")) != snapshot.revision().value())
         throw InvalidInput("Stale parameter revision");
@@ -974,7 +988,9 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
     if (kind == "parameter" && (member(arguments, "offset") || member(arguments, "limit")))
         throw InvalidInput("String chunk options require parameter-value");
     if (individualParameter) {
-        const auto compositionId = integer(member(arguments, "composition"));
+        const auto compositionId = member(arguments, "composition")
+                                       ? integer(member(arguments, "composition"))
+                                       : *defaultedComposition;
         const auto* composition =
             snapshot.project().findComposition(document::CompositionId::fromRaw(compositionId));
         if (!composition)

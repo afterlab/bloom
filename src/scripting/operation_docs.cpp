@@ -365,7 +365,8 @@ constexpr std::array kNotes{
         "layer, slot, layerOutputNode and the shape's nodes and parameters (listed in the result)",
         "query:layers bloom.parameter.set-source", ""},
     OperationNotes{"bloom.layer.add-solid",
-        "Adds a composition-sized solid colour layer on top of the layer stack.",
+        "Adds a composition-sized solid colour layer on top of the layer stack. `name` and "
+        "`color` are required; `position` and `opacity` are optional.",
         "layer, slot, solidNode, layerOutputNode, colorParameter, widthParameter, "
         "heightParameter, positionParameter, "
         "anchorParameter, scaleParameter, rotationParameter, opacityParameter, blendModeParameter",
@@ -666,6 +667,8 @@ void refine(const std::string& op, ArgumentSchema& argument) {
     case ValueKind::Id:
         argument.unit = name == "before" && op != "bloom.layer.move-before"
                             ? std::string("layer id (query:layers .id)")
+                        : name == "source" && op == "bloom.node.add-composition-source"
+                            ? std::string("composition id (query:compositions)")
                             : idUnit(name);
         argument.minimum = 1.0;
         break;

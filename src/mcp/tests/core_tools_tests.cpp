@@ -2023,6 +2023,40 @@ void secondProjectFile() {
         expect(contains(exported, R"("isError":false)") &&
                    std::filesystem::exists(folder / "out.png"),
                "the second project exports: " + exported);
+        // #625: tokens expand, a one-frame range is one file named as given, and the built-in
+        // preset id is accepted. Nothing is written with a token or a frame pattern in its name.
+        const auto one = server.call(
+            "render", file(R"(,"composition":1,"first":0,"last":0,"preset":"builtin:png-sequence",)"
+                           R"("destination":")" +
+                           (folder / "one_{name}_{job}_{format}.png").generic_string() + R"(")"));
+        expect(contains(one, R"("isError":false)"),
+               "a one-frame range with tokens renders: " + one);
+        std::vector<std::string> ones;
+        for (const auto& entry : std::filesystem::directory_iterator(folder))
+            if (entry.path().filename().string().starts_with("one_"))
+                ones.push_back(entry.path().filename().string());
+        expect(ones.size() == 1 && ones[0].find_first_of("{}#") == std::string::npos &&
+                   ones[0].ends_with("_MCP render_png.png"),
+               "the file is named with the tokens expanded and no frame number: " +
+                   (ones.empty() ? std::string("(none)") : ones[0]));
+        const auto unknownToken = server.call(
+            "render",
+            file(R"(,"composition":1,"frame":0,"preset":"PngRgba8SrgbV1","destination":")" +
+                 (folder / "bad_{nope}.png").generic_string() + R"(")"));
+        expect(contains(unknownToken, "unknown token") &&
+                   !std::filesystem::exists(folder / "bad_{nope}.png"),
+               "an unknown token is refused, not written: " + unknownToken);
+        const auto frameNumbered = server.call(
+            "render",
+            file(R"(,"composition":1,"frame":3,"preset":"PngRgba8SrgbV1","destination":")" +
+                 (folder / "still_{job}.####.png").generic_string() + R"(")"));
+        expect(contains(frameNumbered, R"("isError":false)") &&
+                   std::filesystem::exists(folder / "still_MCP render.0003.png"),
+               "a frame number pattern and a token both expand: " + frameNumbered);
+        const auto implicitComposition =
+            server.call("query", file(R"(,"kind":"parameter","parameter":1)"));
+        expect(contains(implicitComposition, R"("isError":false)"),
+               "query parameter defaults to the context composition: " + implicitComposition);
         const auto saved = server.call("project.save", file(""));
         expect(contains(saved, R"("saved":true)"), "the second project saves: " + saved);
         const auto closed = server.call("project.close", file(""));
