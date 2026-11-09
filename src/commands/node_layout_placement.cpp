@@ -17,6 +17,7 @@
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/project.hpp>
 
@@ -131,6 +132,8 @@ struct NodeControlsEstimate final {
         return {1, 0, false};
     if (typeId == "bloom.map-range")
         return {0, 2, false};
+    if (typeId == document::kToneMapNodeType)
+        return {0, 1, false};
     if (typeId == "bloom.luma-key" || typeId == "bloom.clamp" || typeId == "bloom.in-range" ||
         typeId == "bloom.random" || typeId == "bloom.wrap" || typeId == "bloom.smoothstep")
         return {0, 1, false};

@@ -1,6 +1,7 @@
 #include "zip_container_test_support.hpp"
 
 #include <bloom/document/auto_exposure_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
@@ -182,7 +183,7 @@ void blurNodeReopen() {
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
           "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure",
+          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure", "bloom.tone-map",
           "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
           "bloom.test-card", "bloom.corner-pin", "bloom.st-map", "bloom.displace"}) {
         const auto node = draft.ids().allocateNode();
@@ -311,6 +312,20 @@ void blurNodeReopen() {
                           document::autoExposureParameterSpec(parameter.schemaKey)->minimum +
                           0.4 * (document::autoExposureParameterSpec(parameter.schemaKey)->maximum -
                                    document::autoExposureParameterSpec(parameter.schemaKey)->minimum)}
+                // #518 Tone Map: the second method, the gamut switch on and every scalar moved off
+                // its default within its domain.
+                : document::colorCleanupParameterSpec(parameter.schemaKey) != nullptr
+                    ? (document::colorCleanupParameterSpec(parameter.schemaKey)->kind ==
+                               document::DepthParameterKind::Boolean
+                           ? document::ParameterValue{true}
+                       : document::colorCleanupParameterSpec(parameter.schemaKey)->kind ==
+                               document::DepthParameterKind::Choice
+                           ? document::ParameterValue{std::int64_t{1}}
+                           : document::ParameterValue{
+                                 document::colorCleanupParameterSpec(parameter.schemaKey)->softMaximum *
+                                 0.5 +
+                                 document::colorCleanupParameterSpec(parameter.schemaKey)->minimum *
+                                     0.5})
                 // #486 Lens Distortion: Redistort, moved coefficients and a moved centre.
                 : parameter.schemaKey == "bloom.lens-distortion.mode"
                     ? document::ParameterValue{std::int64_t{1}}

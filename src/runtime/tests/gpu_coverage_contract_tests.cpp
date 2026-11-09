@@ -42,6 +42,7 @@
 #include "histogram_test_support.hpp"
 #include "statistics_test_support.hpp"
 #include "pixel_math_test_support.hpp"
+#include "color_tool_test_support.hpp"
 #include "film_grain_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
@@ -1530,6 +1531,44 @@ displayProofRunner(const bool customView) {
                              503600,
                              "production Alpha Association node: white-backed Unmult and a "
                              "signed HDR matte colour, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    // #518 Tone Map over the HDR, signed, partial-alpha gradient: each method, shadow recovery, a
+    // hard clip and gamut compression through the production builder's one resident program.
+    const auto toneMap = [](const bloom::color_tool_test::ToneMapSettings settings) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            return bloom::color_tool_test::toneMap(idBase, settings);
+        };
+    };
+    add(
+        "effect.ColorToolKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color tool tests",
+        [runGrades, toneMap] {
+            bloom::color_tool_test::ToneMapSettings brightest;
+            brightest.method = 1;
+            bloom::color_tool_test::ToneMapSettings shadows;
+            shadows.shadows = 1.5;
+            shadows.knee = 2.0;
+            shadows.ceiling = 6.0;
+            return runGrades({toneMap({}), toneMap(brightest), toneMap(shadows)}, 518000,
+                             "production Tone Map: both roll-off methods and shadow recovery over "
+                             "HDR and signed values, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.tone-map", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color tool tests",
+        [runGrades, toneMap] {
+            bloom::color_tool_test::ToneMapSettings hard;
+            hard.knee = 0.8;
+            hard.ceiling = 0.5;
+            bloom::color_tool_test::ToneMapSettings gamut;
+            gamut.gamut = true;
+            gamut.method = 1;
+            gamut.shadows = -0.5;
+            return runGrades({toneMap(hard), toneMap(gamut)}, 518600,
+                             "production Tone Map node: a hard clip, and gamut compression with a "
+                             "brightest-channel roll-off and darkened shadows, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from

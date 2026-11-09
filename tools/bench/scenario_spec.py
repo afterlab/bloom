@@ -408,6 +408,21 @@ SCENARIOS["image-math-2k"] = {
     ],
 }
 
+# #518: Tone Map over a plate, its ceiling keyed so every frame is new: one fixed pass per frame
+# (gamut compression and shadow recovery on, the costlier branches). Written, not run: it has no
+# recorded numbers and no budget.
+SCENARIOS["tone-map-2k"] = {
+    "description": "A PNG16 plate under Tone Map with shadow recovery and gamut compression, its "
+                   "ceiling keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.tone-map", {"shadows": 0.5, "gamutCompress": True},
+                      {"keys": {"ceiling": [[0, 1.0], [23, 2.0]]}}]]},
+    ],
+}
+
 # #349: Image Compare (a Split whose position is keyed, against a second plate) and then Histogram
 # (its range keyed), so every frame is new and the cost is the compare pass and the three Histogram
 # passes (the tile counts, their sums and the plot). Written, not run: it has no recorded numbers and

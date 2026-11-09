@@ -1725,6 +1725,73 @@ operation, mode, channel choice and second-image window to the CPU oracle with c
 value runs; `effect.PixelMathKernel` and the three `node.*` fixtures prepare through the production
 builder in the coverage contract. [Benchmarks](../development/benchmarks.md) lists `image-math-2k`.
 
+## Tone Map
+
+`bloom.tone-map`, schema 1, under Color Correction (issue #518), compresses highlights for HDR
+scene-linear images with a soft clip, recovers shadows and, when asked, pulls colors that left the gamut
+back inside. It has one Image in, `input`, one Image out, `image`, and the optional effect mask. It
+lowers to one `ColorToolKernel` image effect (a grade kind, `ColorTool`) with no new operation boundary.
+
+| Role | Default | Domain |
+|---|---|---|
+| `method` | Each channel | Each channel, Brightest channel |
+| `knee` | 0.8 | 0 to 1,000,000 |
+| `ceiling` | 1 | 0 to 1,000,000 |
+| `shadows` | 0 | -1 to 16 |
+| `shadowRange` | 0.18 | 0.0001 to 1,000,000 |
+| `gamutCompress` | off | on, off |
+| `gamutThreshold` | 0.8 | 0 to 0.999 |
+| `gamutLimit` | 1.2 | 1.001 to 100 |
+
+Every scalar has a socket and can be keyed or driven; `method` and `gamutCompress` are constants. On
+the card, `knee` and `ceiling` are one range control (Roll-off range).
+
+**The pixel**, in binary32 and in this order, on the straight color (the stored color divided by alpha);
+the result is multiplied by alpha again and alpha is untouched. A pixel with alpha 0 is left as stored,
+since it has no straight color. A pixel whose color is not finite is an error, like every grade.
+
+1. *Gamut compression* (when `gamutCompress` is on). With `a = max(r, g, b)` and `m = |a|`, each
+   channel `c` is at the distance `d = (a - c) / m` from the brightest channel (0 when `m` is 0, the
+   pixel then being left alone). A distance up to `gamutThreshold` (`t`) is left exactly as it is.
+   Above it, with `e = d - t`, the distance becomes `t + e / (1 + e / s)` and the channel
+   `a - m * (that)`, where `s = (l - t)(1 - t) / (l - 1)` and `l` is `gamutLimit`. This is the rational
+   (power one) form of the common reference gamut compression curve: a distance of exactly `l` lands
+   on the edge of the gamut (the channel becomes 0), larger distances are pulled in without limit
+   toward `t + s`, and the curve never decreases, so a farther color never ends nearer the edge.
+2. *Shadow recovery* (when `shadows` is not 0). Each channel `c` is multiplied by
+   `1 + shadows * R / (R + max(c, 0))` where `R` is `shadowRange`. The gain is `1 + shadows` at black,
+   `1 + shadows / 2` at `R` and falls toward 1 above it, so black stays black, a shadows of -1 takes the
+   darkest values toward black and a larger value lifts them by as much as `1 + shadows`. A negative
+   channel takes the gain at 0.
+3. *Highlight roll-off.* With `room = ceiling - knee`: a value at or below `knee` is untouched;
+   above it, with `d = x - knee`, the value is `knee + room * d / (d + room)`, which leaves the knee
+   with slope one (no corner), never decreases and approaches `ceiling` without reaching it. A `room`
+   at or below 0 is a hard clip, `min(x, ceiling)`. *Each channel* rolls every channel off on its own;
+   *Brightest channel* rolls off `max(r, g, b)` alone and multiplies all three channels by the
+   factor the brightest one changed by, so hue and saturation hold. A negative channel is never
+   touched by the roll-off.
+
+The default (knee 0.8, ceiling 1) maps a scene-linear 1.0 to 0.9 and 4.0 to about 0.988; to leave the SDR
+range alone and only tame an HDR peak, raise both, for example a knee of 4 and a ceiling of 8.
+
+**Identity and cache.** The pass is never an identity alias. The packed table (32 floats: the
+operation, the method and gamut switch, the knee, ceiling and room, the shadow gain and range, the
+gamut threshold and scale) is the cache identity; changing any value or choice changes it. Division is
+the correctly rounded one on both sides and nothing else is transcendental, so the CPU reference and
+the GPU program agree exactly.
+
+**On the GPU.** One fixed program (`bloom.render.color-tool.v1`) of the generic color grade dispatch
+reads the same table, with `precise` operations in the CPU's order. A non-finite result is refused as
+on the CPU. It runs resident with the image and needs no readback.
+
+**Evidence.** `src/runtime/tests/color_tool_tests.cpp` reads real values for the roll-off, the hard clip,
+both methods, shadow recovery and gamut compression, the properties above over a sweep, premultiplied
+and alpha 0 pixels, the domains, the table's identity, the pixel budget and cancellation.
+`snapshot_compiler_effect_tests.ipp` holds the lowering; the native harness holds four variants to
+the CPU oracle with cold, warm and changed-value runs; `effect.ColorToolKernel` and `node.bloom.tone-map`
+prepare through the production builder in the coverage contract. [Benchmarks](../development/benchmarks.md)
+lists `tone-map-2k`, written and not yet run.
+
 ## Histogram
 
 `bloom.histogram`, schema 1, under Tracking & Analysis (issue #349), has one Image in, `input`, and one

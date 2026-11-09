@@ -73,7 +73,8 @@ void movingAGroupLeavesTheEffectMaskAlone() {
         return false;
     };
     for (const auto typeId : {"bloom.vignette", "bloom.film-grain", "bloom.depth-fog", "bloom.echo", "bloom.frame-rate-hold",
-                              "bloom.motion-blur", "bloom.z-defocus", "bloom.colorize", "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure"})
+                              "bloom.motion-blur", "bloom.z-defocus", "bloom.colorize", "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure",
+                              "bloom.tone-map"})
         expect(masked(typeId), std::string(typeId) + " keeps its effect mask");
     for (const auto typeId : {"bloom.lens-flare", "bloom.drop-shadow", "bloom.light-wrap",
                               "bloom.luma-key", "bloom.channel-shuffle", "bloom.alpha-association",

@@ -15,6 +15,7 @@
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -2144,6 +2145,7 @@ int main() {
         testRecipeMute(expectations);
         testColorGradeLowering(expectations);
         testAlphaAssociationLowering(expectations);
+        testColorToolLowering(expectations);
         testColorizeLowering(expectations);
         testVignetteLowering(expectations);
         testPixelMathLowering(expectations);

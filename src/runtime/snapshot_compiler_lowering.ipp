@@ -2272,6 +2272,44 @@ lowerImageEffect(const document::NodeRecord& node,
         }
         return effect;
     }
+    // #518 Tone Map: the constant method and gamut switch, then the scalars in the kernel's order.
+    if (document::isColorCleanupNodeType(node.typeId)) {
+        runtime::ColorToolKernel kernel;
+        bool lowered = true;
+        const auto choice = [&](const std::string_view role, const std::size_t slot,
+                                const std::int64_t high) {
+            const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+            lowered = lowered && value != nullptr && *value >= 0 && *value <= high;
+            if (value != nullptr)
+                kernel.choices[slot] = *value;
+        };
+        const auto flag = [&](const std::string_view role, const std::size_t slot) {
+            const auto* value = parameterConstant<bool>(findParameterBinding(node, role));
+            lowered = lowered && value != nullptr;
+            kernel.choices[slot] = value != nullptr && *value ? 1 : 0;
+        };
+        const auto scalars = [&](std::initializer_list<std::string_view> roles) {
+            std::size_t slot = 0;
+            for (const auto role : roles) {
+                const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
+                lowered = lowered && parameter.has_value();
+                if (parameter)
+                    kernel.values[slot] = *parameter;
+                ++slot;
+            }
+        };
+        if (node.typeId == document::kToneMapNodeType) {
+            kernel.operation = runtime::ColorToolOperation::ToneMap;
+            choice("method", 0, document::kToneMapBrightestChannel);
+            flag("gamutCompress", 1);
+            scalars({"knee", "ceiling", "shadows", "shadowRange", "gamutThreshold", "gamutLimit"});
+        }
+        if (!lowered) {
+            addTopologyFailure(node.id, "Color tool parameters could not be lowered.");
+            return std::nullopt;
+        }
+        return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+    }
     if (node.typeId == document::kHueSaturationNodeType) {
         const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
         const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));

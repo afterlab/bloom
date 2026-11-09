@@ -1151,7 +1151,7 @@ group is waiting for:
 | Blur & Sharpen | Gaussian Blur, Box Blur, Z Defocus, Motion Blur, Vector Motion Blur, Optical Flow, Optical Flow Motion Blur, Directional Blur, Spin Blur, Zoom Blur, Sharpen, + Denoise |
 | Light & Shadow | Glow, Light Wrap, Drop Shadow, Depth Fog, Lens Flare, Light Rays, + Inner Shadow, + Inner Glow |
 | Stylize | Vignette, Film Grain, Codec Degrade, + Dither, + Quantize |
-| Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, Auto Exposure, + Color Matrix, + Tone Map |
+| Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, Auto Exposure, Tone Map, + Color Matrix |
 | Color Management | OCIO Color Space Transform, OCIO File Transform |
 | Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
 | Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Path Stroke |

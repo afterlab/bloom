@@ -8,6 +8,7 @@
 #include "codec_degrade_image_effect.hpp"
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
+#include "color_tool_image_effect.hpp"
 #include "histogram_image_effect.hpp"
 #include "statistics_image_effect.hpp"
 #include "audio_plot_image_effect.hpp"
@@ -961,6 +962,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return statisticsProgramText();
     case ColorGradeKind::AudioPlot:
         return audioPlotProgramText();
+    case ColorGradeKind::ColorTool:
+        return colorToolProgramText();
     case ColorGradeKind::Sharpen: {
         // ImageCombineV1's Unsharp mode; buildColorGradeProgram refuses this kind.
         static const std::string none;
@@ -1170,6 +1173,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareMotionGrade(kernel, values);
     if (const auto* pixelMath = std::get_if<PixelMathKernel>(&kernel))
         return preparePixelMathGrade(*pixelMath, values);
+    if (const auto* tool = std::get_if<ColorToolKernel>(&kernel))
+        return prepareColorToolGrade(*tool, values);
     if (const auto* histogram = std::get_if<HistogramKernel>(&kernel))
         return prepareHistogramGrade(*histogram, values);
     if (const auto* statistics = std::get_if<StatisticsKernel>(&kernel))
@@ -1204,6 +1209,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         return alphaAssociationPixel(grade.data, pixel);
     if (grade.kind == ColorGradeKind::Colorize)
         return colorizePixel(grade.data, pixel);
+    if (grade.kind == ColorGradeKind::ColorTool)
+        return colorToolPixel(grade.data, pixel);
     // #505: a vignette depends on where the pixel is (vignettePixel); #525 a field raster replaces
     // every pixel (applyFieldRaster).
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
@@ -1349,11 +1356,12 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::Histogram ? validHistogramProgramData(data)
                         : kind == ColorGradeKind::Statistics ? validStatisticsProgramData(data)
                         : kind == ColorGradeKind::AudioPlot ? validAudioPlotProgramData(data)
+                        : kind == ColorGradeKind::ColorTool ? validColorToolProgramData(data)
                             : data.size() == kHueSaturationFloats;
     if ((static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) &&
          kind != ColorGradeKind::PixelMath && kind != ColorGradeKind::Histogram &&
-         kind != ColorGradeKind::Statistics &&
-         kind != ColorGradeKind::AudioPlot) ||
+         kind != ColorGradeKind::Statistics && kind != ColorGradeKind::AudioPlot &&
+         kind != ColorGradeKind::ColorTool) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1461,6 +1469,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_statistics";
         program.resourcePrefix = "bloom_statistics_";
         program.semanticsId = "bloom.render.statistics.v1";
+        break;
+    case ColorGradeKind::ColorTool:
+        program.functionName = "bloom_color_tool";
+        program.resourcePrefix = "bloom_color_tool_";
+        program.semanticsId = "bloom.render.color-tool.v1";
         break;
     case ColorGradeKind::AudioPlot:
         program.functionName = "bloom_audio_plot";

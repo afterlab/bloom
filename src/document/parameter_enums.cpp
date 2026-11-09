@@ -2,6 +2,7 @@
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
@@ -187,8 +188,11 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return options;
     }
     // #483 Z Defocus and Depth Fog: every Choice, its labels in stored-value order.
-    if (const auto* depth = effectParameterSpec(schemaKey);
-        depth != nullptr && depth->kind == DepthParameterKind::Choice) {
+    const auto* depth = effectParameterSpec(schemaKey);
+    // #518: the color cleanup nodes' table (color_cleanup_nodes.hpp) reads the same way.
+    if (depth == nullptr)
+        depth = colorCleanupParameterSpec(schemaKey);
+    if (depth != nullptr && depth->kind == DepthParameterKind::Choice) {
         Options options;
         for (std::size_t index = 0; index < depth->choices.size(); ++index)
             options.push_back({std::string(depth->choices[index]),

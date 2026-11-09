@@ -14,6 +14,7 @@
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/sharpen_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -481,6 +482,9 @@ std::optional<ParameterPresentation> fieldPresentation(const std::string_view sc
 // #483 Z Defocus and Depth Fog: one presentation per parameter, from the depth table itself.
 std::optional<ParameterPresentation> depthPresentation(const std::string_view schemaKey) {
     const auto* spec = effectParameterSpec(schemaKey);
+    // #518: the color cleanup nodes' table (color_cleanup_nodes.hpp) reads the same way.
+    if (spec == nullptr)
+        spec = colorCleanupParameterSpec(schemaKey);
     if (spec == nullptr)
         return std::nullopt;
     switch (spec->kind) {

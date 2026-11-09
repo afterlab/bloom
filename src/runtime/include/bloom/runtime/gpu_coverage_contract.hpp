@@ -201,6 +201,10 @@ BLOOM_GPU_REQUIRED_EFFECT(StatisticsKernel,
                           "count, extremes, mean and squared deviations, and the combination of "
                           "the tiles in order (#349)");
 
+BLOOM_GPU_REQUIRED_EFFECT(ColorToolKernel,
+                          "Tone Map: gamut compression, shadow recovery and a smooth highlight "
+                          "roll-off of straight scene-linear color (#518)");
+
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
 

@@ -69,7 +69,10 @@ enum class ColorGradeKind : std::uint8_t {
     AudioPlot,
     // #349: Image Statistics (statistics_image_effect.hpp), the geometry of the image it follows
     // appended where it is applied.
-    Statistics
+    Statistics,
+    // #518: Tone Map (color_tool_image_effect.hpp), the table of one per-pixel function of the
+    // straight color.
+    ColorTool
 };
 
 // The packed table, always a whole number of vec4s:

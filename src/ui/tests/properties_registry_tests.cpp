@@ -24,6 +24,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/warp_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
@@ -1160,6 +1161,77 @@ void autoExposureRows() {
     }
 }
 
+// #518 Tone Map in Properties (and the other color cleanup nodes): a row for each value, in plain
+// words, each label shown whole, nothing wider than the panel, at the widths of a wide, a normal and
+// a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed
+// with the device pixel ratio).
+void colorCleanupRows() {
+    for (const auto type : {document::kToneMapNodeType}) {
+        auto project =
+            document::makeNewProject("Cleanup", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, type);
+        session.selectNode(node);
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 900);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& spec : document::colorCleanupParameters(type)) {
+                // The roll-off range's two values are the card widget's range row, not rows of
+                // their own.
+                if (type == document::kToneMapNodeType &&
+                    (spec.role == "knee" || spec.role == "ceiling")) {
+                    auto* range = properties.findChild<QWidget*>("rangeRow.knee");
+                    expect(range != nullptr && range->isVisibleTo(&properties),
+                           "Tone Map presents its roll-off range");
+                    continue;
+                }
+                auto* found = row(properties, std::string(spec.role).c_str());
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "a color cleanup node presents every value");
+                if (found == nullptr)
+                    continue;
+                const auto text =
+                    QString::fromLatin1(spec.label.data(), static_cast<int>(spec.label.size()));
+                expect(found->property("rowLabel").toString() == text,
+                       "a color cleanup node names a row in plain words");
+                QLabel* label = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == text && candidate->isVisibleTo(&properties))
+                        label = candidate;
+                expect(label != nullptr &&
+                           label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                       "a color cleanup node shows a row label whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) &&
+                                   !field->isDisplayRounded(),
+                               "a color cleanup node shows a value whole");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "a color cleanup node's rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/") +
+                                            QString::fromLatin1(type.data(),
+                                                                static_cast<int>(type.size())) +
+                                            QStringLiteral("-properties-") +
+                                            QString::number(width) + QLatin1Char('-') + suffix +
+                                            QStringLiteral(".png")))
+                    std::cerr << "could not write the " << type << " Properties capture\n";
+            }
+        }
+    }
+}
+
 // #348 Corner Pin, ST Map and Displace in Properties: a row for every corner, choice and value, in
 // plain words, each label shown whole and nothing wider than the panel, at the widths of a wide, a
 // normal and a narrow panel. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width
@@ -1559,6 +1631,7 @@ int main(int argc, char** argv) try {
     transform2DRows();
     frameRateHoldRows();
     autoExposureRows();
+    colorCleanupRows();
     warpRows();
     audioEffectRows();
     groupAndPlotRows();

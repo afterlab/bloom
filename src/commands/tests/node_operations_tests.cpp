@@ -1093,6 +1093,32 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aeLookBack,
                                ConstantValueSource{std::int64_t{3}});
 
+    // #518 Tone Map: its values, method and gamut switch edit within their domains and refuse
+    // outside them.
+    const auto toneMap = addRecipe("bloom.tone-map");
+    const auto tmMethod = toneMap.outputId<ParameterId>("parameter.method");
+    const auto tmKnee = toneMap.outputId<ParameterId>("parameter.knee");
+    const auto tmShadows = toneMap.outputId<ParameterId>("parameter.shadows");
+    const auto tmRange = toneMap.outputId<ParameterId>("parameter.shadowRange");
+    const auto tmGamut = toneMap.outputId<ParameterId>("parameter.gamutCompress");
+    const auto tmLimit = toneMap.outputId<ParameterId>("parameter.gamutLimit");
+    if (!tmMethod || !tmKnee || !tmShadows || !tmRange || !tmGamut || !tmLimit)
+        throw std::logic_error("Tone Map exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *tmMethod, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *tmKnee, ConstantValueSource{4.0});
+    (void)exercise<SetParameterSource>(test, fixture, *tmShadows, ConstantValueSource{-1.0});
+    (void)exercise<SetParameterSource>(test, fixture, *tmGamut, ConstantValueSource{true});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tmMethod,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tmKnee,
+                               ConstantValueSource{-0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tmShadows,
+                               ConstantValueSource{-1.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tmRange,
+                               ConstantValueSource{0.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tmLimit,
+                               ConstantValueSource{1.0});
+
     // #348 Corner Pin, ST Map and Displace: their corners, amounts and choices edit within their
     // domains and refuse outside them.
     const auto pin = addRecipe("bloom.corner-pin");

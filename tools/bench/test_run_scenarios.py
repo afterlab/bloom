@@ -594,6 +594,14 @@ class DepthScenario(unittest.TestCase):
                          ["bloom.image-math", "bloom.image-map-range", "bloom.image-clamp"])
         self.assertIn("inputMax", effects[1][2]["keys"], "every frame is new")
 
+    def test_tone_map_scenario_keys_its_ceiling_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["tone-map-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.tone-map")
+        self.assertIn("ceiling", effect[2]["keys"], "every frame is new")
+
     def test_histogram_compare_scenario_wires_its_second_plate_and_keys_both(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["histogram-compare-2k"]

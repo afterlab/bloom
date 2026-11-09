@@ -221,6 +221,7 @@ target_sources(
         codec_degrade_image_effect.cpp
         auto_exposure_image_effect.cpp
         pixel_math_image_effect.cpp
+        color_tool_image_effect.cpp
         histogram_image_effect.cpp
         statistics_image_effect.cpp
         audio_analysis.cpp

@@ -16,6 +16,7 @@
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -229,6 +230,9 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #486 Sharpen: its table's own labels.
     if (const auto* sharpen = document::sharpenParameterSpec(schemaKey); sharpen != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(sharpen->label).c_str());
+    // #518 Tone Map, #517 Color Matrix and #523 HSL Qualifier: their table's own labels.
+    if (const auto* cleanup = document::colorCleanupParameterSpec(schemaKey); cleanup != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(cleanup->label).c_str());
     return
         isEffectColorSpaceSchema(schemaKey)
             ? node_editor::displayTypeName(role)

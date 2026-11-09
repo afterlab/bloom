@@ -19,6 +19,7 @@
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -634,6 +635,9 @@ template <typename Definition>
         // #486 Sharpen: the exact generated shape.
         if (definition.key.typeId == kSharpenNodeType)
             return definition == sharpenDefinition();
+        // #518 Tone Map: the exact generated shape.
+        if (isColorCleanupNodeType(definition.key.typeId))
+            return definition == colorCleanupDefinition(definition.key.typeId);
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1760,6 +1764,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         testCardDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),
+        colorCleanupDefinition(kToneMapNodeType),
         cameraShakeDefinition(),
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),

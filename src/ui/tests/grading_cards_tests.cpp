@@ -1286,6 +1286,7 @@ void pixelAndMotionCards() {
         {"bloom.st-map", {"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter"}},
         {"bloom.displace", {"bloom.lens-distortion", "bloom.st-map", "bloom.rolling-shutter"}},
         {"bloom.stabilize", {"bloom.transform-2d", "bloom.camera-shake", "bloom.corner-pin"}},
+        {"bloom.tone-map", {"bloom.exposure", "bloom.colorize", "bloom.hue-saturation"}},
         {"bloom.image-math", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
         {"bloom.image-map-range", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},
         {"bloom.image-clamp", {"bloom.channel-shuffle", "bloom.levels", "bloom.invert"}},

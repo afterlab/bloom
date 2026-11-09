@@ -1347,6 +1347,86 @@ void testAlphaAssociationLowering(Expectations& expectations) {
     }
 }
 
+// #518 Tone Map lowers to one color tool kernel with its constant method and gamut switch and its
+// six scalars (with their parameter identities) in the kernel's order. A muted node passes its
+// Image through.
+void testColorToolLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(995);
+    const auto* definition = builtInNodeDefinitions().find(kToneMapNodeType, 1);
+    require(definition != nullptr, "the Tone Map definition exists");
+    for (const bool muted : {false, true}) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::vector<ParameterBinding> bindings;
+        std::map<std::string, ParameterId> ids;
+        std::uint64_t next = 2800;
+        for (const auto& parameter : definition->parameters) {
+            auto value = parameter.defaultValue;
+            if (parameter.role == "method")
+                value = kToneMapBrightestChannel;
+            if (parameter.role == "gamutCompress")
+                value = true;
+            if (parameter.role == "knee")
+                value = 1.5;
+            if (parameter.role == "ceiling")
+                value = 4.0;
+            if (parameter.role == "shadows")
+                value = 0.5;
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{value}}),
+                    "Tone Map parameter is valid");
+            ids[parameter.role] = id;
+            bindings.push_back({parameter.role, id});
+        }
+        require(graph.addNode({effectId, std::string(kToneMapNodeType), std::move(bindings), 1}),
+                "Tone Map node is accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{effectId, "input"}}),
+                "source feeds Tone Map");
+        require(graph.addEdge({EdgeId::fromRaw(995), {effectId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "Tone Map feeds Layer");
+        if (muted)
+            composition->nodeLayout()[effectId].muted = true;
+        expectations.expect(project.validate().ok(), "Tone Map graph is valid document truth");
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "Tone Map graph compiles");
+        if (!result.plan)
+            continue;
+        const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+            const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+            return item && item->sourceNodeId == effectId;
+        });
+        if (muted) {
+            expectations.expect(effect == result.plan->operations().end(),
+                                "a muted Tone Map passes its Image through");
+            continue;
+        }
+        require(effect != result.plan->operations().end(), "Tone Map lowers to an image effect");
+        const auto* kernel = std::get_if<runtime::ColorToolKernel>(
+            &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+        const auto scalar = [&](const std::size_t slot, const char* role, const double value) {
+            const auto* source = kernel ? std::get_if<double>(&kernel->values[slot].source) : nullptr;
+            return source != nullptr && *source == value && kernel->values[slot].id == ids[role];
+        };
+        expectations.expect(
+            kernel && kernel->operation == runtime::ColorToolOperation::ToneMap &&
+                kernel->choices[0] == kToneMapBrightestChannel && kernel->choices[1] == 1 &&
+                scalar(0, "knee", 1.5) && scalar(1, "ceiling", 4.0) && scalar(2, "shadows", 0.5) &&
+                scalar(3, "shadowRange", 0.18) && scalar(4, "gamutThreshold", 0.8) &&
+                scalar(5, "gamutLimit", 1.2),
+            "Tone Map lowers its method, gamut switch and six scalars with their identities");
+    }
+}
+
 // #504 Colorize lowers to one colorize kernel with its constant mode. Each mode keeps the
 // identities of only the operands it reads (Gradient Map also its source and cycle); every other
 // operand stays the kernel's constant default without an identity, so animating it neither claims

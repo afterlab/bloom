@@ -5,6 +5,7 @@
 #include "properties_value_edits.hpp"
 
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -510,6 +511,12 @@ struct Controls final {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,
                                    1.0, true});
+    } else if (typeId == document::kToneMapNodeType) {
+        // #518: where the highlight roll-off starts and the value it approaches, on one track.
+        controls.ranges.push_back(
+            {"knee", "ceiling", document::colorCleanupSchemaKey(typeId, "knee"),
+             document::colorCleanupSchemaKey(typeId, "ceiling"),
+             QCoreApplication::translate("NodeControls", "Roll-off range"), 0.0, 4.0, true});
     } else if (typeId == "bloom.map-range") {
         controls.ranges.push_back(operandRange(
             "fromMin", "fromMax", QCoreApplication::translate("NodeControls", "From range")));

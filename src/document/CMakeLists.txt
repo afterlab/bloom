@@ -27,6 +27,7 @@ target_sources(
         light_rays_nodes.cpp
         motion_blur_nodes.cpp
         sharpen_nodes.cpp
+        color_cleanup_nodes.cpp
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp

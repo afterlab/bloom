@@ -17,6 +17,7 @@
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -488,6 +489,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #481 Image Math, Image Map Range and Image Clamp: every parameter within its domain.
     if (imagePixelParameterSpec(schemaKey) != nullptr)
         return isImagePixelParameterValueValid(schemaKey, constant.value);
+    // #518 Tone Map: every parameter within its document domain.
+    if (colorCleanupParameterSpec(schemaKey) != nullptr)
+        return isColorCleanupParameterValueValid(schemaKey, constant.value);
     // #484 the motion-blur nodes and Transform 2D's motion blur.
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionParameterValueValid(schemaKey, constant.value);
@@ -683,6 +687,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isImagePixelConstantSchemaKey(schemaKey) ||
+         bloom::document::isColorCleanupConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
@@ -771,6 +776,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isRollingShutterScalarSchemaKey(schemaKey) || isWarpScalarSchemaKey(schemaKey) ||
            sharpenParameterSpec(schemaKey) != nullptr ||
            isMotionScalarAnimatableSchemaKey(schemaKey) || isImagePixelScalarSchemaKey(schemaKey) ||
+           isColorCleanupScalarSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -861,6 +867,9 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
     // #481 Image Math, Image Map Range and Image Clamp (image_math_parameters.hpp).
     if (imagePixelParameterSpec(schemaKey) != nullptr)
         return isImagePixelScalarWithinDomain(schemaKey, value);
+    // #518 Tone Map (color_cleanup_nodes.hpp).
+    if (colorCleanupParameterSpec(schemaKey) != nullptr)
+        return isColorCleanupScalarWithinDomain(schemaKey, value);
     // #484 the motion-blur nodes (motion_blur_parameters.hpp).
     if (motionParameterSpec(schemaKey) != nullptr)
         return isMotionScalarWithinDomain(schemaKey, value);

@@ -987,6 +987,28 @@ struct PixelMathKernel final {
     friend bool operator==(const PixelMathKernel&, const PixelMathKernel&) = default;
 };
 
+// #518 Tone Map, #517 Color Matrix and #523 HSL Qualifier (docs/architecture/image-filters.md): one
+// per-pixel function of the input's straight color, a grade kind (color_tool_image_effect.hpp).
+// `choices` are the node's constants in its definition order, `values` its scalars in
+// forEachColorGradeOperand order (colorToolScalarCount of them).
+//   ToneMap  choices: method, gamut compression on; values: knee, ceiling, shadow recovery, shadow
+//            range, gamut threshold, gamut limit.
+enum class ColorToolOperation : std::uint8_t { ToneMap };
+inline constexpr std::size_t kColorToolMaxScalars = 24;
+[[nodiscard]] constexpr std::size_t colorToolScalarCount(const ColorToolOperation operation) noexcept {
+    switch (operation) {
+    case ColorToolOperation::ToneMap:
+        return 6;
+    }
+    return 0;
+}
+struct ColorToolKernel final {
+    ColorToolOperation operation = ColorToolOperation::ToneMap;
+    std::array<std::int64_t, 4> choices{};
+    std::array<CompiledScalarParameter, kColorToolMaxScalars> values{};
+    friend bool operator==(const ColorToolKernel&, const ColorToolKernel&) = default;
+};
+
 // #349 Histogram (docs/architecture/image-filters.md, "Histogram"): the node lowers to three passes
 // over the frame, the way Auto Exposure's reduction does.
 //   Bin   cuts the frame into at most `grid` by `grid` tiles and counts, in each tile, the pixels
@@ -1064,7 +1086,7 @@ using ImageEffectKernel =
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
                  CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel, StatisticsKernel,
-                 AudioPlotKernel>;
+                 AudioPlotKernel, ColorToolKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1269,6 +1291,12 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
     // #349: Image Statistics' parameters are all constants.
     if (std::holds_alternative<StatisticsKernel>(kernel))
         return true;
+    // #518: the scalars of the operation, in the kernel's order.
+    if (const auto* tool = std::get_if<ColorToolKernel>(&kernel)) {
+        for (std::size_t index = 0; index < colorToolScalarCount(tool->operation); ++index)
+            visit(tool->values[index]);
+        return true;
+    }
     // #349: a Histogram's Bin reads the range; its Sum and Plot have no operands.
     if (const auto* histogram = std::get_if<HistogramKernel>(&kernel)) {
         if (histogram->role == HistogramRole::Bin)
@@ -1308,7 +1336,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<PixelMathKernel>(kernel) ||
            std::holds_alternative<HistogramKernel>(kernel) ||
            std::holds_alternative<StatisticsKernel>(kernel) ||
-           std::holds_alternative<AudioPlotKernel>(kernel) || isMotionKernel(kernel);
+           std::holds_alternative<AudioPlotKernel>(kernel) ||
+           std::holds_alternative<ColorToolKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

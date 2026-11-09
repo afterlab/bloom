@@ -102,6 +102,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   optional seeded irregular cadence of doubled and dropped frames.
 - [Auto Exposure](user-guide/auto-exposure.md) — a gain that follows the footage's brightness and color
   with an attack and a release, so a light that dims or flares makes the picture hunt like a phone camera.
+- [Color tools](user-guide/color-tools.md) — Tone Map: highlight roll-off, shadow recovery and gamut
+  compression for HDR scene-linear color.
 - [Audio Effects](user-guide/audio-effects.md) — Equalizer, Compressor, Auto Level, Mono and Hiss for an
   audio layer, heard the same in playback and export.
 - [Audio Amplitude, Waveform and Spectrum](user-guide/audio-analysis.md) — a loudness value and two
