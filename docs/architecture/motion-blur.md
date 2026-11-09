@@ -39,8 +39,8 @@ Identical everywhere (`motion_shutter.hpp`, `motion_blur_parameters.hpp`):
 
 - **Shutter angle** in degrees; 360 degrees is one frame, 180 degrees is 0.5 frames (RSMB's 0.5 and
   a layer-based compositor's 180 degrees).
-- **Shutter opens** Centred (the default), Start on frame, End on frame or Custom with a phase in
-  degrees. A layer-based compositor's phase is `-angle/2` for Centred.
+- **Shutter opens** Centered (the default), Start on frame, End on frame or Custom with a phase in
+  degrees. A layer-based compositor's phase is `-angle/2` for Centered.
 - **Shutter curve** Box (the default), Triangle, Gaussian or Custom (a curve on the card). Each
   stratum's weight is the curve's mean over the stratum, normalised to sum 1.
 - **Quality** tiers: Draft 4 samples, Standard 16, High 64, Final adaptive: the smallest power of two

@@ -19,7 +19,7 @@ the Add menu, and Echo under **Time**. The algorithms, their sources and their l
 Every motion blur shares these, so what you learn on one applies to all:
 
 - **Shutter angle**: drag the dial. 180 degrees is half a frame, the film look; 360 is a whole frame.
-- **Shutter opens**: **Centred** (the default) keeps the blur around the object's position on the frame,
+- **Shutter opens**: **Centered** (the default) keeps the blur around the object's position on the frame,
   which keeps tracked composites on the track. **Start on frame** and **End on frame** put it after or
   before; **Custom** adds a **Shutter phase** dial.
 - **Shutter curve**: **Box** is an ordinary shutter. **Triangle** and **Gaussian** fade the ends.

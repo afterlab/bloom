@@ -430,7 +430,7 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
             }
         }
     } else {
-        // The path parameter p over [open, close] / shutter: Centred [-1/2, 1/2], Start [0, 1].
+        // The path parameter p over [open, close] / shutter: Centered [-1/2, 1/2], Start [0, 1].
         const auto [open, close] = shutterInterval(shutter);
         const double span = shutter.shutter > 0.0 ? shutter.shutter : 1.0;
         const double p0 = open / span;

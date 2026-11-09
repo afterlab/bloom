@@ -160,7 +160,7 @@ using depth_parameters::scalar;
 using depth_parameters::text;
 using depth_parameters::vector2;
 
-inline constexpr std::array<std::string_view, 4> kOffsets{"Centred", "Start on frame",
+inline constexpr std::array<std::string_view, 4> kOffsets{"Centered", "Start on frame",
                                                           "End on frame", "Custom"};
 inline constexpr std::array<std::string_view, 4> kCurves{"Box", "Triangle", "Gaussian", "Custom"};
 inline constexpr std::array<std::string_view, 4> kQualities{"Draft", "Standard", "High", "Final"};
