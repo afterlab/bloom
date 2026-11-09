@@ -34,6 +34,20 @@
 // finite is not counted. The graph does not depend on a region of interest: the whole data window
 // is counted.
 //
+// #349 Image Statistics (`bloom.image-statistics`) takes an Image on `input` and gives five Scalars
+// that drive other nodes (a Levels or a Map Range, for instance, to normalize a depth pass): the
+// `minimum`, `maximum`, `mean` and `deviation` (population standard deviation) of one value of every
+// counted pixel of the input's data window, and the `count` of pixels counted. `channel` is the value
+// measured (the luminance, Rec. 709 weights on the color, one color channel, or alpha), `space` how
+// premultiplication is treated (the color is divided by alpha, and a pixel without alpha has no color
+// value, or the stored values are measured as they are) and `pixels` whether every pixel counts or
+// only those with alpha above zero. A value that is not a finite number (NaN or an infinity, as a
+// data pass carries) is never counted. An image with no counted pixel gives 0 for every statistic
+// and a `count` of 0. The measure does not depend on a region of interest: the whole data window is
+// counted. The statistics of a frame are those of that frame's own pixels; a frame whose statistics
+// are not ready is reported as not ready and never takes another frame's.
+// docs/architecture/image-statistics.md is the specification.
+//
 // #347 Audio Amplitude, Audio Waveform and Audio Spectrum take the sound of an Audio or Video
 // source on their `audio` input (any audio effects between them are not applied: an analysis reads
 // the source's own sound) and read a window of it around the frame, so a time on the timeline is the
@@ -80,6 +94,7 @@ inline constexpr std::string_view kImageMapRangeNodeType = "bloom.image-map-rang
 inline constexpr std::string_view kImageClampNodeType = "bloom.image-clamp";
 inline constexpr std::string_view kImageCompareNodeType = "bloom.image-compare";
 inline constexpr std::string_view kHistogramNodeType = "bloom.histogram";
+inline constexpr std::string_view kImageStatisticsNodeType = "bloom.image-statistics";
 inline constexpr std::string_view kAudioAmplitudeNodeType = "bloom.audio-amplitude";
 inline constexpr std::string_view kAudioWaveformNodeType = "bloom.audio-waveform";
 inline constexpr std::string_view kAudioSpectrumNodeType = "bloom.audio-spectrum";
@@ -87,6 +102,10 @@ inline constexpr std::uint32_t kImagePixelNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kAudioAnalysisInputPort = "audio";
 inline constexpr std::string_view kAudioAmplitudeOutputPort = "amplitude";
+
+// Image Statistics' outputs, in order.
+inline constexpr std::array<std::string_view, 5> kImageStatisticsOutputPorts{
+    "minimum", "maximum", "mean", "deviation", "count"};
 
 inline constexpr std::string_view kImagePixelInputPort = "input";
 inline constexpr std::string_view kImagePixelSecondPort = "second";
@@ -123,6 +142,15 @@ inline constexpr std::array<std::int64_t, 4> kHistogramBins{64, 128, 256, 512};
 inline constexpr std::array<std::int64_t, 4> kHistogramHeights{64, 128, 256, 512};
 inline constexpr std::int64_t kHistogramDefaultBins = 2;
 inline constexpr std::int64_t kHistogramDefaultHeight = 1;
+
+// Stored values of Image Statistics' choices.
+inline constexpr std::int64_t kStatisticsLuminance = 0;
+inline constexpr std::int64_t kStatisticsRed = 1;
+inline constexpr std::int64_t kStatisticsGreen = 2;
+inline constexpr std::int64_t kStatisticsBlue = 3;
+inline constexpr std::int64_t kStatisticsAlpha = 4;
+inline constexpr std::int64_t kStatisticsAllPixels = 0;
+inline constexpr std::int64_t kStatisticsOpaqueOnly = 1;
 
 // Stored values of the audio analysis nodes' choices.
 inline constexpr std::int64_t kAudioMeasurePeak = 0;
@@ -173,6 +201,11 @@ inline constexpr std::array<std::string_view, 7> kHistogramChannels{
 inline constexpr std::array<std::string_view, 4> kHistogramBinLabels{"64", "128", "256", "512"};
 inline constexpr std::array<std::string_view, 4> kHistogramHeightLabels{"64", "128", "256", "512"};
 inline constexpr std::array<std::string_view, 2> kHistogramScales{"Linear", "Logarithmic"};
+
+inline constexpr std::array<std::string_view, 5> kStatisticsChannels{"Luminance", "Red", "Green",
+                                                                      "Blue", "Alpha"};
+inline constexpr std::array<std::string_view, 2> kStatisticsPixels{"All pixels",
+                                                                    "Pixels with alpha"};
 
 inline constexpr std::array<std::string_view, 2> kAudioMeasures{"Peak", "RMS"};
 inline constexpr std::array<std::string_view, 2> kAudioUnits{"Linear", "Decibels"};
@@ -230,6 +263,12 @@ inline constexpr std::array kHistogramParameters{
     choice("graphScale", kHistogramScales, kHistogramLinear, "Scale"),
 };
 
+inline constexpr std::array kImageStatisticsParameters{
+    choice("channel", kStatisticsChannels, kStatisticsLuminance, "Measure"),
+    choice("space", kSpaces, kImagePixelStraight, "Operate on"),
+    choice("pixels", kStatisticsPixels, kStatisticsAllPixels, "Count"),
+};
+
 inline constexpr std::array kAudioAmplitudeParameters{
     choice("measure", kAudioMeasures, kAudioMeasureRms, "Measure"),
     choice("unit", kAudioUnits, kAudioUnitLinear, "Unit"),
@@ -266,7 +305,8 @@ inline constexpr std::array kAudioSpectrumParameters{
 [[nodiscard]] constexpr bool isImagePixelNodeType(const std::string_view typeId) noexcept {
     return typeId == kImageMathNodeType || typeId == kImageMapRangeNodeType ||
            typeId == kImageClampNodeType || typeId == kImageCompareNodeType ||
-           typeId == kHistogramNodeType || typeId == kAudioAmplitudeNodeType ||
+           typeId == kHistogramNodeType || typeId == kImageStatisticsNodeType ||
+           typeId == kAudioAmplitudeNodeType ||
            typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType;
 }
 
@@ -283,6 +323,8 @@ imagePixelParameters(const std::string_view typeId) noexcept {
         return image_pixel_parameters::kImageCompareParameters;
     if (typeId == kHistogramNodeType)
         return image_pixel_parameters::kHistogramParameters;
+    if (typeId == kImageStatisticsNodeType)
+        return image_pixel_parameters::kImageStatisticsParameters;
     if (typeId == kAudioAmplitudeNodeType)
         return image_pixel_parameters::kAudioAmplitudeParameters;
     if (typeId == kAudioWaveformNodeType)
@@ -296,7 +338,8 @@ imagePixelParameters(const std::string_view typeId) noexcept {
 [[nodiscard]] constexpr const DepthParameterSpec*
 imagePixelParameterSpec(const std::string_view schemaKey) noexcept {
     for (const auto type : {kImageMathNodeType, kImageMapRangeNodeType, kImageClampNodeType,
-                            kImageCompareNodeType, kHistogramNodeType, kAudioAmplitudeNodeType,
+                            kImageCompareNodeType, kHistogramNodeType, kImageStatisticsNodeType,
+                            kAudioAmplitudeNodeType,
                             kAudioWaveformNodeType, kAudioSpectrumNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')

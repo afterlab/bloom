@@ -63,6 +63,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.audio-amplitude", "Level|Volume|Loudness|Meter|Envelope|Follower|Audio Reactive|Peak|RMS"},
     {"bloom.audio-waveform", "Scope|Oscilloscope|Wave|Audio Visualizer|Audio Track|Sound"},
     {"bloom.audio-spectrum", "Analyzer|FFT|Frequency|Equalizer|EQ Bars|Audio Visualizer|Bars|Sound"},
+    {"bloom.image-statistics",
+     "Min Max|Range|Mean|Average|Auto Normalize|Normalize|Depth Range|Measure|Analyze|Stats"},
     {"bloom.image-compare", "Difference|Diff|Wipe|Split|Checkerboard|Before After|A B"},
     // Keying & Mattes
     {"bloom.luma-key", "Keyer|Extract|Linear Color Key|Keylight|Primatte"},

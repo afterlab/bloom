@@ -81,8 +81,9 @@ NodeDefinition imagePixelDefinition(const std::string_view typeId) {
                                typeId == kAudioWaveformNodeType || typeId == kAudioSpectrumNodeType;
     NodeDefinition definition{
         {std::string(typeId), kImagePixelNodeSchemaVersion},
-        typeId == kAudioAmplitudeNodeType ? NodeLoweringKind::ValueAudioAmplitude
-                                          : NodeLoweringKind::ImageEffect,
+        typeId == kAudioAmplitudeNodeType    ? NodeLoweringKind::ValueAudioAmplitude
+        : typeId == kImageStatisticsNodeType ? NodeLoweringKind::ValueImageStatistics
+                                             : NodeLoweringKind::ImageEffect,
         {{std::string(audioAnalysis ? kAudioAnalysisInputPort : kImagePixelInputPort),
           audioAnalysis ? SocketValueKind::Audio : SocketValueKind::Image, false}},
         {{std::string(typeId == kAudioAmplitudeNodeType ? kAudioAmplitudeOutputPort
@@ -93,12 +94,19 @@ NodeDefinition imagePixelDefinition(const std::string_view typeId) {
                               NodeCardinality::Many,
                               // Histogram and Image Compare publish an analysis image, not the input
                               // changed, so a mask over the input has nothing to select.
-                              typeId == kAudioAmplitudeNodeType ? NodeCategory::Values
+                              typeId == kAudioAmplitudeNodeType || typeId == kImageStatisticsNodeType
+                                  ? NodeCategory::Values
                               : typeId == kHistogramNodeType || typeId == kImageCompareNodeType ||
                                       typeId == kAudioWaveformNodeType ||
                                       typeId == kAudioSpectrumNodeType
                                   ? NodeCategory::Utilities
                                   : NodeCategory::Grade};
+    // #349 Image Statistics gives five Scalars, in place of an Image.
+    if (typeId == kImageStatisticsNodeType) {
+        definition.outputs.clear();
+        for (const auto port : kImageStatisticsOutputPorts)
+            definition.outputs.push_back({std::string(port), SocketValueKind::Scalar});
+    }
     if (typeId == kImageMathNodeType)
         definition.inputs.push_back(
             {std::string(kImagePixelSecondPort), SocketValueKind::Image, false});

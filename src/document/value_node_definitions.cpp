@@ -660,6 +660,10 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     if (definition.lowering == NodeLoweringKind::ValueAudioAmplitude)
         return definition.key.typeId == kAudioAmplitudeNodeType &&
                definition.category == NodeCategory::Values;
+    // #349 Image Statistics: its shape is the image pixel table's too.
+    if (definition.lowering == NodeLoweringKind::ValueImageStatistics)
+        return definition.key.typeId == kImageStatisticsNodeType &&
+               definition.category == NodeCategory::Values;
     // Value nodes are never structural: no layer slot, never a singleton, and always offered under
     // one of the two sections the Add surface lists them in.
     if (definition.layerSlotInput.has_value() || definition.cardinality != NodeCardinality::Many ||
@@ -854,6 +858,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
+    case NodeLoweringKind::ValueImageStatistics:
         break;
     }
     return false;

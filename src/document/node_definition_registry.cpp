@@ -509,6 +509,10 @@ template <typename Definition>
         // #347 Audio Amplitude: the exact generated shape.
         return definition.key.typeId == kAudioAmplitudeNodeType &&
                definition == imagePixelDefinition(kAudioAmplitudeNodeType);
+    case NodeLoweringKind::ValueImageStatistics:
+        // #349 Image Statistics: the exact generated shape.
+        return definition.key.typeId == kImageStatisticsNodeType &&
+               definition == imagePixelDefinition(kImageStatisticsNodeType);
     case NodeLoweringKind::Field:
     case NodeLoweringKind::ValueFieldSample: {
         // #525: the exact generated shape of every Fields node.
@@ -1737,6 +1741,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         imagePixelDefinition(kImageClampNodeType),
         imagePixelDefinition(kImageCompareNodeType),
         imagePixelDefinition(kHistogramNodeType),
+        imagePixelDefinition(kImageStatisticsNodeType),
         imagePixelDefinition(kAudioAmplitudeNodeType),
         imagePixelDefinition(kAudioWaveformNodeType),
         imagePixelDefinition(kAudioSpectrumNodeType),
