@@ -103,6 +103,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   with an attack and a release, so a light that dims or flares makes the picture hunt like a phone camera.
 - [Audio Effects](user-guide/audio-effects.md) — Equalizer, Compressor, Auto Level, Mono and Hiss for an
   audio layer, heard the same in playback and export.
+- [Audio Amplitude, Waveform and Spectrum](user-guide/audio-analysis.md) — a loudness value and two
+  pictures (the shape of the sound and its frequencies) read from an audio or video source.
 - [Codec Degrade](user-guide/codec-degrade.md) — block quantisation, chroma bleed and keyframe
   smearing: quality, block size, GOP length and P-frame persistence.
 - [Stabilize](user-guide/stabilize.md) — follow a feature through a shot and hold the picture still, or

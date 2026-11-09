@@ -13,7 +13,8 @@ area, and its layers from the bottom up. A layer is one of:
 - a nested Merge: {"name", "merge": [footage layers, bottom up], "transform", "blend",
   "effects": [...] (applied to the nested Merge's picture)};
 - an adjustment layer: {"name", "adjustment": [effects]} (filters the stack below it);
-- an audio layer (#569): {"name", "audio": {"seconds", "effects": [...]}}, a generated stereo tone
+- an audio layer (#569): {"name", "audio": {"seconds", "effects": [...], "plots": [...] (#347, Audio
+  Waveform and Audio Spectrum nodes fed by the sound and drawn as their own layers)}}, a generated stereo tone
   with seeded noise, imported as an audio asset and fed through the audio effects in order before
   the layer (a scenario with "audioExport" also exports its sound as WAV, optionally normalized to
   {"loudnessLufs", "truePeakDbtp"}, #570);
@@ -471,6 +472,21 @@ SCENARIOS["stabilize-2k"] = {
         {"name": "Plate", "media": "png16",
          "effects": [["bloom.stabilize", {},
                       {"keys": {"tracked": [[0, [0, 0]], [23, [60, -24]]]}}]]},
+# #347: Audio Waveform and Audio Spectrum of ten seconds of generated sound, each frame reading a new
+# window (the time is the frame), so the cost is the audio window read, the reduction and the plot
+# pass. Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["audio-plots-2k"] = {
+    "description": "A Waveform (a keyed scale) and a logarithmic Spectrum of ten seconds of generated "
+                   "stereo sound, one new window per frame.",
+    "tier": "1080p",
+    "frames": 240,
+    "layers": [
+        {"name": "Voice",
+         "audio": {"seconds": 10,
+                   "plots": [["bloom.audio-waveform", {"width": 1920, "height": 256, "window": 2.0},
+                              {"keys": {"verticalScale": [[0, 1.0], [239, 3.0]]}}],
+                             ["bloom.audio-spectrum", {"width": 1920, "height": 512, "transformSize": "4096",
+                                                       "axis": "Logarithmic"}, {}]]}},
     ],
 }
 

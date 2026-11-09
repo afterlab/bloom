@@ -841,6 +841,66 @@ peak, and the deepest limiter reduction. Every audio-carrying route uses it: the
 queue's saved outputs, the `export` and `render` MCP tools (`loudnessLufs`, `truePeakDbtp`), the
 headless path and scripting. Loudness is an optional member of the 1.43 output settings.
 
+## Audio analysis (#347)
+
+Three nodes under Tracking & Analysis read the sound of one source at one exact time:
+`bloom.audio-amplitude` (a Scalar), `bloom.audio-waveform` and `bloom.audio-spectrum` (Images). Each
+takes an Audio or Video source on its `audio` input. It is not a general audio graph: audio effects
+between the source and the analysis are not applied (an analysis reads the source's own sound), and
+nothing is mixed, so the result does not depend on other layers, levels or the transport.
+
+**Time.** The snapshot compiler carries an `AudioAnalysisSource` (the asset record, the audio stream,
+the node's start frame, the composition rate and a video's loop and conform) in the plan. The source
+second read at composition time `t` is the one the mixer would play (`detail::footageAudioTime`,
+`wrapSourceAudioTime`), so the preview, the CPU reference, the GPU path and an export read the same
+samples. A time before the start or after the end of a source reads silence. Amplitude and the plots
+are time dependent (`analyzeTimeDependence`), so a still frame never reuses another time's result.
+
+**Windows.** Amplitude reads `window` milliseconds (1 to 60000) centred on the frame plus `offset`
+seconds; the measure is the Peak or RMS of every channel's samples, as a linear level or in decibels
+(silence is 0, or -120 dB). Waveform reads `window` seconds (0.01 to 60) centred on the frame; each
+pixel column holds the minimum and maximum of its span, with the channels averaged (Mixed) or one lane
+per channel (up to 8). Spectrum reads `size` frames (1024 to 8192, a power of two) centred on the frame
+through a periodic Hann window and a radix-2 transform; magnitudes are scaled so a sine of amplitude A
+reads A at its own frequency, expressed in decibels between `floor` and `ceiling`, and a column takes
+the maximum of the bins it covers (or the nearest bin) on a logarithmic or linear axis. A plot is 16 to
+4096 pixels on a side.
+
+**Preparation.** The window is read and reduced on a worker, never on the interface thread, and cached
+by `bloom::runtime::prepareAudioAnalysis`. It reuses the media services repaired for #329: audio
+assets open through `openWindowedAudio` after `verifySourceDigest`, video assets through a
+`VideoDecodeSession` and `openWindowedVideoAudio`, so the MP3 index and the bounded stream window apply
+and no file is decoded whole. A missing file, a file whose digest no longer matches the imported asset,
+or a missing stream is a diagnostic that names the cause, and nothing is cached for it. The evaluators
+install an `AudioAnalysisPreparation` for the duration of a frame (the CPU evaluator and the GPU scene
+preparation), so the heavy read happens inside the frame's cancellable worker task; reading the result
+(`findAudioAnalysis`) never does I/O. Cancellation is checked between 16384-frame chunks and a
+cancelled analysis is not cached.
+
+**Identity and budget.** The cache key is the source digest (the revision), the stream, the exact
+rational time on the source clock, the kind and every parameter that changes the numbers (window,
+measure, columns, lanes, transform size, range and axis). A changed file, time or setting is another
+entry. The result cache holds at most `kAudioAnalysisCacheBytes` (32 MiB) and retires least recently
+used entries; at most `kAudioAnalysisOpenSources` (4) decoders are held open. "Purge media cache"
+calls `clearAudioAnalysis`. The operation cache key adds the source digest, stream, start frame and
+loop mode, so a frame cannot be served from another source's picture.
+
+**Pixels.** Waveform and Spectrum lower to a transparent Solid canvas of the plot size followed by one
+`AudioPlotKernel` image effect, which is a `ColorGradeKind::AudioPlot` pass: the prepared analysis is
+packed into the pass table (`audio_plot_image_effect.hpp`) and drawn by one dispatch over the canvas
+window. The CPU reference (`applyAudioPlot`) and the GPU program run the same binary32 additions,
+multiplications, minima and maxima in the same order and use no transcendental function, so the two
+backends agree to the bit; the transforms and the decibel mapping happen once in the analysis. The
+trace is at least one pixel thick, a spectrum bar's top row has fractional coverage, and the line is
+composited source-over onto the background in premultiplied form. Colors are non-negative and may
+exceed 1 (HDR); alpha is 0 to 1. A region of interest reads the same pixels as the full frame. The
+pass is registered in the GPU coverage contract (`effect.AudioPlotKernel`, `node.bloom.audio-waveform`,
+`node.bloom.audio-spectrum`) with a production preparation fixture and a native parity fixture.
+
+**Muting and unwired inputs.** A muted plot is an empty Merge. A plot with nothing wired in draws
+silence (the background only); Amplitude with nothing wired in is 0. Amplitude is a value-graph kernel
+that is not memoized across frames (its key would not carry the source).
+
 ## Disk cache
 
 Task CACHE-2 adds `src/media/cache` (Qt-free): a bounded, content-addressed, on-disk store of

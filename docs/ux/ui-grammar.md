@@ -1156,7 +1156,7 @@ group is waiting for:
 | Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
 | Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Path Stroke |
 | Instances & Particles | + Point, + Grid, + Scatter, + Points Along Path, + Shape To Points, + Text To Points, + Clone To Points, + Draw Instances, + Particle System |
-| Tracking & Analysis | Histogram, Image Compare, + Tracker, + Stabilize, + Image Statistics, + Audio Amplitude, + Audio Waveform, + Audio Spectrum |
+| Tracking & Analysis | Histogram, Image Compare, Audio Amplitude, Audio Waveform, Audio Spectrum, + Tracker, + Stabilize, + Image Statistics |
 | Fields | the 16 Field nodes |
 | Values (submenu) | Values, Math (+ Oscillator, + Wiggle, + Loop Value), Convert, String, Logic, Time Values, Color Values, Vector |
 | Utilities | Reroute, Separate/Combine XY and XYZ, + Group Input, + Group Output, + Node Group, + File Cache |

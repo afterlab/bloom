@@ -673,6 +673,14 @@ class Builder:
         if last != source:
             self.transact("bloom.node.connect", composition=self.composition, sourceNode=last,
                           sourcePort="audio", targetNode=output, port="audio")
+        # #347: Audio Waveform and Audio Spectrum read the source's audio and draw an image, which
+        # takes its own Layer Output into the output Merge.
+        for plot in spec.get("plots") or ():
+            drawn = self.chain(source, "audio", [plot], out_port="image")
+            holder = self.transact("bloom.node.add-fed-by", composition=self.composition,
+                                   nodeType="bloom.layer-output", node=drawn, port="image")["node"]
+            self.transact("bloom.node.connect", composition=self.composition, sourceNode=holder,
+                          sourcePort="image", targetNode=self.output_merge(), role="content")
         self.layers[layer["name"]] = {"source": source, "output": output}
 
     def output_merge(self):

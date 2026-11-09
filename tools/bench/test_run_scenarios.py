@@ -606,6 +606,15 @@ class DepthScenario(unittest.TestCase):
                           "bloom.audio-auto-level", "bloom.audio-mono", "bloom.audio-hiss"])
         self.assertEqual(scenario["audioExport"]["loudnessLufs"], -16.0)
 
+    def test_audio_plots_scenario_draws_both_plots_from_the_audio_layer(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["audio-plots-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        voice = next(layer for layer in scenario["layers"] if "audio" in layer)
+        self.assertEqual([plot[0] for plot in voice["audio"]["plots"]],
+                         ["bloom.audio-waveform", "bloom.audio-spectrum"])
+        self.assertIn("verticalScale", voice["audio"]["plots"][0][2]["keys"], "the plot changes every frame")
+
     def test_camera_shake_scenario_turns_its_motion_blur_on(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["camera-shake-2k"]
