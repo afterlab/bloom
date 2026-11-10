@@ -273,7 +273,9 @@ struct CardFixture final {
     ui::node_editor::NodeItem* item = nullptr;
 };
 
-void capture(CardFixture& fixture, const QString& name) {
+// Writes the card at each device pixel ratio of `scales`: the 2.0 file is "<name>-card.png", any other
+// "<name>-card-dpr<ratio>.png" (1.0 is dpr1, 1.5 is dpr15).
+void capture(CardFixture& fixture, const QString& name, const std::vector<qreal>& scales = {2.0}) {
     const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
     if (directory.isEmpty() || fixture.item == nullptr)
         return;
@@ -287,17 +289,22 @@ void capture(CardFixture& fixture, const QString& name) {
     auto& item = *fixture.item;
     auto& editor = *fixture.editor;
     const QRectF source = item.mapRectToScene(item.cardRect()).adjusted(-24, -24, 24, 24);
-    constexpr qreal scale = 2.0;
-    QImage image((source.size() * scale).toSize(), QImage::Format_ARGB32_Premultiplied);
-    image.setDevicePixelRatio(scale);
-    image.fill(ui::kit::color(ui::kit::Color::Canvas));
-    {
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        editor.graphScene()->render(&painter, QRectF(QPointF(), source.size()), source);
+    for (const qreal scale : scales) {
+        QImage image((source.size() * scale).toSize(), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(scale);
+        image.fill(ui::kit::color(ui::kit::Color::Canvas));
+        {
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            editor.graphScene()->render(&painter, QRectF(QPointF(), source.size()), source);
+        }
+        const QString suffix = scale == 2.0   ? QString{}
+                               : scale == 1.0 ? QStringLiteral("-dpr1")
+                                              : QStringLiteral("-dpr15");
+        if (!image.save(directory + QLatin1Char('/') + name + QStringLiteral("-card") + suffix +
+                        QStringLiteral(".png")))
+            std::cerr << "could not write " << name.toStdString() << '\n';
     }
-    if (!image.save(directory + QLatin1Char('/') + name + QStringLiteral("-card.png")))
-        std::cerr << "could not write " << name.toStdString() << '\n';
 }
 
 // The cards at their default width.
@@ -1895,7 +1902,7 @@ void proceduralWarpCards() {
         }
         if (!cardContentFits(*fixture.item, mode.name))
             ++failures;
-        capture(fixture, QString::fromLatin1(mode.name));
+        capture(fixture, QString::fromLatin1(mode.name), {1.0, 1.5, 2.0});
         const auto point = [&](const char* role) {
             const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
             const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;

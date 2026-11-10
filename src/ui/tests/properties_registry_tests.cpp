@@ -1831,6 +1831,18 @@ void proceduralWarpRows() {
          false},
         {9, "split",
          with({{"lineStart", "Line Start"}, {"lineEnd", "Line End"},
+               {"splitDistance", "Split Distance"}, {"mirror", "Mirror"},
+               {"asymmetric", "Asymmetric"}}),
+         0, true, false},
+        // Asymmetric on: the second distance appears, with the first named for its side.
+        {9, "split-asymmetric",
+         with({{"lineStart", "Line Start"}, {"lineEnd", "Line End"},
+               {"splitDistance", "Split Distance"}, {"mirror", "Mirror"},
+               {"asymmetric", "Asymmetric"}, {"oppositeDistance", "Opposite Distance"}}),
+         0, true, false},
+        // The mirror has one side, so neither Asymmetric row is read.
+        {9, "split-mirror",
+         with({{"lineStart", "Line Start"}, {"lineEnd", "Line End"},
                {"splitDistance", "Split Distance"}, {"mirror", "Mirror"}}),
          0, true, false},
         {10, "turbulent",
@@ -1858,6 +1870,13 @@ void proceduralWarpRows() {
         session.selectNode(node);
         expect(session.setNodeParameterValue(node, "mode", mode.value, QStringLiteral("Set")),
                "the mode is set through a command");
+        if (std::string_view(mode.name) == "split-asymmetric")
+            expect(session.setNodeParameterValue(node, "asymmetric", true, QStringLiteral("Set")),
+                   "Asymmetric is set through a command");
+        if (std::string_view(mode.name) == "split-mirror")
+            expect(session.setNodeParameterValue(node, "mirror", true, QStringLiteral("Set")) &&
+                       session.setNodeParameterValue(node, "asymmetric", true, QStringLiteral("Set")),
+                   "the mirror and Asymmetric are set through commands");
         const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
         const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
                                    ? QStringLiteral("dpr1")

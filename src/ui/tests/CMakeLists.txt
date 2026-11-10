@@ -2399,6 +2399,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-ripple procedural-warp-wave procedural-warp-polar
                               procedural-warp-magnify
                               procedural-warp-warp procedural-warp-bend procedural-warp-split
+                              procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse)
         bloom_add_test(
@@ -2420,6 +2421,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-ripple procedural-warp-wave procedural-warp-polar
                               procedural-warp-magnify
                               procedural-warp-warp procedural-warp-bend procedural-warp-split
+                              procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse)
         bloom_add_test(

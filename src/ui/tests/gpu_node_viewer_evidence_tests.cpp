@@ -123,6 +123,11 @@ struct Scenario final {
     std::string animatedRole = {};
     document::ParameterValue animatedFrom = {};
     document::ParameterValue animatedTo = {};
+    // The source output that feeds the effect (empty: its first), the effect's input it feeds, and
+    // whether the keyed value belongs to the source (a Field Noise's evolution) and not the effect.
+    std::string sourcePort = {};
+    std::string effectPort = "input";
+    bool animateSource = false;
     // #342: the effect sits inside a Node Group definition (Group Input image1 -> effect -> Group
     // Output image1) and the source feeds the instance's image1, so the node under test is the group.
     bool group = false;
@@ -160,7 +165,7 @@ struct Scenario final {
                            {{"colorize", true}, {"hue", 200.0}, {"saturation", 1.0}}};
     // #342: the same Exposure the flat node would be, inside a Node Group whose scalar1 slot drives
     // the exposure, over a gradient.
-    out["node-group"] = {"bloom.four-color-gradient", {}, "bloom.exposure", {{"amount", 0.0}}, {}, {}, {}, true};
+    out["node-group"] = {"bloom.four-color-gradient", {}, "bloom.exposure", {{"amount", 0.0}}, {}, {}, {}, {}, "input", false, true};
     // #511 Tile & Mirror: each mode over a checker, with its phase, offset, line angle or rotation
     // keyed so a RAM preview shows a new picture every frame.
     out["tile-mirror-tile"] = {"bloom.checker-source", {}, "bloom.tile-mirror",
@@ -214,6 +219,16 @@ struct Scenario final {
     out["procedural-warp-split"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
                                     {{"mode", std::int64_t{9}}, {"mirror", true}},
                                     "splitDistance", 10.0, 120.0};
+    out["procedural-warp-split-asymmetric"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                               {{"mode", std::int64_t{9}}, {"asymmetric", true},
+                                                {"splitDistance", 80.0}},
+                                               "oppositeDistance", 10.0, 120.0};
+    // #647 Field Noise's vector output (the x and y streams in one instruction) into Rasterize Field,
+    // its evolution keyed so a RAM preview shows a new picture every frame.
+    out["field-noise-vector"] = {"bloom.field-noise", {{"size", Vec2d{90.0, 90.0}},
+                                                       {"seed", std::int64_t{5}}},
+                                 "bloom.field-rasterize", {}, "evolution", 0.0, 3.0, "vector",
+                                 "field", true};
     out["procedural-warp-turbulent"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
                                         {{"mode", std::int64_t{10}}, {"displacement", 40.0}},
                                         "evolution", 0.0, 360.0};
@@ -332,7 +347,8 @@ bool runTransaction(ui::CompositionSession& session, commands::Transaction trans
 }
 
 [[nodiscard]] bool connect(ui::CompositionSession& session, const document::NodeId from,
-                           const document::NodeId to, const std::string& port) {
+                           const document::NodeId to, const std::string& port,
+                           const std::string& outputPort = {}) {
     const auto* node = session.composition()->graph().findNode(from);
     const auto* definition =
         node ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
@@ -341,7 +357,9 @@ bool runTransaction(ui::CompositionSession& session, commands::Transaction trans
         return false;
     commands::Transaction transaction("Connect", session.snapshot().revision());
     transaction.emplace<commands::ConnectPorts>(
-        session.compositionId(), document::OutputPortRef{from, definition->outputs.front().name},
+        session.compositionId(),
+        document::OutputPortRef{from, outputPort.empty() ? definition->outputs.front().name
+                                                         : outputPort},
         document::NodeInputRef{to, port});
     return runTransaction(session, std::move(transaction));
 }
@@ -736,7 +754,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             last = {};
         } else if (!scenario->effect.empty()) {
             const auto effect = addNode(session, scenario->effect);
-            checks.expect(effect.isValid() && connect(session, source, effect, "input") &&
+            checks.expect(effect.isValid() &&
+                              connect(session, source, effect, scenario->effectPort,
+                                      scenario->sourcePort) &&
                               setValues(session, effect, scenario->effectValues),
                           "the effect node is added and wired");
             last = effect;
@@ -745,9 +765,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(connect(session, last, layerNode,
                                   std::string(document::kLayerOutputContentInputPort)),
                           "the chain feeds the layer");
-        if (options.ramFrames > 0 && !scenario->effect.empty() && !scenario->animatedRole.empty()) {
+        if (options.ramFrames > 0 && (!scenario->effect.empty() || scenario->animateSource) &&
+            !scenario->animatedRole.empty()) {
             // Key the animated value on the first and on the last frame.
-            const auto effect = last;
+            const auto effect = scenario->animateSource ? source : last;
             const auto lastFrame = core::RationalTime::create(options.ramFrames - 1, 25).value();
             const auto parameter = ui::nodeRoleParameter(session, effect, scenario->animatedRole);
             checks.expect(parameter.has_value(), "the animated value exists");
