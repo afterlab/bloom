@@ -845,7 +845,15 @@ read the node that drives them, exactly as every other operand does. A fixed cat
 the registry keep one static definition per node type, and so every surface that reads a node's
 sockets (the card, search, validation, scripting and MCP) read a Node Group the way it reads any
 other node. The cost is that a group cannot name its slots or have more of one kind than the table
-says; both are a larger change to the registry than this one.
+says; both are a larger change to the registry than this one. These slots are the group's typed
+exposed ports: every port is typed by its kind, and the catalogue, not a per-group list, is the
+set a group can expose.
+
+Evidence: `bloom.runtime.node-group-reopen` (save and reopen through the archive writer and reader,
+wrong-kind links refused by `ConnectPorts`), `bloom.runtime.snapshot_compiler` (`testNodeGroup*`: a
+Mask and a ChannelSet entering and leaving a group, wrong-kind links, nested groups, the depth and
+node caps) and `bloom.runtime.gpu_node_group_native` (the group against the flat graph and the CPU
+reference on the device).
 
 ### Expansion
 

@@ -1003,6 +1003,27 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_path_processing_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
+# #342: a Node Group (image, second image, Mask and a keyed value slot) on the production GPU route
+# against the CPU reference and the flat graph of the same nodes, with cache identity,
+# invalidation, region of interest, reduced resolution, cancellation and budget. Skips (exit 77)
+# only the GPU half.
+add_executable(bloom_runtime_gpu_node_group_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_node_group_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_node_group_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_node_group_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_gpu_node_group_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_node_group_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_node_group_native
+    COMMAND bloom_runtime_gpu_node_group_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_node_group_native
+    PROPERTIES SKIP_RETURN_CODE 77)
+
 # #624: a zero-scale shape or text layer is invisible and stays on the GPU route.
 add_executable(bloom_runtime_gpu_zero_scale_layer_native_test
     ${PROJECT_SOURCE_DIR}/tests/integration/gpu_zero_scale_layer_native_tests.cpp)
@@ -1964,6 +1985,8 @@ if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
         "${bloom_runtime_ocio_glslang_validator}" DIRECTORY)
     # The path processing native test prepares Glow's programs with the same pinned tools.
     target_compile_definitions(bloom_runtime_gpu_path_processing_native_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    target_compile_definitions(bloom_runtime_gpu_node_group_native_test PRIVATE
         "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
     target_compile_definitions(bloom_runtime_gpu_ocio_command_test PRIVATE
         "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
