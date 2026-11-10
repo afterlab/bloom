@@ -248,9 +248,11 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] GpuProcessingPhaseAdmission claimRetainedHostBytes(std::uint64_t bytes) noexcept;
     // #343: the phase's scene is prepared and its images are known at their real sizes, which the
     // admission took as one frame each. Raises the executor bytes the phase needs on the device to
-    // `bytes` (beside its working allowance) when that is more than it was admitted with: the
-    // larger need is checked against the device as at admission and claimed with the rest of the
-    // device stage. Accepted (also when `bytes` is not more); AwaitingCapacity when the live device
+    // `bytes` when that is more than it was admitted with: the device need grows by the excess over
+    // the executor bytes it already counts (the minimum, inside the stated or the measured need),
+    // never back to the stated working allowance a measured envelope replaced. A stated need
+    // (working allowance plus `bytes`) larger than the device is refused as at admission; the
+    // larger need is checked against the live room and claimed with the rest of the device stage. Accepted (also when `bytes` is not more); AwaitingCapacity when the live device
     // room cannot hold it now; BudgetRefused when it exceeds the phase's executor ceiling or the
     // device itself. Nothing changes unless Accepted.
     [[nodiscard]] GpuProcessingPhaseAdmission raiseExecutorNeed(std::uint64_t bytes) noexcept;
@@ -326,6 +328,9 @@ class GpuProcessingPhaseLease final {
     // claims, returned to the root on release.
     std::uint64_t deviceClaimBytes_ = 0;
     std::uint64_t deviceNeedBytes_ = 0;
+    // The executor image bytes deviceNeedBytes_ counts: the envelope's minimum at admission, then
+    // what raiseExecutorNeed raised it to (#343).
+    std::uint64_t needExecutorBytes_ = 0;
     // The most unallocated claim this phase may hold: its need while it executes, its working
     // allowance once execution has ended (#539).
     std::uint64_t deviceClaimCapBytes_ = 0;

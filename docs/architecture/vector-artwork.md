@@ -158,7 +158,10 @@ origin at zero, so it is not sub-windowed. It is the import's elliptical reach o
 longer a square of the larger), and admission counts it at that size. Once the scene is prepared
 the phase raises its claim to the executor's live set with every image at its prepared size
 (`GpuProcessingPhaseLease::raiseExecutorNeed`); a ceiling below that refuses the scene instead of
-drawing past it. Images are counted at what the device allocates, not at the requested extent: the allocator
+drawing past it. The raise adds only the live set's excess over the executor bytes the admitted
+need already counts. Once phases of an envelope have been measured, their need is the measured peak
+plus a quarter rather than the stated working allowance (which phases do not fill), and a raise
+keeps that: it never puts the unused working allowance back into the claim. Images are counted at what the device allocates, not at the requested extent: the allocator
 rounds each one up (a 1920-wide float image allocates 2048 wide). The device reports its allocation
 sizes (`GpuAllocationSizes`, probed with `vkGetImageMemoryRequirements` and memoised per size), the
 phase budget rounds each claimed image with them, and the per-operation metadata buffers (axis

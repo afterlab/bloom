@@ -1913,8 +1913,10 @@ slots. Each is now counted as what it is; no budget was raised.
   frame. Once the scene is prepared, `detail::gpuExecutorLivePeakBytes` walks the plan again with
   every prepared window and the phase raises its claim to that live set when it is more
   (`GpuProcessingPhaseLease::raiseExecutorNeed`): a gradient node drawn in its own window larger
-  than the frame is counted at its size. The device admits, waits for or refuses the larger need;
-  an executor ceiling below it refuses the scene. Images are counted at what the device allocates,
+  than the frame is counted at its size. The need grows by the live set's excess over the executor
+  bytes it already counts, so a measured envelope (#417) keeps its measured need plus that excess
+  and never claims the unused stated working allowance again. The device admits, waits for or
+  refuses the larger need; an executor ceiling below it refuses the scene. Images are counted at what the device allocates,
   not at their requested extent: the device reports `render::GpuAllocationSizes` (carried in
   `GpuAllocationBudget::allocation_sizes`, probed with `vkGetImageMemoryRequirements` on the image
   formats and memoised per size), `GpuProcessingPhasePolicy` rounds each claimed image with it, and

@@ -726,6 +726,69 @@ void deviceNeedFollowsMeasuredPeaks() {
             "every claim returns");
 }
 
+// #343: a prepared scene's images at their real sizes can need more than the admission's minimum
+// (each image taken as one frame). The raise grows the device need by that excess only. Before an
+// envelope is measured, the need becomes the stated working allowance plus the real images; once it
+// is measured (#417), the measured need plus the excess, never the stated working allowance again,
+// which phases of this envelope were measured not to use.
+void raisedNeedKeepsTheMeasuredNeed() {
+    GpuProcessingPhaseBudget budget;
+    const auto now = std::chrono::steady_clock::now();
+    budget.setHostCapacity(64 * kGiB, true, now + std::chrono::seconds(60));
+    budget.setDeviceCapacity(2 * kGiB, true);
+    const std::uint64_t frameBytes = 1920ULL * 1080 * 16;
+    const GpuProcessingPhaseRequest request{.fixedHostBytes = 64 * kMiB,
+                                            .deviceWorkingBytes = 832 * kMiB,
+                                            .requestedExecutorBytes = 2 * kGiB,
+                                            .minimumExecutorBytes = 2 * frameBytes,
+                                            .sourceFree = true};
+    const auto stated = 832 * kMiB + 2 * frameBytes;
+    const auto real = 3 * frameBytes + 4096; // three padded images and their metadata
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+
+    auto first = budget.reserve(request);
+    require(first.lease && first.lease->deviceNeedBytes() == stated,
+            "an unmeasured envelope is admitted at its stated need");
+    require(first.lease->raiseExecutorNeed(2 * frameBytes) ==
+                    GpuProcessingPhaseAdmission::Accepted &&
+                first.lease->deviceNeedBytes() == stated,
+            "a raise to the admitted minimum changes nothing");
+    require(first.lease->raiseExecutorNeed(real) == GpuProcessingPhaseAdmission::Accepted &&
+                first.lease->deviceNeedBytes() == 832 * kMiB + real &&
+                first.lease->executorByteLimit() >= real,
+            "an unmeasured envelope needs its working allowance and the real images");
+    require(first.lease->raiseExecutorNeed(real) == GpuProcessingPhaseAdmission::Accepted &&
+                first.lease->deviceNeedBytes() == 832 * kMiB + real,
+            "a repeated raise does not count the images twice");
+    {
+        auto image = NativeImageStorageToken::reserve(first.lease, 200 * kMiB, local, now);
+        require(image.token.has_value(), "the first frame allocates what it uses");
+    }
+    first.lease.reset();
+
+    auto measured = budget.reserve(request);
+    require(measured.lease && measured.lease->deviceNeedBytes() == 250 * kMiB,
+            "the next frame is admitted at the measured peak plus a quarter");
+    require(
+        measured.lease->raiseExecutorNeed(real) == GpuProcessingPhaseAdmission::Accepted &&
+            measured.lease->deviceNeedBytes() == 250 * kMiB + (real - 2 * frameBytes) &&
+            measured.lease->executorByteLimit() >= real,
+        "a measured envelope grows by the images beyond its minimum, not the working allowance");
+    measured.lease.reset();
+
+    // The device itself still bounds a raise, as it bounds admission.
+    auto bounded = budget.reserve(request);
+    require(bounded.lease != nullptr, "a third frame is admitted");
+    require(bounded.lease->raiseExecutorNeed(2 * kGiB - 832 * kMiB + 1) ==
+                    GpuProcessingPhaseAdmission::BudgetRefused &&
+                bounded.lease->deviceNeedBytes() == 250 * kMiB,
+            "a stated need larger than the device is refused and changes nothing");
+    bounded.lease.reset();
+    const auto settled = budget.snapshot();
+    require(settled.totalDeviceClaimBytes == 0 && settled.admittedPhases == 0,
+            "every raised claim returns");
+}
+
 // #472: the many-layer RAM Preview fill. A 1080p stack of 19 footage layers cycling through six
 // media (four 1080p, two 2160p) states every reference as a float frame (34 1080p frames), while
 // preparation decodes each distinct source once and retains 12 such frames. Eight frames in flight
@@ -955,6 +1018,7 @@ int main() {
         deviceGrowthBeyondTheClaimUsesLiveRoom();
         deviceClaimsFollowDeviceStages();
         deviceNeedFollowsMeasuredPeaks();
+        raisedNeedKeepsTheMeasuredNeed();
         hostClaimsFollowRetainedSources();
         hostClaimsTrackOneSourcesScratch();
         previewWidthFollowsMeasuredRoom();

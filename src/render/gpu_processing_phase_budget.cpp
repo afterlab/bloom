@@ -361,12 +361,22 @@ GpuProcessingPhaseLease::raiseExecutorNeed(const std::uint64_t bytes) noexcept {
     const auto max = std::numeric_limits<std::uint64_t>::max();
     if (bytes > max - envelopeWorkingBytes_)
         return GpuProcessingPhaseAdmission::BudgetRefused;
-    const std::uint64_t need = envelopeWorkingBytes_ + bytes;
-    if (need <= deviceNeedBytes_ && bytes <= executorBytes_)
+    // The admitted need counts `needExecutorBytes_` of executor images: in the stated working
+    // allowance plus the minimum, or inside an envelope's measured peak (#417), which replaced the
+    // stated allowance because phases do not use all of it. Only the images beyond those are new,
+    // so the need grows by that excess. Resetting it to the stated allowance plus `bytes` would
+    // claim the unused working ceiling again on every measured phase.
+    const std::uint64_t excess = bytes > needExecutorBytes_ ? bytes - needExecutorBytes_ : 0;
+    if (excess > max - deviceNeedBytes_)
+        return GpuProcessingPhaseAdmission::BudgetRefused;
+    const std::uint64_t need = deviceNeedBytes_ + excess;
+    if (excess == 0 && bytes <= executorBytes_)
         return GpuProcessingPhaseAdmission::Accepted;
+    // As at admission, a phase whose stated need could never fit the device is refused.
     const std::uint64_t deviceLimit =
         std::max(*counters.deviceCapacityBytes, counters.deviceCeilingBytes.value_or(0));
-    if ((requestedExecutorBytes_ != 0 && bytes > requestedExecutorBytes_) || need > deviceLimit) {
+    if ((requestedExecutorBytes_ != 0 && bytes > requestedExecutorBytes_) ||
+        envelopeWorkingBytes_ + bytes > deviceLimit) {
         incrementSaturating(counters.budgetRefusals);
         return GpuProcessingPhaseAdmission::BudgetRefused;
     }
@@ -385,8 +395,9 @@ GpuProcessingPhaseLease::raiseExecutorNeed(const std::uint64_t bytes) noexcept {
         counters.peakDeviceReservedBytes =
             std::max(counters.peakDeviceReservedBytes, counters.deviceReservedBytes);
     }
-    deviceNeedBytes_ = std::max(deviceNeedBytes_, need);
+    deviceNeedBytes_ = need;
     deviceClaimCapBytes_ = std::max(deviceClaimCapBytes_, need);
+    needExecutorBytes_ = std::max(needExecutorBytes_, bytes);
     if (bytes > executorBytes_) {
         const auto added = bytes - executorBytes_;
         executorBytes_ = bytes;
@@ -1003,6 +1014,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     lease->deviceClaimCapBytes_ = deviceNeed;
     lease->envelopeWorkingBytes_ = request.deviceWorkingBytes;
     lease->envelopeMinimumExecutorBytes_ = request.minimumExecutorBytes;
+    lease->needExecutorBytes_ = request.native ? request.minimumExecutorBytes : 0;
     lease->envelopeFixedHostBytes_ = request.fixedHostBytes;
     lease->envelopeMinimumSourceBytes_ = request.minimumSourceBytes;
     lease->sourceBytes_ = sourceNeed;
