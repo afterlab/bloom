@@ -1581,6 +1581,14 @@ target_compile_definitions(bloom_svg_import_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_svg_import_capture)
 
+# #645: review captures of drilling into grouped SVG artwork (not a ctest).
+add_executable(bloom_svg_drill_capture svg_drill_capture.cpp)
+target_include_directories(bloom_svg_drill_capture PRIVATE ..)
+target_link_libraries(bloom_svg_drill_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_svg_drill_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_svg_drill_capture)
+
 add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
 target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_viewer_chrome_capture PRIVATE
@@ -2222,6 +2230,26 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# #645: the Viewer's isolation (the outside of an entered group at 30%) through the real Viewer
+# route: part of every preview and cache identity, never served across levels, a RAM Preview filled
+# at one level never shown at the other, and never in a still, range or scripted render. The CPU
+# route always runs; the GPU route (GPU-prepared packed product, 1080p and 4K included) runs with a
+# Vulkan loader and a qualified device and prints NotRun otherwise.
+add_executable(bloom_ui_viewer_isolation_test viewer_isolation_tests.cpp)
+target_link_libraries(bloom_ui_viewer_isolation_test PRIVATE bloom_ui bloom_host)
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_isolation_test PRIVATE BLOOM_UI_ISOLATION_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_isolation_test)
+endif()
+bloom_enable_warnings(bloom_ui_viewer_isolation_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_isolation
+    COMMAND bloom_ui_viewer_isolation_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Real Wayland device present/ack/resize/resume for the resident controller. Without a packaged
 # loader it skips cleanly (no --loader is passed by normal CTest, which stays offscreen); the
 # supervisor passes --loader/--require-device under QT_QPA_PLATFORM=wayland for the native run.
@@ -2570,6 +2598,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     add_executable(bloom_ui_viewer_resident_interaction_native_test
         viewer_resident_interaction_native_tests.cpp
         viewer_resident_interaction_support.hpp
+        viewer_resident_drill_proof.ipp
         viewer_resident_transition_support.hpp
         gpu_service_chain_fixture.hpp
         gpu_vertical_proof_support.hpp)
@@ -2608,6 +2637,16 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         set_tests_properties(bloom.ui.viewer_resident_transitions_${resident_transition_arm}
             PROPERTIES SKIP_RETURN_CODE 77)
     endforeach()
+    # #645: native double-clicks drill three groups deep into imported SVG shapes on the resident
+    # route; every level is a resident frame with that level's isolation, picks read its geometry.
+    bloom_add_test(
+        NAME bloom.ui.viewer_resident_drill_native
+        COMMAND bloom_ui_viewer_resident_interaction_native_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args} --drill
+        LABELS ui gpu viewer resident interaction native
+        TIMEOUT 150
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(bloom.ui.viewer_resident_drill_native PROPERTIES SKIP_RETURN_CODE 77)
     bloom_add_test(
         NAME bloom.ui.viewer_resident_shutdown_inflight
         COMMAND bloom_ui_viewer_resident_interaction_native_test

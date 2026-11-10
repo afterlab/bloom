@@ -59,6 +59,7 @@
 #include "viewer_resident_transition_support.hpp"
 
 #include "viewer_resident_editor_outline_proof.ipp"
+#include "viewer_resident_drill_proof.ipp"
 #include "viewer_resident_resize_proof.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
@@ -359,6 +360,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto geometry = ui::residentFrameGeometry(*displayed);
         checks.expect(geometry.has_value() && geometry->lease.isValid(),
                       "the displayed frame carries a valid genuine native lease");
+
+        if (options.drill) {
+            const bool drilled = exerciseResidentDrill(checks, session, controller, *viewer, *host,
+                                                       service, fixture.compiler, fixture.evaluator);
+            return drilled && checks.failures() == 0 ? 0 : 1;
+        }
 
         if (options.resizeProof) {
             if (options.geometryAdmissionProof)

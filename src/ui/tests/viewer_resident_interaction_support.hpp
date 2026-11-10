@@ -26,6 +26,8 @@ struct HarnessOptions final {
     bool transitions = false;
     bool general = false;
     bool shutdownInFlight = false;
+    // #645: drill into an imported SVG's nested groups on the resident route.
+    bool drill = false;
     std::filesystem::path trace;
 };
 
@@ -41,6 +43,8 @@ struct HarnessOptions final {
             options.failAfterPresent = true;
         } else if (argument == "--shutdown-in-flight") {
             options.shutdownInFlight = true;
+        } else if (argument == "--drill") {
+            options.drill = true;
         } else if (argument == "--general") {
             options.general = true;
         } else if (argument == "--transitions") {

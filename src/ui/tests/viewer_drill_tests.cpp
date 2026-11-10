@@ -14,6 +14,7 @@
 //  - a double-click on a one-layer SVG offers Break Apart and drills into the result; Cancel
 //    changes nothing; one undo restores the one-layer SVG.
 
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -32,16 +33,19 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/breadcrumb.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/mcp_live_ui_binding.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
 
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QTest>
 #include <QThread>
@@ -899,6 +903,467 @@ void testBreakApartOffer() {
     expect(app.level().empty(), "and the level, no longer a group, returns to the top");
 }
 
+
+// ---- H: isolation, the breadcrumb, masks, deep gestures, stroke small groups ----
+
+[[nodiscard]] document::ParameterId layerRole(const App& app, const document::LayerId layer,
+                                              const std::string_view role) {
+    const auto& graph = app.composition().graph();
+    const auto* boundary = graph.findLayer(layer);
+    const auto* binding = boundary ? document::layerParameterBinding(graph, *boundary, role) : nullptr;
+    if (binding == nullptr)
+        throw std::runtime_error("the layer has no " + std::string(role));
+    return binding->parameterId;
+}
+
+// The CPU reference frame of the session's document at `time` (no cache).
+std::shared_ptr<const runtime::ProcessFrame> renderNow(App& app, const core::RationalTime time) {
+    const auto compiled = app.pipeline.compiler->compile(
+        {.snapshot = app.session.snapshot(), .compositionId = app.session.compositionId()}, {});
+    if (!compiled.plan)
+        return nullptr;
+    runtime::EvaluationRequest request{.time = time,
+                                       .output = compiled.plan->output(),
+                                       .resolution = runtime::CompositionFormatResolution{},
+                                       .quality = runtime::EvaluationQuality::Reference,
+                                       .colorIntent =
+                                           runtime::EvaluationColorIntent::LinearRec709Scene,
+                                       .pixelStorageByteLimit = std::size_t{1} << 30U};
+    request.bypassOperationCache = true;
+    return runtime::CpuCompositionEvaluator{}.evaluate(compiled.plan, request, {}).frame();
+}
+
+float alphaIn(const std::shared_ptr<const runtime::ProcessFrame>& frame, const std::int64_t x,
+              const std::int64_t y) {
+    if (frame == nullptr)
+        return -1.0F;
+    const auto& image = frame->processImage();
+    const auto window = image.descriptor()->dataWindow();
+    if (x < window.originX() || y < window.originY() || x >= window.maxXExclusive() ||
+        y >= window.maxYExclusive())
+        return 0.0F;
+    const auto width = static_cast<std::int64_t>(window.extent().width());
+    return image
+        .pixels()[static_cast<std::size_t>((y - window.originY()) * width + (x - window.originX()))]
+        .alpha();
+}
+
+bool samePixels(const std::shared_ptr<const runtime::ProcessFrame>& a,
+                const std::shared_ptr<const runtime::ProcessFrame>& b) {
+    if (a == nullptr || b == nullptr)
+        return false;
+    const auto left = a->processImage().pixels();
+    const auto right = b->processImage().pixels();
+    return left.size_bytes() == right.size_bytes() &&
+           std::memcmp(left.data(), right.data(), left.size_bytes()) == 0;
+}
+
+// The Viewer shows a frame of the session's current revision and time.
+bool settleRevision(App& app) {
+    // A render-neutral revision keeps the frame of an earlier one (retained provenance): the
+    // frame must be the controller's current answer, for this level, painted.
+    const bool ok = waitUntil([&] {
+        const auto state = app.viewer->displayedPreviewState();
+        const auto& desired = app.preview->state().desiredIdentity;
+        return state.frame != nullptr && desired.has_value() &&
+               app.preview->state().activity == ui::PreviewActivity::Ready &&
+               state.freshness == ui::FrameFreshness::Current &&
+               state.frame->desiredIdentity().time == app.session.currentTime() &&
+               state.frame->desiredIdentity().isolation == app.preview->isolation() &&
+               app.viewer->mappingForTest().has_value();
+    });
+    if (!ok) {
+        const auto state = app.viewer->displayedPreviewState();
+        std::cerr << "settleRevision: frame " << (state.frame != nullptr);
+        if (state.frame)
+            std::cerr << " time " << (state.frame->desiredIdentity().time == app.session.currentTime())
+                      << " revision " << state.frame->desiredIdentity().sourceRevision.value() << "/"
+                      << app.session.snapshot().revision().value() << " isolation "
+                      << state.frame->desiredIdentity().isolation.size() << "/"
+                      << app.preview->isolation().size();
+        std::cerr << " mapping " << app.viewer->mappingForTest().has_value() << '\n';
+    }
+    QApplication::processEvents();
+    return ok;
+}
+
+// Inside a group the outside is dimmed and not pickable; the Viewer's request carries the level.
+void testIsolation(App& app, const Scene& s) {
+    expect(app.session.currentTime() == kOne || app.session.setCurrentTime(kOne), "go to 1 s");
+    const std::vector<document::LayerId> outer{s.root, s.outer};
+    expect(app.session.setViewerLevel({outer, std::nullopt}).ok(), "enter outer");
+    expect(app.preview->isolation() == outer, "the Viewer's request names the entered groups");
+    expect(settleRevision(app), "the Viewer shows the dimmed frame");
+    const auto shown = app.viewer->displayedPreviewState().frame;
+    expect(shown && shown->desiredIdentity().isolation == outer,
+           "the displayed frame is the one for this level");
+    // The backdrop, outside outer, draws dimmed and cannot be picked.
+    runtime::ViewerPicker picker([&](const runtime::SnapshotCompileRequest& request,
+                                     const runtime::CancellationToken& cancellation) {
+        return app.pipeline.compiler->compile(request, cancellation);
+    });
+    const auto bounds = runtime::queryLayerBounds(*app.pipeline.compiler, app.pipeline.evaluator,
+                                                  {.snapshot = app.session.snapshot(),
+                                                   .composition = app.session.compositionId(),
+                                                   .time = kOne,
+                                                   .layers = {}});
+    const auto picked = picker.pick({.snapshot = app.session.snapshot(),
+                                     .composition = app.session.compositionId(),
+                                     .time = kOne,
+                                     .level = outer,
+                                     .point = {30.0, 30.0},
+                                     .tolerance = 0.0,
+                                     .bounds = bounds.bounds,
+                                     .plan = nullptr},
+                                    {});
+    expect(picked.status == runtime::ViewerPickStatus::Picked && !picked.child,
+           "a dimmed layer outside the group is not picked");
+    app.session.selectLayerFromViewer(s.middle);
+    app.click({30.0, 30.0});
+    expect(!app.primary() && app.level() == outer,
+           "a click on the dimmed backdrop selects nothing and stays inside");
+    expect(app.session.setViewerLevel({}).ok() && app.preview->isolation().empty(),
+           "back at the top level the request carries no isolation");
+    expect(settleRevision(app), "the Viewer shows the undimmed frame");
+}
+
+void testBreadcrumb(App& app, const Scene& s) {
+    auto* crumb = app.viewer->breadcrumbForTest();
+    expect(crumb != nullptr && crumb->objectName() == QStringLiteral("viewerBreadcrumb"),
+           "the Viewer header has the breadcrumb");
+    if (crumb == nullptr)
+        return;
+    expect(app.session.setViewerLevel({}).ok(), "top level");
+    expect(crumb->property("chromeSuppressed").toBool() && crumb->crumbs().empty(),
+           "the breadcrumb is hidden at the top level");
+    const std::vector<document::LayerId> deep{s.root, s.outer, s.middle, s.inner};
+    expect(app.session.setViewerLevel({deep, std::nullopt}).ok(), "inside inner");
+    const auto texts = [&] {
+        std::vector<QString> out;
+        for (const auto& item : crumb->crumbs())
+            out.push_back(item.text);
+        return out;
+    };
+    expect(!crumb->property("chromeSuppressed").toBool() &&
+               texts() == std::vector<QString>{QStringLiteral("Drill"), QStringLiteral("Art"),
+                                               QStringLiteral("outer"), QStringLiteral("middle"),
+                                               QStringLiteral("inner")},
+           "the breadcrumb names the composition and every entered group, outermost first");
+    expect(app.session.enterViewerPoints(s.ring), "edit ring's points");
+    expect(texts().back() == QStringLiteral("ring") && crumb->suffix() == QStringLiteral("Points") &&
+               crumb->toolTip() ==
+                   QStringLiteral("Drill ▸ Art ▸ outer ▸ middle ▸ inner ▸ "
+                                  "ring · Points"),
+           "point editing shows the shape and Points; the tooltip has the whole path");
+    // A click on a crumb of the Viewer's own breadcrumb.
+    const auto clickOn = [](ui::kit::KBreadcrumb& widget, const int target) {
+        for (const auto& entry : widget.shown())
+            if (entry.target == target) {
+                const QPointF point = QRectF(entry.rect).center();
+                QMouseEvent press(QEvent::MouseButtonPress, point, widget.mapToGlobal(point),
+                                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(&widget, &press);
+                QMouseEvent release(QEvent::MouseButtonRelease, point, widget.mapToGlobal(point),
+                                    Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(&widget, &release);
+                return true;
+            }
+        return false;
+    };
+    crumb->resize(crumb->sizeHint());
+    auto shown = crumb->shown();
+    expect(shown.size() == 6 && std::ranges::none_of(shown, [](const auto& entry) {
+               return entry.elided;
+           }),
+           "with room, every crumb shows in full");
+    expect(clickOn(*crumb, 5) && app.session.viewerLevel().points == s.ring,
+           "a click on the current crumb does nothing");
+    expect(clickOn(*crumb, 4) && app.level() == deep && !app.session.viewerLevel().points &&
+               app.primary() == s.ring,
+           "a click on the innermost group leaves the points with the shape selected");
+    expect(clickOn(*crumb, 2) && app.level() == std::vector{s.root, s.outer} &&
+               app.primary() == s.middle,
+           "a click on a crumb jumps to that level with the group left selected");
+    expect(clickOn(*crumb, 0) && app.level().empty() && app.primary() == s.root,
+           "a click on the composition returns to the top level");
+
+    // Eliding and the keyboard, on a shown breadcrumb with the Viewer's crumbs and its jump (this
+    // Viewer is not hosted by an EditorArea, so its header row, and the breadcrumb, is not shown).
+    expect(app.session.setViewerLevel({deep, std::nullopt}).ok(), "inside inner again");
+    QWidget host;
+    auto* mirror = new ui::kit::KBreadcrumb(&host);
+    mirror->setCrumbs(crumb->crumbs(), crumb->suffix());
+    QObject::connect(mirror, &ui::kit::KBreadcrumb::crumbActivated, app.viewer,
+                     &ui::ViewerEditor::jumpToViewerCrumb);
+    host.resize(mirror->sizeHint().width() + 40, mirror->sizeHint().height() + 20);
+    mirror->resize(mirror->sizeHint());
+    host.show();
+    QApplication::processEvents();
+    const auto full = mirror->sizeHint().width();
+    mirror->resize(full - 1, mirror->height());
+    shown = mirror->shown();
+    expect(shown.size() >= 3 && shown.size() <= 5 && shown[1].text == QStringLiteral("…") &&
+               shown.front().text == QStringLiteral("Drill") && !shown.front().elided &&
+               shown.back().text == QStringLiteral("inner") && !shown.back().elided,
+           "a little short of room, the middle crumbs fold into … first and the ends stay whole");
+    expect(mirror->toolTip().contains(QStringLiteral("outer")),
+           "the tooltip still names every level");
+    mirror->resize(mirror->minimumSizeHint().width(), mirror->height());
+    shown = mirror->shown();
+    expect(shown.size() == 3 && shown[1].text == QStringLiteral("…"),
+           "at its narrowest the path is the first crumb, one … and the last crumb");
+    // Keyboard: Tab lands on the innermost way back; Left and Enter go further out.
+    mirror->resize(mirror->sizeHint());
+    // Focus as Tab gives it (the offscreen platform does not activate windows).
+    QFocusEvent tabIn(QEvent::FocusIn, Qt::TabFocusReason);
+    QApplication::sendEvent(mirror, &tabIn);
+    expect(mirror->focusPolicy() == Qt::StrongFocus && mirror->focusedCrumb() == 3,
+           "keyboard focus lands on the innermost crumb to go back to");
+    QTest::keyClick(mirror, Qt::Key_Left);
+    expect(mirror->focusedCrumb() == 2, "Left moves out one crumb");
+    QTest::keyClick(mirror, Qt::Key_Return);
+    expect(app.level() == std::vector{s.root, s.outer} && app.primary() == s.middle,
+           "Enter on a crumb jumps to its level");
+    expect(app.session.setViewerLevel({}).ok(), "back to the top");
+    app.viewer->setFocus();
+}
+
+// A pick honours the layer's masks, as the frame draws them.
+void testMaskedPick(App& app, const Scene& s) {
+    runtime::ViewerPicker picker([&](const runtime::SnapshotCompileRequest& request,
+                                     const runtime::CancellationToken& cancellation) {
+        return app.pipeline.compiler->compile(request, cancellation);
+    });
+    const auto pickAt = [&](const std::vector<document::LayerId>& level,
+                            const document::Vec2d point) {
+        const auto snapshot = app.session.snapshot();
+        const auto bounds = runtime::queryLayerBounds(*app.pipeline.compiler, app.pipeline.evaluator,
+                                                      {.snapshot = snapshot,
+                                                       .composition = app.session.compositionId(),
+                                                       .time = kZero,
+                                                       .layers = {}});
+        return picker.pick({.snapshot = snapshot,
+                            .composition = app.session.compositionId(),
+                            .time = kZero,
+                            .level = level,
+                            .point = point,
+                            .tolerance = 0.0,
+                            .bounds = bounds.bounds,
+                            .plan = nullptr},
+                           {});
+    };
+    // The left part of the canvas: x from 0 to 160.
+    const auto corner = [](const double x, const double y) {
+        return document::PathAnchor{.point = {x, y}, .inHandle = {}, .outHandle = {}};
+    };
+    const auto left = document::PathValue::fromContour(
+        {corner(0.0, 0.0), corner(160.0, 0.0), corner(160.0, 300.0), corner(0.0, 300.0)}, true);
+    const std::vector<document::LayerId> inner{s.root, s.outer, s.middle, s.inner};
+    const std::vector<document::LayerId> middle{s.root, s.outer, s.middle};
+    for (const auto& [masked, level, label] :
+         {std::tuple{s.ring, inner, std::string("a mask on ring")},
+          std::tuple{s.inner, middle, std::string("a mask on the inner group")}}) {
+        const auto expectedChild = masked;
+        expect(pickAt(level, {210.0, 50.0}).child == expectedChild,
+               label + ": before the mask, the ring's right side picks");
+        commands::Transaction transaction("Mask", app.session.snapshot().revision());
+        transaction.emplace<commands::AddLayerMask>(app.session.compositionId(), masked, left);
+        expect(app.session.executeTransaction(std::move(transaction)).succeeded(),
+               label + ": the mask is added");
+        const auto frame = renderNow(app, kZero);
+        expect(alphaIn(frame, 210, 50) == 0.0F && alphaIn(frame, 110, 50) > 0.5F,
+               label + ": the frame draws the ring only inside the mask");
+        expect(!pickAt(level, {210.0, 50.0}).child,
+               label + ": a click outside the mask misses, as nothing is drawn there");
+        expect(pickAt(level, {110.0, 50.0}).child == expectedChild,
+               label + ": a click inside the mask still picks");
+        expect(app.session.undo(), label + ": undo the mask");
+    }
+}
+
+// Move, scale and rotate on a layer three groups deep (inner, inside middle, outer and the
+// artwork's root), inside turned and scaled groups: each one command, and the result equals the
+// same values set as Properties sets them. A group, not a Path shape: a selected Path shape shows
+// its points, whose handles answer before the transform gizmo does.
+void testDeepGestures(App& app, const Scene& s) {
+    expect(app.session.currentTime() == kZero || app.session.setCurrentTime(kZero), "go to 0 s");
+    expect(app.session.setParameterValue(layerRole(app, s.middle, document::kRotationParameterRole),
+                                         15.0, QStringLiteral("Rotate")),
+           "turn middle");
+    expect(app.session.setParameterValue(layerRole(app, s.outer, document::kScaleParameterRole),
+                                         document::Vec2d{1.2, 1.2}, QStringLiteral("Scale")),
+           "scale outer");
+    const std::vector<document::LayerId> deep{s.root, s.outer, s.middle};
+    enum class Grip { Move, Scale, Rotate };
+    for (const auto grip : {Grip::Move, Grip::Scale, Grip::Rotate}) {
+        const std::string label = grip == Grip::Move    ? "move inner"
+                                  : grip == Grip::Scale ? "scale inner"
+                                                        : "rotate inner";
+        expect(app.session.setViewerLevel({deep, std::nullopt}).ok(), label + ": inside middle");
+        app.session.selectLayerFromViewer(s.inner);
+        expect(settleRevision(app), label + ": the Viewer shows the current frame");
+        const auto mapping = app.viewer->mappingForTest();
+        const auto bounds = app.preview->selectedLayerBounds(app.preview->state().frame);
+        expect(mapping && bounds.size() == 1 && bounds.front().layerId == s.inner,
+               label + ": inner's gizmo is composed through its three groups");
+        if (!mapping || bounds.empty())
+            continue;
+        const auto handles = ui::viewerHandlePoints(*mapping, bounds.front());
+        // Inside its box, off its anchor (which has its own handle) and on the canvas.
+        const auto& quad = bounds.front().polygon;
+        QPointF press = mapping->toScreen(
+            {quad[0].x + 0.35 * (quad[1].x - quad[0].x) + 0.65 * (quad[3].x - quad[0].x),
+             quad[0].y + 0.35 * (quad[1].y - quad[0].y) + 0.65 * (quad[3].y - quad[0].y)});
+        QPointF drag = press + QPointF(24.0, 14.0);
+        auto region = ui::ViewerHitRegion::Move;
+        if (grip == Grip::Scale) {
+            press = handles[4];
+            drag = press + QPointF(18.0, 12.0);
+            region = ui::ViewerHitRegion::Scale;
+        } else if (grip == Grip::Rotate) {
+            press = handles[4] + (handles[4] - handles[0]) * (12.0 / std::max(1.0, QLineF(handles[0], handles[4]).length()));
+            drag = press + QPointF(-30.0, 20.0);
+            region = ui::ViewerHitRegion::Rotate;
+        }
+        expect(ui::hitTestViewer(*mapping, press, bounds, bounds).region == region &&
+                   app.viewer->contentRectForTest().contains(press) &&
+                   app.viewer->contentRectForTest().contains(drag),
+               label + ": the press lands on its gizmo region, on the canvas");
+        const auto centreBefore = bounds.front().output.centre();
+        const auto revision = app.session.snapshot().revision();
+        const auto history = app.session.undoLabel();
+        // inner's own transform values, before and after the gesture.
+        std::vector<document::ParameterId> transform;
+        for (const auto role : {document::kPositionParameterRole, document::kAnchorParameterRole,
+                                document::kScaleParameterRole, document::kRotationParameterRole})
+            transform.push_back(layerRole(app, s.inner, role));
+        const auto stored = [&](const document::ParameterId id) -> std::optional<document::ParameterValue> {
+            const auto* parameter = app.composition().parameters().find(id);
+            const auto* constant =
+                parameter ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
+            return constant ? std::optional(constant->value) : std::nullopt;
+        };
+        std::vector<std::optional<document::ParameterValue>> valuesBefore;
+        for (const auto id : transform)
+            valuesBefore.push_back(stored(id));
+        app.mouse(QEvent::MouseButtonPress, press, Qt::LeftButton);
+        for (int step = 1; step <= 4; ++step) {
+            const auto point = press + (drag - press) * (step / 4.0);
+            QMouseEvent move(QEvent::MouseMove, point, app.viewer->mapToGlobal(point),
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(app.viewer, &move);
+        }
+        app.mouse(QEvent::MouseButtonRelease, drag, Qt::NoButton);
+        QApplication::processEvents();
+        expect(app.session.snapshot().revision().value() == revision.value() + 1 &&
+                   app.session.undoLabel() != history,
+               label + ": the drag is one command");
+        std::vector<std::pair<document::ParameterId, document::ParameterValue>> values;
+        for (std::size_t index = 0; index < transform.size(); ++index)
+            if (const auto value = stored(transform[index]); value && value != valuesBefore[index])
+                values.emplace_back(transform[index], *value);
+        expect(!values.empty(), label + ": the drag edited inner's transform");
+        if (grip == Grip::Move) {
+            expect(settleRevision(app), label + ": the moved frame is shown");
+            const auto after = app.preview->selectedLayerBounds(app.preview->state().frame);
+            const auto moved = mapping->toComposition(drag);
+            const auto from = mapping->toComposition(press);
+            expect(!after.empty() &&
+                       std::abs(after.front().output.centre().x - centreBefore.x -
+                                (moved.x - from.x)) < 0.75 &&
+                       std::abs(after.front().output.centre().y - centreBefore.y -
+                                (moved.y - from.y)) < 0.75,
+                   label + ": inner follows the pointer through its turned, scaled groups");
+        }
+        const auto gestured = renderNow(app, kZero);
+        expect(app.session.undo() && app.session.snapshot().revision() != revision &&
+                   app.session.undoLabel() == history,
+               label + ": one undo restores inner");
+        expect(app.session.setParameterValues(values, QStringLiteral("Properties")),
+               label + ": the same values are set as Properties sets them");
+        const auto typed = renderNow(app, kZero);
+        expect(samePixels(gestured, typed),
+               label + ": the gesture's frame equals the Properties edit's, pixel for pixel");
+        expect(app.session.undo(), label + ": undo the Properties edit");
+    }
+    expect(app.session.undo() && app.session.undo(), "restore outer and middle");
+    expect(app.session.setViewerLevel({}).ok(), "back to the top");
+}
+
+// The importer's dashed-stroke and gradient-stroke shapes are small groups: they pick on the drawn
+// stroke (a dash, not a gap) and a double-click edits their outline.
+constexpr auto kStrokes =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+<defs><linearGradient id="edge"><stop offset="0" stop-color="#ffff00"/><stop offset="1" stop-color="#00ffff"/></linearGradient></defs>
+<g id="set">
+<path id="dashed" fill="#446688" stroke="#ffffff" stroke-width="10" stroke-dasharray="20 20" d="M60 60H160V160H60Z"/>
+<path id="graded" fill="#cccccc" stroke="url(#edge)" stroke-width="10" d="M240 60H340V160H240Z"/>
+<rect id="plain" x="60" y="220" width="40" height="40" fill="#999999"/>
+</g>
+</svg>
+)svg";
+
+void testStrokeSmallGroups() {
+    App app;
+    const auto root = app.import(kStrokes, commands::SvgImportMode::Shapes, "Strokes");
+    const auto set = app.child(root, "set");
+    const auto dashed = app.child(set, "dashed");
+    const auto graded = app.child(set, "graded");
+    const auto& c = app.composition();
+    const auto dashedShape = document::drillShape(c, dashed);
+    const auto gradedShape = document::drillShape(c, graded);
+    expect(dashedShape && dashedShape->smallGroup && !document::isDrillGroup(c, dashed),
+           "a dashed stroke over a fill imports as a small-group shape");
+    expect(gradedShape && gradedShape->smallGroup && !document::isDrillGroup(c, graded),
+           "a gradient stroke over a fill imports as a small-group shape");
+    runtime::ViewerPicker picker([&](const runtime::SnapshotCompileRequest& request,
+                                     const runtime::CancellationToken& cancellation) {
+        return app.pipeline.compiler->compile(request, cancellation);
+    });
+    const auto snapshot = app.session.snapshot();
+    const auto bounds = runtime::queryLayerBounds(*app.pipeline.compiler, app.pipeline.evaluator,
+                                                  {.snapshot = snapshot,
+                                                   .composition = app.session.compositionId(),
+                                                   .time = kZero,
+                                                   .layers = {}});
+    const std::vector level{root, set};
+    const auto pick = [&](const document::Vec2d point) {
+        return picker
+            .pick({.snapshot = snapshot,
+                   .composition = app.session.compositionId(),
+                   .time = kZero,
+                   .level = level,
+                   .point = point,
+                   .tolerance = 0.0,
+                   .bounds = bounds.bounds,
+                   .plan = nullptr},
+                  {})
+            .child;
+    };
+    const auto frame = renderNow(app, kZero);
+    expect(alphaIn(frame, 70, 57) > 0.5F && alphaIn(frame, 90, 57) == 0.0F,
+           "the dashed stroke draws a dash at (70, 57) and a gap at (90, 57)");
+    expect(pick({70.0, 57.0}) == dashed, "a dash of the dashed stroke picks the shape");
+    expect(!pick({90.0, 57.0}), "a gap between dashes, outside the fill, misses");
+    expect(pick({110.0, 110.0}) == dashed, "the dashed shape's fill picks it");
+    expect(pick({290.0, 57.0}) == graded, "the gradient stroke picks its shape on the stroke");
+    expect(!pick({290.0, 50.0}), "just outside the gradient stroke misses");
+    expect(pick({290.0, 110.0}) == graded, "the gradient-stroked shape's fill picks it");
+    // Enter: the root, the set, then the dashed shape's points.
+    app.doubleClick({70.0, 57.0});
+    app.doubleClick({70.0, 57.0});
+    expect(app.level() == level && app.primary() == dashed,
+           "double-clicks enter the set and select the dashed shape");
+    app.doubleClick({70.0, 57.0});
+    expect(app.session.viewerLevel().points == dashed && app.primary() == dashedShape->edited,
+           "a double-click on the dashed shape edits its outline");
+    app.key(Qt::Key_Escape);
+    app.doubleClick({290.0, 57.0});
+    expect(app.session.viewerLevel().points == graded && app.primary() == gradedShape->edited,
+           "a double-click on the gradient-stroked shape edits its outline");
+    app.key(Qt::Key_Escape);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -916,8 +1381,13 @@ int main(int argc, char** argv) {
             testSelectionFollowsLevel(app, scene);
             testKeyedPointDrag(app, scene);
             testPickThreadStaleAndCancel(app, scene);
+            testIsolation(app, scene);
+            testBreadcrumb(app, scene);
+            testMaskedPick(app, scene);
+            testDeepGestures(app, scene);
         }
         testBreakApartOffer();
+        testStrokeSmallGroups();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

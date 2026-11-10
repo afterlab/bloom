@@ -1039,6 +1039,30 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_svg_artwork_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
+# #645: the Viewer's isolation (the outside of an entered group at 30%) on the CPU reference and the
+# production GPU route at 512 x 288 over three frames, interleaved with undimmed frames on one
+# executor, and rendered on the device at 1080p and 4K. Skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_gpu_viewer_isolation_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_viewer_isolation_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_viewer_isolation_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime"
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(bloom_runtime_gpu_viewer_isolation_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+target_compile_definitions(bloom_runtime_gpu_viewer_isolation_native_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_viewer_isolation_native_test>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_viewer_isolation_native_test)
+bloom_enable_warnings(bloom_runtime_gpu_viewer_isolation_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_viewer_isolation_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_viewer_isolation_native
+    COMMAND bloom_runtime_gpu_viewer_isolation_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_viewer_isolation_native
+    PROPERTIES SKIP_RETURN_CODE 77)
+
 # #642: an SVG imported as one layer (a Vector Artwork layer) on the production GPU route against
 # the CPU reference and the editable import: keyed, scaled and turned at 512 x 288 over a few frames,
 # at half resolution, at 1080p and 4K, admitted, retired and cancelled; in scaled groups and clipped
