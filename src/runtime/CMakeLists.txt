@@ -318,6 +318,7 @@ target_sources(
         value_utility_path_sources.cpp
         value_utility_path_resample.cpp
         path_resample.cpp
+        path_morph.cpp
         value_utility_path_warp.cpp
         path_warp.cpp
     PUBLIC

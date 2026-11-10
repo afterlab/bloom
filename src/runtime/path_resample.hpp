@@ -3,9 +3,9 @@
 // #637 Resample Path's computation, shared (docs/architecture/path-processing.md): the arc-length
 // measure of a contour, the points to place along it for a count or a gap, and the contour through
 // those points as straight segments or as curves that keep the shape. Resample Path is the node;
-// a warp that must subdivide a straight segment (#598) and a morph that must give two contours the
-// same number of points (#597) call the same functions, so they never disagree about where a point
-// falls.
+// `resampleToCount` is the shared equal-count helper for any caller that wants points spread evenly
+// by length. (The morph, #597, gives two contours the same count by subdividing instead, so every
+// original anchor stays: path_morph.hpp.)
 //
 // Pure functions of their arguments: no clock, no state, no Qt. Nothing here allocates more than
 // `maximumPoints` points: a request past it is reported, not clamped.

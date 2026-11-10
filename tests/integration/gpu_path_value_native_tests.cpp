@@ -5,8 +5,11 @@
 // value owns, several consumers of one output and a key that holds. Every state is prepared by the
 // production CpuGpuSceneBuilder, run by the production GpuSceneExecutor and compared to the CPU
 // reference (2e-6) cold and warm. The prepared identity changes exactly where the resolved path
-// does: a held frame dispatches nothing new, an interpolated frame and an edited key do.
-// Preparation and the native job cancel, and the budget refuses.
+// does: a held frame dispatches nothing new, an interpolated frame and an edited key do. #597: keys
+// of different shapes morph; every quarter second of a star into a two-holed square into an open
+// wave matches the CPU reference at 512 px, each key's frame is exactly its key, and a 1080p morph
+// frame runs on the production route. Preparation and the native job cancel, and the budget
+// refuses.
 //
 // The CPU assertions always run. Without a device the GPU half reports an explicit SKIP (exit 77)
 // after the CPU half passed; --require-device makes that a failure.
@@ -23,6 +26,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstring>
 #include <iostream>
@@ -58,13 +62,17 @@ PathValue framed(const PathFillRule rule, const double inner) {
 }
 
 struct Fixture final {
-    document::NewProject initial = document::makeNewProject(
-        "Path value", "Main", core::RationalTime::fromInteger(4),
-        *document::CompositionFormat::create(96, 80, core::PixelAspectRatio::square(),
-                                             *document::FrameRate::create(24, 1)));
-    document::CompositionId main = initial.initialCompositionId;
-    document::Document document{std::move(initial.project)};
-    commands::CommandStack commands{document};
+    explicit Fixture(const std::uint32_t width = 96, const std::uint32_t height = 80)
+        : initial(document::makeNewProject(
+              "Path value", "Main", core::RationalTime::fromInteger(4),
+              *document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(),
+                                                   *document::FrameRate::create(24, 1)))),
+          main(initial.initialCompositionId), document(std::move(initial.project)),
+          commands(document) {}
+    document::NewProject initial;
+    document::CompositionId main;
+    document::Document document;
+    commands::CommandStack commands;
 
     document::NodeId addPathNode() {
         execute<commands::AddNode>(document, commands, main,
@@ -103,6 +111,20 @@ struct Fixture final {
             document, commands, main,
             parameter(document, main, producer, document::kValueParameterRole),
             core::RationalTime::fromInteger(second), std::move(value));
+    }
+    // Makes the producer's key at `second` a Hold key.
+    void hold(const document::NodeId producer, const std::int64_t second) {
+        const auto& composition = test::document_render::composition(document, main);
+        const auto* record = composition.parameters().find(
+            parameter(document, main, producer, document::kValueParameterRole));
+        const auto curveId = std::get<document::AnimationCurveSource>(record->source).curveId;
+        const auto& curve =
+            std::get<document::PathAnimationCurve>(*composition.animationCurves().find(curveId));
+        for (const auto& keyframe : curve.keyframes)
+            if (keyframe.time == core::RationalTime::fromInteger(second))
+                execute<commands::SetKeyframeInterpolation>(document, commands, main, curveId,
+                                                            keyframe.id,
+                                                            document::KeyframeInterpolation::Hold);
     }
 };
 
@@ -176,7 +198,8 @@ struct Fixture final {
     return token;
 }
 
-// The keyed graph: two matching keys, then a key of a different shape that the second holds up to.
+// The keyed graph: two matching keys, then a key of a different shape that the second (a Hold key)
+// holds up to.
 struct KeyedStates final {
     Reference start, middle, end, holding;
 };
@@ -202,6 +225,64 @@ void buildKeyed(Fixture& fixture) {
     auto oneContour = framed(PathFillRule::EvenOdd, 34.0);
     oneContour.contours.pop_back();
     fixture.key(producer, 2, oneContour);
+    fixture.hold(producer, 1);
+}
+
+// #597: keys of different shapes morph. A five-pointed star with a round hole (two keyed groups)
+// into a square body with its hole moved and a second hole growing (three contours, the groups in
+// another order), into one open wave (closed to open, three contours to one).
+PathContour circle(const double cx, const double cy, const double radius) {
+    const double k = 0.5522847498307936 * radius;
+    PathContour contour;
+    contour.closed = true;
+    contour.anchors = {{{cx + radius, cy}, Vec2d{cx + radius, cy - k}, Vec2d{cx + radius, cy + k}},
+                       {{cx, cy + radius}, Vec2d{cx + k, cy + radius}, Vec2d{cx - k, cy + radius}},
+                       {{cx - radius, cy}, Vec2d{cx - radius, cy + k}, Vec2d{cx - radius, cy - k}},
+                       {{cx, cy - radius}, Vec2d{cx - k, cy - radius}, Vec2d{cx + k, cy - radius}}};
+    return contour;
+}
+
+PathContour star(const double cx, const double cy, const double outer, const double inner) {
+    PathContour contour;
+    contour.closed = true;
+    for (int index = 0; index < 10; ++index) {
+        const double angle = -1.5707963267948966 + index * 0.6283185307179586;
+        const double radius = index % 2 == 0 ? outer : inner;
+        contour.anchors.push_back(
+            {{cx + radius * std::cos(angle), cy + radius * std::sin(angle)}, {}, {}});
+    }
+    return contour;
+}
+
+PathValue morphKey(const int which, const double scale) {
+    const auto at = [scale](const double value) { return value * scale; };
+    PathValue value;
+    value.fillRule = PathFillRule::EvenOdd;
+    if (which == 0) {
+        value.contours = {star(at(256), at(256), at(200), at(90)),
+                          circle(at(256), at(266), at(40))};
+        value.groups = {{"body", 0, 1, std::nullopt}, {"eye", 1, 1, std::nullopt}};
+    } else if (which == 1) {
+        value.contours = {circle(at(200), at(300), at(36)), square(at(96), at(96), at(320)),
+                          circle(at(330), at(190), at(28))};
+        value.groups = {{"eye", 0, 1, std::nullopt}, {"body", 1, 1, std::nullopt}};
+    } else {
+        PathContour wave;
+        wave.anchors = {{{at(60), at(256)}, {}, Vec2d{at(140), at(120)}},
+                        {{at(256), at(256)}, Vec2d{at(200), at(390)}, Vec2d{at(310), at(120)}},
+                        {{at(452), at(256)}, Vec2d{at(380), at(390)}, {}}};
+        value.contours = {wave};
+    }
+    return value;
+}
+
+void buildMorph(Fixture& fixture, const double scale) {
+    const auto producer = fixture.addPathNode();
+    const auto shape = fixture.addShape(PathValue::fromContour(square(1, 1, 2)),
+                                        core::Color4d{0.85, 0.45, 0.15, 1.0}, true);
+    fixture.drive(producer, shape);
+    for (int which = 0; which < 3; ++which)
+        fixture.key(producer, which, morphKey(which, scale));
 }
 
 // Cache identity on the device: a frame whose path did not change runs nothing new; a frame whose
@@ -377,6 +458,41 @@ int main(int argc, char** argv) {
                                 "the keyed path moves");
             expectations.expect(samePixels(keyed->end, keyed->holding), "and the second key holds");
         }
+
+        // #597: keys of different shapes morph. Every quarter second from the star to the square
+        // with two holes to the open wave has a CPU reference; the frames between keys move (they
+        // morph rather than hold), and each key's own frame is exactly that key's shape.
+        Fixture morphFixture(512, 512);
+        buildMorph(morphFixture, 1.0);
+        std::vector<Reference> morphFrames;
+        for (int quarter = 0; quarter <= 8; ++quarter)
+            if (auto reference = referenceAt(expectations, morphFixture, quarter,
+                                             "morph quarter " + std::to_string(quarter)))
+                morphFrames.push_back(std::move(*reference));
+        expectations.expect(morphFrames.size() == 9, "every morph frame has a CPU reference");
+        if (morphFrames.size() == 9) {
+            for (std::size_t quarter = 1; quarter <= 8; ++quarter)
+                expectations.expect(!samePixels(morphFrames[quarter], morphFrames[quarter - 1]),
+                                    "morph: quarter " + std::to_string(quarter) +
+                                        " differs from the one before (the shape morphs)");
+            for (int which = 0; which < 3; ++which) {
+                // Made like the morph's shape (a closed placeholder sets its style), then its own
+                // path set to the key as a constant.
+                Fixture still(512, 512);
+                const auto stillShape = still.addShape(PathValue::fromContour(square(1, 1, 2)),
+                                                       core::Color4d{0.85, 0.45, 0.15, 1.0}, true);
+                execute<commands::SetParameterSource>(
+                    still.document, still.commands, still.main,
+                    parameter(still.document, still.main, stillShape, "path"),
+                    document::ConstantValueSource{document::ParameterValue{morphKey(which, 1.0)}});
+                const auto reference =
+                    referenceAt(expectations, still, 0, "morph key " + std::to_string(which));
+                expectations.expect(
+                    reference.has_value() &&
+                        samePixels(*reference, morphFrames[static_cast<std::size_t>(which) * 4]),
+                    "morph: key " + std::to_string(which) + "'s frame is exactly that key's shape");
+            }
+        }
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " path value expectation(s) failed\n";
             return 1;
@@ -411,6 +527,62 @@ int main(int argc, char** argv) {
         gpuParity(expectations, *executor.executor, keyed->middle, "keyed middle");
         gpuParity(expectations, *executor.executor, keyed->end, "keyed end");
         gpuParity(expectations, *executor.executor, keyed->holding, "keyed holding");
+        for (std::size_t quarter = 0; quarter < morphFrames.size(); ++quarter)
+            gpuParity(expectations, *executor.executor, morphFrames[quarter],
+                      "morph quarter " + std::to_string(quarter));
+
+        // #597 identity, on a cache of its own (the parity runs above warmed the shared one): a
+        // morph frame already run dispatches nothing new, the next one does.
+        auto morphCache =
+            runtime::GpuSceneCache::create(*device.device, runtime::GpuSceneCacheBudgets{});
+        auto morphExecutor =
+            morphCache
+                ? runtime::GpuSceneExecutor::create(*device.device, *morphCache.cache)
+                : decltype(runtime::GpuSceneExecutor::create(*device.device, *morphCache.cache)){};
+        expectations.expect(morphCache.hasValue() && morphExecutor.hasValue(),
+                            "the morph identity executor creates");
+        if (morphExecutor) {
+            auto& coldExecutor = *morphExecutor.executor;
+            const runtime::CpuGpuSceneBuilder builder;
+            const auto second = builder.build(morphFrames[2].plan, morphFrames[2].request);
+            const auto third = builder.build(morphFrames[3].plan, morphFrames[3].request);
+            expectations.expect(second.hasValue() && third.hasValue(), "morph identity: prepares");
+            if (second && third) {
+                (void)runScene(coldExecutor, second.scene);
+                const auto before = coldExecutor.counters();
+                (void)runScene(coldExecutor, second.scene);
+                expectations.expect(coldExecutor.counters().dispatches == before.dispatches,
+                                    "morph identity: the same morph frame dispatches nothing new");
+                const auto next = runScene(coldExecutor, third.scene);
+                expectations.expect(
+                    coldExecutor.counters().dispatches > before.dispatches &&
+                        parity(next, morphFrames[3].frame->processImage().pixels()),
+                    "morph identity: the next morph frame is dispatched and matches");
+            }
+        }
+        // 1080p: a morph frame prepares and runs on the production route with no refusal.
+        {
+            Fixture large(1920, 1080);
+            buildMorph(large, 2.0);
+            const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+            const auto plan = compiler.compile({large.document.snapshot(), large.main}, {}).plan;
+            expectations.expect(plan != nullptr, "morph 1080p: compiles");
+            if (plan) {
+                auto request = requestFor(*plan);
+                request.time = *core::RationalTime::create(2, 4);
+                const auto prepared = runtime::CpuGpuSceneBuilder{}.build(plan, request);
+                expectations.expect(prepared.hasValue(),
+                                    "morph 1080p: prepares on the production route: " +
+                                        prepared.diagnostic.message);
+                if (prepared) {
+                    const auto pixels = runScene(*executor.executor, prepared.scene);
+                    expectations.expect(!pixels.empty() &&
+                                            executor.executor->diagnostic().code ==
+                                                runtime::GpuSceneExecutorDiagnosticCode::None,
+                                        "morph 1080p: the native run completes with no refusal");
+                }
+            }
+        }
 
         // Its own cache: the identity proof starts cold.
         auto identityCache =

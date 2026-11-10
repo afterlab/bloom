@@ -3,7 +3,13 @@
 // field's remap curve, a Curves node), renders byte for byte what that writer's build rendered, and
 // survives save and reopen unchanged. tests/fixtures/paths holds the project and the document as
 // that build wrote them; the digests below are the frames it rendered.
+//
+// #597 changed one thing that build did: a key followed by a key of a different shape used to hold,
+// and now morphs into it. The fixture's mask has such a pair, so the one frame between them is the
+// morph; with that key made a Hold key, the project renders every frame exactly as that build did.
 
+#include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/command_stack.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/data_block.hpp>
@@ -26,9 +32,11 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 #ifndef BLOOM_PATH_FIXTURE_DIR
@@ -103,7 +111,8 @@ void replaceOnce(std::string& text, const std::string_view from, const std::stri
 }
 
 // The frames at q / 4 seconds, as the build before document 1.43 rendered this fixture: the mask's
-// two matching keys interpolate (frames 0 to 4), its triangle key holds (6 and 7).
+// two matching keys interpolate (frames 0 to 4), the second holds up to the triangle key (5), and
+// the triangle key holds (6 and 7).
 constexpr std::array<std::string_view, 8> kBaselineFrames{
     "f9197cee9f0b13325c07eeb2a2b4ad8d738a6599e9c2724f6c97b914e9b87e6b",
     "c4633bdde8c3c8179f28b32b13410dc4acf1dbc8591edcf1ab5beb95006eed44",
@@ -113,6 +122,11 @@ constexpr std::array<std::string_view, 8> kBaselineFrames{
     "d057b84f6005fcb52e4fef44132a9f8e90af21b7eb8b2ade738351184dd6311f",
     "f5501f3d1b040c545143a165532d7d16b2f7dc83e04d613de7c58e15ad4ddb09",
     "f5501f3d1b040c545143a165532d7d16b2f7dc83e04d613de7c58e15ad4ddb09"};
+
+// Frame 5 (1.25 seconds) since #597: halfway from the second key's quadrilateral to the triangle.
+constexpr std::string_view kMorphFrame =
+    "25d81daca334631947c22c5fad4ce477a61a010a6fb84d11493ebff8fb9b7c5a";
+constexpr std::size_t kMorphFrameIndex = 5;
 
 std::vector<std::string> renderFrames(const document::Snapshot& snapshot,
                                       const document::CompositionId composition) {
@@ -142,17 +156,29 @@ std::vector<std::string> renderFrames(const document::Snapshot& snapshot,
 }
 
 // The exact digests pin this toolchain's floating point against the old build's. Every platform
-// still proves the frames unchanged by save and reopen, and every path unchanged, below.
-void expectBaselineFrames(const std::vector<std::string>& frames) {
+// still proves the frames unchanged by save and reopen, and every path unchanged, below. `morphs`
+// expects the frame between the second key and the triangle to be the morph; otherwise the
+// second key is a Hold key and every frame is the old build's.
+void expectBaselineFrames(const std::vector<std::string>& frames, const bool morphs) {
+    std::vector<std::string_view> expected(kBaselineFrames.begin(), kBaselineFrames.end());
+    if (morphs)
+        expected.at(kMorphFrameIndex) = kMorphFrame;
 #if defined(__linux__) && defined(__x86_64__)
-    expect(std::ranges::equal(frames, kBaselineFrames),
-           "the migrated project renders every frame byte for byte as it did before 1.43");
-    if (!std::ranges::equal(frames, kBaselineFrames))
+    const bool same = std::ranges::equal(frames, expected);
+    expect(same, morphs ? "the migrated project renders every frame byte for byte as it did before "
+                          "1.43, except the one where the keys of different shapes now morph"
+                        : "with that key made Hold, the migrated project renders every frame byte "
+                          "for byte as it did before 1.43");
+    if (!same)
         for (const auto& frame : frames)
             std::cerr << "  rendered " << frame << '\n';
 #else
-    expect(frames.size() == kBaselineFrames.size(), "every frame renders");
+    expect(frames.size() == expected.size(), "every frame renders");
 #endif
+    if (morphs && frames.size() == kBaselineFrames.size())
+        expect(frames.at(kMorphFrameIndex) != frames.at(kMorphFrameIndex - 1) &&
+                   frames.at(kMorphFrameIndex) != frames.at(kMorphFrameIndex + 1),
+               "the frame between the keys of different shapes is neither key: it morphs");
 }
 
 struct PathCensus final {
@@ -228,7 +254,7 @@ void oldProjectOpensAndRendersIdentically() {
     expect(census.keyedPaths == 3, "the mask's three keys load");
 
     const auto frames = renderFrames(snapshot, composition);
-    expectBaselineFrames(frames);
+    expectBaselineFrames(frames, true);
 
     // The re-encoded document is the older document with only its minor advanced: no value on any
     // surface changed its spelling, so nothing downstream of the bytes can tell.
@@ -264,6 +290,40 @@ void oldProjectOpensAndRendersIdentically() {
            "save and reopen renders exactly the same frames");
     expect(encode(again, reopened.colorSettings) == older,
            "a second save writes the same document");
+}
+
+// The older build's hold, asked for explicitly: the second key made a Hold key renders every frame
+// as that build did.
+void aHoldKeyRendersAsTheOlderBuildHeld() {
+    auto opening =
+        project::openProjectArchive(readFixture("one-contour-paths-1.42.bloom"), {}, memory());
+    expect(opening.outcome() == project::OpenArchiveOutcome::Opened, "the fixture opens again");
+    if (opening.outcome() != project::OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(opening).takeOpened();
+    auto& document = *opened.document;
+    const auto composition = document.snapshot().project().compositions().front().id();
+    std::optional<document::AnimationCurveId> curveId;
+    std::optional<document::KeyframeId> second;
+    for (const auto& record :
+         document.snapshot().project().findComposition(composition)->animationCurves().records()) {
+        const auto* keyed = std::get_if<document::PathAnimationCurve>(&record);
+        if (keyed == nullptr)
+            continue;
+        curveId = keyed->id;
+        for (const auto& key : keyed->keyframes)
+            if (key.time == core::RationalTime::fromInteger(1))
+                second = key.id;
+    }
+    expect(curveId.has_value() && second.has_value(), "the mask's second key is found");
+    if (!curveId.has_value() || !second.has_value())
+        return;
+    commands::CommandStack stack{document};
+    commands::Transaction transaction("Hold", document.snapshot().revision());
+    transaction.emplace<commands::SetKeyframeInterpolation>(composition, *curveId, *second,
+                                                            document::KeyframeInterpolation::Hold);
+    expect(stack.execute(std::move(transaction)).succeeded(), "the second key becomes a Hold key");
+    expectBaselineFrames(renderFrames(document.snapshot(), composition), false);
 }
 
 void theMigrationStepOnlyAdvancesTheVersion() {
@@ -334,6 +394,7 @@ void olderDocumentsRefuseADrivenShapePath() {
 int main() {
     try {
         oldProjectOpensAndRendersIdentically();
+        aHoldKeyRendersAsTheOlderBuildHeld();
         theMigrationStepOnlyAdvancesTheVersion();
         olderDocumentsRefuseTheNewSpelling();
         olderDocumentsRefuseADrivenShapePath();

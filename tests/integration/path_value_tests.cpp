@@ -29,6 +29,8 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
+#include "path_morph.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -459,7 +461,7 @@ PathValue sampled(const document::PathAnimationCurve& curve, const int quarter) 
     return *value;
 }
 
-void keysInterpolateOrHold() {
+void keysInterpolateOrMorph() {
     auto start = framed(PathFillRule::EvenOdd);
     start.groups = {{"outer", 0, 1, core::Color4d{1, 0, 0, 1}}};
     auto end = framed(PathFillRule::NonZero, 20.0);
@@ -473,21 +475,72 @@ void keysInterpolateOrHold() {
            "the fill rule and groups are the earlier key's");
     expect(sampled(curveOf({{0, start}, {1, end}}), 4) == end, "the later key arrives exactly");
 
-    const auto holds = [&](const PathValue& other, const std::string& why) {
+    // #597: keys that do not interpolate morph through the shared alignment step: exactly the
+    // earlier key at its time, exactly the later at its own, and between them the morph itself (the
+    // same value the Shape Morph node answers), carrying the earlier key's fill rule and groups.
+    const auto morphs = [&](const PathValue& other, const std::string& why) {
         expect(!document::pathKeysInterpolate(start, other), why + ": the keys do not interpolate");
         const auto curve = curveOf({{0, start}, {1, other}});
-        expect(sampled(curve, 3) == start, why + ": the earlier key holds");
-        expect(sampled(curve, 4) == other, why + ": the next key takes over at its time");
+        expect(sampled(curve, 0) == start, why + ": the earlier key is exact at its time");
+        const auto between = sampled(curve, 3);
+        const auto expected = runtime::pathmorph::morphPaths(start, other, 0.75);
+        expect(expected.has_value() && between == *expected, why + ": the keys morph between");
+        expect(between != start && between != other, why + ": the morph is neither key");
+        expect(between.fillRule == start.fillRule && between.groups == start.groups,
+               why + ": the morph carries the earlier key's fill rule and groups");
+        expect(sampled(curve, 4) == other, why + ": the next key takes over exactly at its time");
+        // Hold still holds.
+        auto held = runtime::compileAnimationCurve(curve);
+        held.keyframes.front().outgoingInterpolation = runtime::CompiledKeyframeInterpolation::Hold;
+        const auto holding = runtime::samplePathCurve(held, *core::RationalTime::create(3, 4));
+        expect(holding && *holding == start, why + ": a Hold key still holds");
     };
     auto fewerContours = start;
     fewerContours.contours.pop_back();
-    holds(fewerContours, "a different contour count");
+    morphs(fewerContours, "a different contour count");
     auto moreAnchors = start;
-    moreAnchors.contours[1].anchors.emplace_back();
-    holds(moreAnchors, "a different anchor count");
+    moreAnchors.contours[1].anchors.push_back(
+        {{30, 30}, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
+    morphs(moreAnchors, "a different anchor count");
     auto openContour = start;
     openContour.contours[1].closed = false;
-    holds(openContour, "a different closed flag");
+    morphs(openContour, "a different closed flag");
+
+    // Keys that already interpolate give exactly the result they always gave: every point and
+    // handle mixed by index, nothing aligned, byte for byte.
+    {
+        auto withHandles = start;
+        withHandles.contours[0].anchors[1].outHandle = Vec2d{12, -6};
+        auto other = end;
+        other.contours[1].anchors[2].inHandle = Vec2d{9, 33};
+        const auto curve = curveOf({{0, withHandles}, {1, other}});
+        const auto value = sampled(curve, 1);
+        PathValue expected;
+        expected.fillRule = withHandles.fillRule;
+        expected.groups = withHandles.groups;
+        for (std::size_t c = 0; c < withHandles.contours.size(); ++c) {
+            auto& out = expected.contours.emplace_back();
+            out.closed = withHandles.contours[c].closed;
+            for (std::size_t i = 0; i < withHandles.contours[c].anchors.size(); ++i) {
+                const auto& a = withHandles.contours[c].anchors[i];
+                const auto& b = other.contours[c].anchors[i];
+                const auto mix = [](const Vec2d p, const Vec2d q) {
+                    return Vec2d{p.x + (q.x - p.x) * 0.25, p.y + (q.y - p.y) * 0.25};
+                };
+                document::PathAnchor anchor;
+                anchor.point = mix(a.point, b.point);
+                if (a.inHandle || b.inHandle)
+                    anchor.inHandle =
+                        mix(a.inHandle.value_or(a.point), b.inHandle.value_or(b.point));
+                if (a.outHandle || b.outHandle)
+                    anchor.outHandle =
+                        mix(a.outHandle.value_or(a.point), b.outHandle.value_or(b.point));
+                anchor.mode = a.mode;
+                out.anchors.push_back(anchor);
+            }
+        }
+        expect(value == expected, "keys that interpolate are mixed by index exactly as before");
+    }
 
     // One contour is the rule it always was.
     const auto one = PathValue::fromContour(square(0, 0, 8));
@@ -563,6 +616,18 @@ struct Fixture final {
              document::ParameterValue value) {
         run<commands::SetParameterSource>(composition, parameter(node, role),
                                           document::ConstantValueSource{std::move(value)});
+    }
+    // Makes the key at `second` of the producer's value a Hold key.
+    void hold(const document::NodeId producer, const std::int64_t second) {
+        const auto* record =
+            main().parameters().find(parameter(producer, document::kValueParameterRole));
+        const auto curveId = std::get<document::AnimationCurveSource>(record->source).curveId;
+        const auto& curve =
+            std::get<document::PathAnimationCurve>(*main().animationCurves().find(curveId));
+        for (const auto& keyframe : curve.keyframes)
+            if (keyframe.time == core::RationalTime::fromInteger(second))
+                run<commands::SetKeyframeInterpolation>(composition, curveId, keyframe.id,
+                                                        document::KeyframeInterpolation::Hold);
     }
 };
 
@@ -768,21 +833,40 @@ void aKeyedPathAnimatesPerFrame() {
     expect(middle.alpha(18, 18) == 0.0F && middle.alpha(14, 14) == 1.0F && !(middle == start) &&
                !(middle == end),
            "the hole moves between the keys");
-    expect(holding == end, "the earlier key holds up to a key of a different shape");
-    expect(last.alpha(34, 34) == 1.0F, "and the next key takes over at its time");
+    // #597: toward a key of a different shape (one contour fewer: the hole shrinks to its centre)
+    // the path morphs instead of holding.
+    expect(!(holding == end) && !(holding == last),
+           "the path morphs toward a key of a different shape");
+    expect(last.alpha(34, 34) == 1.0F, "and the next key arrives exactly at its time");
+    {
+        // A Hold key still holds up to the next, whatever its shape.
+        Fixture held;
+        const auto heldProducer = held.addPathNode();
+        held.drive(heldProducer, held.addShape());
+        held.key(heldProducer, 1, framed(PathFillRule::EvenOdd, 20.0));
+        held.key(heldProducer, 2, oneContour);
+        held.hold(heldProducer, 1);
+        const auto heldPlan = compile(held);
+        runtime::CpuCompositionEvaluator heldEvaluator;
+        expect(render(heldEvaluator, heldPlan, 6) == render(heldEvaluator, heldPlan, 4),
+               "a Hold key holds up to a key of a different shape");
+    }
 
     // Cache identity: the time the path holds its value is one operation, and a changed frame is
     // evaluated anew.
+    // The second key made Hold: the frames after it hold one value.
+    fixture.hold(producer, 1);
+    const auto holdingPlan = compile(fixture);
     runtime::CpuCompositionEvaluator cached;
-    (void)render(cached, plan, 4);
-    const auto repeat = render(cached, plan, 4);
+    (void)render(cached, holdingPlan, 4);
+    const auto repeat = render(cached, holdingPlan, 4);
     expect(repeat.statistics.misses == 0 && repeat.statistics.hits > 0,
            "the same frame is served from the operation cache");
-    const auto held = render(cached, plan, 5);
+    const auto held = render(cached, holdingPlan, 5);
     expect(!held.statistics.evaluatedNodes.empty() || held.statistics.hits > 0,
            "a held frame resolves through the cache");
     expect(held == end, "and is the same picture");
-    const auto moved = render(cached, plan, 3);
+    const auto moved = render(cached, holdingPlan, 3);
     expect(moved.statistics.misses > 0, "a frame whose path moved is evaluated");
 
     // Invalidation: editing the producer changes the next compile's picture.
@@ -1045,7 +1129,7 @@ int main() {
         subdivisionKeepsTheShape();
         arcLengthIsTheStrokedPolyline();
         compoundContoursFillTogether();
-        keysInterpolateOrHold();
+        keysInterpolateOrMorph();
         theSocketIsDeclared();
         aDrivenPathRendersThroughTheEvaluator();
         theValuesFillRuleWins();

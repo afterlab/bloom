@@ -3,6 +3,8 @@
 
 #include <bloom/document/path_value.hpp>
 
+#include "path_morph.hpp"
+
 #include <bloom/core/floating_point.hpp>
 #include <bloom/core/rational_interval.hpp>
 #include <bloom/core/scalar_primitives.hpp>
@@ -534,10 +536,8 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
         ++index;
     const auto& from = keys[index];
     const auto& to = keys[index + 1];
-    // #589: two keys interpolate only when their contour count, anchor counts and closed flags all
-    // match; otherwise the earlier key holds. Morphing beyond that is not interpolation.
-    if (from.outgoingInterpolation == CompiledKeyframeInterpolation::Hold ||
-        !document::pathKeysInterpolate(from.value, to.value))
+    // A Hold key holds whatever comes next.
+    if (from.outgoingInterpolation == CompiledKeyframeInterpolation::Hold)
         return from.value;
     // The factor is the scalar curve 0 -> 1 over the segment, so every ease and handle rule is the
     // scalar sampler's own.
@@ -547,9 +547,16 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
                                         {to.id, to.time, 1.0, CompiledKeyframeInterpolation::Linear,
                                          to.outgoingHandle, to.incomingHandle, to.easing}}};
     const auto sampled = sampleAnimationCurve(progress, time);
+    const bool interpolate = document::pathKeysInterpolate(from.value, to.value);
     if (!sampled || !sampled.value)
-        return std::nullopt;
+        return interpolate ? std::nullopt : std::optional<document::PathValue>(from.value);
     const double u = *sampled.value;
+    // #597: two keys whose contour counts, anchor counts or closed flags differ morph through the
+    // shared alignment step (path_morph.hpp): the earlier key exactly at its time, the later at its
+    // own. The rare pair whose aligned form passes the path caps holds the earlier key, as before.
+    // Keys that already match interpolate below exactly as they always have.
+    if (!interpolate)
+        return pathmorph::morphPaths(from.value, to.value, u).value_or(from.value);
     const auto mix = [u](const document::Vec2d a, const document::Vec2d b) {
         return document::Vec2d{a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u};
     };

@@ -2,7 +2,7 @@
 // path on a Path node drives Shape Source's `path`; the real Viewer preview path shows it at
 // several times, and the real export route renders the same frames as a still, a PNG range and a
 // movie. Each Viewer frame equals the exported frame (RGB within one code, exact alpha), the
-// picture moves with the keys, and the key that holds holds.
+// picture moves with the keys, and the second key morphs into a key of a different shape.
 //
 // The CPU reference half always runs (CPU preview pipeline against the CPU export provider). The
 // GPU half runs the GPU-prepared packed preview product against the GPU export provider when
@@ -215,7 +215,7 @@ document::PathValue framed(const double inner) {
 
 // One authored composition shared by the Viewer session and the export route: a Path node, keyed at
 // 0, 1 and 2 seconds, driving a Shape Source. The first two keys interpolate and the third has a
-// different contour count, so the second holds up to it.
+// different contour count, so the second morphs into it: its hole shrinks to the hole's center.
 struct Authored final {
     std::unique_ptr<scripting::Session> scripting;
     std::unique_ptr<ui::CompositionSession> session;
@@ -621,9 +621,10 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     }
 
     // The picture moves with the keys. The layer centers the 4..44 square on the frame, so a path
-    // point (x, y) shows at (x + 8, y): the hole's center goes from (22, 14) to (38, 30), and
-    // holds. (With the #509 features the path is stroked, not filled, so only the motion and the
-    // hold are asked of it.)
+    // point (x, y) shows at (x + 8, y): the hole's center goes from (22, 14) to (38, 30), and then
+    // the hole (24..36) shrinks toward that center on its way to the key without a hole. (With the
+    // #509 features the path is stroked, not filled, so only the motion and the morph are asked of
+    // it.)
     if (!route.features) {
         checks.expect(shown[0].at(22, 14)[3] == 0 && shown[0].at(38, 30)[3] == 255,
                       prefix + "the first key's hole shows in the Viewer");
@@ -632,8 +633,15 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     }
     checks.expect(shown[1].rgba != shown[0].rgba && shown[1].rgba != shown[2].rgba,
                   prefix + "the frame between them moves");
-    checks.expect(shown[3].rgba == shown[2].rgba,
-                  prefix + "the second key holds up to the key of a different shape");
+    if (!route.features)
+        checks.expect(shown[2].at(33, 25)[3] == 0 && shown[3].at(33, 25)[3] == 255 &&
+                          shown[3].at(38, 30)[3] == 0,
+                      prefix + "the second key morphs into the key of a different shape: the hole "
+                               "shrinks toward its center");
+    else
+        checks.expect(shown[3].rgba != shown[2].rgba,
+                      prefix + "the stroked second key morphs into the key of a different shape "
+                               "instead of holding");
 
     // The export route, rendered from the same document.
     runtime::TaskScheduler exportScheduler;
