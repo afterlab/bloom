@@ -16,6 +16,11 @@
 //   and its slot, its scale, rotation and opacity keyed; a layer pivoting on its content; a
 //   retimed layer) is drawn at its output scale (the oversampled route) and matches the CPU
 //   reference cold and warm with its bounds, 512 x 288 over frames 0 to 2.
+// - A Layer node pivoting on its content above the oversampled picture (a blur between, masked,
+//   keyed from 1x to 3x, turned and panned) matches the CPU reference cold and warm with its
+//   bounds, 512 x 288 over frames 0 to 2, its box the same at every frame and only the window the
+//   frame shows drawn; at 3840 x 2160, scaled 4x and 8x and turned, a crop is the scaled
+//   pre-composition's on the device, with at most two frames of pixels drawn (#642 B4).
 // - 1920 x 1080 and 3840 x 2160 prepare and run on the device, the plain layer and the oversampled
 //   one (no comparison at these sizes; the export route's provenance is read by
 //   bloom.ui.viewer_export_svg_artwork).
@@ -56,6 +61,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <tuple>
 #include <variant>
 
 namespace {
@@ -1022,6 +1028,220 @@ void sharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
     std::filesystem::remove(plain);
 }
 
+// ---- #642 B4: a content pivot draws only the window the frame shows, on the device ----
+
+// A new Layer node, which pivots on its content, reading `source` through `between` and feeding the
+// slot of `fixture.art` through a second Layer node at its defaults (fed straight into the slot it
+// would take the entry's own layer's place, and its frame pivot). Returns the first one's layer.
+document::LayerId pivotOnContent(Fixture& fixture, const document::NodeId source,
+                                 const std::vector<document::NodeId>& between = {}) {
+    const auto node = fixture.addNode(document::kLayerOutputNodeType);
+    const auto outer = fixture.addNode(document::kLayerOutputNodeType);
+    auto from = source;
+    for (const auto next : between) {
+        fixture.connect(from, document::NodeInputRef{next, "input"});
+        from = next;
+    }
+    fixture.connect(from, document::NodeInputRef{node, std::string(document::kLayerOutputContentInputPort)});
+    fixture.connect(node, document::NodeInputRef{outer, std::string(document::kLayerOutputContentInputPort)});
+    const auto* entry = composition(fixture.document, fixture.main).graph().findLayer(fixture.art);
+    fixture.connect(outer, document::LayerStackInputRef{entry->nodeId, *entry->entrySlot,
+                                                        std::string(document::kLayerStackContentInputRole)});
+    for (const auto& boundary : composition(fixture.document, fixture.main).graph().layerOutputs())
+        if (!boundary.entryOwned() && boundary.nodeId == node) {
+            if (boundary.pivot != document::LayerPivot::Content)
+                throw std::runtime_error("the Layer node does not pivot on its content");
+            return boundary.layerId;
+        }
+    throw std::runtime_error("the Layer node has no layer");
+}
+
+template <typename Value>
+void keyLayer(Fixture& fixture, const document::LayerId layer, const std::string_view role, const Value first,
+              const Value last) {
+    apply<commands::SetKeyframeAtTimeForParameter>(fixture.document, fixture.commands, fixture.main,
+                                                   fixture.layerParameter(layer, role), frameAt(2), last);
+    apply<commands::SetKeyframeAtTimeForParameter>(fixture.document, fixture.commands, fixture.main,
+                                                   fixture.layerParameter(layer, role), core::RationalTime{}, first);
+}
+
+// The plan's Layer Output of `layer` and the operation it reads.
+[[nodiscard]] std::optional<std::pair<std::size_t, std::size_t>> layerOperation(const runtime::CompiledCompositionPlan& plan,
+                                                                                const document::LayerId layer) {
+    const auto operations = plan.operations();
+    for (std::size_t index = 0; index < operations.size(); ++index)
+        if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
+            output != nullptr && output->layerId == layer)
+            return std::pair{index, output->input.value()};
+    return std::nullopt;
+}
+
+// #642 B4: a Layer node pivoting on its content above the oversampled picture, a blur between and a
+// mask, its scale keyed from 1x to 3x (drawn at 4x) and turned, panned so most of its picture is off
+// the frame at frame 2: on the device as on the CPU reference, cold and warm, with its bounds, 512 x
+// 288 over frames 0 to 2; its box (and so its pivot) the same at every frame, while only the window
+// the frame shows is drawn at frame 2.
+void contentPivotOnTheDevice(Expectations& expectations, const Device& device) {
+    const auto file = writeSvg("icon", kIcon);
+    Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+    std::filesystem::remove(file);
+    const auto blur = layer.addNode("bloom.gaussian-blur");
+    layer.set(layer.nodeParameter(blur, "radius"), document::ParameterValue{1.5});
+    const auto held = pivotOnContent(layer, *layer.artworkNode, {blur});
+    addMask(layer, held, {{150, 20}, {380, 30}, {370, 270}, {140, 260}}, 3.0);
+    keyLayer(layer, held, document::kScaleParameterRole, document::Vec2d{1, 1}, document::Vec2d{3, 3});
+    keyLayer(layer, held, document::kPositionParameterRole, document::Vec2d{256, 144}, document::Vec2d{420, 60});
+    layer.set(layer.layerParameter(held, document::kRotationParameterRole), document::ParameterValue{20.0});
+    layer.set(layer.layerParameter(held, document::kAnchorParameterRole), document::ParameterValue{document::Vec2d{6.0, -4.0}});
+    // The whole 4x picture of the 288 x 288 fitted icon.
+    const double whole = 288.0 * 288.0 * 16.0;
+    std::optional<runtime::ContentBounds> box;
+    std::vector<std::vector<render::Rgba32f>> frames;
+    for (const std::int64_t index : {0, 1, 2}) {
+        const auto label = "content pivot frame " + std::to_string(index);
+        const auto reference = referenceAt(expectations, layer, frameAt(index), label, {}, Sharp::Oversampled);
+        if (!reference)
+            continue;
+        expectations.expect(contentScaleOf(*reference->plan, held) == 4.0, label + ": drawn at 4x");
+        parityOn(expectations, device, *reference, label);
+        const auto pixels = reference->frame->processImage().pixels();
+        frames.emplace_back(pixels.begin(), pixels.end());
+        const auto found = layerOperation(*reference->plan, held);
+        expectations.expect(found.has_value(), label + ": the Layer node is in the plan");
+        if (found) {
+            const auto& own = reference->frame->evaluatedBounds()[found->first].local;
+            if (!box)
+                box = own;
+            expectations.expect(own == *box, label + ": its box, and so its pivot, is the one it has with all of it shown");
+        }
+        const auto largest = largestWindowOf(expectations, *reference, label);
+        std::cout << label << ": the largest window drawn is " << largest << " pixels (the whole 4x picture would be "
+                  << whole << ")\n";
+        if (index == 2)
+            expectations.expect(largest > 0 && static_cast<double>(largest) * 2.0 <= whole,
+                                label + ": panned, only the window the frame shows is drawn (under half the picture)");
+    }
+    expectations.expect(frames.size() == 3 && !parity(frames[0], frames[1]) && !parity(frames[1], frames[2]),
+                        "content pivot: the keyed layer changes every frame");
+}
+
+// The centre of what the Layer Output of `layer` reads, as the production builder publishes it
+// (the bounds a content pivot is taken from), without a CPU frame.
+[[nodiscard]] std::optional<document::Vec2d> pivotSource(Expectations& expectations, const Fixture& fixture,
+                                                         const document::LayerId layer, const std::string& label) {
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({fixture.document.snapshot(), fixture.main}, {});
+    const auto found = compiled.plan ? layerOperation(*compiled.plan, layer) : std::nullopt;
+    expectations.expect(found.has_value(), label + ": compiles with the Layer node");
+    if (!found)
+        return std::nullopt;
+    auto request = requestFor(*compiled.plan);
+    request.pixelStorageByteLimit = 8 * kGib;
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto built = toolsBuilder(expectations, evaluator).build(compiled.plan, request);
+    expectations.expect(built.hasValue(), label + ": prepares: " + built.diagnostic.message);
+    if (!built.hasValue())
+        return std::nullopt;
+    return built.scene->bounds()[found->second].output.centre();
+}
+
+// #642 B4: at 3840 x 2160, a Layer node pivoting on its content above the fitted, whole-frame
+// artwork, scaled 4x and 8x and turned 12 degrees, renders on the production GPU route with only
+// the window the frame shows drawn, and a crop around a curved edge is the scaled
+// pre-composition's (the file baked that many times larger, through the editable import, turned
+// about the same point by its own layer, which pivots on the frame, so that only its window is
+// drawn too) up to the flattenings' coverage samples, far sharper than the resampled picture. The
+// layer's anchor is set from its picture's bounds as the builder publishes them, to put the
+// circle's leftmost point at the frame's centre. No full-size CPU frame.
+void contentPivotSharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
+    constexpr std::uint32_t kWidth = 3840;
+    constexpr std::uint32_t kHeight = 2160;
+    const document::Vec2d centre{kWidth / 2.0, kHeight / 2.0};
+    // Fitted, the circle's left edge lands at (2136, 648) (sharpAt4KOnTheDevice).
+    const document::Vec2d target{2136.0, 648.0};
+    const auto plain = writeSvg("b4-4k", sharpSvg(""));
+    for (const double s : {4.0, 8.0}) {
+        const auto name = "4K content pivot, scaled " + std::to_string(static_cast<int>(s)) + "x and turned";
+        const auto baked = writeSvg("b4-4k-baked", sharpSvg("translate(" + std::to_string(s * 300.0 - 1860.0) + " " +
+                                                            std::to_string(-1040.0) + ") scale(" + std::to_string(27.0 * s) + ")"));
+        Fixture layer(plain, commands::SvgImportMode::Layer, kWidth, kHeight);
+        Fixture reference(baked, commands::SvgImportMode::Shapes, kWidth, kHeight, false);
+        std::filesystem::remove(baked);
+        const auto held = pivotOnContent(layer, *layer.artworkNode);
+        layer.set(layer.layerParameter(held, document::kScaleParameterRole), document::ParameterValue{document::Vec2d{s, s}});
+        layer.set(layer.layerParameter(held, document::kRotationParameterRole), document::ParameterValue{12.0});
+        // At the frame's centre (a value the parameter already holds is not an edit).
+        const auto position = layer.layerParameter(held, document::kPositionParameterRole);
+        const auto* record = composition(layer.document, layer.main).parameters().find(position);
+        const auto* constant = record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+        if (constant == nullptr || !(constant->value == document::ParameterValue{centre}))
+            layer.set(position, document::ParameterValue{centre});
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({layer.document.snapshot(), layer.main}, {});
+        expectations.expect(compiled.plan != nullptr && contentScaleOf(*compiled.plan, held) == s,
+                            name + ": drawn at " + std::to_string(static_cast<int>(s)) + "x");
+        // A content pivot is its content's centre plus the anchor, in the file's fitted units (its
+        // s x picture's centre over s): the anchor puts the target there.
+        const auto content = pivotSource(expectations, layer, held, name + " one layer");
+        if (!content)
+            continue;
+        layer.set(layer.layerParameter(held, document::kAnchorParameterRole),
+                  document::ParameterValue{document::Vec2d{target.x - content->x / s, target.y - content->y / s}});
+        // The scaled pre-composition: the same matrix, about s times the target (the entry's own
+        // layer pivots on the frame: the frame's centre plus its anchor).
+        reference.set(reference.layerParameter(document::kAnchorParameterRole),
+                      document::ParameterValue{document::Vec2d{s * target.x - centre.x, s * target.y - centre.y}});
+        reference.set(reference.layerParameter(document::kRotationParameterRole), document::ParameterValue{12.0});
+
+        const auto one = largeFrame(expectations, device, layer.document, layer.main, name + " one layer");
+        const auto precomposed = largeFrame(expectations, device, reference.document, reference.main,
+                                            name + " scaled pre-composition");
+        document::VectorArtworkExpansionContext resample;
+        resample.composeLayerTransform = false;
+        auto fonts = std::make_shared<platform::FontCatalogue>();
+        fonts->status = platform::FontCatalogueStatus::Available;
+        resample.fonts = fonts;
+        const auto snapshot = layer.document.snapshot();
+        const auto expansion = document::expandVectorArtwork(snapshot.project(), *snapshot.project().findComposition(layer.main),
+                                                             resample);
+        document::Project project = snapshot.project();
+        *project.findComposition(layer.main) = *expansion.composition;
+        const document::Document softDocument(std::move(project));
+        const auto soft = largeFrame(expectations, device, softDocument, layer.main, name + " resampled");
+
+        const double frameArea = double{kWidth} * kHeight;
+        std::cout << name << ": the largest window drawn is " << one.largestWindow << " pixels (the frame is "
+                  << frameArea << "; the whole " << s << "x picture would be " << 3240.0 * 2160.0 * s * s << ")\n";
+        expectations.expect(one.largestWindow > 0 && static_cast<double>(one.largestWindow) <= 2.0 * frameArea,
+                            name + ": only the window the frame shows is drawn (at most two frames of pixels)");
+        constexpr std::uint32_t kCropWidth = 384;
+        constexpr std::uint32_t kCropHeight = 216;
+        const auto left = kWidth / 2 - kCropWidth / 2;
+        const auto top = kHeight / 2 - kCropHeight / 2;
+        const auto sharp = crop(one.pixels, kWidth, left, top, kCropWidth, kCropHeight);
+        const auto truth = crop(precomposed.pixels, kWidth, left, top, kCropWidth, kCropHeight);
+        const auto blurry = crop(soft.pixels, kWidth, left, top, kCropWidth, kCropHeight);
+        expectations.expect(!sharp.empty() && !truth.empty() && !blurry.empty(), name + ": all three frames render");
+        if (sharp.empty() || truth.empty() || blurry.empty())
+            continue;
+        const double worst = worstDifference(sharp, truth);
+        const auto moved = differingPixels(sharp, truth, 1e-3);
+        const auto edges = partialPixels(sharp);
+        const auto softMoved = differingPixels(blurry, truth, 1e-2);
+        const auto softEdges = partialPixels(blurry);
+        std::cout << name << " (crop " << kCropWidth << " x " << kCropHeight << "): worst difference to the scaled "
+                  << "pre-composition " << worst << " on " << moved << " pixels (edge pixels " << edges
+                  << "); the resampled picture differs on " << softMoved << " pixels (edge pixels " << softEdges << ")\n";
+        expectations.expect(edges > 100, name + ": the crop holds an edge");
+        expectations.expect(worst <= 4.0 / 16.0 + 1.0 / 255.0 && moved * 4 <= edges,
+                            name + ": the crop is the scaled pre-composition's up to a column of a pixel's sixteen "
+                                   "coverage samples");
+        expectations.expect(softMoved >= 10 * moved + 200 && softEdges > edges + edges / 2,
+                            name + ": the resampled picture would be visibly softer");
+    }
+    std::filesystem::remove(plain);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1069,14 +1289,16 @@ int main(int argc, char** argv) {
         groupOnTheDevice(expectations, device);
         clippedOnTheDevice(expectations, device);
         sharpAt4KOnTheDevice(expectations, device);
+        contentPivotOnTheDevice(expectations, device);
+        contentPivotSharpAt4KOnTheDevice(expectations, device);
         std::filesystem::remove(composite);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " Vector Artwork layer expectation(s) failed\n";
             return 1;
         }
         std::cout << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the editable import, "
-                     "keyed, turned, scaled, masked, retimed, with effects between, in scaled groups, clipped to the "
-                     "window the frame shows, at half resolution, at 1080p and 4K, admitted, retired and cancelled\n";
+                     "keyed, turned, scaled, masked, retimed, with effects between, in scaled groups, on a "
+                     "content pivot, clipped to the window the frame shows, at half resolution, at 1080p and 4K, admitted, retired and cancelled\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

@@ -437,6 +437,70 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     return 0.0;
 }
 
+// #642 B4: the one layer read by a Layer node pivoting on its content (through a second Layer node
+// at its defaults into the entry's slot), scaled 6x and turned (drawn at 8x, only the window the
+// frame shows). The content scale the compiled plan draws the Layer node at, or 0 when an edit fails.
+[[nodiscard]] double contentPivotPastTheFrame(Authored& authored, const runtime::SnapshotCompiler& compiler) {
+    const auto* main = authored.scripting->snapshot().project().findComposition(authored.composition);
+    const document::LayerOutputBoundary* entry = nullptr;
+    for (const auto& boundary : main->graph().layerOutputs())
+        if (boundary.entryOwned() && boundary.entrySlot.has_value())
+            entry = &boundary;
+    std::optional<document::NodeId> artwork;
+    for (const auto& node : main->graph().nodes())
+        if (node.typeId == document::kVectorArtworkNodeType)
+            artwork = node.id;
+    if (entry == nullptr || !artwork)
+        return 0.0;
+    const auto top = entry->nodeId;
+    const auto slot = *entry->entrySlot;
+    const auto addLayerNode = [&]() {
+        return edit<commands::AddNode>(authored, authored.composition, std::string(document::kLayerOutputNodeType),
+                                       document::Vec2d{0, -300})
+            .outputId<document::NodeId>(commands::kAddNodeOutput);
+    };
+    const auto node = addLayerNode();
+    const auto outer = addLayerNode();
+    if (!node || !outer)
+        return 0.0;
+    const auto connect = [&](const document::NodeId from, const auto to) {
+        return edit<commands::ConnectPorts>(authored, authored.composition,
+                                            document::OutputPortRef{from, std::string(document::kLayerOutputOutputPort)}, to)
+            .succeeded();
+    };
+    if (!edit<commands::ConnectPorts>(authored, authored.composition, document::OutputPortRef{*artwork, "image"},
+                                      document::NodeInputRef{*node, std::string(document::kLayerOutputContentInputPort)})
+             .succeeded() ||
+        !connect(*node, document::NodeInputRef{*outer, std::string(document::kLayerOutputContentInputPort)}) ||
+        !connect(*outer, document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)}))
+        return 0.0;
+    const auto* graph = &authored.scripting->snapshot().project().findComposition(authored.composition)->graph();
+    std::optional<document::LayerId> held;
+    for (const auto& boundary : graph->layerOutputs())
+        if (!boundary.entryOwned() && boundary.nodeId == *node && boundary.pivot == document::LayerPivot::Content)
+            held = boundary.layerId;
+    if (!held)
+        return 0.0;
+    for (const auto& [role, value] :
+         {std::pair{document::kScaleParameterRole, document::ParameterValue{document::Vec2d{6.0, 6.0}}},
+          std::pair{document::kRotationParameterRole, document::ParameterValue{15.0}}}) {
+        graph = &authored.scripting->snapshot().project().findComposition(authored.composition)->graph();
+        const auto* binding = document::layerParameterBinding(*graph, *graph->findLayer(*held), role);
+        if (binding == nullptr || !edit<commands::SetParameterSource>(authored, authored.composition, binding->parameterId,
+                                                                      document::ConstantValueSource{value})
+                                       .succeeded())
+            return 0.0;
+    }
+    const auto compiled = compiler.compile({authored.scripting->snapshot(), authored.composition}, {});
+    if (!compiled.plan)
+        return 0.0;
+    for (const auto& operation : compiled.plan->operations())
+        if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation);
+            output != nullptr && output->layerId == *held)
+            return output->contentScale;
+    return 0.0;
+}
+
 [[nodiscard]] std::optional<Authored> author(Expectations& checks,
                                              const std::filesystem::path& workDir,
                                              const commands::SvgImportMode mode =
@@ -857,18 +921,21 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     // #642: the one layer at 1080p and 4K, exported from the device with no CPU reference frame;
     // B2: and with a blur between its artwork and its slot (drawn at its output scale); B3: at 4K
     // masked and scaled 8x (drawn at 8x) and in a group scaled 3x (drawn at 4x), only the window
-    // the frame shows.
+    // the frame shows; B4: read by a Layer node pivoting on its content, scaled 6x and turned
+    // (drawn at 8x), only the window the frame shows.
     if (route.gpu && route.layer) {
-        enum class Dressed { Plain, Blurred, Masked8x, Group3x };
+        enum class Dressed { Plain, Blurred, Masked8x, Group3x, ContentPivot8x };
         for (const auto& [width, height, dressed] :
              {std::tuple{1920U, 1080U, Dressed::Plain}, std::tuple{3840U, 2160U, Dressed::Plain},
               std::tuple{1920U, 1080U, Dressed::Blurred}, std::tuple{3840U, 2160U, Dressed::Blurred},
-              std::tuple{3840U, 2160U, Dressed::Masked8x}, std::tuple{3840U, 2160U, Dressed::Group3x}}) {
+              std::tuple{3840U, 2160U, Dressed::Masked8x}, std::tuple{3840U, 2160U, Dressed::Group3x},
+              std::tuple{3840U, 2160U, Dressed::ContentPivot8x}}) {
             const auto size = std::to_string(width) + "x" + std::to_string(height) +
-                              (dressed == Dressed::Blurred    ? " oversampled"
-                               : dressed == Dressed::Masked8x ? " masked 8x"
-                               : dressed == Dressed::Group3x  ? " group 3x"
-                                                              : "");
+                              (dressed == Dressed::Blurred          ? " oversampled"
+                               : dressed == Dressed::Masked8x       ? " masked 8x"
+                               : dressed == Dressed::Group3x        ? " group 3x"
+                               : dressed == Dressed::ContentPivot8x ? " content pivot 8x"
+                                                                    : "");
             auto large = author(checks, workDir, commands::SvgImportMode::Layer, width, height);
             if (!large.has_value())
                 continue;
@@ -876,6 +943,12 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                 const bool oversampled = blurBetween(*large, exportCompiler);
                 checks.expect(oversampled, prefix + size + ": a blur goes between and the layer is drawn at its output scale");
                 if (!oversampled)
+                    continue;
+            } else if (dressed == Dressed::ContentPivot8x) {
+                const auto drawn = contentPivotPastTheFrame(*large, exportCompiler);
+                checks.expect(drawn == 8.0, prefix + size + ": the Layer node's artwork is drawn at 8x (" +
+                                                std::to_string(drawn) + ")");
+                if (drawn <= 1.0)
                     continue;
             } else if (dressed != Dressed::Plain) {
                 const auto group = dressed == Dressed::Group3x;

@@ -1463,8 +1463,10 @@ void namedWhenItCannotBeSharp() {
     {
         // #642 B3, the named pixel budget: a whole-frame artwork keyed from 1x to 8x in a 4K
         // composition would draw sixty-four frames of pixels at its first key; it is drawn at 2x
-        // and says why. A content pivot cannot be clipped (its matrix follows its content), so a
-        // whole-frame one scaled 6x is drawn at 2x too, named. Expansion only.
+        // and says why. B4: a content pivot is clipped like a frame pivot (the runtime works out
+        // the bounds it pivots on first), so a whole-frame one scaled 6x is drawn at 8x; through a
+        // Drop Shadow it is not (its picture's bounds are known only once drawn) and is drawn at
+        // 2x, the budget named. Expansion only.
         Fixture keyed(plain, SvgImportMode::Layer, 3840, 2160);
         applyEdits(keyed, keyed.art, *keyed.artworkNode, {.mask = true}, 1.0);
         const auto scale = keyed.layerParameter(keyed.art, document::kScaleParameterRole);
@@ -1499,10 +1501,27 @@ void namedWhenItCannotBeSharp() {
             setLayerValue(pivot, *held, document::kScaleParameterRole, document::Vec2d{6.0, 6.0});
             const auto pivoted = artworkExpansion(pivot);
             const auto drawn = pivoted.oversampled.find(*held);
-            expect(drawn != pivoted.oversampled.end() && drawn->second.scale == 2.0 &&
-                       drawn->second.limited.find("pixel budget") != std::string::npos,
-                   "budget: a whole-frame content-pivot layer scaled 6x at 4K is drawn at 2x, the budget named: " +
-                       (drawn != pivoted.oversampled.end() ? drawn->second.limited : std::string("not oversampled")));
+            expect(drawn != pivoted.oversampled.end() && drawn->second.scale == 8.0 && drawn->second.limited.empty(),
+                   "window: a whole-frame content-pivot layer scaled 6x at 4K is drawn at 8x (B4): " +
+                       (drawn != pivoted.oversampled.end() ? std::to_string(drawn->second.scale) + " " + drawn->second.limited
+                                                           : std::string("not oversampled")));
+            // A Drop Shadow between the artwork and the Layer node.
+            const auto shadow = addNode(pivot, std::string(document::kDropShadowNodeType));
+            pivot.run<ConnectPorts>(pivot.main, document::OutputPortRef{*pivot.artworkNode, "image"},
+                                    document::NodeInputRef{shadow, "input"});
+            pivot.run<ConnectPorts>(pivot.main, document::OutputPortRef{shadow, "image"},
+                                    document::NodeInputRef{node, std::string(document::kLayerOutputContentInputPort)});
+            const auto shadowed = artworkExpansion(pivot);
+            const auto whole = shadowed.oversampled.find(*held);
+            std::string why;
+            for (const auto& [id, reason] : shadowed.resampled)
+                why += " " + reason;
+            // Its whole picture is drawn (a Drop Shadow's bounds are known only once drawn): 6x the
+            // 4K frame's area at 2x is past the pixel budget, so it is resampled, the budget named.
+            expect(whole == shadowed.oversampled.end() && why.find("pixel budget") != std::string::npos,
+                   "budget: a whole-frame content-pivot layer scaled 6x at 4K through a Drop Shadow draws its whole "
+                   "picture, past the pixel budget even at 2x, and is resampled, the budget named: " +
+                       (whole != shadowed.oversampled.end() ? whole->second.limited : "not oversampled:" + why));
         }
     }
     {
@@ -2009,6 +2028,241 @@ void windowAndGroupIdentity() {
     std::filesystem::remove(plain);
 }
 
+// ---- #642 B4: a content pivot draws only the window the frame shows ----
+
+// `source` (the artwork node, or the editable import's root Merge) read by a new Layer node, which
+// pivots on its content by default, through `between` first; the Layer node feeds the slot of
+// `fixture.art` through a second Layer node at its defaults (the identity), as sharpOnAContentPivot
+// does. Returns the first Layer node's layer.
+document::LayerId pivotOnContent(Fixture& fixture, const document::NodeId source,
+                                 const std::vector<document::NodeId>& between = {}) {
+    using namespace commands;
+    const auto* entry = fixture.composition().graph().findLayer(fixture.art);
+    const auto merge = entry->nodeId;
+    const auto slot = *entry->entrySlot;
+    const auto node = addNode(fixture, std::string(document::kLayerOutputNodeType));
+    // A Layer node fed straight into the slot takes the entry's own layer's place (and its frame
+    // pivot); a second one between keeps this one pivoting on its content.
+    const auto outer = addNode(fixture, std::string(document::kLayerOutputNodeType));
+    auto from = source;
+    for (const auto next : between) {
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{from, "image"}, document::NodeInputRef{next, "input"});
+        from = next;
+    }
+    fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{from, "image"},
+                              document::NodeInputRef{node, std::string(document::kLayerOutputContentInputPort)});
+    fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{node, std::string(document::kLayerOutputOutputPort)},
+                              document::NodeInputRef{outer, std::string(document::kLayerOutputContentInputPort)});
+    fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{outer, std::string(document::kLayerOutputOutputPort)},
+                              document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
+    for (const auto& boundary : fixture.composition().graph().layerOutputs())
+        if (!boundary.entryOwned() && boundary.nodeId == node) {
+            if (boundary.pivot != document::LayerPivot::Content)
+                throw std::runtime_error("the Layer node does not pivot on its content");
+            return boundary.layerId;
+        }
+    throw std::runtime_error("the Layer node has no layer");
+}
+
+// The content pivot's edits at `factor` (1: the one layer's own; larger: its scaled
+// pre-composition's): its scale over `factor` (keyed from 1 at frame 0, where all of the picture
+// is in the frame, to `scale` at frame 2), turned, its anchor (the content pivot is the content's
+// centre plus the anchor, so times `factor`) and its position keyed for a pan that takes about a
+// third of the picture off the frame's right edge at frame 2. `dressed` adds a Gaussian Blur
+// between its source and it (radius times `factor`) and a mask (its points and feather times
+// `factor`).
+document::LayerId dressContentPivot(Fixture& fixture, const document::NodeId source, const double scale,
+                                    const double factor, const bool dressed) {
+    using namespace commands;
+    std::vector<document::NodeId> between;
+    if (dressed) {
+        between.push_back(addNode(fixture, "bloom.gaussian-blur"));
+        setNodeValue(fixture, between.back(), "radius", 1.5 * factor);
+    }
+    const auto held = pivotOnContent(fixture, source, between);
+    const auto scaled = fixture.layerParameter(held, document::kScaleParameterRole);
+    fixture.run<SetKeyframeAtTimeForParameter>(fixture.main, scaled, frame(2), document::Vec2d{scale / factor, scale / factor});
+    fixture.run<SetKeyframeAtTimeForParameter>(fixture.main, scaled, frame(0), document::Vec2d{1.0 / factor, 1.0 / factor});
+    setLayerValue(fixture, held, document::kRotationParameterRole, 20.0);
+    setLayerValue(fixture, held, document::kAnchorParameterRole, document::Vec2d{6.0 * factor, -4.0 * factor});
+    const auto position = fixture.layerParameter(held, document::kPositionParameterRole);
+    fixture.run<SetKeyframeAtTimeForParameter>(fixture.main, position, frame(2),
+                                               document::Vec2d{kB2Centre.x + 200.0, kB2Centre.y + 40.0});
+    fixture.run<SetKeyframeAtTimeForParameter>(fixture.main, position, frame(0), kB2Centre);
+    if (!dressed)
+        return held;
+    document::PathValue mask;
+    document::PathContour contour;
+    contour.closed = true;
+    for (const auto& point : {document::Vec2d{200, 104}, document::Vec2d{318, 110}, document::Vec2d{300, 186},
+                              document::Vec2d{214, 176}})
+        contour.anchors.push_back(document::PathAnchor{{point.x * factor, point.y * factor}, std::nullopt, std::nullopt});
+    mask.contours.push_back(contour);
+    fixture.run<AddLayerMask>(fixture.main, held, mask);
+    const auto feather = fixture.composition().graph().findLayer(held)->masks.back().feather;
+    fixture.run<SetParameterSource>(fixture.main, feather, document::ConstantValueSource{document::ParameterValue{1.5 * factor}});
+    return held;
+}
+
+// The plan's Layer Output of `layer` and the operation it reads.
+std::optional<std::pair<std::size_t, std::size_t>> layerOperation(const runtime::CompiledCompositionPlan& plan,
+                                                                  const document::LayerId layer) {
+    const auto operations = plan.operations();
+    for (std::size_t index = 0; index < operations.size(); ++index)
+        if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
+            output != nullptr && output->layerId == layer)
+            return std::pair{index, output->input.value()};
+    return std::nullopt;
+}
+
+// A Layer node pivoting on its content above the oversampled picture draws only the window the
+// frame shows, as a frame pivot does (B3): its pivot is its input's centre as the frame would
+// publish it with nothing clipped, worked out before the frame is drawn, so the window never moves
+// it. Scaled 3x (drawn at 4x), turned and panned so about a third of the picture leaves the frame
+// (frame 2), it is its scaled pre-composition and far sharper than the resampled picture; so it is
+// masked with a blur between, its pivot matched to the pre-composition's (the two pictures' data
+// windows, which a blur's and a mask's bounds are, differ by their margins; named in
+// docs/architecture/vector-artwork.md). Its pivot is the same at frame 2 as at frame 0 (scaled 1x,
+// all of it in the frame, nothing clipped), where it is exactly the input's own bounds, while its
+// input is drawn in a smaller window. Fitted and scaled 5x (drawn at 8x), a request budget below
+// the whole 8x picture renders it (only the window is drawn) and refuses it through a Drop Shadow
+// (whose picture's bounds are known only once drawn: the whole picture). A pan compiles once, a
+// frame showing another window draws it and a frame shown again hits; a cancelled evaluation
+// publishes nothing.
+void contentPivotDrawsItsWindow() {
+    using namespace commands;
+    constexpr double kScale = 3.0;
+    constexpr double kFactor = 4.0;
+    const auto plain = writeSvg("b4-pivot", sharpSvg(""));
+    const auto bakedFile = writeSvg("b4-pivot-baked", bakedSharpSvg(kFactor));
+    {
+        Fixture layer(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(layer);
+        const auto held = dressContentPivot(layer, *layer.artworkNode, kScale, 1.0, false);
+        Fixture reference(bakedFile, SvgImportMode::Shapes, kB2Width, kB2Height, false);
+        static_cast<void>(dressContentPivot(reference, *reference.rootMerge, kScale, kFactor, false));
+        const auto expansion = artworkExpansion(layer);
+        const auto oversampled = expansion.oversampled.find(held);
+        expect(oversampled != expansion.oversampled.end() && oversampled->second.scale == kFactor &&
+                   oversampled->second.limited.empty(),
+               "content pivot window: the Layer node's artwork is drawn at 4x");
+        const auto label = std::string("content pivot window, scaled 3x, turned and panned");
+        if (const auto report = compareSharp(layer, reference, frame(2), label))
+            expectSharp(*report, label, kFactor, false);
+    }
+    Fixture layer(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+    unfit(layer);
+    const auto held = dressContentPivot(layer, *layer.artworkNode, kScale, 1.0, true);
+    Fixture reference(bakedFile, SvgImportMode::Shapes, kB2Width, kB2Height, false);
+    const auto referenceHeld = dressContentPivot(reference, *reference.rootMerge, kScale, kFactor, true);
+    std::filesystem::remove(bakedFile);
+    // Its pivot: the same at both frames, and at frame 0 (nothing off the frame, nothing clipped)
+    // exactly the bounds the frame publishes for its input (the mask over the blur).
+    const auto plan = compilePlan(layer.document, layer.main, "content pivot window");
+    const auto ops = plan ? layerOperation(*plan, held) : std::nullopt;
+    const auto shown = plan ? evaluate(plan, frame(0), "content pivot window frame 0") : std::nullopt;
+    const auto panned = plan ? evaluate(plan, frame(2), "content pivot window frame 2") : std::nullopt;
+    const auto referencePlan = compilePlan(reference.document, reference.main, "content pivot window reference");
+    const auto referenceOps = referencePlan ? layerOperation(*referencePlan, referenceHeld) : std::nullopt;
+    const auto referenceShown =
+        referencePlan ? evaluate(referencePlan, frame(0), "content pivot window reference frame 0") : std::nullopt;
+    expect(ops && shown && panned && referenceOps && referenceShown,
+           "content pivot window: the Layer node is in the plan and both frames evaluate");
+    if (ops && shown && panned && referenceOps && referenceShown) {
+        const auto& [pivotIndex, inputIndex] = *ops;
+        const auto& own0 = shown->frame->evaluatedBounds()[pivotIndex];
+        const auto& own2 = panned->frame->evaluatedBounds()[pivotIndex];
+        const auto& input0 = shown->frame->evaluatedBounds()[inputIndex].output;
+        const auto& input2 = panned->frame->evaluatedBounds()[inputIndex].output;
+        expect(own0.local.left * kFactor == input0.left && own0.local.right * kFactor == input0.right &&
+                   own0.local.top * kFactor == input0.top && own0.local.bottom * kFactor == input0.bottom,
+               "content pivot window: with nothing clipped, the bounds it pivots on are exactly its input's");
+        expect(own2.local == own0.local,
+               "content pivot window: panned, its pivot and box are the same as with all of it shown");
+        expect(input2.right < input0.right && input2.left == input0.left,
+               "content pivot window: panned, its input is drawn in a smaller window (its input's own bounds follow "
+               "the window; the pivot does not)");
+        std::cout << "content pivot window: input bounds all shown [" << input0.left << ", " << input0.right << "] x ["
+                  << input0.top << ", " << input0.bottom << "], panned [" << input2.left << ", " << input2.right << "] x ["
+                  << input2.top << ", " << input2.bottom << "]\n";
+        // The pre-composition pivots on its own picture's bounds: matched to the layer's.
+        const auto& referenceInput = referenceShown->frame->evaluatedBounds()[referenceOps->second].output;
+        const document::Vec2d shift{(input0.left + input0.right - referenceInput.left - referenceInput.right) / 2.0,
+                                    (input0.top + input0.bottom - referenceInput.top - referenceInput.bottom) / 2.0};
+        std::cout << "content pivot window: the pre-composition's data window centre differs by (" << shift.x << ", "
+                  << shift.y << ") of its pixels\n";
+        setLayerValue(reference, referenceHeld, document::kAnchorParameterRole,
+                      document::Vec2d{6.0 * kFactor + shift.x, -4.0 * kFactor + shift.y});
+        const auto label = std::string("content pivot window, masked, a blur between, scaled 3x, turned and panned");
+        if (const auto report = compareSharp(layer, reference, frame(2), label))
+            expectSharp(*report, label, kFactor, false);
+    }
+
+    // Only the window is drawn: fitted, scaled 5x (8x), a request below the whole 8x picture.
+    const auto budgetFor = [&](const bool shadow) -> std::optional<std::string> {
+        Fixture fitted(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        std::vector<document::NodeId> between;
+        if (shadow)
+            between.push_back(addNode(fitted, std::string(document::kDropShadowNodeType)));
+        const auto pivot = pivotOnContent(fitted, *fitted.artworkNode, between);
+        setLayerValue(fitted, pivot, document::kScaleParameterRole, document::Vec2d{5.0, 5.0});
+        setLayerValue(fitted, pivot, document::kRotationParameterRole, 15.0);
+        const auto compiled = compilePlan(fitted.document, fitted.main, "content pivot budget");
+        if (!compiled)
+            return std::string("no plan");
+        const auto found = layerOperation(*compiled, pivot);
+        expect(found && std::get<runtime::CompiledLayerOutput>(compiled->operations()[found->first]).contentScale == 8.0,
+               "content pivot budget: drawn at 8x");
+        auto request = referenceRequest(*compiled, frame(0));
+        // The whole 8x picture of the fitted 432 x 288 artwork is 3456 x 2304 float pixels, 127 MB.
+        request.pixelStorageByteLimit = std::size_t{64} << 20;
+        const auto result = runtime::CpuCompositionEvaluator{}.evaluate(compiled, request, {});
+        if (result.frame() != nullptr)
+            return std::nullopt;
+        std::string reason;
+        for (const auto& diagnostic : result.diagnostics())
+            reason += diagnostic.summary + " ";
+        return reason;
+    };
+    const auto windowed = budgetFor(false);
+    expect(!windowed, "content pivot budget: 64 MiB, below the whole 8x picture (127 MB), renders the frame: only the "
+                      "window the frame shows is drawn" + (windowed ? ": " + *windowed : std::string()));
+    const auto whole = budgetFor(true);
+    expect(whole && (whole->find("budget") != std::string::npos || whole->find("could not be allocated") != std::string::npos),
+           "content pivot budget: through a Drop Shadow the whole picture is drawn, and the same request is refused: " + whole.value_or("it rendered"));
+
+    // A pan compiles once; a frame showing another window draws it, a frame shown again hits.
+    if (plan) {
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        runtime::CompiledPlanCache plans;
+        const auto cached = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto hitsAt = [&](const std::int64_t index) {
+            auto request = referenceRequest(*cached.plan, frame(index));
+            request.bypassOperationCache = false;
+            const auto before = evaluator.operationCache()->statistics().hits;
+            const auto result = evaluator.evaluate(cached.plan, request, {});
+            expect(result.frame() != nullptr, "content pivot pan: frame " + std::to_string(index) + " evaluates");
+            return evaluator.operationCache()->statistics().hits - before;
+        };
+        static_cast<void>(hitsAt(0));
+        const auto movedHits = hitsAt(2);
+        const auto again = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+        const auto shownAgain = hitsAt(0);
+        std::cout << "content pivot pan: frame 2 after frame 0: " << movedHits << " hits; frame 0 again: " << shownAgain
+                  << " hits; compiles " << plans.statistics().compiles << "\n";
+        expect(again.plan == cached.plan && plans.statistics().compiles == 1, "content pivot pan: a pan never compiles again");
+        expect(shownAgain > movedHits, "content pivot pan: a frame showing another window draws it (" +
+                                           std::to_string(movedHits) + " hits), a frame shown again reuses it (" +
+                                           std::to_string(shownAgain) + " hits)");
+        const auto cancelled =
+            runtime::CpuCompositionEvaluator{}.evaluate(cached.plan, referenceRequest(*cached.plan, frame(2)), cancelledToken());
+        expect(cancelled.status() == runtime::EvaluationStatus::Cancelled && cancelled.frame() == nullptr,
+               "content pivot cancel: a cancelled evaluation publishes no frame");
+    }
+    std::filesystem::remove(plain);
+}
+
 } // namespace
 
 int main() {
@@ -2031,6 +2285,7 @@ int main() {
         groupBoundsAndSiblings();
         groupsNamedWhenTheyCannotBe();
         windowAndGroupIdentity();
+        contentPivotDrawsItsWindow();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return EXIT_FAILURE;
