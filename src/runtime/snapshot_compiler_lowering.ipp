@@ -2330,6 +2330,49 @@ lowerImageEffect(const document::NodeRecord& node,
         }
         return effect;
     }
+    // #527 Dither: every choice, the seed and Monochrome are constants; the amplitude is the one
+    // value. The matrix size is read only by the Ordered pattern, so another pattern lowers it to
+    // the blue-noise side whatever it holds and it never claims the identity.
+    if (node.typeId == document::kDitherNodeType) {
+        runtime::DitherKernel kernel;
+        const auto constant = [&](const std::string_view role) {
+            return parameterConstant<std::int64_t>(findParameterBinding(node, role));
+        };
+        const auto* pattern = constant("pattern");
+        const auto* size = constant("matrixSize");
+        const auto* depth = constant("bitDepth");
+        const auto* domain = constant("domain");
+        const auto* animation = constant("animation");
+        const auto* seed = constant("seed");
+        const auto* monochrome = parameterConstant<bool>(findParameterBinding(node, "monochrome"));
+        bool lowered = pattern != nullptr && size != nullptr && depth != nullptr &&
+                       domain != nullptr && animation != nullptr && seed != nullptr &&
+                       monochrome != nullptr;
+        if (lowered) {
+            kernel.blueNoise = *pattern == document::kDitherBlueNoise;
+            kernel.side = kernel.blueNoise ? core::dither::kBlueNoiseSide
+                                           : document::ditherBayerSide(*size);
+            kernel.bits = document::ditherBits(*depth);
+            kernel.stored = *domain == document::kDitherStored;
+            kernel.everyFrame = *animation == document::kDitherEveryFrame;
+            kernel.seed = *seed;
+            kernel.monochrome = *monochrome;
+            lowered = (*pattern == document::kDitherOrdered || kernel.blueNoise) &&
+                      kernel.side != 0 && kernel.bits != 0 &&
+                      (*domain == document::kDitherDisplay || kernel.stored) &&
+                      (*animation == document::kDitherEveryFrame ||
+                       *animation == document::kDitherHeld) &&
+                      *seed >= 0;
+        }
+        const auto amplitude = compiledScalarParameter(findParameterBinding(node, "amplitude"));
+        lowered = lowered && amplitude.has_value();
+        if (amplitude)
+            kernel.amplitude = *amplitude;
+        if (lowered)
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        addTopologyFailure(node.id, "Dither parameters could not be lowered.");
+        return std::nullopt;
+    }
     // #518 Tone Map: the constant method and gamut switch, then the scalars in the kernel's order.
     if (document::isColorCleanupNodeType(node.typeId)) {
         runtime::ColorToolKernel kernel;

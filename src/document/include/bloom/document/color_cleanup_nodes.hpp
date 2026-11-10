@@ -1,12 +1,23 @@
 #pragma once
 
-// #518 Tone Map, #517 Color Matrix, #523 HSL Qualifier and #519 Quantize: the durable vocabulary of the
+// #518 Tone Map, #517 Color Matrix, #523 HSL Qualifier, #519 Quantize and #527 Dither: the durable
+// vocabulary of the
 // per-pixel color nodes. Every node takes an Image on `input`; Tone Map and Color Matrix give an
 // Image on `image` (and take the optional effect mask every grade takes), the HSL Qualifier gives a
 // Mask on `mask`. Schema keys are "<type id>.<role>", like the depth effects'. Every Scalar is
 // animatable, drivable and has a socket of its own; every Choice and Boolean is a constant with no
-// socket. docs/architecture/image-filters.md, "Tone Map", "Color Matrix", "HSL Qualifier" and
-// "Quantize", are the specification.
+// socket. docs/architecture/image-filters.md, "Tone Map", "Color Matrix", "HSL Qualifier",
+// "Quantize" and "Dither", are the specification.
+//
+//   Dither (`bloom.dither`) adds a tiled threshold pattern to the color before a delivery quantizes it,
+//     so smooth gradients do not band. `pattern` Ordered (a Bayer matrix of `matrixSize` 2, 4, 8 or 16)
+//     or Blue noise (a generated 64 x 64 void-and-cluster table). `amplitude` is the pattern's
+//     peak-to-peak size in steps (LSBs) of `bitDepth` (8, 10, 12 or 16 bit; 1 LSB is 1 / (2^bits - 1)),
+//     measured in `domain` Display (the straight value's sRGB encoding, where a delivery's code values
+//     are even) or Stored (the working-space value itself). `animation` Every Frame draws a new
+//     placement for each frame; Held keeps one. `seed` picks the placement; `monochrome` gives every
+//     channel red's. Alpha never changes; a pixel with alpha 0 is left as it is; amplitude 0 is the
+//     input exactly.
 //
 //   Quantize (`bloom.quantize`) works on the straight working-space color and, in Threshold mode,
 //     leaves alpha alone. `mode` Threshold or Posterize. Threshold: `basis` Luma (Rec. 709 luma, one
@@ -62,6 +73,7 @@ inline constexpr std::string_view kToneMapNodeType = "bloom.tone-map";
 inline constexpr std::string_view kColorMatrixNodeType = "bloom.color-matrix";
 inline constexpr std::string_view kHslQualifierNodeType = "bloom.hsl-qualifier";
 inline constexpr std::string_view kQuantizeNodeType = "bloom.quantize";
+inline constexpr std::string_view kDitherNodeType = "bloom.dither";
 inline constexpr std::string_view kColorCleanupMaskOutputPort = "mask";
 inline constexpr std::uint32_t kColorCleanupNodeSchemaVersion = 1;
 
@@ -93,6 +105,26 @@ inline constexpr double kMinimumQuantizeLevels = 2.0;
 inline constexpr double kMaximumQuantizeLevels = 256.0;
 // A threshold level or softness is finite and within this.
 inline constexpr double kMaximumQuantizeThreshold = 16.0;
+// Stored values of Dither's pattern, domain and animation; its matrix sizes 2 << value and bit depths.
+inline constexpr std::int64_t kDitherOrdered = 0;
+inline constexpr std::int64_t kDitherBlueNoise = 1;
+inline constexpr std::int64_t kDitherDisplay = 0;
+inline constexpr std::int64_t kDitherStored = 1;
+inline constexpr std::int64_t kDitherEveryFrame = 0;
+inline constexpr std::int64_t kDitherHeld = 1;
+inline constexpr std::array<int, 4> kDitherBitDepths{8, 10, 12, 16};
+// The Bayer side of a stored matrix size, or 0.
+[[nodiscard]] constexpr int ditherBayerSide(const std::int64_t value) noexcept {
+    return value >= 0 && value <= 3 ? 2 << value : 0;
+}
+// The bits of a stored bit depth, or 0.
+[[nodiscard]] constexpr int ditherBits(const std::int64_t value) noexcept {
+    return value >= 0 && value < static_cast<std::int64_t>(kDitherBitDepths.size())
+               ? kDitherBitDepths[static_cast<std::size_t>(value)]
+               : 0;
+}
+// An amplitude is finite and within this many LSBs.
+inline constexpr double kMaximumDitherAmplitude = 16.0;
 // A matrix element is finite and within this.
 inline constexpr double kMaximumColorMatrixElement = 100.0;
 
@@ -115,6 +147,14 @@ inline constexpr std::array<std::string_view, 5> kColorModels{"RGB", "HSL", "HSV
 
 inline constexpr std::array<std::string_view, 2> kQuantizeModes{"Threshold", "Posterize"};
 inline constexpr std::array<std::string_view, 2> kQuantizeBases{"Luma", "Per channel"};
+
+inline constexpr std::array<std::string_view, 2> kDitherPatterns{"Ordered (Bayer)", "Blue noise"};
+inline constexpr std::array<std::string_view, 4> kDitherMatrixSizes{"2 x 2", "4 x 4", "8 x 8",
+                                                                    "16 x 16"};
+inline constexpr std::array<std::string_view, 4> kDitherBitDepthLabels{"8-bit", "10-bit", "12-bit",
+                                                                       "16-bit"};
+inline constexpr std::array<std::string_view, 2> kDitherDomains{"Display (sRGB)", "Stored value"};
+inline constexpr std::array<std::string_view, 2> kDitherAnimations{"Every Frame", "Held"};
 
 // A Boolean that is on by default.
 inline constexpr DepthParameterSpec booleanOn(const std::string_view role,
@@ -181,6 +221,17 @@ inline constexpr std::array kQuantizeParameters{
     scalar("alphaLevels", 8.0, kLevelsMin, kLevelsMax, "Alpha levels", 2.0, 64.0, 1.0, 0),
 };
 
+inline constexpr std::array kDitherParameters{
+    choice("pattern", kDitherPatterns, kDitherBlueNoise, "Pattern"),
+    choice("matrixSize", kDitherMatrixSizes, 2, "Matrix size"),
+    choice("bitDepth", kDitherBitDepthLabels, 0, "Target bit depth"),
+    scalar("amplitude", 1.0, 0.0, kMaximumDitherAmplitude, "Amplitude", 0.0, 4.0, 0.05, 2, "LSB"),
+    choice("domain", kDitherDomains, kDitherDisplay, "Measured in"),
+    choice("animation", kDitherAnimations, kDitherEveryFrame, "Pattern changes"),
+    integer("seed", 1, 0, 2147483647, "Seed"),
+    boolean("monochrome", "Monochrome"),
+};
+
 inline constexpr std::array kHslQualifierParameters{
     scalar("hueCenter", 0.0, 0.0, 360.0, "Hue", 0.0, 360.0, 1.0, 1, "\xC2\xB0"),
     scalar("hueWidth", 360.0, 0.0, 360.0, "Hue width", 0.0, 360.0, 1.0, 1, "\xC2\xB0"),
@@ -198,7 +249,8 @@ inline constexpr std::array kHslQualifierParameters{
 
 [[nodiscard]] constexpr bool isColorCleanupNodeType(const std::string_view typeId) noexcept {
     return typeId == kToneMapNodeType || typeId == kColorMatrixNodeType ||
-           typeId == kHslQualifierNodeType || typeId == kQuantizeNodeType;
+           typeId == kHslQualifierNodeType || typeId == kQuantizeNodeType ||
+           typeId == kDitherNodeType;
 }
 
 // The parameters of a color cleanup node in definition order, or an empty span.
@@ -212,14 +264,16 @@ colorCleanupParameters(const std::string_view typeId) noexcept {
         return color_cleanup_parameters::kHslQualifierParameters;
     if (typeId == kQuantizeNodeType)
         return color_cleanup_parameters::kQuantizeParameters;
+    if (typeId == kDitherNodeType)
+        return color_cleanup_parameters::kDitherParameters;
     return {};
 }
 
 // The spec of a "<type id>.<role>" schema key, or null.
 [[nodiscard]] constexpr const DepthParameterSpec*
 colorCleanupParameterSpec(const std::string_view schemaKey) noexcept {
-    for (const auto type :
-         {kToneMapNodeType, kColorMatrixNodeType, kHslQualifierNodeType, kQuantizeNodeType}) {
+    for (const auto type : {kToneMapNodeType, kColorMatrixNodeType, kHslQualifierNodeType,
+                            kQuantizeNodeType, kDitherNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

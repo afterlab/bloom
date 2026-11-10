@@ -1864,6 +1864,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         colorCleanupDefinition(kColorMatrixNodeType),
         colorCleanupDefinition(kHslQualifierNodeType),
         colorCleanupDefinition(kQuantizeNodeType),
+        colorCleanupDefinition(kDitherNodeType),
         cameraShakeDefinition(),
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),

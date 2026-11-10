@@ -1061,6 +1061,24 @@ struct ColorToolKernel final {
     friend bool operator==(const ColorToolKernel&, const ColorToolKernel&) = default;
 };
 
+// #527 Dither (docs/architecture/image-filters.md, "Dither"): adds a tiled threshold pattern of
+// `amplitude` LSBs of `bits` to the colour, measured in the display encoding (`stored` false) or the
+// stored value. `side` is the pattern's (2, 4, 8 or 16 for a Bayer matrix, 64 for the blue-noise
+// table, `blueNoise`). Every Frame draws each frame's placement from the operation clock's frame, so
+// the operation varies with time; Held does not. `monochrome` gives every channel red's placement.
+struct DitherKernel final {
+    bool blueNoise = true;
+    std::int64_t side = 64;
+    std::int64_t bits = 8;
+    bool stored = false;
+    bool everyFrame = true;
+    std::int64_t seed = 1;
+    bool monochrome = false;
+    CompiledScalarParameter amplitude{document::ParameterId{}, 1.0};
+    [[nodiscard]] bool drawsPerFrame() const noexcept { return everyFrame; }
+    friend bool operator==(const DitherKernel&, const DitherKernel&) = default;
+};
+
 // #349 Histogram (docs/architecture/image-filters.md, "Histogram"): the node lowers to three passes
 // over the frame, the way Auto Exposure's reduction does.
 //   Bin   cuts the frame into at most `grid` by `grid` tiles and counts, in each tile, the pixels
@@ -1138,7 +1156,7 @@ using ImageEffectKernel =
                  FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
                  MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel, SharpenKernel,
                  CodecDegradeKernel, AutoExposureKernel, PixelMathKernel, HistogramKernel, StatisticsKernel,
-                 AudioPlotKernel, ColorToolKernel, DenoiseKernel>;
+                 AudioPlotKernel, ColorToolKernel, DenoiseKernel, DitherKernel>;
 
 // #484: the motion kernels that run the motion kernel (a time sample is an identity).
 [[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
@@ -1291,6 +1309,11 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(value);
         return true;
     }
+    // #527: the amplitude.
+    if (const auto* dither = std::get_if<DitherKernel>(&kernel)) {
+        visit(dither->amplitude);
+        return true;
+    }
     // #484: the path sampler's angle, length, centre and amount, then a Transform path's
     // translate, pivot, scale, rotation, skew, skew axis and opacity. The other motion kernels have
     // constant operands.
@@ -1387,6 +1410,7 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<DefocusKernel>(kernel) ||
            std::holds_alternative<LensFlareKernel>(kernel) ||
            std::holds_alternative<FilmGrainKernel>(kernel) ||
+           std::holds_alternative<DitherKernel>(kernel) ||
            std::holds_alternative<SharpenKernel>(kernel) ||
            std::holds_alternative<CodecDegradeKernel>(kernel) ||
            std::holds_alternative<AutoExposureKernel>(kernel) ||

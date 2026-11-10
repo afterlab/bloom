@@ -72,7 +72,9 @@ enum class ColorGradeKind : std::uint8_t {
     Statistics,
     // #518: Tone Map (color_tool_image_effect.hpp), the table of one per-pixel function of the
     // straight color.
-    ColorTool
+    ColorTool,
+    // #527: Dither (dither_image_effect.hpp), its geometry inserted where it is applied.
+    Dither
 };
 
 // The packed table, always a whole number of vec4s:

@@ -219,6 +219,7 @@ target_sources(
         depth_effect_image_effect.cpp
         lens_flare_image_effect.cpp
         film_grain_image_effect.cpp
+        dither_image_effect.cpp
         codec_degrade_image_effect.cpp
         auto_exposure_image_effect.cpp
         pixel_math_image_effect.cpp
@@ -439,6 +440,21 @@ file(CONFIGURE
     @ONLY)
 target_sources(bloom_runtime_evaluator
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/motion_kernel_source.cpp")
+
+# #527: the dither kernel, the same way.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/dither_kernel.glsl")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dither_kernel.glsl" BLOOM_DITHER_KERNEL_HEX HEX)
+string(LENGTH "${BLOOM_DITHER_KERNEL_HEX}" BLOOM_DITHER_KERNEL_HEX_LENGTH)
+math(EXPR BLOOM_DITHER_KERNEL_SIZE "${BLOOM_DITHER_KERNEL_HEX_LENGTH} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," BLOOM_DITHER_KERNEL_BYTES
+    "${BLOOM_DITHER_KERNEL_HEX}")
+file(CONFIGURE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/dither_kernel_source.cpp"
+    CONTENT "#include <string_view>\n\nnamespace bloom::runtime::detail {\nnamespace {\nconstexpr unsigned char kDitherKernelSource[] = {${BLOOM_DITHER_KERNEL_BYTES}0x00};\n} // namespace\n\nstd::string_view ditherKernelGlsl() noexcept;\nstd::string_view ditherKernelGlsl() noexcept {\n    return {reinterpret_cast<const char*>(kDitherKernelSource), ${BLOOM_DITHER_KERNEL_SIZE}};\n}\n\n} // namespace bloom::runtime::detail\n"
+    @ONLY)
+target_sources(bloom_runtime_evaluator
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/dither_kernel_source.cpp")
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

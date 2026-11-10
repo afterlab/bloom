@@ -185,6 +185,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         // #486: grain drawn anew for every frame.
                         if (const auto* grain = std::get_if<FilmGrainKernel>(&step.kernel))
                             animated = animated || grain->drawsPerFrame();
+                        // #527: a placement drawn anew for every frame.
+                        if (const auto* dither = std::get_if<DitherKernel>(&step.kernel))
+                            animated = animated || dither->drawsPerFrame();
                         // #347: a plot draws the audio around its frame.
                         animated = animated || std::holds_alternative<AudioPlotKernel>(step.kernel);
                         // #563: a step is drawn for its frame's place in the group of pictures.

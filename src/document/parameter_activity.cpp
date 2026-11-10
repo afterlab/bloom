@@ -102,6 +102,12 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
             return !posterize || constantOf(composition, node, "posterizeAlpha").value_or(0) == 0;
         return false;
     }
+    // #527 Dither: the matrix size is read only by the Ordered pattern.
+    if (node.typeId == kDitherNodeType) {
+        if (schemaKey != "bloom.dither.matrixSize")
+            return false;
+        return constantOf(composition, node, "pattern").value_or(kDitherBlueNoise) != kDitherOrdered;
+    }
     // #511 Tile & Mirror: each mode reads only its own values (the lowering reads the same ones).
     if (node.typeId == kTileMirrorNodeType) {
         constexpr std::string_view prefix = "bloom.tile-mirror.";

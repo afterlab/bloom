@@ -27,6 +27,7 @@
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "dither_image_effect.hpp"
 #include "motion_blur_image_effect.hpp"
 #include "sharpen_image_effect.hpp"
 #include "codec_degrade_image_effect.hpp"
@@ -882,7 +883,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                         "Color grade values are out of domain");
         if (grade->identity)
             return identity();
-        if (grade->kind == ColorGradeKind::Vignette || grade->kind == ColorGradeKind::FilmGrain) {
+        if (grade->kind == ColorGradeKind::Vignette || grade->kind == ColorGradeKind::FilmGrain ||
+            grade->kind == ColorGradeKind::Dither) {
             positioned = std::move(*grade);
         } else {
             GpuOcioTransformSpec leg;
@@ -1137,6 +1139,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         auto data = positioned->kind == ColorGradeKind::FilmGrain
                         ? filmGrainProgramData(*positioned, descriptor->data, pixelAspect,
                                                ctx.hScale, ctx.vScale)
+                    : positioned->kind == ColorGradeKind::Dither
+                        ? ditherProgramData(*positioned, descriptor->data, ctx.hScale, ctx.vScale)
                         : vignetteProgramData(*positioned, descriptor->display,
                                               descriptor->data.originX(),
                                               descriptor->data.originY(), pixelAspect, ctx.hScale,
@@ -1145,6 +1149,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         positioned->kind == ColorGradeKind::FilmGrain
                             ? "Film Grain geometry cannot be represented"
+                        : positioned->kind == ColorGradeKind::Dither
+                            ? "Dither geometry cannot be represented"
                             : "Vignette geometry cannot be represented");
         GpuOcioTransformSpec leg;
         leg.kind = GpuOcioTransformKind::ColorGrade;

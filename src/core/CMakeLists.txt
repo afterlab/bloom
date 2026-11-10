@@ -10,6 +10,7 @@ target_sources(
         value_primitives.cpp
         field_program.cpp
         film_grain_noise.cpp
+        dither_pattern.cpp
         camera_shake.cpp
         light_flicker.cpp
         motion_values.cpp
@@ -26,6 +27,7 @@ target_sources(
             include/bloom/core/blend_mode.hpp
             include/bloom/core/field_program.hpp
             include/bloom/core/film_grain_noise.hpp
+            include/bloom/core/dither_pattern.hpp
             include/bloom/core/camera_shake.hpp
             include/bloom/core/light_flicker.hpp
             include/bloom/core/motion_values.hpp
@@ -163,6 +165,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.field_program
         COMMAND bloom_core_field_program_test
+        LABELS unit
+    )
+
+    add_executable(bloom_core_dither_pattern_test tests/dither_pattern_tests.cpp)
+    target_link_libraries(bloom_core_dither_pattern_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_dither_pattern_test)
+    bloom_enable_strict_floating_point(bloom_core_dither_pattern_test)
+    bloom_add_test(
+        NAME bloom.core.dither_pattern
+        COMMAND bloom_core_dither_pattern_test
         LABELS unit
     )
 

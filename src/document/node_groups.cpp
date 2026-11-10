@@ -58,10 +58,9 @@ constexpr std::array<std::string_view, 12> kBlurSharpen{"bloom.gaussian-blur",
 constexpr std::array<std::string_view, 8> kLightShadow{
     "bloom.glow",       "bloom.light-wrap", "bloom.drop-shadow", "bloom.inner-shadow",
     "bloom.inner-glow", "bloom.depth-fog",  "bloom.lens-flare",  "bloom.light-rays"};
-// Planned: Dither.
-constexpr std::array<std::string_view, 5> kStylize{"bloom.vignette", "bloom.film-grain",
+constexpr std::array<std::string_view, 6> kStylize{"bloom.vignette", "bloom.film-grain",
                                                    "bloom.codec-degrade", "bloom.alpha-contour",
-                                                   "bloom.quantize"};
+                                                   "bloom.quantize", "bloom.dither"};
 constexpr std::array<std::string_view, 12> kColorCorrection{
     "bloom.grade",  "bloom.levels",   "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
     "bloom.offset", "bloom.multiply", "bloom.invert", "bloom.colorize", "bloom.auto-exposure",

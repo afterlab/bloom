@@ -5,6 +5,7 @@
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "dither_image_effect.hpp"
 #include "codec_degrade_image_effect.hpp"
 #include "auto_exposure_image_effect.hpp"
 #include "pixel_math_image_effect.hpp"
@@ -975,6 +976,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return lensFlareProbeProgramText();
     case ColorGradeKind::FilmGrain:
         return filmGrainProgramText();
+    case ColorGradeKind::Dither:
+        return ditherProgramText();
     case ColorGradeKind::CodecDegrade:
         return codecDegradeProgramText();
     case ColorGradeKind::AutoExposure:
@@ -1154,6 +1157,19 @@ sampleOperandsImpl(const ImageEffectKernel& kernel, const CompiledCompositionPla
             values.push_back(static_cast<double>(*frame));
         }
     }
+    // #527: Dither reads its frame the same way; Held reads none.
+    if (const auto* dither = std::get_if<DitherKernel>(&kernel)) {
+        if (!dither->drawsPerFrame()) {
+            values.push_back(0.0);
+        } else {
+            if (!time)
+                return std::nullopt;
+            const auto frame = valueGraphFrameIndex(*time, plan.format().frameRate());
+            if (!frame)
+                return std::nullopt;
+            values.push_back(static_cast<double>(*frame));
+        }
+    }
     return values;
 }
 } // namespace
@@ -1200,6 +1216,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareLensFlareGrade(*flare, values);
     if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel))
         return prepareFilmGrainGrade(*grain, values);
+    if (const auto* dither = std::get_if<DitherKernel>(&kernel))
+        return prepareDitherGrade(*dither, values);
     if (const auto* codec = std::get_if<CodecDegradeKernel>(&kernel))
         return prepareCodecDegradeGrade(*codec, values);
     if (const auto* autoExposure = std::get_if<AutoExposureKernel>(&kernel))
@@ -1264,7 +1282,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
         grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
         grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
-        grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::CodecDegrade ||
+        grade.kind == ColorGradeKind::FilmGrain || grade.kind == ColorGradeKind::Dither ||
+        grade.kind == ColorGradeKind::CodecDegrade ||
         grade.kind == ColorGradeKind::AutoExposure || grade.kind == ColorGradeKind::Motion ||
         grade.kind == ColorGradeKind::Sharpen || grade.kind == ColorGradeKind::PixelMath ||
         grade.kind == ColorGradeKind::Histogram || grade.kind == ColorGradeKind::AudioPlot ||
@@ -1395,6 +1414,7 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::LensFlareProbe
                             ? validLensFlareProbeData(data)
                         : kind == ColorGradeKind::FilmGrain ? validFilmGrainProgramData(data)
+                        : kind == ColorGradeKind::Dither ? validDitherProgramData(data)
                         : kind == ColorGradeKind::CodecDegrade
                             ? validCodecDegradeProgramData(data)
                         : kind == ColorGradeKind::AutoExposure
@@ -1409,7 +1429,7 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
     if ((static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) &&
          kind != ColorGradeKind::PixelMath && kind != ColorGradeKind::Histogram &&
          kind != ColorGradeKind::Statistics && kind != ColorGradeKind::AudioPlot &&
-         kind != ColorGradeKind::ColorTool) ||
+         kind != ColorGradeKind::ColorTool && kind != ColorGradeKind::Dither) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1517,6 +1537,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_statistics";
         program.resourcePrefix = "bloom_statistics_";
         program.semanticsId = "bloom.render.statistics.v1";
+        break;
+    case ColorGradeKind::Dither:
+        program.functionName = "bloom_dither";
+        program.resourcePrefix = "bloom_dither_";
+        program.semanticsId = "bloom.render.dither.v1";
         break;
     case ColorGradeKind::ColorTool:
         program.functionName = "bloom_color_tool";

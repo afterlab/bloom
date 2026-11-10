@@ -208,6 +208,10 @@ BLOOM_GPU_REQUIRED_EFFECT(ColorToolKernel,
                           "Tone Map: gamut compression, shadow recovery and a smooth highlight "
                           "roll-off of straight scene-linear color (#518); Color Matrix: a 3 x 3 or "
                           "4 x 4 channel mix between color models (#517)");
+BLOOM_GPU_REQUIRED_EFFECT(DitherKernel,
+                          "Dither: a seeded Bayer or generated blue-noise threshold pattern of a "
+                          "number of LSBs of a bit depth, in the display encoding or the stored "
+                          "value, placed in full-resolution pixels (#527)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

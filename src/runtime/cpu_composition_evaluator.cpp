@@ -8,6 +8,7 @@
 #include "cryptomatte.hpp"
 #include "depth_effect_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "dither_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "histogram_image_effect.hpp"
 #include "image_effect.hpp"
@@ -4380,6 +4381,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                               progress, rowBands)
                                     : gradeKind == detail::ColorGradeKind::FilmGrain
                                         ? detail::applyFilmGrain(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              resolved.horizontalScale, resolved.verticalScale,
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::Dither
+                                        ? detail::applyDither(
                                               *preparedEffect->colorGrade, *slots[index],
                                               resolved.horizontalScale, resolved.verticalScale,
                                               effectPixelBudget, cancellation, operationIndex,
