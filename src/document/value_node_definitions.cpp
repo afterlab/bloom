@@ -3,6 +3,7 @@
 
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -643,6 +644,7 @@ bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
         schemaKey == kStrokeStampParameterSchemaKey || schemaKey == kStampAlignParameterSchemaKey ||
         schemaKey == kResampleModeParameterSchemaKey ||
         schemaKey == kResampleOutputParameterSchemaKey ||
+        schemaKey == kWarpFunctionParameterSchemaKey ||
         isPathSourceParameterSchemaKey(schemaKey) || schemaKey == kDataBlockParameterSchemaKey) {
         return true;
     }

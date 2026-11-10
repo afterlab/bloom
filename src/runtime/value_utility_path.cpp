@@ -6,6 +6,7 @@
 // sequence and a scripted render, and whatever draws it (Shape Source) is the production fill that
 // is already covered on every route. Nothing here reads the time.
 
+#include "path_warp.hpp"
 #include "value_utility_path_support.hpp"
 
 #include <bloom/document/parameter.hpp>
@@ -86,24 +87,27 @@ ValueUtilityOutcome transformPath(const ValueUtilityInvocation& invocation) {
     const auto anchor = reader.vector2(2);
     const auto scale = reader.vector2(3);
     const double rotation = reader.scalar(4);
+    // The skew was added after the node shipped: an invocation without it is not skewed.
+    const bool skewed = invocation.operands.size() > 6;
+    const double skew = skewed ? reader.scalar(5) : 0.0;
+    const double skewAxis = skewed ? reader.scalar(6) : 0.0;
     if (reader.malformed())
         return outcome;
-    if (!finite(position) || !finite(anchor) || !finite(scale) || !std::isfinite(rotation))
+    if (!finite(position) || !finite(anchor) || !finite(scale) || !std::isfinite(rotation) ||
+        !std::isfinite(skew) || !std::isfinite(skewAxis))
         return refuse(std::move(outcome), "Transform Path operand is not finite",
-                      "The position, anchor, scale and rotation must be finite numbers.");
-    const double radians = rotation * std::numbers::pi / 180.0;
-    const double cosine = std::cos(radians);
-    const double sine = std::sin(radians);
-    const double scaleX = scale.x;
-    const double scaleY = scale.y;
-    // Scale about the anchor, then turn about it (clockwise on screen for a positive angle), then
-    // move the anchor to the position. A cubic curve maps to the cubic of the mapped controls, so
-    // the transform is exact for every segment.
-    const auto map = [&](const Vec2d point) {
-        const double dx = (point.x - anchor.x) * scaleX;
-        const double dy = (point.y - anchor.y) * scaleY;
-        return Vec2d{position.x + dx * cosine - dy * sine, position.y + dx * sine + dy * cosine};
-    };
+                      "The position, anchor, scale, rotation, skew and skew axis must be finite "
+                      "numbers.");
+    if (std::abs(skew) > document::kMaximumPathSkewDegrees)
+        return refuse(std::move(outcome), "Transform Path skew is out of range",
+                      "The skew must be within 89.9 degrees either way: a quarter turn is no "
+                      "slant.");
+    // Scale about the anchor, slant along the skew axis, then turn about it (clockwise on screen
+    // for a positive angle), then move the anchor to the position. A cubic curve maps to the cubic
+    // of the mapped controls, so the transform is exact for every segment.
+    const auto matrix = runtime::pathwarp::Matrix::make(position, anchor, scale, rotation, skew,
+                                                        skewAxis);
+    const auto map = [&](const Vec2d point) { return matrix.forward(point); };
     PathValue result = path;
     for (auto& contour : result.contours) {
         if (stopRequested(invocation))
@@ -812,6 +816,8 @@ ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation) 
         return evaluateValueTextOutline(invocation);
     case Kernel::ResamplePath:
         return evaluateValuePathResample(invocation);
+    case Kernel::WarpPath:
+        return evaluateValuePathWarp(invocation);
     default:
         break;
     }

@@ -4,6 +4,7 @@
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 
 #include <algorithm>
@@ -54,6 +55,16 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
             return mode != ResampleMode::ByLength;
         if (schemaKey == kResamplePercentageSchemaKey)
             return mode != ResampleMode::Percentage;
+        return false;
+    }
+    // #598 Warp Path: only Wave and Ripple travel along a cycle, so only they read the phase.
+    if (node.typeId == kWarpPathNodeType) {
+        if (schemaKey == kWarpPhaseSchemaKey) {
+            const auto function = static_cast<WarpFunction>(
+                constantOf(composition, node, "function")
+                    .value_or(selectorStoredValue(WarpFunction::Wave)));
+            return function != WarpFunction::Wave && function != WarpFunction::Ripple;
+        }
         return false;
     }
     if (node.typeId == kVignetteNodeType) {

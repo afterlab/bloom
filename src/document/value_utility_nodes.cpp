@@ -5,6 +5,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
@@ -142,13 +143,58 @@ constexpr std::array<ValueUtilityOutput, 4> kAxisTickOutputs{
     ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
 // #344 and #530 path processing. Distances are pixels in the path's own space; a percentage runs 0 to
 // 100; a scale is a multiplier, as in Transform; an angle is degrees.
-constexpr std::array<ValueUtilityOperand, 5> kTransformPathOperands{
+constexpr std::array<ValueUtilityOperand, 7> kTransformPathOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "position", .kind = SocketValueKind::Vector2},
     ValueUtilityOperand{.role = "anchor", .kind = SocketValueKind::Vector2},
     ValueUtilityOperand{
         .role = "scale", .kind = SocketValueKind::Vector2, .number = 1.0, .y = 1.0},
-    ValueUtilityOperand{.role = "rotation", .kind = SocketValueKind::Scalar}};
+    ValueUtilityOperand{.role = "rotation", .kind = SocketValueKind::Scalar},
+    // #598: the skew was added after the node shipped, so a node saved without it reads no skew.
+    ValueUtilityOperand{.role = "skew",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kPathSkewSchemaKey,
+                        .optional = true},
+    ValueUtilityOperand{.role = "skewAxis",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kPathSkewAxisSchemaKey,
+                        .optional = true}};
+// #598 Warp Path. The amount, size and phase say how hard, how wide and where in its cycle the
+// function runs; the six matrix operands are Transform Path's own, so one set of value nodes can
+// drive both and the paths stay aligned; the tolerance is the farthest in pixels the drawn curve
+// may stray from the exact warp.
+constexpr std::array<ValueUtilityOperand, 11> kWarpPathOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "amount",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kWarpAmountSchemaKey,
+                        .number = 20.0},
+    ValueUtilityOperand{.role = "size",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kWarpSizeSchemaKey,
+                        .number = 100.0},
+    ValueUtilityOperand{.role = "phase",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kWarpPhaseSchemaKey,
+                        .number = 0.0},
+    ValueUtilityOperand{.role = "tolerance",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kWarpToleranceSchemaKey,
+                        .number = 0.25},
+    ValueUtilityOperand{.role = "position", .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{.role = "anchor", .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{
+        .role = "scale", .kind = SocketValueKind::Vector2, .number = 1.0, .y = 1.0},
+    ValueUtilityOperand{.role = "rotation", .kind = SocketValueKind::Scalar},
+    ValueUtilityOperand{.role = "skew",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kPathSkewSchemaKey},
+    ValueUtilityOperand{.role = "skewAxis",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kPathSkewAxisSchemaKey}};
+constexpr std::array<ValueUtilitySelector, 1> kWarpPathSelectors{ValueUtilitySelector{
+    "function", bloom::document::kWarpFunctionParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::WarpFunction::Wave)}};
 constexpr std::array<ValueUtilityOutput, 1> kPathResult{
     ValueUtilityOutput{"path", SocketValueKind::Path}};
 constexpr std::array<ValueUtilityOperand, 4> kTrimPathOperands{
@@ -202,9 +248,9 @@ constexpr std::array<ValueUtilityOperand, 18> kPathStrokeOperands{
     // Added after the node shipped (stamps), so optional: degrees, clockwise on screen.
     ValueUtilityOperand{.role = "stampRotation",
                         .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kStampRotationParameterSchemaKey,
                         .number = 0.0,
-                        .optional = true,
-                        .schemaKey = bloom::document::kStampRotationParameterSchemaKey}};
+                        .optional = true}};
 constexpr std::array<ValueUtilitySelector, 4> kPathStrokeSelectors{
     ValueUtilitySelector{"cap", bloom::document::kStrokeCapParameterSchemaKey,
                          bloom::document::selectorStoredValue(bloom::document::StrokeCap::Round)},
@@ -568,7 +614,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 82> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 83> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -818,6 +864,9 @@ constexpr std::array<ValueUtilityDescriptor, 82> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kResamplePathNodeType, "Resample Path",
                            ValueUtilityKernel::ResamplePath, NodeCategory::Values,
                            kResamplePathOperands, kResamplePathSelectors, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kWarpPathNodeType, "Warp Path",
+                           ValueUtilityKernel::WarpPath, NodeCategory::Values, kWarpPathOperands,
+                           kWarpPathSelectors, kPathResult},
 };
 
 } // namespace

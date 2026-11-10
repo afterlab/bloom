@@ -135,6 +135,8 @@ enum class ValueUtilityKernel : std::uint8_t {
     TextOutline,
     // #637: a path with more or fewer points, spaced along each contour.
     ResamplePath,
+    // #598: a path moved by a non-linear function, subdivided so straight segments bend.
+    WarpPath,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -500,11 +502,8 @@ struct ValueUtilityOperand final {
     std::string_view text{};
     // An operand added to a node after it shipped: its parameter is optional, so a node saved
     // before it still validates, the compiler lowers it at `number`/`integer`/... when unbound, and
-    // opening a project binds it at that default (project-format.md).
+    // opening a project binds it at that default (project-format.md). #598: Transform Path's skew.
     bool optional = false;
-    // The parameter's schema when it is not the plain operand of its kind (an angle, so both
-    // surfaces show a dial); empty for the operand schema.
-    std::string_view schemaKey{};
 };
 
 // An inline selector: a closed integer vocabulary with NO socket, exactly as a Math node's

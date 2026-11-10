@@ -5,6 +5,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
@@ -405,6 +406,7 @@ constexpr std::array kChoiceSchemas{
     std::string_view("bloom.path.text-source"),
     std::string_view("bloom.path.resample-mode"),
     std::string_view("bloom.path.resample-output"),
+    std::string_view("bloom.path.warp-function"),
     std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),
@@ -820,6 +822,20 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return number(0.0, 1.0e6, 0.0, 200.0, 1.0, 1, kPercent);
     if (schemaKey == kResampleStartOffsetSchemaKey)
         return number(kLowest, kHighest, 0.0, 100.0, 0.5, 1, kPercent);
+    // #598 Warp Path and the skew Transform Path shares with it: the amount's unit is the
+    // function's (pixels, degrees or percent), the size is a distance, the phase and the skew
+    // are angles, and the tolerance is pixels.
+    if (schemaKey == kWarpAmountSchemaKey)
+        return number(kLowest, kHighest, -360.0, 360.0, 1.0, 2);
+    if (schemaKey == kWarpSizeSchemaKey)
+        return number(0.001, 1.0e9, 10.0, 1000.0, 1.0, 2, kPixels);
+    if (schemaKey == kWarpPhaseSchemaKey || schemaKey == kPathSkewAxisSchemaKey)
+        return number(kLowest, kHighest, -360.0, 360.0, 1.0, 1, kDegrees);
+    if (schemaKey == kWarpToleranceSchemaKey)
+        return number(0.001, 1000.0, 0.01, 4.0, 0.01, 3, kPixels);
+    if (schemaKey == kPathSkewSchemaKey)
+        return number(-kMaximumPathSkewDegrees, kMaximumPathSkewDegrees, -89.0, 89.0, 0.5, 1,
+                      kDegrees);
     // The value library: literals and operands carry no meaning beyond their kind, except where
     // the role says what the number is for.
     if (schemaKey == kScalarOperandParameterSchemaKey ||

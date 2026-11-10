@@ -10,6 +10,8 @@
 #include <bloom/render/text_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include "../path_resample.hpp"
+#include "../path_warp.hpp"
+#include <bloom/document/warp_path_nodes.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1413,6 +1415,440 @@ void testResampleHelper(Expectations& expectations) {
                         "resampling is deterministic");
 }
 
+// ---------------------------------------------------------------------------------------------
+// #598 Transform Path skew and Warp Path
+// ---------------------------------------------------------------------------------------------
+
+[[nodiscard]] ValueUtilityOutcome transformWithSkew(const PathValue& path, const Vec2d position,
+                                                    const Vec2d anchor, const Vec2d scale,
+                                                    const double rotation, const double skew,
+                                                    const double skewAxis) {
+    return run(Kernel::TransformPath,
+               {wrap(path), position, anchor, scale, rotation, skew, skewAxis});
+}
+
+struct WarpOptions final {
+    document::WarpFunction function = document::WarpFunction::Wave;
+    double amount = 20.0;
+    double size = 100.0;
+    double phase = 0.0;
+    double tolerance = 0.25;
+    Vec2d position{0, 0};
+    Vec2d anchor{0, 0};
+    Vec2d scale{1, 1};
+    double rotation = 0.0;
+    double skew = 0.0;
+    double skewAxis = 0.0;
+};
+[[nodiscard]] ValueUtilityOutcome warp(const PathValue& path, const WarpOptions& o) {
+    return run(Kernel::WarpPath,
+               {wrap(path), o.amount, o.size, o.phase, o.tolerance, o.position, o.anchor, o.scale,
+                o.rotation, o.skew, o.skewAxis},
+               {document::selectorStoredValue(o.function)});
+}
+
+// A contour as a dense polyline: each cubic segment at `steps` parameters.
+[[nodiscard]] std::vector<Vec2d> dense(const PathContour& contour, const int steps) {
+    std::vector<Vec2d> points;
+    const auto count = contour.anchors.size();
+    const auto segments = contour.closed ? count : count - 1;
+    for (std::size_t index = 0; index < segments; ++index) {
+        const auto& a = contour.anchors[index];
+        const auto& b = contour.anchors[(index + 1) % count];
+        const Vec2d p0 = a.point, p1 = a.outHandle.value_or(a.point),
+                    p2 = b.inHandle.value_or(b.point), p3 = b.point;
+        for (int step = 0; step < steps; ++step) {
+            const double t = static_cast<double>(step) / steps;
+            const double u = 1.0 - t;
+            points.push_back({u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+                              u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y});
+        }
+    }
+    points.push_back(contour.closed ? contour.anchors[0].point : contour.anchors.back().point);
+    return points;
+}
+
+// The smallest distance from a point to a polyline.
+[[nodiscard]] double distanceTo(const Vec2d point, const std::vector<Vec2d>& line) {
+    double best = std::numeric_limits<double>::max();
+    for (std::size_t index = 0; index + 1 < line.size(); ++index) {
+        const auto a = line[index];
+        const auto b = line[index + 1];
+        const double dx = b.x - a.x, dy = b.y - a.y;
+        const double length = dx * dx + dy * dy;
+        const double t = length > 0.0
+                             ? std::clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / length, 0.0, 1.0)
+                             : 0.0;
+        best = std::min(best, std::hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy)));
+    }
+    return best;
+}
+
+// The farthest the dense `curve` strays from the dense `reference`, and the reverse (so a curve that
+// misses a stretch of the reference is found as well as one that strays from it).
+[[nodiscard]] double strayBetween(const std::vector<Vec2d>& curve, const std::vector<Vec2d>& reference) {
+    double worst = 0.0;
+    for (const auto point : curve)
+        worst = std::max(worst, distanceTo(point, reference));
+    for (const auto point : reference)
+        worst = std::max(worst, distanceTo(point, curve));
+    return worst;
+}
+
+void testTransformSkew(Expectations& expectations) {
+    const PathValue source = single(square(0, 0, 10));
+    // Skew 45 degrees along the x axis slides each point right by its height: (0,10) -> (10,10).
+    const auto slanted = transformWithSkew(source, {0, 0}, {0, 0}, {1, 1}, 0.0, 45.0, 0.0);
+    const auto& corners = pathOf(slanted).contours[0].anchors;
+    expectations.expect(!slanted.failed && corners.size() == 4 && near(corners[0].point, {0, 0}) &&
+                            near(corners[1].point, {10, 0}) && near(corners[2].point, {20, 10}) &&
+                            near(corners[3].point, {10, 10}),
+                        "a 45 degree skew along x slides each point by its height");
+    // Along the y axis (90 degrees) it slides each point down by minus its x: (10,0) -> (10,-10).
+    const auto upright = transformWithSkew(source, {0, 0}, {0, 0}, {1, 1}, 0.0, 45.0, 90.0);
+    const auto& tall = pathOf(upright).contours[0].anchors;
+    expectations.expect(near(tall[1].point, {10, -10}) && near(tall[3].point, {0, 10}) &&
+                            near(tall[2].point, {10, 0}),
+                        "a skew along the y axis slides each point by minus its x");
+    // Skew sits between scale and turn: scale (2,1), skew 45 along x, then turn 90, move to (5,5):
+    // (10,10) -> scaled (20,10) -> slanted (30,10) -> turned (-10,30) -> moved (-5,35).
+    const auto combined = transformWithSkew(source, {5, 5}, {0, 0}, {2, 1}, 90.0, 45.0, 0.0);
+    expectations.expect(near(pathOf(combined).contours[0].anchors[2].point, {-5, 35}),
+                        "skew is applied after the scale and before the turn");
+    // No skew changes nothing: five operands (a node saved before the skew), seven at zero, and the
+    // hand-worked answer of the older test are all the same bytes.
+    const auto old = run(Kernel::TransformPath, {wrap(source), Vec2d{5, 5}, Vec2d{0, 0}, Vec2d{2, 1}, 90.0});
+    const auto zero = transformWithSkew(source, {5, 5}, {0, 0}, {2, 1}, 90.0, 0.0, 37.0);
+    expectations.expect(pathOf(old) == pathOf(zero),
+                        "a skew of zero (any axis) answers exactly what the node did before");
+    // A curve stays a curve: the mapped cubic is the cubic of the mapped controls, at every t.
+    PathContour curve = polygon({{0, 0}, {40, 10}}, false);
+    curve.anchors[0].outHandle = Vec2d{0, 30};
+    curve.anchors[1].inHandle = Vec2d{20, -20};
+    const auto bent = transformWithSkew(single(curve), {3, -4}, {1, 2}, {1.5, 0.5}, 30.0, 25.0, 15.0);
+    const auto original = dense(curve, 40);
+    const auto mapped = dense(pathOf(bent).contours[0], 40);
+    const auto matrix = runtime::pathwarp::Matrix::make({3, -4}, {1, 2}, {1.5, 0.5}, 30.0, 25.0, 15.0);
+    bool exact = original.size() == mapped.size();
+    for (std::size_t index = 0; exact && index < original.size(); ++index)
+        exact = near(matrix.forward(original[index]), mapped[index], 1e-9);
+    expectations.expect(exact, "a skewed, scaled, turned cubic is exactly the cubic of the mapped controls");
+    expectations.expect(pathOf(bent).contours[0].anchors.size() == 2,
+                        "a matrix never adds points (no subdivision for a pure matrix)");
+    // The inverse really inverts it.
+    const auto probe = Vec2d{12.5, -7.25};
+    expectations.expect(near(matrix.inverse(matrix.forward(probe)), probe, 1e-9),
+                        "the matrix's inverse undoes it");
+    expectations.expect(transformWithSkew(source, {}, {}, {1, 1}, 0.0, 90.0, 0.0).failed &&
+                            transformWithSkew(source, {}, {}, {1, 1}, 0.0, -89.95, 0.0).failed &&
+                            !transformWithSkew(source, {}, {}, {1, 1}, 0.0, 89.9, 0.0).failed,
+                        "a skew past 89.9 degrees is refused");
+    expectations.expect(transformWithSkew(source, {}, {}, {1, 1}, 0.0, std::nan(""), 0.0).failed &&
+                            transformWithSkew(source, {}, {}, {1, 1}, 0.0, 10.0, std::nan("")).failed,
+                        "a skew or axis that is not a number is refused");
+}
+
+void testWarpFunctionsKnownAnswers(Expectations& expectations) {
+    using runtime::pathwarp::apply;
+    using runtime::pathwarp::Warp;
+    using document::WarpFunction;
+    const double tau = 2.0 * std::numbers::pi;
+    // Wave: x moves by A sin(2 pi y / size + phase); y stays.
+    const auto wave = apply(Warp{WarpFunction::Wave, 20.0, 100.0, 0.0}, {7.0, 25.0});
+    expectations.expect(near(wave, {7.0 + 20.0 * std::sin(tau * 25.0 / 100.0), 25.0}),
+                        "Wave moves x by a sine of y: a quarter wavelength up is the full amount");
+    expectations.expect(near(wave.x, 27.0, 1e-9), "Wave at a quarter wavelength moves x by exactly the amount");
+    const auto shifted = apply(Warp{WarpFunction::Wave, 20.0, 100.0, 90.0}, {0.0, 0.0});
+    expectations.expect(near(shifted, {20.0, 0.0}, 1e-9), "a phase of 90 degrees starts Wave at its peak");
+    // Twist: radius kept, turned by amount * exp(-(r/size)^2) (degrees).
+    const auto twisted = apply(Warp{WarpFunction::Twist, 90.0, 100.0, 0.0}, {50.0, 0.0});
+    const double turn = std::numbers::pi / 2.0 * std::exp(-0.25);
+    expectations.expect(near(twisted, {50.0 * std::cos(turn), 50.0 * std::sin(turn)}, 1e-9) &&
+                            near(std::hypot(twisted.x, twisted.y), 50.0, 1e-9),
+                        "Twist turns a point about the origin, keeping its radius");
+    expectations.expect(near(apply(Warp{WarpFunction::Twist, 90.0, 100.0, 0.0}, {0.0, 0.0}), {0.0, 0.0}),
+                        "Twist leaves the origin where it is");
+    // Bulge: a point moves out by amount percent where the fade is one (size very wide).
+    expectations.expect(near(apply(Warp{WarpFunction::Bulge, 50.0, 1.0e9, 0.0}, {10.0, -4.0}), {15.0, -6.0}, 1e-9) &&
+                            near(apply(Warp{WarpFunction::Bulge, -50.0, 1.0e9, 0.0}, {10.0, -4.0}), {5.0, -2.0}, 1e-9),
+                        "Bulge pushes a point out by the percentage and a negative amount pulls it in");
+    // Bend: a quarter turn over `size`: (100, 0) -> the quarter point of a circle of radius 200/pi.
+    const double radius = 200.0 / std::numbers::pi;
+    const auto arc = apply(Warp{WarpFunction::Bend, 90.0, 100.0, 0.0}, {100.0, 0.0});
+    expectations.expect(near(arc, {radius, radius}, 1e-9), "Bend sends the end of the length to the quarter of the arc");
+    expectations.expect(near(apply(Warp{WarpFunction::Bend, 0.0, 100.0, 0.0}, {33.0, 4.0}), {33.0, 4.0}, 1e-9) &&
+                            near(apply(Warp{WarpFunction::Bend, 1.0e-9, 100.0, 0.0}, {33.0, 4.0}), {33.0, 4.0}, 1e-6),
+                        "Bend with no angle is the identity, with no division by zero");
+    // Ripple: along the line from the origin by A sin(2 pi r / size + phase).
+    expectations.expect(near(apply(Warp{WarpFunction::Ripple, 12.0, 100.0, 90.0}, {100.0, 0.0}), {112.0, 0.0}, 1e-9) &&
+                            near(apply(Warp{WarpFunction::Ripple, 12.0, 100.0, 90.0}, {0.0, 0.0}), {0.0, 0.0}),
+                        "Ripple moves a point along its radius and leaves the origin");
+}
+
+void testWarpGridIsAnalytic(Expectations& expectations) {
+    // The issue's example: a grid warped by (x, y) -> (x + A sin(y / w), y) (w here is size / 2 pi).
+    const double amount = 20.0, size = 100.0;
+    PathValue grid;
+    for (const double c : {-100.0, -50.0, 0.0, 50.0, 100.0})
+        grid.contours.push_back(polygon({{c, -100}, {c, 100}}, false));
+    for (const double c : {-100.0, -50.0, 0.0, 50.0, 100.0})
+        grid.contours.push_back(polygon({{-100, c}, {100, c}}, false));
+    grid.groups.push_back({"verticals", 0, 5, std::nullopt});
+    grid.groups.push_back({"horizontals", 5, 5, core::Color4d{1, 0, 0, 1}});
+    WarpOptions options;
+    options.amount = amount;
+    options.size = size;
+    options.tolerance = 0.25;
+    const auto done = warp(grid, options);
+    const auto& result = pathOf(done);
+    expectations.expect(!done.failed && result.contours.size() == 10 && result.groups == grid.groups &&
+                            result.fillRule == grid.fillRule,
+                        "the warped grid keeps its contours, groups and fill rule, one to one");
+    if (result.contours.size() != 10)
+        return;
+    const double tau = 2.0 * std::numbers::pi;
+    const auto analytic = [&](const Vec2d p) { return Vec2d{p.x + amount * std::sin(tau * p.y / size), p.y}; };
+    bool straightBecameCurves = true, pointsExact = true, horizontalsStayStraight = true;
+    double worst = 0.0;
+    for (std::size_t index = 0; index < 5; ++index) {
+        const auto& contour = result.contours[index];
+        const double c = grid.contours[index].anchors[0].point.x;
+        straightBecameCurves = straightBecameCurves && contour.anchors.size() > 4 && !contour.closed;
+        bool handled = false;
+        for (const auto& anchor : contour.anchors) {
+            handled = handled || anchor.inHandle || anchor.outHandle;
+            // Every output point is the analytic function of a point of the original line.
+            pointsExact = pointsExact && near(anchor.point, analytic({c, anchor.point.y}), 1e-9);
+        }
+        straightBecameCurves = straightBecameCurves && handled;
+        // The drawn curve against the analytic warp of the original line, sampled finely.
+        std::vector<Vec2d> reference;
+        for (int step = 0; step <= 4000; ++step)
+            reference.push_back(analytic({c, -100.0 + 200.0 * step / 4000.0}));
+        worst = std::max(worst, strayBetween(dense(contour, 64), reference));
+    }
+    for (std::size_t index = 5; index < 10; ++index) {
+        const auto& contour = result.contours[index];
+        const double c = grid.contours[index].anchors[0].point.y;
+        // A horizontal line only slides sideways by A sin(2 pi c / size): it stays a straight pair.
+        horizontalsStayStraight = horizontalsStayStraight && contour.anchors.size() == 2 &&
+                                  near(contour.anchors[0].point, analytic({-100, c}), 1e-9) &&
+                                  near(contour.anchors[1].point, analytic({100, c}), 1e-9);
+    }
+    expectations.expect(straightBecameCurves, "straight vertical lines become curves (more points, with handles)");
+    expectations.expect(pointsExact, "every output point equals the analytic function of its original point");
+    expectations.expect(horizontalsStayStraight, "horizontal lines, which the wave only slides, stay two points");
+    expectations.expect(worst <= 0.25,
+                        "the drawn curves stay within the 0.25 px tolerance of the analytic warp (worst " +
+                            std::to_string(worst) + ")");
+    // A tighter tolerance gives more points and a tighter fit.
+    WarpOptions fine = options;
+    fine.tolerance = 0.01;
+    const auto finer = warp(grid, fine);
+    expectations.expect(!finer.failed &&
+                            pathOf(finer).contours[0].anchors.size() > result.contours[0].anchors.size(),
+                        "a tolerance of 0.01 px keeps more points than 0.25 px");
+    double tight = 0.0;
+    {
+        std::vector<Vec2d> reference;
+        for (int step = 0; step <= 4000; ++step)
+            reference.push_back(analytic({-50.0, -100.0 + 200.0 * step / 4000.0}));
+        tight = strayBetween(dense(pathOf(finer).contours[1], 64), reference);
+    }
+    expectations.expect(tight <= 0.01, "and stays within 0.01 px of the analytic warp (worst " +
+                                           std::to_string(tight) + ")");
+    // No amount: the identity. Positions are the input's.
+    WarpOptions none = options;
+    none.amount = 0.0;
+    const auto flat = warp(grid, none);
+    bool same = !flat.failed;
+    for (std::size_t index = 0; same && index < 10; ++index) {
+        const auto& out = pathOf(flat).contours[index];
+        same = out.anchors.size() == 2 && near(out.anchors[0].point, grid.contours[index].anchors[0].point, 1e-9) &&
+               near(out.anchors[1].point, grid.contours[index].anchors[1].point, 1e-9);
+    }
+    expectations.expect(same, "an amount of zero leaves the grid where it was, two points a line");
+    expectations.expect(pathOf(warp(grid, options)) == pathOf(warp(grid, options)),
+                        "warping twice gives the same bytes");
+}
+
+void testWarpCurvesAndClosedContours(Expectations& expectations) {
+    // A circle (closed, four curved segments) through a Ripple about its centre: it stays closed, and
+    // each output point is the analytic function of an original point.
+    const auto round = circle(40.0, {10.0, 5.0});
+    WarpOptions options;
+    options.function = document::WarpFunction::Ripple;
+    options.amount = 6.0;
+    options.size = 30.0;
+    options.tolerance = 0.1;
+    const auto done = warp(single(round), options);
+    const auto& out = pathOf(done);
+    expectations.expect(!done.failed && out.contours.size() == 1 && out.contours[0].closed &&
+                            out.contours[0].anchors.size() > 4,
+                        "a closed curved contour stays closed and gains points where the ripple bends it");
+    if (out.contours.size() != 1)
+        return;
+    expectations.expect(out.contours[0].anchors.front().inHandle.has_value(),
+                        "the seam of a closed contour has its closing handle");
+    // Deviation of the output against the analytic ripple of the dense original.
+    const auto reference = [&] {
+        std::vector<Vec2d> line;
+        for (const auto p : dense(round, 4000))
+            line.push_back(runtime::pathwarp::apply({options.function, options.amount, options.size, 0.0}, p));
+        return line;
+    }();
+    const double worst = strayBetween(dense(out.contours[0], 64), reference);
+    expectations.expect(worst <= 0.1, "the warped circle stays within its 0.1 px tolerance (worst " +
+                                          std::to_string(worst) + ")");
+    // Bend: a line along x becomes an arc of radius 200 / pi about (0, 200 / pi).
+    WarpOptions bend;
+    bend.function = document::WarpFunction::Bend;
+    bend.amount = 90.0;
+    bend.size = 100.0;
+    bend.tolerance = 0.05;
+    const auto arc = warp(single(polygon({{0, 0}, {100, 0}}, false)), bend);
+    const double radius = 200.0 / std::numbers::pi;
+    bool onCircle = !arc.failed && pathOf(arc).contours[0].anchors.size() > 2;
+    for (const auto& anchor : pathOf(arc).contours[0].anchors)
+        onCircle = onCircle && std::abs(std::hypot(anchor.point.x, anchor.point.y - radius) - radius) < 1e-9;
+    expectations.expect(onCircle, "a bent line's points lie on the arc of radius 200 / pi");
+    std::vector<Vec2d> circleLine;
+    for (int step = 0; step <= 2000; ++step) {
+        const double angle = std::numbers::pi / 2.0 * step / 2000.0;
+        circleLine.push_back({radius * std::sin(angle), radius - radius * std::cos(angle)});
+    }
+    expectations.expect(strayBetween(dense(pathOf(arc).contours[0], 64), circleLine) <= 0.05,
+                        "and the drawn curve stays within 0.05 px of the arc");
+}
+
+void testWarpSpaceMatrix(Expectations& expectations) {
+    // The warp runs in the matrix's space. Turned 90 degrees, the wave runs along the other axis:
+    // y' = y - A sin(2 pi x / size) for a horizontal line.
+    WarpOptions options;
+    options.amount = 10.0;
+    options.size = 100.0;
+    options.tolerance = 0.05;
+    options.rotation = 90.0;
+    const auto turned = warp(single(polygon({{-100, 30}, {100, 30}}, false)), options);
+    bool along = !turned.failed && pathOf(turned).contours[0].anchors.size() > 2;
+    for (const auto& anchor : pathOf(turned).contours[0].anchors)
+        along = along && near(anchor.point.y,
+                              30.0 - 10.0 * std::sin(2.0 * std::numbers::pi * anchor.point.x / 100.0), 1e-9);
+    expectations.expect(along, "a warp in a space turned 90 degrees waves the other way");
+    // A scaled space stretches the function: scale (2, 1) makes the wave twice as wide in x... a
+    // vertical line at x = 0 has y' = y, so its wave is unchanged; a vertical line at x = 40 maps to
+    // local x = 20 and moves by A sin(2 pi y / size) in local x, i.e. 2x in the world.
+    WarpOptions stretched;
+    stretched.amount = 10.0;
+    stretched.size = 100.0;
+    stretched.tolerance = 0.05;
+    stretched.scale = {2.0, 1.0};
+    const auto wide = warp(single(polygon({{40, -50}, {40, 50}}, false)), stretched);
+    bool doubled = !wide.failed;
+    for (const auto& anchor : pathOf(wide).contours[0].anchors)
+        doubled = doubled && near(anchor.point.x, 40.0 + 2.0 * 10.0 * std::sin(2.0 * std::numbers::pi * anchor.point.y / 100.0), 1e-9);
+    expectations.expect(doubled, "a scaled space stretches the displacement by the scale");
+    // Skewed, anchored and moved: with no amount the whole map is the identity (the space cancels).
+    WarpOptions cancels;
+    cancels.amount = 0.0;
+    cancels.position = {17, -3};
+    cancels.anchor = {5, 6};
+    cancels.scale = {1.5, 0.75};
+    cancels.rotation = 33.0;
+    cancels.skew = 21.0;
+    cancels.skewAxis = 40.0;
+    const auto source = single(polygon({{-20, -10}, {30, 5}, {12, 40}}, true));
+    const auto same = warp(source, cancels);
+    bool identity = !same.failed && pathOf(same).contours[0].anchors.size() == 3;
+    for (std::size_t index = 0; identity && index < 3; ++index)
+        identity = near(pathOf(same).contours[0].anchors[index].point, source.contours[0].anchors[index].point, 1e-9);
+    expectations.expect(identity, "with no amount the space's matrix and its inverse cancel exactly");
+    WarpOptions flat;
+    flat.scale = {0.0, 1.0};
+    expectations.expect(warp(source, flat).failed, "a scale of zero is refused");
+}
+
+void testWarpBoundsAndDiagnostics(Expectations& expectations) {
+    const auto line = single(polygon({{-100, 0}, {100, 0}}, false));
+    WarpOptions huge;
+    huge.function = document::WarpFunction::Wave;
+    huge.amount = 1.0e7;
+    huge.size = 1.0;
+    huge.tolerance = 0.001;
+    const auto beyond = warp(single(polygon({{0, -100}, {0, 100}}, false)), huge);
+    const std::string_view detail = beyond.detail;
+    expectations.expect(beyond.failed && pathOf(beyond).contours.empty() &&
+                            detail.find("Warp Path") != std::string_view::npos &&
+                            detail.find("Wave") != std::string_view::npos &&
+                            detail.find("4096") != std::string_view::npos &&
+                            detail.find("0.001") != std::string_view::npos,
+                        "a warp that needs more than 4096 points fails, naming the node, the function, the tolerance and the cap");
+    // Operands.
+    WarpOptions bad;
+    bad.size = 0.0;
+    expectations.expect(warp(line, bad).failed, "a size of zero is refused");
+    bad = {};
+    bad.size = -5.0;
+    expectations.expect(warp(line, bad).failed, "a negative size is refused");
+    bad = {};
+    bad.tolerance = 0.0;
+    expectations.expect(warp(line, bad).failed, "a tolerance of zero is refused");
+    bad.tolerance = 5000.0;
+    expectations.expect(warp(line, bad).failed, "a tolerance above 1000 is refused");
+    bad = {};
+    bad.amount = std::nan("");
+    expectations.expect(warp(line, bad).failed, "an amount that is not a number is refused");
+    bad = {};
+    bad.skew = 95.0;
+    expectations.expect(warp(line, bad).failed, "a skew of a quarter turn or more is refused");
+    expectations.expect(warp(single(polygon({{0, 0}, {std::nan(""), 1}}, false)), WarpOptions{}).failed,
+                        "a path with a coordinate that is not a number is refused");
+    // A warp that jumps (Ripple through its centre, off the cycle) stops at the depth limit and says
+    // so without failing.
+    WarpOptions jump;
+    jump.function = document::WarpFunction::Ripple;
+    jump.amount = 20.0;
+    jump.size = 100.0;
+    jump.phase = 90.0;
+    const auto jumped = warp(line, jump);
+    expectations.expect(!jumped.failed && jumped.notice && !pathOf(jumped).contours.empty() &&
+                            std::string_view(jumped.summary).find("depth") != std::string_view::npos,
+                        "a warp that jumps says it stopped splitting and still answers");
+    // Contours with no anchors and one anchor pass through.
+    PathValue odd;
+    odd.contours.push_back({});
+    PathContour lone;
+    lone.anchors.push_back(corner(3, 4));
+    odd.contours.push_back(lone);
+    const auto passed = warp(odd, WarpOptions{});
+    expectations.expect(!passed.failed && pathOf(passed).contours.size() == 2 &&
+                            pathOf(passed).contours[0].anchors.empty() &&
+                            pathOf(passed).contours[1].anchors.size() == 1,
+                        "an empty contour and a lone point are carried through");
+    // An empty path is an empty path.
+    expectations.expect(!warp(PathValue{}, WarpOptions{}).failed && pathOf(warp(PathValue{}, WarpOptions{})).contours.empty(),
+                        "an empty path warps to an empty path");
+}
+
+void testWarpRespectsAnUncancelledToken(Expectations& expectations) {
+    PathValue many;
+    for (int index = 0; index < 6; ++index)
+        many.contours.push_back(circle(10.0 + index));
+    runtime::CancellationToken token;
+    std::vector<const CompiledValue*> operands;
+    std::vector<CompiledValue> values{wrap(many), 4.0, 100.0, 0.0, 0.25, Vec2d{}, Vec2d{},
+                                      Vec2d{1, 1}, 0.0, 0.0, 0.0};
+    for (const auto& value : values)
+        operands.push_back(&value);
+    const std::array<std::int64_t, 1> selectors{0};
+    const auto done = runtime::evaluateValueUtility({Kernel::WarpPath, operands, selectors,
+                                                     core::RationalTime::fromInteger(0),
+                                                     document::FrameRate::framesPerSecond24(),
+                                                     nullptr, {.cancellation = &token}});
+    expectations.expect(!done.cancelled && !done.failed && pathOf(done).contours.size() == 6,
+                        "an uncancelled token changes nothing (a cancelled one has its own integration test)");
+}
+
 } // namespace
 
 int main() {
@@ -1432,5 +1868,12 @@ int main() {
     testResampleBounds(expectations);
     testResampleCancellation(expectations);
     testResampleHelper(expectations);
+    testTransformSkew(expectations);
+    testWarpFunctionsKnownAnswers(expectations);
+    testWarpGridIsAnalytic(expectations);
+    testWarpCurvesAndClosedContours(expectations);
+    testWarpSpaceMatrix(expectations);
+    testWarpBoundsAndDiagnostics(expectations);
+    testWarpRespectsAnUncancelledToken(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -34,6 +34,7 @@
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
@@ -112,8 +113,20 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         schemaKey == kScalarOperandParameterSchemaKey ||
         schemaKey == kStampRotationParameterSchemaKey || schemaKey == kResampleGapSchemaKey ||
         schemaKey == kResampleDensitySchemaKey || schemaKey == kResamplePercentageSchemaKey ||
-        schemaKey == kResampleStartOffsetSchemaKey) {
+        schemaKey == kResampleStartOffsetSchemaKey || schemaKey == kWarpAmountSchemaKey ||
+        schemaKey == kWarpSizeSchemaKey || schemaKey == kWarpPhaseSchemaKey ||
+        schemaKey == kWarpToleranceSchemaKey || schemaKey == kPathSkewAxisSchemaKey) {
         return finiteScalar();
+    }
+    // #598: a slant of a quarter turn or more is no slant (its tangent is unbounded).
+    if (schemaKey == kPathSkewSchemaKey) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               std::abs(*value) <= kMaximumPathSkewDegrees;
+    }
+    if (schemaKey == kWarpFunctionParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kWarpFunctions, *stored).has_value();
     }
     if (schemaKey == kIntegerValueParameterSchemaKey ||
         schemaKey == kIntegerOperandParameterSchemaKey || schemaKey == kResampleCountSchemaKey) {
