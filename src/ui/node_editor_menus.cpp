@@ -135,7 +135,9 @@ document::NodeLayoutRecord layoutFor(const document::Composition& composition,
 definitionsInGroup(const document::NodeGroup group) {
     std::vector<const document::NodeDefinition*> section;
     for (const auto& definition : document::builtInNodeDefinitions().definitions())
-        if (document::nodeGroupOf(definition.key.typeId) == group)
+        // #642: a Vector Artwork node is made by importing an SVG; an empty one draws nothing.
+        if (document::nodeGroupOf(definition.key.typeId) == group &&
+            definition.key.typeId != document::kVectorArtworkNodeType)
             section.push_back(&definition);
     std::ranges::sort(section, [](const auto* left, const auto* right) {
         return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);

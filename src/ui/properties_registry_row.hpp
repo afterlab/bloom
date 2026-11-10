@@ -78,6 +78,9 @@ bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSessi
 // default) shows the first such block, which is the one it reads.
 bool refreshDataBlockSelector(kit::KDropdown& selector, const CompositionSession& session,
                               const document::NodeRecord& node);
+// #642: what a Vector Artwork node's `artwork` reads out as, on its card and in Properties: the SVG's
+// file name and the size the project holds for it. A reference, never a number to edit.
+[[nodiscard]] QString vectorArtworkSourceText(const document::Project& project, std::int64_t stored);
 // #509: the node a Mask Path or Text Outline reads, offered as the composition's nodes it can read;
 // 0 (the default) shows the first such node, which is the one it reads.
 bool refreshPathSourceSelector(kit::KDropdown& selector, const CompositionSession& session,

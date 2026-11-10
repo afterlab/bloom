@@ -304,7 +304,8 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
         out << artworkSvg();
     }
     const auto imported = edit<commands::AddSvgArtwork>(authored, authored.composition, nullptr,
-                                                        file, "artwork", true);
+                                                        file, "artwork", true,
+                                                        commands::SvgImportMode::Shapes);
     checks.expect(imported.succeeded(), "the generated artwork imports");
     std::filesystem::remove(file);
     if (!imported.succeeded()) {
@@ -714,7 +715,8 @@ int viewerAtSize(const std::filesystem::path& svg, const std::uint32_t width,
     authored.session = std::make_unique<ui::CompositionSession>(
         *authored.scripting->document(), *authored.scripting->commandStack(), authored.composition);
     const auto imported = edit<commands::AddSvgArtwork>(authored, authored.composition, nullptr,
-                                                        svg, "artwork", true);
+                                                        svg, "artwork", true,
+                                                        commands::SvgImportMode::Shapes);
     if (!imported.succeeded()) {
         std::cerr << "FAIL: " << prefix << "the file does not import\n";
         return 1;

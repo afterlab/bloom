@@ -60,6 +60,7 @@ target_sources(
         footage_interpretation.cpp
         value_node_definitions.cpp
         value_utility_nodes.cpp
+        vector_artwork_nodes.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -101,6 +102,7 @@ target_sources(
             include/bloom/document/value_nodes.hpp
             include/bloom/document/value_operations.hpp
             include/bloom/document/value_utility_nodes.hpp
+            include/bloom/document/vector_artwork_nodes.hpp
 )
 
 target_compile_features(bloom_document PUBLIC cxx_std_20)
@@ -111,7 +113,7 @@ bloom_enable_warnings(bloom_document)
 # into a Draft by the editable import and into a compile-time expansion by the Vector Artwork layer
 # (docs/architecture/vector-artwork.md). Its own library so only its users link the SVG reader and
 # the platform font catalogue.
-add_library(bloom_svg_artwork STATIC svg_artwork.cpp)
+add_library(bloom_svg_artwork STATIC svg_artwork.cpp svg_artwork_expansion.cpp)
 target_sources(bloom_svg_artwork PUBLIC FILE_SET HEADERS BASE_DIRS include
     FILES include/bloom/document/svg_artwork.hpp)
 target_compile_features(bloom_svg_artwork PUBLIC cxx_std_20)

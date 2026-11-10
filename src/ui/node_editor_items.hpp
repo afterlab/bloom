@@ -50,6 +50,7 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 
 #include <QAction>
 #include <QBrush>
@@ -1323,6 +1324,9 @@ class NodeItem final : public QGraphicsObject {
         if (declared == definition->parameters.end() || binding == node.parameters.end()) {
             return false;
         }
+        // #642: the SVG a Vector Artwork layer holds is a reference, read out by name.
+        if (declared->schemaKey == document::kVectorArtworkBlockParameterSchemaKey)
+            return false;
         const auto index = operandRows_.size();
         OperandRow row;
         row.parameterId = binding->parameterId;
@@ -2113,6 +2117,13 @@ class NodeItem final : public QGraphicsObject {
                 readOnlyRows_[readOnlyIndex].first == displayTypeName(binding.role)) {
                 readOnlyRows_[readOnlyIndex].second =
                     parameter == nullptr ? QString{} : parameterText(*parameter);
+                if (parameter != nullptr && session_ != nullptr &&
+                    parameter->schemaKey == document::kVectorArtworkBlockParameterSchemaKey)
+                    if (const auto* constant =
+                            std::get_if<document::ConstantValueSource>(&parameter->source))
+                        if (const auto* stored = std::get_if<std::int64_t>(&constant->value))
+                            readOnlyRows_[readOnlyIndex].second = vectorArtworkSourceText(
+                                session_->snapshot().project(), *stored);
                 // #644: a keyed whole value reads what it holds at the playhead, not "Animated".
                 if (parameter != nullptr && session_ != nullptr &&
                     std::holds_alternative<document::AnimationCurveSource>(parameter->source))

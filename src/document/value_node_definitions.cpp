@@ -877,6 +877,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
     case NodeLoweringKind::ValueImageStatistics:
+    case NodeLoweringKind::VectorArtwork:
         break;
     }
     return false;

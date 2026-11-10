@@ -952,6 +952,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             runtime::CompiledValueFunction{*argument, std::move(compiled)}};
     }
     case runtime::NodeLoweringKind::NodeGroup:
+    case runtime::NodeLoweringKind::VectorArtwork:
     case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:

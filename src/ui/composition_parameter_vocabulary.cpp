@@ -21,6 +21,7 @@
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/host/project_color_choice.hpp>
 #include <bloom/runtime/channel_inspection_listing.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -31,6 +32,7 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <tuple>
@@ -437,6 +439,24 @@ bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSessi
     if (listing != nullptr && listing->channels.empty() && !listing->diagnostic.empty())
         selector.setToolTip(QString::fromStdString(listing->diagnostic));
     return listed;
+}
+
+QString vectorArtworkSourceText(const document::Project& project, const std::int64_t stored) {
+    if (stored <= 0)
+        return QObject::tr("No SVG");
+    const auto* block =
+        project.findDataBlock(document::DataBlockRecordId::fromRaw(static_cast<std::uint64_t>(stored)));
+    if (block == nullptr || !document::isVectorArtworkBlock(*block))
+        return QObject::tr("The SVG is missing from the project");
+    QString name;
+    if (const auto* asset = document::vectorArtworkSourceAsset(project, *block))
+        name = QString::fromStdString(asset->name);
+    else if (const auto* locator = std::get_if<document::AssetLocator>(&block->provenance.source))
+        name = QString::fromStdString(std::filesystem::path(locator->path).filename().string());
+    if (name.isEmpty())
+        name = QObject::tr("SVG");
+    const auto kib = (block->payloadBytes() + 1023) / 1024;
+    return QObject::tr("%1 · %2 KB held").arg(name).arg(kib);
 }
 
 bool refreshDataBlockSelector(kit::KDropdown& selector, const CompositionSession& session,

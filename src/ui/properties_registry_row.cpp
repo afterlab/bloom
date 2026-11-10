@@ -20,6 +20,7 @@
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <QCoreApplication>
 #include <QEvent>
@@ -428,6 +429,13 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         summary->setObjectName("propertiesPathSummary");
         summary->setTone(kit::Color::Foreground);
         layout->addWidget(summary);
+    } else if (definition_.schemaKey == document::kVectorArtworkBlockParameterSchemaKey) {
+        // #642: the SVG a Vector Artwork layer holds, by name; it changes only by importing again.
+        auto* source = new kit::KLabel(controls);
+        source->setObjectName("propertiesVectorArtworkSource");
+        source->setTone(kit::Color::Foreground);
+        source->setAccessibleName(label);
+        layout->addWidget(source, 1);
     } else if (definition_.schemaKey == document::kAudioLevelParameterSchemaKey) {
         slider_ = new kit::KSlider(controls);
         slider_->setObjectName(QStringLiteral("propertiesAudioLevelSlider"));
@@ -761,6 +769,9 @@ void PropertiesRegistryRow::refresh() {
         if (checklist_)
             checklist_->refresh();
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
+            if (definition_.schemaKey == document::kVectorArtworkBlockParameterSchemaKey)
+                if (auto* source = findChild<kit::KLabel*>("propertiesVectorArtworkSource"))
+                    source->setText(vectorArtworkSourceText(session_.snapshot().project(), *integer));
             if (selector_ && definition_.schemaKey == "bloom.ocio-file.lut")
                 refreshLutSelector(*selector_, session_, *integer);
             if (selector_ && node &&

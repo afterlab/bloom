@@ -254,6 +254,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Radial Gradient");
     if (typeId == "bloom.four-color-gradient")
         return QCoreApplication::translate("node_editor", "Four-Color Gradient");
+    if (typeId == document::kVectorArtworkNodeType)
+        return QCoreApplication::translate("node_editor", "Vector Artwork");
     if (typeId == document::kLayerOutputNodeType)
         return QCoreApplication::translate("node_editor", "Layer");
     if (typeId == document::kAdjustmentNodeType)

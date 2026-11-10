@@ -7,11 +7,15 @@
 #include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/svg_artwork.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
+#include <bloom/platform/font_catalog.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -144,19 +148,245 @@ OperationResult writeEditable(document::Draft& draft, document::Composition& com
     }
 }
 
+
+// "As one layer": a Vector Artwork layer on top of the composition's stack whose node names a
+// data block holding the file's bytes (one block per SHA-256, shared by every import of the same
+// bytes). The description is built here as well, so the import names exactly the warnings the
+// editable import names and refuses what it would refuse.
+OperationResult writeLayer(document::Draft& draft, document::Composition& composition,
+                           const document::CompositionId compositionId, const PreparedSvgSource& source,
+                           const document::SvgArtworkDescription& description, const std::string& name,
+                           const bool fit, const std::filesystem::path& projectDirectory) {
+    try {
+        auto& project = draft.project();
+        document::SvgArtworkNotes notes;
+        const auto sourceAsset = recordSource(draft, *source.scene, projectDirectory, notes);
+        notes.append(description.notes);
+
+        document::DataBlockRecordId blockId;
+        if (const auto* existing = document::findVectorArtworkBlock(project, source.digest)) {
+            blockId = std::get<document::DataBlockRecordId>(existing->id);
+        } else {
+            if (!source.bytes)
+                throw Failure{"The SVG's bytes were not read, so it cannot be held in the project"};
+            std::size_t held = 0;
+            for (const auto& block : project.typedDataBlocks())
+                held += block.payloadBytes();
+            const auto size = source.bytes->size();
+            if (size > document::kMaxDataBlockPayloadBytes ||
+                size > document::kMaxAggregateDataBlockPayloadBytes - std::min(held, document::kMaxAggregateDataBlockPayloadBytes))
+                throw Failure{"The SVG '" + document::svgArtworkName(source.path.filename().string(), "SVG") + "' (" +
+                              std::to_string((size + 1023) / 1024) +
+                              " KiB) does not fit in the 128 MiB a project holds for embedded data; import it "
+                              "as editable shapes instead"};
+            const auto id = draft.ids().allocateDataBlock();
+            if (!id)
+                throw Failure{"Data block ID space is exhausted"};
+            document::DataBlockRecord block;
+            block.id = *id;
+            block.kind = document::DataBlockKind::Opaque;
+            block.typeId = std::string(document::kVectorArtworkBlockTypeId);
+            block.schemaVersion = document::kVectorArtworkBlockSchemaVersion;
+            block.mediaType = std::string(document::kVectorArtworkBlockMediaType);
+            try {
+                block.provenance.source = assetLocatorFor(source.path, projectDirectory);
+            } catch (const std::exception&) {
+                block.provenance.source = document::DataBlockProducer{"bloom.svg-import", "1", {}};
+            }
+            block.provenance.contentDigest = source.digest;
+            block.payload = document::OpaqueExtensionPayload(*source.bytes);
+            if (!project.addDataBlock(std::move(block)))
+                throw Failure{"The SVG could not be held in the project"};
+            blockId = *id;
+        }
+
+        // One node, written the way the editable import writes its nodes.
+        document::SvgArtworkDescription layer;
+        layer.nodes.push_back({std::string(document::kVectorArtworkNodeType),
+                               {{std::string(document::kVectorArtworkBlockParameterRole),
+                                 document::ParameterValue{static_cast<std::int64_t>(blockId.value())}},
+                                {std::string(document::kVectorArtworkFitParameterRole), document::ParameterValue{fit}}},
+                               {document::svgArtworkLayoutOrigin(composition), 0.0},
+                               false});
+        DraftTarget target(draft, compositionId);
+        document::SvgArtworkWriter writer(composition, target, layer);
+        const auto top = composition.graph().layerStack().nodeId();
+        const auto node = writer.addRoot();
+        const auto slot = writer.addSlot(top, node);
+        const auto entry = writer.addEntry(top, slot, document::svgArtworkName(name, "SVG"));
+        std::vector<OperationOutput> outputs{{"layer", entry}, {"slot", slot}, {"node", node}, {"dataBlock", blockId}};
+        if (sourceAsset)
+            outputs.push_back({"asset", *sourceAsset});
+        auto result = OperationResult::applied(std::move(outputs));
+        appendNotes(result, notes);
+        return result;
+    } catch (const Failure& failure) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, failure.message);
+    } catch (const document::SvgArtworkWriteError& failure) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, failure.what());
+    }
+}
+
+bool hasText(const media::SvgElement& element) {
+    if (element.kind == media::SvgElement::Kind::Text)
+        return true;
+    return std::ranges::any_of(element.children, [](const auto& child) { return hasText(child); }) ||
+           (element.clip && hasText(*element.clip)) || (element.mask && hasText(*element.mask));
+}
+
+void collectWarnings(const media::SvgElement& element, std::vector<SvgSourceWarning>& out) {
+    for (const auto& text : element.approximations)
+        out.push_back({"bloom.svg.approximated", (element.where.empty() ? element.name : element.where) + ": " + text,
+                       text});
+    for (const auto& child : element.children)
+        collectWarnings(child, out);
+}
+
+SvgSourceRead finishPrepare(media::SvgReadResult read, std::shared_ptr<const std::vector<std::byte>> bytes,
+                            const std::filesystem::path& path, const std::function<bool()>& cancel,
+                            const std::function<void(SvgPreparePhase)>& phase) {
+    SvgSourceRead out;
+    out.error = read.error;
+    out.diagnostic = read.diagnostic;
+    if (read.error != media::SvgError::None || !read.scene)
+        return out;
+    auto prepared = std::make_shared<PreparedSvgSource>();
+    prepared->path = path;
+    prepared->bytes = std::move(bytes);
+    core::Sha256Hasher hasher;
+    if (!hasher.update(*prepared->bytes)) {
+        out.error = media::SvgError::ReadFailed;
+        out.diagnostic = "The file could not be hashed.";
+        return out;
+    }
+    prepared->digest = hasher.finalize();
+    // The scene is ours alone until it is returned: record which file it came from and what that
+    // file held, so the imported artwork names its source.
+    const auto scene = std::const_pointer_cast<media::SvgScene>(read.scene);
+    scene->sourcePath = path;
+    scene->sourceDigest = prepared->digest;
+    scene->hasSourceDigest = true;
+    prepared->scene = scene;
+    for (const auto& skipped : scene->skipped)
+        prepared->warnings.push_back({"bloom.svg.not-imported", skipped.name + ": " + skipped.reason, skipped.reason});
+    collectWarnings(scene->root, prepared->warnings);
+    if (hasText(scene->root)) {
+        if (phase)
+            phase(SvgPreparePhase::FindingFonts);
+        prepared->fonts = std::make_shared<const platform::FontCatalogue>(
+            platform::FontCatalogueProvider{}.enumerate(cancel ? cancel : std::function<bool()>{}, false));
+        if (cancel && cancel()) {
+            out.error = media::SvgError::Cancelled;
+            out.diagnostic = "Cancelled.";
+            return out;
+        }
+    }
+    out.source = std::move(prepared);
+    return out;
+}
+
 } // namespace
+
+std::string_view svgImportModeName(const SvgImportMode mode) noexcept {
+    return mode == SvgImportMode::Shapes ? "shapes" : "layer";
+}
+
+std::optional<SvgImportMode> svgImportModeFromName(const std::string_view name) noexcept {
+    if (name == "layer")
+        return SvgImportMode::Layer;
+    if (name == "shapes")
+        return SvgImportMode::Shapes;
+    return std::nullopt;
+}
+
+bool SvgSourceRead::cancelled() const noexcept { return error == media::SvgError::Cancelled; }
+
+SvgSourceRead prepareSvgSource(const std::filesystem::path& path, const std::function<bool()>& cancel,
+                               const std::function<void(SvgPreparePhase)>& phase) {
+    if (phase)
+        phase(SvgPreparePhase::Reading);
+    SvgSourceRead out;
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        out.error = media::SvgError::ReadFailed;
+        out.diagnostic = "The file could not be opened.";
+        return out;
+    }
+    file.seekg(0, std::ios::end);
+    const auto size = file.tellg();
+    if (size < 0) {
+        out.error = media::SvgError::ReadFailed;
+        out.diagnostic = "The file could not be read.";
+        return out;
+    }
+    if (static_cast<std::uint64_t>(size) > media::kMaxSvgFileBytes) {
+        out.error = media::SvgError::TooLarge;
+        out.diagnostic = "The file is larger than 32 MiB, the most an SVG import reads.";
+        return out;
+    }
+    file.seekg(0);
+    auto bytes = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+    if (!file && !file.eof()) {
+        out.error = media::SvgError::ReadFailed;
+        out.diagnostic = "The file could not be read.";
+        return out;
+    }
+    return prepareSvgSource(std::move(bytes), path, cancel, {});
+}
+
+SvgSourceRead prepareSvgSource(std::shared_ptr<const std::vector<std::byte>> bytes, const std::filesystem::path& path,
+                               const std::function<bool()>& cancel, const std::function<void(SvgPreparePhase)>& phase) {
+    if (phase)
+        phase(SvgPreparePhase::Reading);
+    if (!bytes) {
+        SvgSourceRead out;
+        out.error = media::SvgError::ReadFailed;
+        out.diagnostic = "The file could not be read.";
+        return out;
+    }
+    if (bytes->size() > media::kMaxSvgFileBytes) {
+        SvgSourceRead out;
+        out.error = media::SvgError::TooLarge;
+        out.diagnostic = "The file is larger than 32 MiB, the most an SVG import reads.";
+        return out;
+    }
+    auto read = media::parseSvgScene(*bytes, cancel ? media::SvgCancel(cancel) : media::SvgCancel{});
+    return finishPrepare(std::move(read), std::move(bytes), path, cancel, phase);
+}
+
+AddSvgArtwork::AddSvgArtwork(const document::CompositionId composition, std::shared_ptr<const media::SvgScene> scene,
+                             std::filesystem::path path, std::string name, const bool fit,
+                             const SvgImportMode mode)
+    : composition_(composition), scene_(std::move(scene)), path_(std::move(path)), name_(std::move(name)),
+      fit_(fit), mode_(mode) {}
+
+AddSvgArtwork::AddSvgArtwork(const document::CompositionId composition, std::shared_ptr<const PreparedSvgSource> source,
+                             std::string name, const SvgImportMode mode, const bool fit)
+    : composition_(composition), scene_(source ? source->scene : nullptr), source_(std::move(source)),
+      path_(source_ ? source_->path : std::filesystem::path{}), name_(std::move(name)), fit_(fit), mode_(mode) {
+    if (source_)
+        fonts_ = source_->fonts;
+}
 
 OperationResult AddSvgArtwork::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
         return detail::missingComposition(composition_);
+    // One layer keeps the file's bytes; a caller that gave only a scene has the file read here,
+    // as a caller that gave nothing has always had.
+    std::shared_ptr<const PreparedSvgSource> source = source_;
     std::shared_ptr<const media::SvgScene> scene = scene_;
-    if (!scene) {
-        auto read = media::readSvgSceneFile(path_);
-        if (read.error != media::SvgError::None)
-            return OperationResult::rejected(OperationIssueCode::InvalidValue, "SVG import failed: " + read.diagnostic);
-        scene = std::move(read.scene);
+    if ((mode_ == SvgImportMode::Layer && (!source || !source->bytes)) || !scene) {
+        if (mode_ == SvgImportMode::Layer || !scene) {
+            auto read = prepareSvgSource(path_);
+            if (!read.source)
+                return OperationResult::rejected(OperationIssueCode::InvalidValue, "SVG import failed: " + read.diagnostic);
+            source = read.source;
+            scene = source->scene;
+        }
     }
+    auto fonts = fonts_ ? fonts_ : (source ? source->fonts : nullptr);
     const auto name = name_.empty() ? path_.stem().string() : name_;
     document::SvgArtworkOptions options;
     options.width = composition->format().width();
@@ -164,9 +394,11 @@ OperationResult AddSvgArtwork::apply(document::Draft& draft) const {
     options.fit = fit_;
     options.name = name;
     options.layoutOriginX = document::svgArtworkLayoutOrigin(*composition);
-    options.fonts = fonts_;
+    options.fonts = fonts;
     const auto description = document::buildSvgArtwork(*scene, options);
-    auto result = writeEditable(draft, *composition, composition_, *scene, description, name, projectDirectory_);
+    auto result = mode_ == SvgImportMode::Layer
+                      ? writeLayer(draft, *composition, composition_, *source, description, name, fit_, projectDirectory_)
+                      : writeEditable(draft, *composition, composition_, *scene, description, name, projectDirectory_);
     if (result.status == OperationStatus::Applied) {
         // The placement is by construction; one validation of the whole composition at the end.
         if (const auto failure = detail::validateGraph(*composition, document::builtInNodeDefinitions()))

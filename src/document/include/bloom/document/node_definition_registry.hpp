@@ -410,6 +410,10 @@ enum class NodeLoweringKind {
     // axes nodes that sample one). The group's body is cut out of the value graph and run per
     // argument (runtime::CompiledValueFunction).
     ValueFunction,
+    // #642: a Vector Artwork node (vector_artwork_nodes.hpp). Like a Node Group it has no operation
+    // of its own: the compiler replaces it with the nodes of the SVG it names before anything is
+    // lowered.
+    VectorArtwork,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -441,6 +445,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueImageStatistics:
         return true;
     case NodeLoweringKind::NodeGroup:
+    case NodeLoweringKind::VectorArtwork:
         return false;
     case NodeLoweringKind::Field:
     case NodeLoweringKind::Shape:

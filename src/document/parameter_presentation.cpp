@@ -1,5 +1,6 @@
 #include <bloom/document/transform_2d_nodes.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
@@ -830,6 +831,11 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         other.named = true;
         return other;
     }
+    // #642 Vector Artwork: the SVG the layer holds is a reference read out as its file's name, never
+    // a number to edit.
+    // It presents as a choice of the project's records, like a Data Reader's block.
+    if (schemaKey == kVectorArtworkBlockParameterSchemaKey)
+        return choice();
     // #637 Resample Path: a count, a gap and a density are not bounded below the cap by the schema (a
     // count past the Path caps is refused by the node with a diagnostic, never clamped here); a
     // percentage of the points and the start offset run on a slider.

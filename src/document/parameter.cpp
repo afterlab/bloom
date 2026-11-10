@@ -17,6 +17,7 @@
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
@@ -530,6 +531,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #587 Test Card: every parameter within its document domain.
     if (testCardParameterSpec(schemaKey) != nullptr)
         return isTestCardParameterValueValid(schemaKey, constant.value);
+    // #642 Vector Artwork: a data block id (0 for none) and the fit switch.
+    if (isVectorArtworkParameterSchemaKey(schemaKey))
+        return isVectorArtworkParameterValueValid(schemaKey, constant.value);
     // Four-Color Gradient: every parameter within its document domain.
     if (schemaKey.starts_with("bloom.four-color-gradient."))
         return isFourColorGradientParameterValueValid(schemaKey, constant.value);

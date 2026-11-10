@@ -1,5 +1,6 @@
 // #357. Incremental publication validation: a draft is checked against the published project it was
 // drafted from, so an edit costs what it changed rather than what the project holds.
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
@@ -204,6 +205,9 @@ bool Project::validatesAgainst(const Project& base) const {
         compositionsValidated.fetch_add(1, std::memory_order_relaxed);
         const auto& composition = compositions_[ordinal];
         if (!composition.validate().ok())
+            return notProven();
+        // #642: the SVG data block a changed composition's Vector Artwork names must exist.
+        if (!validateVectorArtworkReferences(*this, composition).ok())
             return notProven();
         fresh.push_back(Composition::buildDeclaredIdIndex(composition.content()));
     }

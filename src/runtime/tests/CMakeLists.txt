@@ -295,6 +295,13 @@ target_link_libraries(bloom_runtime_glow_legacy_controls_test PRIVATE bloom_runt
 bloom_enable_warnings(bloom_runtime_glow_legacy_controls_test)
 bloom_enable_strict_floating_point(bloom_runtime_glow_legacy_controls_test)
 bloom_add_test(NAME bloom.runtime.glow-legacy-controls COMMAND bloom_runtime_glow_legacy_controls_test LABELS unit runtime persistence TIMEOUT 60)
+# #642: an SVG imported as one layer composes, renders and reopens (its file deleted) as the same
+# file imported as editable shapes, on the CPU reference.
+add_executable(bloom_runtime_svg_artwork_layer_test ${PROJECT_SOURCE_DIR}/tests/integration/svg_artwork_layer_tests.cpp)
+target_link_libraries(bloom_runtime_svg_artwork_layer_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project bloom_svg_artwork bloom_platform)
+bloom_enable_warnings(bloom_runtime_svg_artwork_layer_test)
+bloom_enable_strict_floating_point(bloom_runtime_svg_artwork_layer_test)
+bloom_add_test(NAME bloom.runtime.svg-artwork-layer COMMAND bloom_runtime_svg_artwork_layer_test LABELS runtime integration persistence TIMEOUT 120)
 # #484: a pre-motion-blur Transform 2D opens with its motion blur bound off and renders identically.
 add_executable(bloom_runtime_transform_motion_blur_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/transform_motion_blur_migration_tests.cpp)
 target_link_libraries(bloom_runtime_transform_motion_blur_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)

@@ -1618,6 +1618,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::NodeGroup:
+    // #642: a Vector Artwork node is refused by resolveDefinitions() until it is expanded.
+    case NodeLoweringKind::VectorArtwork:
         break;
     }
     addTopologyFailure(node.id, "Unsupported lowering reached plan publication.");

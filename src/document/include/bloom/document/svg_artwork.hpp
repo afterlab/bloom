@@ -224,4 +224,49 @@ class SvgArtworkWriter final {
     std::vector<LayerId> layers_;
 };
 
+// ---- #642: the Vector Artwork layer's expansion ----
+//
+// A Vector Artwork node (vector_artwork_nodes.hpp) names a data block holding an SVG file's bytes.
+// expandVectorArtwork() replaces every such node of a composition with the artwork the editable
+// import would build from those bytes for this composition: buildSvgArtwork() over the parsed
+// bytes, written with ids derived from the node's id (never ones the project allocator hands
+// out), and every edge that read the node's image reading the artwork's root Merge instead. The
+// layer that held the node is left exactly as it is, so its transform, opacity, blend mode, track
+// matte, masks, parent, timing and every node between the source and its slot apply to the
+// artwork's root as they apply to the root group of an editable import.
+
+struct VectorArtworkExpansionContext final {
+    // The installed fonts the artwork's text is matched against; null enumerates them when a file
+    // has text (names only, no hashing).
+    std::shared_ptr<const platform::FontCatalogue> fonts;
+    // The parsed scene of a block, so a caller can keep scenes between compiles. Empty: the block's
+    // bytes are parsed here. Returning null names the block unreadable.
+    std::function<std::shared_ptr<const media::SvgScene>(const DataBlockRecord&)> scene;
+    // Polled between nodes and while a block is parsed.
+    std::function<bool()> cancelled;
+};
+
+struct VectorArtworkExpansion final {
+    // The composition with every resolvable Vector Artwork node replaced. Empty when the
+    // composition holds none, so the caller keeps reading the original.
+    std::optional<Composition> composition;
+    // Each expanded node's artwork root (a Merge), by the node's id.
+    std::unordered_map<NodeId, NodeId> roots;
+    // What the file holds that the artwork does not take, by the node's id (the import's warnings).
+    std::unordered_map<NodeId, SvgArtworkNotes> notes;
+    // Why a node stayed unexpanded: its block is missing or does not parse. It stays in the
+    // composition, and the compiler refuses it by name.
+    std::unordered_map<NodeId, std::string> unresolved;
+    bool cancelled = false;
+};
+
+[[nodiscard]] VectorArtworkExpansion expandVectorArtwork(const Project& project, const Composition& composition,
+                                                         const VectorArtworkExpansionContext& context = {});
+
+// The scene an SVG data block holds, parsed (bounded and cancellable like a file import). Null with
+// `diagnostic` set when it is not an SVG block or does not parse.
+[[nodiscard]] std::shared_ptr<const media::SvgScene>
+parseVectorArtworkBlock(const DataBlockRecord& block, std::string& diagnostic,
+                        const std::function<bool()>& cancelled = {});
+
 } // namespace bloom::document

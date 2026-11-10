@@ -2802,7 +2802,7 @@ OperationRegistry OperationRegistry::builtIn() {
                 file = base / file;
             auto artwork = std::make_unique<commands::AddSvgArtwork>(
                 document::CompositionId::fromRaw(*composition), nullptr, std::move(file),
-                name.value_or(std::string{}), fit.value_or(true));
+                name.value_or(std::string{}), fit.value_or(true), commands::SvgImportMode::Shapes);
             artwork->withProjectDirectory(base);
             return OperationCreateResult(std::move(artwork), std::nullopt);
         });

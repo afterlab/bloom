@@ -1,6 +1,11 @@
 #include "command_test_support.hpp"
 
+#include <bloom/commands/data_block_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/core/sha256.hpp>
+#include <bloom/document/svg_artwork.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
+#include <bloom/media/svg_scene.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/font_id.hpp>
@@ -9,6 +14,10 @@
 #include <bloom/platform/font_catalog.hpp>
 
 #include <algorithm>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <iterator>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -55,7 +64,7 @@ bool hasLayerNamed(const Composition& composition, const std::string_view name) 
 CommandResult importFile(Document& document, CommandStack& stack, const CompositionId composition,
                          const std::filesystem::path& path, const bool fit = true) {
     Transaction transaction("Import SVG", document.snapshot().revision());
-    transaction.emplace<AddSvgArtwork>(composition, nullptr, path, "art", fit);
+    transaction.emplace<AddSvgArtwork>(composition, nullptr, path, "art", fit, SvgImportMode::Shapes);
     return stack.execute(std::move(transaction));
 }
 
@@ -217,7 +226,7 @@ void pivotsBlurFontsAndNames(TestContext& test) {
     bold.path = "/nonexistent/TestSans-Bold.ttf";
     fonts->faces.push_back(bold);
     Transaction transaction("Import SVG", document.snapshot().revision());
-    transaction.emplace<AddSvgArtwork>(composition, nullptr, path, "art", true).withFonts(fonts);
+    transaction.emplace<AddSvgArtwork>(composition, nullptr, path, "art", true, SvgImportMode::Shapes).withFonts(fonts);
     const auto result = stack.execute(std::move(transaction));
     test.expect(result.succeeded(), "the file imports");
     const auto& imported = compositionOf(document, composition);
@@ -311,6 +320,246 @@ void pivotsBlurFontsAndNames(TestContext& test) {
     std::filesystem::remove(path);
 }
 
+
+// ---- #642: as one layer ----
+
+constexpr const char* kLayerArtwork = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+<defs><linearGradient id="g"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient></defs>
+<g id="Group"><rect id="Box" width="40" height="30" fill="#f00"/>
+<path id="Ring" fill="#0f0" fill-rule="evenodd" d="M60 10H100V50H60Z M70 20H90V40H70Z"/></g>
+<circle id="Dot" cx="150" cy="50" r="20" fill="url(#g)" stroke="#00f" stroke-width="4"/>
+<line id="Dash" x1="0" y1="95" x2="200" y2="95" stroke="#000" stroke-dasharray="4 2 1"/>
+<foreignObject id="Embed" width="10" height="10"/></svg>)svg";
+
+std::shared_ptr<const platform::FontCatalogue> noFonts() {
+    auto fonts = std::make_shared<platform::FontCatalogue>();
+    fonts->status = platform::FontCatalogueStatus::Available;
+    return fonts;
+}
+
+std::vector<std::byte> fileBytes(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::vector<char> chars((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<std::byte> bytes(chars.size());
+    std::ranges::transform(chars, bytes.begin(), [](const char c) { return static_cast<std::byte>(c); });
+    return bytes;
+}
+
+struct Session final {
+    document::NewProject initial = document::makeNewProject("Svg", "Main", core::RationalTime::fromInteger(4));
+    CompositionId composition = initial.initialCompositionId;
+    Document document{std::move(initial.project)};
+    CommandStack stack{document};
+
+    CommandResult import(const std::filesystem::path& path, std::optional<SvgImportMode> mode = std::nullopt) {
+        Transaction transaction("Import SVG", document.snapshot().revision());
+        auto& operation = mode ? transaction.emplace<AddSvgArtwork>(composition, nullptr, path, "art", true, *mode)
+                               : transaction.emplace<AddSvgArtwork>(composition, nullptr, path, "art");
+        operation.withFonts(noFonts()).withProjectDirectory(path.parent_path());
+        return stack.execute(std::move(transaction));
+    }
+    const Composition& main() const { return compositionOf(document, composition); }
+    const document::Project& project() const { return document.snapshot().project(); }
+};
+
+std::vector<std::string> warningsOf(const CommandResult& result) {
+    std::vector<std::string> out;
+    for (const auto& warning : result.warnings)
+        out.push_back(warning.issue.message);
+    return out;
+}
+
+template <typename Id> std::optional<Id> outputOf(const CommandResult& result, const std::string_view name) {
+    return result.outputId<Id>(name);
+}
+
+void oneLayerIsTheDefault(TestContext& test) {
+    const auto path = writeFile("one-layer", kLayerArtwork);
+    Session session;
+    const auto nodesBefore = session.main().graph().nodes().size();
+    const auto layersBefore = session.main().graph().layerOutputs().size();
+    const auto result = session.import(path);
+    test.expect(result.succeeded(), "an SVG imports as one layer by default");
+    const auto& imported = session.main();
+    test.expect(imported.graph().nodes().size() == nodesBefore + 1 &&
+                    imported.graph().layerOutputs().size() == layersBefore + 1,
+                "one layer and one node join the graph");
+    test.expect(countNodes(imported, document::kVectorArtworkNodeType) == 1 &&
+                    countNodes(imported, document::kPathValueNodeType) == 0 &&
+                    countNodes(imported, document::kShapeSourceNodeType) == 0 &&
+                    countNodes(imported, document::kLayerStackNodeType) == 1,
+                "the parts are not nodes in the graph: no Path, Shape or Merge node of the file");
+    test.expect(hasLayerNamed(imported, "art"), "the layer is named after the file");
+    const auto node = outputOf<document::NodeId>(result, "node");
+    const auto blockId = outputOf<document::DataBlockRecordId>(result, "dataBlock");
+    const auto asset = outputOf<document::AssetId>(result, "asset");
+    test.expect(node && blockId && asset && outputOf<LayerId>(result, "layer"), "the import names its layer, node, block and asset");
+    if (!node || !blockId || !asset)
+        return;
+    const auto* record = imported.graph().findNode(*node);
+    const auto* block = record ? document::vectorArtworkBlock(session.project(), *record, imported.parameters()) : nullptr;
+    test.expect(block != nullptr && std::get<document::DataBlockRecordId>(block->id) == *blockId,
+                "the Vector Artwork node names its data block");
+    if (block == nullptr)
+        return;
+    const auto bytes = fileBytes(path);
+    const auto& payload = std::get<document::OpaqueExtensionPayload>(block->payload);
+    test.expect(std::ranges::equal(payload.bytes(), bytes), "the block holds the file's bytes exactly");
+    core::Sha256Hasher hasher;
+    (void)hasher.update(bytes);
+    const auto digest = hasher.finalize();
+    test.expect(block->provenance.contentDigest == digest && block->mediaType == "image/svg+xml" &&
+                    block->typeId == document::kVectorArtworkBlockTypeId,
+                "the block records the bytes' SHA-256 and SVG's media type");
+    const auto* source = session.project().findAsset(*asset);
+    test.expect(source != nullptr && source->contentDigest == digest &&
+                    source->locator.path == path.filename().generic_string() &&
+                    document::vectorArtworkSourceAsset(session.project(), *block) == source,
+                "the Assets record holds the project-relative path and the SHA-256, as the editable import's does");
+    test.expect(document::vectorArtworkFits(*record, imported.parameters()), "fit is on by default");
+    test.expect(session.project().validate().ok(), "the project validates");
+
+    // Undo removes the layer, the node, the block and the record in one step; redo brings them back.
+    test.expect(session.stack.undo().changed(), "one undo");
+    test.expect(countNodes(session.main(), document::kVectorArtworkNodeType) == 0 &&
+                    session.main().graph().layerOutputs().size() == layersBefore &&
+                    session.project().typedDataBlocks().empty() && session.project().assets().empty(),
+                "one undo removes the whole import");
+    test.expect(session.stack.redo().changed() && countNodes(session.main(), document::kVectorArtworkNodeType) == 1 &&
+                    session.project().typedDataBlocks().size() == 1 && session.project().assets().size() == 1,
+                "redo brings it back");
+    std::filesystem::remove(path);
+}
+
+void bothModesNameTheSameWarnings(TestContext& test) {
+    const auto path = writeFile("warnings", kLayerArtwork);
+    Session layer;
+    Session shapes;
+    const auto one = layer.import(path, SvgImportMode::Layer);
+    const auto editable = shapes.import(path, SvgImportMode::Shapes);
+    test.expect(one.succeeded() && editable.succeeded(), "the file imports in both modes");
+    const auto names = warningsOf(one);
+    test.expect(!names.empty() && names == warningsOf(editable), "both modes name the same warnings, in the same order");
+    const auto named = [&](const std::string_view text) {
+        return std::ranges::any_of(names, [&](const std::string& note) { return note.find(text) != std::string::npos; });
+    };
+    test.expect(named("Embed") && named("Dash"), "what the file holds and the artwork does not take is named");
+    test.expect(countNodes(shapes.main(), document::kPathValueNodeType) == 4 &&
+                    countNodes(shapes.main(), document::kVectorArtworkNodeType) == 0,
+                "as editable shapes is the breakdown it always was");
+    // The expansion of the one layer holds exactly the nodes the editable import made.
+    document::VectorArtworkExpansionContext context;
+    context.fonts = noFonts();
+    const auto expansion = document::expandVectorArtwork(layer.project(), layer.main(), context);
+    test.expect(expansion.composition && expansion.unresolved.empty() && expansion.roots.size() == 1,
+                "the layer expands");
+    if (expansion.composition) {
+        std::map<std::string, std::size_t> expanded, editableTypes;
+        for (const auto& node : expansion.composition->graph().nodes())
+            ++expanded[node.typeId];
+        for (const auto& node : shapes.main().graph().nodes())
+            ++editableTypes[node.typeId];
+        test.expect(expanded == editableTypes, "the expansion makes the editable import's nodes, type for type");
+        test.expect(expansion.composition->graph().layerOutputs().size() == shapes.main().graph().layerOutputs().size(),
+                    "and its layers, layer for layer");
+        test.expect(expansion.composition->graph().validate(expansion.composition->parameters()).ok(),
+                    "the expanded graph validates");
+        const auto notes = expansion.notes.begin()->second.listed;
+        test.expect(std::ranges::all_of(notes, [&](const std::string& note) {
+                        return std::ranges::find(names, note) != names.end();
+                    }),
+                    "the expansion names the import's warnings");
+    }
+    std::filesystem::remove(path);
+}
+
+void oneBlockPerFile(TestContext& test) {
+    const auto path = writeFile("shared", kLayerArtwork);
+    Session session;
+    test.expect(session.import(path).succeeded() && session.import(path).succeeded(), "the file imports twice");
+    test.expect(session.project().typedDataBlocks().size() == 1 && session.project().assets().size() == 1,
+                "the same bytes are held once and recorded once");
+    test.expect(countNodes(session.main(), document::kVectorArtworkNodeType) == 2, "two layers read them");
+    test.expect(session.import(path, SvgImportMode::Shapes).succeeded() && session.project().assets().size() == 1,
+                "an editable import of the same file reuses the record");
+    // A block a layer reads cannot be removed from under it.
+    const auto id = std::get<document::DataBlockRecordId>(session.project().typedDataBlocks().front().id);
+    Transaction remove("Remove block", session.document.snapshot().revision());
+    remove.emplace<RemoveDataBlock>(id);
+    test.expect(!session.stack.execute(std::move(remove)).succeeded() && session.project().typedDataBlocks().size() == 1,
+                "the block a Vector Artwork layer reads cannot be removed");
+    std::filesystem::remove(path);
+}
+
+void oneLayerRefusesWhatItCannotHold(TestContext& test) {
+    Session session;
+    const auto missing = std::filesystem::temp_directory_path() / "bloom-svg-import-no-such-file.svg";
+    std::filesystem::remove(missing);
+    const auto refused = session.import(missing);
+    test.expect(!refused.succeeded() && countNodes(session.main(), document::kVectorArtworkNodeType) == 0,
+                "a file that cannot be read adds nothing");
+    // A project already holding 128 MiB of embedded data takes no more. Two blocks share one buffer.
+    {
+        const document::OpaqueExtensionPayload large{std::vector<std::byte>(document::kMaxDataBlockPayloadBytes)};
+        Transaction fill("Fill", session.document.snapshot().revision());
+        for (int index = 0; index < 2; ++index) {
+            document::DataBlockRecord block;
+            block.kind = document::DataBlockKind::Opaque;
+            block.typeId = "test.filler";
+            block.schemaVersion = {1, 0};
+            block.mediaType = "application/octet-stream";
+            block.provenance.source = document::DataBlockProducer{"test.filler", "1", {}};
+            block.payload = large;
+            fill.emplace<CreateDataBlock>(std::move(block));
+        }
+        requireFixture(session.stack.execute(std::move(fill)).succeeded(), "filler blocks");
+    }
+    const auto path = writeFile("full", kLayerArtwork);
+    const auto full = session.import(path);
+    const bool named = !full.operationFailures.empty() &&
+                       full.operationFailures.front().issue.message.find("bloom-svg-import-full.svg") != std::string::npos &&
+                       full.operationFailures.front().issue.message.find("editable shapes") != std::string::npos;
+    test.expect(!full.succeeded() && named, "an SVG that does not fit is refused by name, offering editable shapes");
+    test.expect(countNodes(session.main(), document::kVectorArtworkNodeType) == 0 && session.project().assets().empty(),
+                "and nothing is added");
+    test.expect(session.import(path, SvgImportMode::Shapes).succeeded(), "editable shapes need no embedded copy");
+    std::filesystem::remove(path);
+}
+
+void preparedSourcesReadNothingLater(TestContext& test) {
+    const auto path = writeFile("prepared", kLayerArtwork);
+    std::vector<SvgPreparePhase> phases;
+    const auto read = prepareSvgSource(path, {}, [&](const SvgPreparePhase phase) { phases.push_back(phase); });
+    test.expect(read.source && read.source->bytes && read.source->scene && !read.source->fonts,
+                "a file without text is read, hashed and parsed, and no fonts are enumerated");
+    test.expect(phases == std::vector<SvgPreparePhase>{SvgPreparePhase::Reading}, "the phase is reported");
+    if (read.source) {
+        test.expect(read.source->scene->hasSourceDigest && read.source->scene->sourceDigest == read.source->digest &&
+                        read.source->scene->sourcePath == path,
+                    "the scene names its file and digest");
+        test.expect(std::ranges::any_of(read.source->warnings,
+                                        [](const SvgSourceWarning& warning) {
+                                            return warning.code == "bloom.svg.not-imported" &&
+                                                   warning.summary.find("Embed") != std::string::npos;
+                                        }),
+                    "the job's warnings are named");
+    }
+    // The file is gone before the import applies: nothing reads it again.
+    std::filesystem::remove(path);
+    Session session;
+    Transaction transaction("Import SVG", session.document.snapshot().revision());
+    transaction.emplace<AddSvgArtwork>(session.composition, read.source, "art", SvgImportMode::Layer)
+        .withFonts(noFonts());
+    test.expect(session.stack.execute(std::move(transaction)).succeeded() &&
+                    countNodes(session.main(), document::kVectorArtworkNodeType) == 1,
+                "a prepared file imports with the file gone");
+    // Cancellation stops the read.
+    const auto text = writeFile("prepared-text", R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><text x="1" y="10">A</text></svg>)svg");
+    const auto cancelled = prepareSvgSource(text, [] { return true; });
+    test.expect(!cancelled.source && cancelled.cancelled(), "a cancelled read yields nothing");
+    std::filesystem::remove(text);
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -321,5 +570,10 @@ int main() {
     bloom::commands::test::scriptsAndExternalImagesDoNothing(test);
     bloom::commands::test::manySiblingsAreHeldInRuns(test);
     bloom::commands::test::pivotsBlurFontsAndNames(test);
+    bloom::commands::test::oneLayerIsTheDefault(test);
+    bloom::commands::test::bothModesNameTheSameWarnings(test);
+    bloom::commands::test::oneBlockPerFile(test);
+    bloom::commands::test::oneLayerRefusesWhatItCannotHold(test);
+    bloom::commands::test::preparedSourcesReadNothingLater(test);
     return test.failures() == 0 ? 0 : 1;
 }

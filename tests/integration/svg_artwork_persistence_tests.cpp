@@ -89,7 +89,8 @@ void importKeySaveAndReopen() {
 
     {
         commands::Transaction transaction("Import SVG", document.snapshot().revision());
-        auto& op = transaction.emplace<commands::AddSvgArtwork>(composition, nullptr, file, "art", true);
+        auto& op = transaction.emplace<commands::AddSvgArtwork>(composition, nullptr, file, "art", true,
+                                                                commands::SvgImportMode::Shapes);
         op.withProjectDirectory(folder).withFonts(fonts);
         const auto result = stack.execute(std::move(transaction));
         expect(result.succeeded(), "the file imports");
@@ -139,7 +140,8 @@ void importKeySaveAndReopen() {
     // Importing the same file again records it once.
     {
         commands::Transaction transaction("Import SVG again", document.snapshot().revision());
-        auto& op = transaction.emplace<commands::AddSvgArtwork>(composition, nullptr, file, "again", true);
+        auto& op = transaction.emplace<commands::AddSvgArtwork>(composition, nullptr, file, "again", true,
+                                                                commands::SvgImportMode::Shapes);
         op.withProjectDirectory(folder).withFonts(fonts);
         expect(stack.execute(std::move(transaction)).succeeded() && document.snapshot().project().assets().size() == 1,
                "the same file is recorded once");

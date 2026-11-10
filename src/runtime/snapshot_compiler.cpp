@@ -655,6 +655,12 @@ class CompilePass final {
                                ? "The group this node names could not be expanded."
                                : reason->second + ".");
             }
+            // #642: a Vector Artwork node is replaced by the nodes of its SVG before lowering. One
+            // that reaches here was not expanded.
+            if (definition->lowering == runtime::NodeLoweringKind::VectorArtwork)
+                addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                           subject(node->id, "parameter.artwork"), "Vector Artwork cannot be expanded",
+                           "The SVG this layer holds was not expanded into its shapes.");
             // #598: a second group that is named must be read too; an unset one is no function.
             if (definition->lowering == runtime::NodeLoweringKind::ValueFunction &&
                 document::groupReferenceRoles(node->typeId).size() > 1) {

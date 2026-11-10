@@ -1046,10 +1046,19 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                     if (hook)
                         hook(state);
                 }
-                auto read = media::readSvgSceneFile(files.front(), stop);
-                if (read.error == media::SvgError::Cancelled || context.isCancellationRequested())
+                // The shared preparation (read, SHA-256, fonts when the file has text), the one
+                // the operation factories use, so every route imports the same file the same way.
+                auto read = commands::prepareSvgSource(
+                    files.front(), stop, [&](const commands::SvgPreparePhase phase) {
+                        if (phase == commands::SvgPreparePhase::FindingFonts)
+                            context.reportProgress({.phase = "Finding fonts",
+                                                    .subphase = std::string(name.begin(), name.end()),
+                                                    .completed = 0,
+                                                    .total = std::nullopt});
+                    });
+                if (read.cancelled() || context.isCancellationRequested() || stop())
                     return runtime::TaskResult<OperationHandle>::cancelled();
-                if (read.error != media::SvgError::None || !read.scene) {
+                if (!read.source) {
                     {
                         const std::lock_guard lock(shared->mutex);
                         shared->failures.push_back({files.front(), read.diagnostic, std::nullopt});
@@ -1061,53 +1070,20 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                           .detail = read.diagnostic,
                           .suggestedAction = "Check the file; nothing was added."}});
                 }
-                // What the artwork keeps as it is, and what it cannot hold, stays listed by name.
-                for (const auto& skipped : read.scene->skipped)
-                    warnings.push_back({.code = "bloom.svg.not-imported",
+                // What the artwork keeps as it is, and what it cannot hold or approximates (a filter
+                // that is not applied, a dash pattern), stays listed by name on the job.
+                for (const auto& warning : read.source->warnings)
+                    warnings.push_back({.code = warning.code,
                                         .severity = runtime::DiagnosticSeverity::Warning,
-                                        .summary = skipped.name + ": " + skipped.reason,
-                                        .detail = skipped.reason,
+                                        .summary = warning.summary,
+                                        .detail = warning.detail,
                                         .suggestedAction = {}});
-                // What the file asks for that the artwork approximates (a filter that is not applied,
-                // a dash pattern) is named on the job too, by the element's id, label or position.
-                const auto collect = [&](const auto& self, const media::SvgElement& element) -> void {
-                    for (const auto& text : element.approximations)
-                        warnings.push_back({.code = "bloom.svg.approximated",
-                                            .severity = runtime::DiagnosticSeverity::Warning,
-                                            .summary = (element.where.empty() ? element.name : element.where) +
-                                                       ": " + text,
-                                            .detail = text,
-                                            .suggestedAction = {}});
-                    for (const auto& child : element.children)
-                        self(self, child);
-                };
-                collect(collect, read.scene->root);
-                // The installed fonts are read here, on the worker, only for a file with text.
-                std::shared_ptr<const platform::FontCatalogue> fonts;
-                const auto hasText = [](const auto& self, const media::SvgElement& element) -> bool {
-                    if (element.kind == media::SvgElement::Kind::Text)
-                        return true;
-                    return std::ranges::any_of(element.children, [&](const auto& child) {
-                        return self(self, child);
-                    });
-                };
-                if (hasText(hasText, read.scene->root)) {
-                    context.reportProgress({.phase = "Finding fonts",
-                                            .subphase = std::string(name.begin(), name.end()),
-                                            .completed = 0,
-                                            .total = std::nullopt});
-                    fonts = std::make_shared<const platform::FontCatalogue>(
-                        platform::FontCatalogueProvider{}.enumerate(stop, false));
-                    if (stop())
-                        return runtime::TaskResult<OperationHandle>::cancelled();
-                }
                 const auto stem = files.front().stem().u8string();
+                // #642: the desktop offers no choice of mode yet, so it keeps the editable import.
                 auto artwork = std::make_unique<commands::AddSvgArtwork>(
-                    compositionId, read.scene, files.front(),
-                    std::string(stem.begin(), stem.end()), true);
+                    compositionId, read.source, std::string(stem.begin(), stem.end()),
+                    commands::SvgImportMode::Shapes, true);
                 artwork->withProjectDirectory(directory);
-                if (fonts)
-                    artwork->withFonts(std::move(fonts));
                 *result = std::move(artwork);
             } else {
                 {

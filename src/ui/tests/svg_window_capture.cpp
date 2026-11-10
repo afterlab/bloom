@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
             // folder (here the working directory, an unsaved project's base).
             transaction
                 .emplace<commands::AddSvgArtwork>(f.session.compositionId(), nullptr, svg,
-                                                  svg.stem().string(), true)
+                                                  svg.stem().string(), true, commands::SvgImportMode::Shapes)
                 .withProjectDirectory(std::filesystem::current_path());
             if (!f.session.executeTransaction(std::move(transaction)).succeeded())
                 throw std::runtime_error("the SVG import was refused");

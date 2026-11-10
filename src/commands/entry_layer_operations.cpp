@@ -76,6 +76,7 @@ std::string sourceKindName(const CanonicalGraph& graph, const NodeId merge,
             {"bloom.shape-source", "Shape"},
             {"bloom.image-source", "Image"},
             {"bloom.video-source", "Video"},
+            {"bloom.vector-artwork", "Vector Artwork"},
         };
         if (const auto found = kNames.find(node->typeId); found != kNames.end())
             return std::string(found->second);

@@ -697,8 +697,10 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::ValueFieldSample:
     // #342: a Node Group is replaced by its group's nodes before lowering, and Group Input and
     // Group Output republish values. None produces a pixel of its own: the nodes the group brings
-    // are lowered, and covered, like any other.
+    // are lowered, and covered, like any other. #642: a Vector Artwork node is replaced the same
+    // way, by the nodes of the editable SVG import (Shape, Gradient, Text, Merge, Blur, mattes).
     case NodeLoweringKind::NodeGroup:
+    case NodeLoweringKind::VectorArtwork:
     case NodeLoweringKind::GroupBoundary:
     case NodeLoweringKind::ValueFunction:
     case NodeLoweringKind::ValueAudioAmplitude:
@@ -777,6 +779,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ValueImageStatistics:
         return "scope.value";
     case NodeLoweringKind::NodeGroup:
+    case NodeLoweringKind::VectorArtwork:
         return "scope.expansion";
     }
     return {};

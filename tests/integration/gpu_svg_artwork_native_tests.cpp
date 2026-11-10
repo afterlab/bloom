@@ -182,7 +182,7 @@ struct Fixture final {
     explicit Fixture(const std::string& name, const std::string& svg) {
         const auto path = writeSvg(name, svg);
         apply<commands::AddSvgArtwork>("import " + name, document, commands, main, nullptr, path,
-                                       name, true);
+                                       name, true, commands::SvgImportMode::Shapes);
         std::filesystem::remove(path);
     }
     // An existing file, fitted to a composition of the given size.
@@ -193,7 +193,8 @@ struct Fixture final {
               *document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(),
                                                    *document::FrameRate::create(24, 1)))) {
         apply<commands::AddSvgArtwork>("import " + file.filename().string(), document, commands,
-                                       main, nullptr, file, file.stem().string(), true);
+                                       main, nullptr, file, file.stem().string(), true,
+                                       commands::SvgImportMode::Shapes);
     }
     [[nodiscard]] std::vector<document::NodeId> pathNodes() const {
         std::vector<document::NodeId> nodes;

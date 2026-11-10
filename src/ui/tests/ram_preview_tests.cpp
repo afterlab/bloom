@@ -1718,7 +1718,8 @@ void testImportedSvgPreviewAtHalfScale(Expectations& expectations) {
 <circle id="Dot" cx="50" cy="24" r="8" fill="#06c"/></g></svg>)svg";
     }
     commands::Transaction import("Import SVG", fixture.session.snapshot().revision());
-    import.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), nullptr, file, "art", true);
+    import.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), nullptr, file, "art", true,
+                                            commands::SvgImportMode::Shapes);
     expectations.expect(fixture.session.executeTransaction(std::move(import)).succeeded(),
                         "the SVG imports into the session");
     std::filesystem::remove(file);

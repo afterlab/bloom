@@ -5,6 +5,7 @@
 
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/render_reachability.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -841,6 +842,9 @@ void Project::validateExportQueue(ValidationResult& result) const {
 
 void Project::validateCrossRecords(ValidationResult& result) const {
     result.append("", validateExtensionRecords(*this));
+    // #642: a Vector Artwork node reads its SVG from a data block, which must be there.
+    for (const auto& composition : compositions_)
+        result.append("", validateVectorArtworkReferences(*this, composition));
     std::size_t aggregateDataBlockBytes = 0;
     std::unordered_set<DataBlockRecordId> dataBlockIds;
     for (const auto& block : dataBlocks_.get()) {
