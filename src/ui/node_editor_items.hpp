@@ -418,6 +418,14 @@ class NodeItem final : public QGraphicsObject {
                                       : nullptr;
         imageSequence_ = imageRecord && (imageRecord->kind == document::AssetKind::Sequence ||
                                          imageRecord->kind == document::AssetKind::Video);
+        // #646: an image source on an SVG record draws nothing; the card says so by name.
+        {
+            const auto warning = imageSource_ && session_
+                                     ? document::svgFootageWarning(session_->snapshot().project(), composition, node)
+                                     : std::nullopt;
+            const auto text = warning ? QString::fromStdString(*warning) : QString{};
+            svgFootageWarning_ = text;
+        }
         reroute_ = document::isRerouteNodeType(node.typeId);
         // #490: an Image Preview card draws its input below its rows, at the composition's
         // aspect.
@@ -459,6 +467,9 @@ class NodeItem final : public QGraphicsObject {
             setToolTip(QStringLiteral("%1\n%2\nNode %3")
                            .arg(title_, nodeTypeDisplayName(node.typeId))
                            .arg(id_.value()));
+            // #646: the warning is named in the tooltip, under the node's own lines.
+            if (!svgFootageWarning_.isEmpty())
+                setToolTip(toolTip() + QLatin1Char('\n') + svgFootageWarning_);
         }
         ensureFields(node, registry);
         // A card that shows readouts follows the resolver's answers (and so the playhead) as a card
@@ -568,6 +579,8 @@ class NodeItem final : public QGraphicsObject {
     // True for an Image, Video or Audio source whose asset is gone, gapped or unreadable: the
     // header shows a warning badge for it.
     [[nodiscard]] bool assetProblem() const;
+    // #646: the named warning of an Image Source whose asset is an SVG record (empty otherwise).
+    [[nodiscard]] const QString& svgFootageWarning() const noexcept { return svgFootageWarning_; }
     // #598: what the value evaluation said about this node (empty when nothing): a warning badge on
     // the header, the text on hover.
     [[nodiscard]] const QString& valueProblem() const noexcept { return valueProblem_; }
@@ -2563,6 +2576,7 @@ class NodeItem final : public QGraphicsObject {
     bool timeVarying_ = false;
     bool timeStale_ = false;
     QString valueProblem_;
+    QString svgFootageWarning_;
     std::vector<SocketItem*> sockets_;
     std::set<QString> linkedInputs_;
     // Which parameter role each control edits. Keyed by widget because that is what the proxy sweep

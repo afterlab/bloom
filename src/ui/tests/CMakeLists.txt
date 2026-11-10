@@ -1801,6 +1801,18 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_svg_readd_ui_test svg_readd_ui_tests.cpp)
+target_include_directories(bloom_svg_readd_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_svg_readd_ui_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_svg_readd_ui_test)
+bloom_add_test(
+    NAME bloom.ui.svg-readd
+    COMMAND bloom_svg_readd_ui_test
+    LABELS unit ui media
+    TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_svg_import_route_test svg_import_route_tests.cpp)
 target_include_directories(bloom_svg_import_route_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_svg_import_route_test PRIVATE bloom_ui Qt6::Test)

@@ -1,5 +1,5 @@
 // Review captures for the SVG import modes (#642): the chooser, Preferences > Import, the one-layer
-// artwork in the whole window, the Timeline's context menu offering Break Apart SVG, and the window
+// artwork in the whole window, the Assets panel with the SVG and its held data (#646), the Timeline's context menu offering Break Apart SVG, and the window
 // after Break Apart. Writes PNGs to the directory given as the first argument; the scale factor is
 // the environment's QT_SCALE_FACTOR. Not a ctest.
 #include "svg_import_mode_dialog.hpp"
@@ -10,12 +10,14 @@
 #include <QListWidget>
 #include <QMenu>
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include "preferences_window.hpp"
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -80,6 +82,12 @@ int main(int argc, char** argv) {
             save(preferences, "preferences-import");
         }
         save(window, "window-one-layer");
+        // #646: the Assets panel with the SVG asset and the data block the project holds for it.
+        if (auto* assets = window.findChild<ui::AssetsEditor*>()) {
+            assets->resize(std::max(assets->width(), 640), std::max(assets->height(), 320));
+            settle();
+            save(*assets, "assets-svg-and-data-block");
+        }
         if (auto* stack = window.findChild<ui::TimelineLayerStack*>()) {
             const QPoint point(stack->width() / 2, ui::kTimelineRowHeight / 2);
             QContextMenuEvent event(QContextMenuEvent::Mouse, point, stack->mapToGlobal(point));

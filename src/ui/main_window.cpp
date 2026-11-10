@@ -767,8 +767,9 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
         auto* assets = compositionSession_.assetController();
         if (assets == nullptr)
             return;
-        if (const auto layer = assets->selectedVectorArtworkLayer())
-            assets->breakApartSvg(compositionSession_.compositionId(), *layer);
+        // Every selected SVG layer, in one undo step.
+        if (auto layers = assets->selectedVectorArtworkLayers(); !layers.empty())
+            assets->breakApartSvg(compositionSession_.compositionId(), std::move(layers));
     });
     compositionMenu.addSeparator();
     // ADR 0031: the same Align and Distribute actions as the context bar.

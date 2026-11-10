@@ -174,21 +174,27 @@ class AssetDropTarget final : public QObject {
             return true;
         }
         if (event->type() == QEvent::Drop) {
-            const auto* asset = session_.snapshot().project().findAsset(id);
-            const bool audio = asset != nullptr && asset->kind == document::AssetKind::Audio;
-            const bool video = asset != nullptr && asset->kind == document::AssetKind::Video;
-            commands::Transaction transaction(audio   ? "Add Audio Source"
-                                              : video ? "Add Video Source"
-                                                      : "Add Image Source",
-                                              session_.snapshot().revision());
             const auto point = view_.mapToScene(drop->position().toPoint());
-            if (audio)
-                transaction.emplace<AddAudioNode>(session_.compositionId(), id,
-                                                  document::Vec2d{point.x(), point.y()});
-            else
-                transaction.emplace<AddImageNode>(session_.compositionId(), id,
-                                                  document::Vec2d{point.x(), point.y()});
-            static_cast<void>(session_.executeTransaction(std::move(transaction)));
+            // #646: an imported SVG becomes its artwork's nodes (read on the import worker); other
+            // footage becomes its source node at once.
+            if (auto* controller = session_.assetController()) {
+                controller->addAssetNode(id, document::Vec2d{point.x(), point.y()});
+            } else {
+                const auto* asset = session_.snapshot().project().findAsset(id);
+                const bool audio = asset != nullptr && asset->kind == document::AssetKind::Audio;
+                const bool video = asset != nullptr && asset->kind == document::AssetKind::Video;
+                commands::Transaction transaction(audio   ? "Add Audio Source"
+                                                  : video ? "Add Video Source"
+                                                          : "Add Image Source",
+                                                  session_.snapshot().revision());
+                if (audio)
+                    transaction.emplace<AddAudioNode>(session_.compositionId(), id,
+                                                      document::Vec2d{point.x(), point.y()});
+                else
+                    transaction.emplace<AddImageNode>(session_.compositionId(), id,
+                                                      document::Vec2d{point.x(), point.y()});
+                static_cast<void>(session_.executeTransaction(std::move(transaction)));
+            }
         }
         drop->acceptProposedAction();
         return true;

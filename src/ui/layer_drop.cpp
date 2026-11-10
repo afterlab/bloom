@@ -12,6 +12,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
@@ -98,6 +99,17 @@ class LayerDropTarget final : public QObject {
                 return true;
             }
             indicate(std::nullopt);
+            // #646: an imported SVG among the items is built as artwork on the import worker, so
+            // the add goes through the controller when there is one.
+            if (auto* controller = session_.assetController()) {
+                auto* session = &session_;
+                controller->addToComposition(items, placement(hit, drop->modifiers()),
+                                             [session](const commands::CommandResult& result) {
+                                                 selectDroppedLayers(*session, result);
+                                             });
+                drop->acceptProposedAction();
+                return true;
+            }
             commands::Transaction transaction(layerDropLabel(items),
                                               session_.snapshot().revision());
             transaction.emplace<AddDroppedLayers>(session_.compositionId(), items,
@@ -142,10 +154,14 @@ class LayerDropTarget final : public QObject {
         indicate(std::nullopt);
         if (!files.isEmpty()) {
             AssetController::ImportFollowUp followUp;
-            if (session_.composition() != nullptr)
+            std::optional<LayerDropPlacement> svgPlacement;
+            if (session_.composition() != nullptr) {
                 followUp = importedLayersFollowUp(session_, session_.compositionId(),
                                                   placement(hit, drop->modifiers()));
-            controller->importFiles(files, controller->importFolder(), std::move(followUp));
+                svgPlacement = placement(hit, drop->modifiers());
+            }
+            controller->importFiles(files, controller->importFolder(), std::move(followUp), {},
+                                    svgPlacement);
         }
         for (const auto& label : unresolvedShares)
             emit session_.commandRejected(
@@ -185,7 +201,9 @@ importedLayersFollowUp(CompositionSession& session, const document::CompositionI
             return {};
         std::vector<LayerDropItem> items;
         for (const auto id : imported)
-            if (droppableAsLayer(target->snapshot().project(), composition, id))
+            if (const auto* asset = target->snapshot().project().findAsset(id);
+                droppableAsLayer(target->snapshot().project(), composition, id) &&
+                !(asset != nullptr && document::isSvgSourceAsset(*asset)))
                 items.emplace_back(id);
         if (items.empty())
             return {};

@@ -7,6 +7,8 @@
 #include <atomic>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
+#include <bloom/commands/result.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -110,13 +112,18 @@ class AssetController final : public QObject {
     void requestImport(QWidget* parent = nullptr);
     // The same dialog, with `followUp` run once the import it starts commits (the Viewer's Add >
     // Import and Add… adds the imported media as layers); it then offers no composition.
-    void requestImport(QWidget* parent, ImportFollowUp followUp);
+    void requestImport(QWidget* parent, ImportFollowUp followUp,
+                       std::optional<commands::LayerDropPlacement> svgPlacement = std::nullopt);
     // Imports into the current import folder (see setImportFolder).
     void importFiles(const QStringList& paths);
     // Imports into `folder`; nullopt is the Assets root. `followUp` runs after the commit. Every
     // import reads the Import preferences (sequence frame rate, still duration) into `options`.
+    // `svgPlacement`: where an SVG file among `paths` joins the active composition (a drop on the
+    // Timeline or the Viewer), as the footage of the same drop does through `followUp`. Without it
+    // the SVG's artwork goes on top at the start.
     void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder,
-                     ImportFollowUp followUp = {}, commands::ImportOptions options = {});
+                     ImportFollowUp followUp = {}, commands::ImportOptions options = {},
+                     std::optional<commands::LayerDropPlacement> svgPlacement = std::nullopt);
     // #642: how the SVG files of one import or drop batch import. Asks once for the batch: the
     // remembered answer (Preferences > Import) is used without a prompt; otherwise the chooser opens
     // over the active window with As one layer selected and a "Remember my choice" check. `done`
@@ -131,13 +138,37 @@ class AssetController final : public QObject {
         std::function<std::optional<commands::SvgImportMode>(std::size_t)> chooser) {
         svgChooser_ = std::move(chooser);
     }
+    // #646: adds assets and compositions to the active composition as layers at `placement` (a drop
+    // on the Viewer or the Timeline, the Assets panel's Add to Composition). An imported SVG asset
+    // is not footage: its artwork is built through the SVG import, in the mode the chooser gives
+    // (asked once for the whole batch), on the asset's own record, from its file or the project's
+    // stored copy (read on the import worker). Everything is one undo step. A batch with no SVG
+    // commits at once. `committed` runs with the result of a successful commit. A missing SVG is
+    // refused by name and nothing is added.
+    void addToComposition(std::vector<commands::LayerDropItem> items, commands::LayerDropPlacement placement,
+                          std::function<void(const commands::CommandResult&)> committed = {});
+    // #646: the node editor's route: an SVG asset dropped at `position` becomes unconnected artwork
+    // nodes (a Vector Artwork node, or the artwork's group), other footage its source node.
+    void addAssetNode(document::AssetId asset, document::Vec2d position,
+                      std::function<void(const commands::CommandResult&)> committed = {});
+    // #646: New Composition from Selection for `assets`, SVG assets included (their artwork).
+    // `committed` runs with the result of a successful commit.
+    void createCompositionFromAssets(std::vector<document::AssetId> assets,
+                                     std::optional<document::CompositionId> templateComposition,
+                                     std::string fallbackName, std::optional<document::AssetFolderId> folder,
+                                     std::function<void(const commands::CommandResult&)> committed = {});
     // #642 Break Apart: turns the Vector Artwork `layer` holds into editable shapes in place, as one
     // undo step. The held SVG is parsed (and fonts matched) on the blocking-I/O worker; the edit
     // commits when it is ready. Refused, with a diagnostic, while another import runs.
     void breakApartSvg(document::CompositionId composition, document::LayerId layer);
+    // The same for several layers: all of them, in one undo step. A layer that is scaled past 100%
+    // or turned is named in the job log: the editable shapes are resampled and may look softer.
+    void breakApartSvg(document::CompositionId composition, std::vector<document::LayerId> layers);
     // The selected layer when it holds an SVG as one Vector Artwork layer (the Composition menu's
     // Break Apart SVG acts on it); nullopt otherwise.
     [[nodiscard]] std::optional<document::LayerId> selectedVectorArtworkLayer() const;
+    // Every selected layer that holds one, in selection order.
+    [[nodiscard]] std::vector<document::LayerId> selectedVectorArtworkLayers() const;
     // Whether `layer` of the current composition holds an SVG as one Vector Artwork layer.
     [[nodiscard]] bool holdsVectorArtwork(document::LayerId layer) const;
     // New Composition from Selection for the assets an import resolved to, opened once made.
@@ -308,7 +339,8 @@ class AssetController final : public QObject {
     void prepare(const QStringList& paths, document::AssetId relinkId = {},
                  std::optional<document::AssetFolderId> folder = {},
                  commands::ImportOptions options = {},
-                 commands::SvgImportMode svgMode = commands::kDefaultSvgImportMode);
+                 commands::SvgImportMode svgMode = commands::kDefaultSvgImportMode,
+                 std::optional<commands::LayerDropPlacement> svgPlacement = std::nullopt);
     void refresh();
     void startThumbnails();
     void poll();
@@ -328,6 +360,7 @@ class AssetController final : public QObject {
     struct PendingSvg final {
         std::filesystem::path path;
         commands::SvgImportMode mode = commands::kDefaultSvgImportMode;
+        std::optional<commands::LayerDropPlacement> placement;
     };
     std::vector<PendingSvg> pendingSvg_;
     void startNextSvg();
@@ -335,9 +368,19 @@ class AssetController final : public QObject {
     // A Break Apart job running on the import worker, committed by finishBreakApart.
     struct BreakApartJob final {
         document::CompositionId composition;
-        document::LayerId layer;
+        std::vector<document::LayerId> layers;
     };
     std::optional<BreakApartJob> breakApart_;
+    // #646: an add of SVG assets running on the import worker, committed by finishSvgPlacement.
+    using SvgOperationBuilder = std::function<std::unique_ptr<commands::Operation>(commands::SvgAssetSources&&)>;
+    struct SvgPlacementJob final {
+        std::string label;
+        std::function<void(const commands::CommandResult&)> committed;
+    };
+    std::optional<SvgPlacementJob> svgPlacement_;
+    void startSvgPlacement(std::string label, std::vector<document::AssetId> svgAssets, SvgOperationBuilder build,
+                           std::function<void(const commands::CommandResult&)> committed);
+    void finishSvgPlacement(runtime::TaskResult<OperationHandle>& result);
     void finishBreakApart(runtime::TaskResult<OperationHandle>& result);
     std::function<void(const commands::ImportProgress&)> importProgressHook_;
     ProjectHost& host_;

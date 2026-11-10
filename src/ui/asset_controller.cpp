@@ -41,6 +41,10 @@
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/commands/project_item_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/media/svg_scene.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -833,7 +837,8 @@ void AssetController::retryAudioAfterCapacitySample() {
         startThumbnails();
 }
 void AssetController::requestImport(QWidget* parent) { requestImport(parent, {}); }
-void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp) {
+void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp,
+                                    std::optional<commands::LayerDropPlacement> svgPlacement) {
     if (!host_.canSave())
         return;
     // Every file dialog has an owner; a request without one opens nothing.
@@ -866,7 +871,7 @@ void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp) {
         return;
     if (createComposition)
         followUp = compositionFollowUp();
-    importFiles(paths, importFolder_, std::move(followUp), options);
+    importFiles(paths, importFolder_, std::move(followUp), options, svgPlacement);
 }
 AssetController::ImportFollowUp AssetController::compositionFollowUp() {
     return [this](const std::vector<document::AssetId>& assets) -> QString {
@@ -900,7 +905,8 @@ AssetController::ImportFollowUp AssetController::compositionFollowUp() {
 void AssetController::importFiles(const QStringList& paths) { importFiles(paths, importFolder_); }
 void AssetController::importFiles(const QStringList& paths,
                                   const std::optional<document::AssetFolderId> folder,
-                                  ImportFollowUp followUp, commands::ImportOptions options) {
+                                  ImportFollowUp followUp, commands::ImportOptions options,
+                                  std::optional<commands::LayerDropPlacement> svgPlacement) {
     // The Import preferences: the interpretation new sequences and stills start with (#381).
     const auto preferences = loadApplicationPreferences(QSettings{});
     options.sequenceFrameRate = preferences.importSequenceFrameRate;
@@ -922,11 +928,11 @@ void AssetController::importFiles(const QStringList& paths,
     }
     // #642: the batch's SVG files import after its media, in the mode the artist chooses once.
     if (!svg.empty())
-        chooseSvgImportMode(svg.size(), [this, svg](const std::optional<commands::SvgImportMode> mode) {
+        chooseSvgImportMode(svg.size(), [this, svg, svgPlacement](const std::optional<commands::SvgImportMode> mode) {
             if (!mode)
                 return;
             for (const auto& path : svg)
-                pendingSvg_.push_back({path, *mode});
+                pendingSvg_.push_back({path, *mode, svgPlacement});
             startNextSvg();
         });
     if (media.isEmpty() && importShared_ != nullptr && importShared_ != running)
@@ -937,7 +943,7 @@ void AssetController::startNextSvg() {
         return;
     const auto next = pendingSvg_.front();
     pendingSvg_.erase(pendingSvg_.begin());
-    prepare({QString::fromStdU16String(next.path.u16string())}, {}, {}, {}, next.mode);
+    prepare({QString::fromStdU16String(next.path.u16string())}, {}, {}, {}, next.mode, next.placement);
 }
 void AssetController::chooseSvgImportMode(
     const std::size_t count, std::function<void(std::optional<commands::SvgImportMode>)> done) {
@@ -976,7 +982,222 @@ void AssetController::chooseSvgImportMode(
         done(mode);
     });
 }
+void AssetController::addToComposition(std::vector<commands::LayerDropItem> items,
+                                        commands::LayerDropPlacement placement,
+                                        std::function<void(const commands::CommandResult&)> committed) {
+    if (items.empty() || session_.composition() == nullptr)
+        return;
+    const auto composition = session_.compositionId();
+    std::vector<document::AssetId> svg;
+    for (const auto& item : items)
+        if (const auto* asset = std::get_if<document::AssetId>(&item))
+            if (const auto* record = session_.snapshot().project().findAsset(*asset);
+                record != nullptr && document::isSvgSourceAsset(*record))
+                svg.push_back(*asset);
+    const auto label = items.size() > 1 ? tr("Add %1 Layers").arg(items.size()).toStdString()
+                       : std::holds_alternative<document::CompositionId>(items.front())
+                           ? tr("Add Composition Layer").toStdString()
+                           : tr("Add Layer").toStdString();
+    if (svg.empty()) {
+        commands::Transaction transaction(label, session_.snapshot().revision());
+        transaction.emplace<commands::AddDroppedLayers>(composition, items, placement);
+        const auto result = session_.executeTransaction(std::move(transaction));
+        if (result.succeeded() && committed)
+            committed(result);
+        return;
+    }
+    startSvgPlacement(label, std::move(svg),
+                      [composition, items = std::move(items), placement](commands::SvgAssetSources&& sources) {
+                          auto drop = std::make_unique<commands::AddDroppedLayers>(composition, items, placement);
+                          drop->withSvgSources(std::move(sources));
+                          return std::unique_ptr<commands::Operation>(std::move(drop));
+                      },
+                      std::move(committed));
+}
+void AssetController::addAssetNode(const document::AssetId asset, const document::Vec2d position,
+                                   std::function<void(const commands::CommandResult&)> committed) {
+    if (session_.composition() == nullptr)
+        return;
+    const auto composition = session_.compositionId();
+    const auto* record = session_.snapshot().project().findAsset(asset);
+    if (record == nullptr)
+        return;
+    const auto label = record->kind == document::AssetKind::Audio   ? "Add Audio Source"
+                       : record->kind == document::AssetKind::Video ? "Add Video Source"
+                       : document::isSvgSourceAsset(*record)        ? "Add SVG Artwork"
+                                                                    : "Add Image Source";
+    if (!document::isSvgSourceAsset(*record)) {
+        commands::Transaction transaction(label, session_.snapshot().revision());
+        transaction.emplace<commands::AddAssetSourceNode>(composition, asset, position);
+        const auto result = session_.executeTransaction(std::move(transaction));
+        if (result.succeeded() && committed)
+            committed(result);
+        return;
+    }
+    startSvgPlacement(label, {asset},
+                      [composition, asset, position](commands::SvgAssetSources&& sources) {
+                          auto node = std::make_unique<commands::AddAssetSourceNode>(composition, asset, position);
+                          node->withSvgSources(std::move(sources));
+                          return std::unique_ptr<commands::Operation>(std::move(node));
+                      },
+                      std::move(committed));
+}
+void AssetController::createCompositionFromAssets(std::vector<document::AssetId> assets,
+                                                  std::optional<document::CompositionId> templateComposition,
+                                                  std::string fallbackName,
+                                                  std::optional<document::AssetFolderId> folder,
+                                                  std::function<void(const commands::CommandResult&)> committed) {
+    if (assets.empty())
+        return;
+    std::vector<document::AssetId> svg;
+    for (const auto id : assets)
+        if (const auto* record = session_.snapshot().project().findAsset(id);
+            record != nullptr && document::isSvgSourceAsset(*record))
+            svg.push_back(id);
+    if (svg.empty()) {
+        commands::Transaction transaction("New Composition from Selection", session_.snapshot().revision());
+        transaction.emplace<commands::AddCompositionFromFootage>(std::move(assets), templateComposition,
+                                                                 std::move(fallbackName), folder);
+        const auto result = session_.executeTransaction(std::move(transaction));
+        if (result.succeeded() && committed)
+            committed(result);
+        return;
+    }
+    startSvgPlacement("New Composition from Selection", std::move(svg),
+                      [assets = std::move(assets), templateComposition, fallbackName = std::move(fallbackName),
+                       folder](commands::SvgAssetSources&& sources) {
+                          auto footage = std::make_unique<commands::AddCompositionFromFootage>(
+                              assets, templateComposition, fallbackName, folder);
+                          footage->withSvgSources(std::move(sources));
+                          return std::unique_ptr<commands::Operation>(std::move(footage));
+                      },
+                      std::move(committed));
+}
+void AssetController::startSvgPlacement(std::string label, std::vector<document::AssetId> svgAssets,
+                                        SvgOperationBuilder build,
+                                        std::function<void(const commands::CommandResult&)> committed) {
+    if (!host_.canSave()) {
+        emit diagnostic(tr("Adding requires an idle, editable project"));
+        return;
+    }
+    if (busy_) {
+        emit diagnostic(tr("Another import is still running; add these when it finishes"));
+        return;
+    }
+    // One question for the whole batch: the remembered answer, or the chooser.
+    chooseSvgImportMode(svgAssets.size(), [this, label = std::move(label), svgAssets = std::move(svgAssets),
+                                           build = std::move(build), committed = std::move(committed)](
+                                              const std::optional<commands::SvgImportMode> mode) mutable {
+        if (!mode)
+            return;
+        if (busy_ || !host_.canSave()) {
+            emit diagnostic(tr("Another import is still running; add these when it finishes"));
+            return;
+        }
+        base_ = session_.snapshot();
+        auto submission = scheduler_.submit<OperationHandle>(
+            runtime::TaskRequest(
+                "Add SVG to composition",
+                {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+                runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
+            [snapshot = *base_, svgAssets, mode = *mode, build = std::move(build),
+             directory = baseDirectory()](runtime::TaskContext& context) {
+                commands::SvgAssetSources sources;
+                sources.mode = mode;
+                sources.projectDirectory = directory;
+                std::vector<runtime::TaskDiagnostic> refusals;
+                const auto cancel = [&context] { return context.isCancellationRequested(); };
+                for (const auto id : svgAssets) {
+                    const auto* record = snapshot.project().findAsset(id);
+                    const auto name = record != nullptr ? record->name : std::string{};
+                    context.reportProgress({.phase = "Reading SVG",
+                                            .subphase = name,
+                                            .completed = 0,
+                                            .total = std::nullopt});
+                    auto prepared = commands::prepareSvgAssetSource(
+                        snapshot.project(), id, directory, cancel, [&](const commands::SvgPreparePhase phase) {
+                            if (phase == commands::SvgPreparePhase::FindingFonts)
+                                context.reportProgress({.phase = "Finding fonts",
+                                                        .subphase = name,
+                                                        .completed = 0,
+                                                        .total = std::nullopt});
+                        });
+                    if (prepared.cancelled || context.isCancellationRequested())
+                        return runtime::TaskResult<OperationHandle>::cancelled();
+                    if (!prepared.source) {
+                        refusals.push_back({.code = "bloom.svg.add-refused",
+                                            .severity = runtime::DiagnosticSeverity::Error,
+                                            .summary = prepared.refusal,
+                                            .detail = prepared.refusal,
+                                            .suggestedAction = "Nothing was added."});
+                        continue;
+                    }
+                    sources.sources.emplace(id, std::move(prepared.source));
+                }
+                // One missing SVG refuses the whole add: nothing is added.
+                if (!refusals.empty())
+                    return runtime::TaskResult<OperationHandle>::failed(std::move(refusals));
+                auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
+                *result = build(std::move(sources));
+                return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), {});
+            });
+        if (!submission.accepted()) {
+            base_.reset();
+            emit diagnostic(tr("Adding could not be scheduled"));
+            return;
+        }
+        import_ = std::move(submission.handle);
+        svgPlacement_ = SvgPlacementJob{std::move(label), std::move(committed)};
+        busy_ = true;
+        bridge_.wake();
+        emit activityChanged();
+    });
+}
+void AssetController::finishSvgPlacement(runtime::TaskResult<OperationHandle>& result) {
+    const auto job = std::exchange(svgPlacement_, std::nullopt);
+    if (!job)
+        return;
+    if (result.state() == runtime::TaskState::Failed) {
+        // Each refusal names its asset; the Jobs panel keeps all of them.
+        for (const auto& issue : result.diagnostics())
+            emit diagnostic(QString::fromStdString(issue.summary));
+        return;
+    }
+    if (result.state() != runtime::TaskState::Succeeded || !result.value().has_value() || !*result.value())
+        return;
+    if (!host_.liveDocumentAndStack().first || !base_ ||
+        base_->project().id() != session_.snapshot().project().id() ||
+        base_->revision() != session_.snapshot().revision()) {
+        emit diagnostic(tr("The project changed while the SVG was being read, so nothing was added. "
+                           "Add it again."));
+        return;
+    }
+    commands::Transaction transaction(job->label, base_->revision());
+    if (!transaction.add(std::move(**result.value())))
+        return;
+    const auto executed = session_.executeTransaction(std::move(transaction));
+    if (!executed.succeeded()) {
+        emit diagnostic(tr("%1 failed: %2")
+                            .arg(QString::fromStdString(job->label),
+                                 executed.operationFailures.empty()
+                                     ? QString{}
+                                     : QString::fromStdString(executed.operationFailures.front().issue.message)));
+        return;
+    }
+    constexpr std::size_t kListed = 12;
+    for (std::size_t index = 0; index < executed.warnings.size() && index < kListed; ++index)
+        emit diagnostic(QString::fromStdString(executed.warnings[index].issue.message));
+    if (executed.warnings.size() > kListed)
+        emit diagnostic(tr("%1 more notes about this SVG are in the operation's warnings")
+                            .arg(executed.warnings.size() - kListed));
+    if (job->committed)
+        job->committed(executed);
+}
 void AssetController::breakApartSvg(const document::CompositionId composition, const document::LayerId layer) {
+    breakApartSvg(composition, std::vector<document::LayerId>{layer});
+}
+void AssetController::breakApartSvg(const document::CompositionId composition,
+                                    std::vector<document::LayerId> layers) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Break Apart requires an idle, editable project"));
         return;
@@ -986,7 +1207,10 @@ void AssetController::breakApartSvg(const document::CompositionId composition, c
         return;
     }
     const auto* held = session_.snapshot().project().findComposition(composition);
-    if (held == nullptr || commands::findLayerVectorArtwork(*held, layer) == nullptr) {
+    std::erase_if(layers, [&](const document::LayerId layer) {
+        return held == nullptr || commands::findLayerVectorArtwork(*held, layer) == nullptr;
+    });
+    if (layers.empty()) {
         emit diagnostic(tr("This layer does not hold an SVG as one layer, so there is nothing to break apart"));
         return;
     }
@@ -996,36 +1220,57 @@ void AssetController::breakApartSvg(const document::CompositionId composition, c
             "Break apart SVG",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [snapshot = *base_, composition, layer](runtime::TaskContext& context) {
-            context.reportProgress({.phase = "Reading SVG",
-                                    .subphase = {},
-                                    .completed = 0,
-                                    .total = std::nullopt});
-            std::string diagnostic;
-            auto prepared = commands::prepareVectorArtworkSource(
-                snapshot.project(), composition, layer, diagnostic,
-                [&context] { return context.isCancellationRequested(); },
-                [&context](const commands::SvgPreparePhase phase) {
-                    if (phase == commands::SvgPreparePhase::FindingFonts)
-                        context.reportProgress({.phase = "Finding fonts",
-                                                .subphase = {},
-                                                .completed = 0,
-                                                .total = std::nullopt});
-                });
-            if (context.isCancellationRequested())
-                return runtime::TaskResult<OperationHandle>::cancelled();
-            if (!prepared)
-                return runtime::TaskResult<OperationHandle>::failed(
-                    {{.code = "bloom.svg.break-apart-failed",
-                      .severity = runtime::DiagnosticSeverity::Error,
-                      .summary = "The SVG could not be broken apart: " + diagnostic,
-                      .detail = diagnostic,
-                      .suggestedAction = "Nothing was changed."}});
+        [snapshot = *base_, composition, layers](runtime::TaskContext& context) {
+            const auto cancel = [&context] { return context.isCancellationRequested(); };
+            std::vector<std::unique_ptr<commands::BreakApartSvgArtwork>> each;
+            std::vector<runtime::TaskDiagnostic> notes;
+            for (const auto layer : layers) {
+                context.reportProgress({.phase = "Reading SVG",
+                                        .subphase = {},
+                                        .completed = each.size(),
+                                        .total = layers.size()});
+                std::string diagnostic;
+                auto prepared = commands::prepareVectorArtworkSource(
+                    snapshot.project(), composition, layer, diagnostic, cancel,
+                    [&context](const commands::SvgPreparePhase phase) {
+                        if (phase == commands::SvgPreparePhase::FindingFonts)
+                            context.reportProgress({.phase = "Finding fonts",
+                                                    .subphase = {},
+                                                    .completed = 0,
+                                                    .total = std::nullopt});
+                    });
+                if (context.isCancellationRequested())
+                    return runtime::TaskResult<OperationHandle>::cancelled();
+                if (!prepared)
+                    return runtime::TaskResult<OperationHandle>::failed(
+                        {{.code = "bloom.svg.break-apart-failed",
+                          .severity = runtime::DiagnosticSeverity::Error,
+                          .summary = "The SVG could not be broken apart: " + diagnostic,
+                          .detail = diagnostic,
+                          .suggestedAction = "Nothing was changed."}});
+                auto operation = std::make_unique<commands::BreakApartSvgArtwork>(composition, layer);
+                operation->withPrepared(std::move(prepared));
+                each.push_back(std::move(operation));
+                // #642: one layer draws sharp at any scale; the shapes are resampled like any group.
+                const auto* found = snapshot.project().findComposition(composition);
+                if (found != nullptr && commands::breakApartMayResample(*found, layer)) {
+                    const auto* boundary = found->graph().findLayer(layer);
+                    const auto name = boundary != nullptr ? boundary->name : std::string("The layer");
+                    notes.push_back({.code = "bloom.svg.break-apart-resampled",
+                                     .severity = runtime::DiagnosticSeverity::Warning,
+                                     .summary = "'" + name +
+                                                "' is scaled up or turned: as editable shapes it is resampled "
+                                                "like any group and may look softer than the one-layer SVG",
+                                     .detail = "A one-layer SVG draws from its vector geometry at any scale and "
+                                               "rotation. Broken apart, its group is resampled when the layer is "
+                                               "scaled past 100% or turned.",
+                                     .suggestedAction = "Undo to get the sharp one-layer SVG back."});
+                }
+            }
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
-            auto operation = std::make_unique<commands::BreakApartSvgArtwork>(composition, layer);
-            operation->withPrepared(std::move(prepared));
-            *result = std::move(operation);
-            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), {});
+            *result = each.size() == 1 ? std::unique_ptr<commands::Operation>(std::move(each.front()))
+                                       : std::make_unique<commands::BreakApartSvgArtworks>(composition, std::move(each));
+            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), std::move(notes));
         });
     if (!submission.accepted()) {
         base_.reset();
@@ -1033,7 +1278,7 @@ void AssetController::breakApartSvg(const document::CompositionId composition, c
         return;
     }
     import_ = std::move(submission.handle);
-    breakApart_ = BreakApartJob{composition, layer};
+    breakApart_ = BreakApartJob{composition, std::move(layers)};
     busy_ = true;
     bridge_.wake();
     emit activityChanged();
@@ -1044,10 +1289,16 @@ bool AssetController::holdsVectorArtwork(const document::LayerId layer) const {
            commands::findLayerVectorArtwork(*composition, layer) != nullptr;
 }
 std::optional<document::LayerId> AssetController::selectedVectorArtworkLayer() const {
+    const auto layers = selectedVectorArtworkLayers();
+    return layers.empty() ? std::nullopt : std::optional(layers.front());
+}
+std::vector<document::LayerId> AssetController::selectedVectorArtworkLayers() const {
+    std::vector<document::LayerId> layers;
     for (const auto& entry : session_.selectedEntries())
         if (const auto layer = session_.entryLayer(entry); layer && holdsVectorArtwork(*layer))
-            return layer;
-    return std::nullopt;
+            if (std::ranges::find(layers, *layer) == layers.end())
+                layers.push_back(*layer);
+    return layers;
 }
 void AssetController::finishBreakApart(runtime::TaskResult<OperationHandle>& result) {
     const auto job = std::exchange(breakApart_, std::nullopt);
@@ -1070,6 +1321,11 @@ void AssetController::finishBreakApart(runtime::TaskResult<OperationHandle>& res
     if (!transaction.add(std::move(**result.value())))
         return;
     const auto executed = session_.executeTransaction(std::move(transaction));
+    // The job's own notes (a layer scaled up or turned is resampled) join the status line and stay in
+    // the job log; none of them stops the edit or asks anything.
+    if (executed.succeeded())
+        for (const auto& note : result.diagnostics())
+            emit diagnostic(QString::fromStdString(note.summary));
     if (!executed.succeeded()) {
         emit diagnostic(tr("Break Apart failed: %1")
                             .arg(executed.operationFailures.empty()
@@ -1133,7 +1389,8 @@ void AssetController::remove(document::AssetId id) {
 }
 void AssetController::prepare(const QStringList& paths, document::AssetId relinkId,
                               const std::optional<document::AssetFolderId> folder,
-                              commands::ImportOptions options, const commands::SvgImportMode svgMode) {
+                              commands::ImportOptions options, const commands::SvgImportMode svgMode,
+                              const std::optional<commands::LayerDropPlacement> svgPlacement) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Media import requires an idle, editable project"));
         return;
@@ -1162,7 +1419,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, folder, shared, options, svgMode,
+        [files = std::move(files), directory, relinkId, folder, shared, options, svgMode, svgPlacement,
          compositionId = session_.compositionId(), hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
@@ -1238,6 +1495,8 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                 auto artwork = std::make_unique<commands::AddSvgArtwork>(
                     compositionId, read.source, std::string(stem.begin(), stem.end()), svgMode, true);
                 artwork->withProjectDirectory(directory);
+                if (svgPlacement)
+                    artwork->withPlacement(*svgPlacement);
                 *result = std::move(artwork);
             } else {
                 {
@@ -2148,8 +2407,9 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
             }
             // Successful files commit as one undoable transaction; every skipped file is
             // reported with its own diagnostic.
-            const bool svgArtwork =
-                dynamic_cast<const commands::AddSvgArtwork*>((*result.value())->get()) != nullptr;
+            const auto* svgImport = dynamic_cast<const commands::AddSvgArtwork*>((*result.value())->get());
+            const bool svgArtwork = svgImport != nullptr;
+            const bool placedSvg = svgImport != nullptr && svgImport->placed();
             commands::Transaction transaction(svgArtwork ? "Import SVG" : "Import Assets",
                                               base_->revision());
             if (transaction.add(std::move(**result.value()))) {
@@ -2167,6 +2427,12 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                 report.imported = svgArtwork && executed.succeeded() ? 1 : added.size();
                 // What the importer could not carry over (a font that is not installed, a filter it
                 // does not apply) stays listed by name, not only the reader's skipped items.
+                // A dropped SVG ends up selected, as dropped footage does.
+                if (placedSvg && executed.succeeded())
+                    for (const auto& output : executed.outputs)
+                        if (output.output.name == "layer")
+                            if (const auto* layer = std::get_if<document::LayerId>(&output.output.id))
+                                session_.selectLayer(*layer, false);
                 if (svgArtwork) {
                     constexpr std::size_t kListed = 12;
                     for (std::size_t index = 0; index < executed.warnings.size() && index < kListed; ++index)
@@ -2333,6 +2599,8 @@ void AssetController::poll() {
             emit activityChanged();
             if (breakApart_)
                 finishBreakApart(*result);
+            else if (svgPlacement_)
+                finishSvgPlacement(*result);
             else
                 finishImport(*result);
             base_.reset();

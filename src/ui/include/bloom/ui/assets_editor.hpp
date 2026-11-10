@@ -64,6 +64,9 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     void duplicateComposition(document::CompositionId id);
     void showNewCompositionDialog();
     void newCompositionFromSelection();
+    // #646: the selected footage, SVG artwork and compositions become layers of the active
+    // composition, on top at the playhead, as a drop on the Viewer does.
+    void addSelectionToComposition();
     void buildHeaderMenus();
     void buildFooter();
     void refreshSelectionHeader();

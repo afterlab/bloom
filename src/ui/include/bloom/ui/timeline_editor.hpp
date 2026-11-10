@@ -104,6 +104,9 @@ struct TimelineLayerEntry final {
     // The entry's layer is a Layer node reaching other entries too: their names (the shared
     // marker's tooltip); empty otherwise.
     QString sharedWith{};
+    // #646: a named warning on the layer (an image layer made from an SVG asset draws nothing);
+    // empty when there is none.
+    QString warning{};
     // The entry's layer is a Layer node feeding its slot directly (Remove Layer Node dissolves it).
     document::NodeId directLayerNode{};
     [[nodiscard]] document::MergeEntryRef entry() const noexcept { return {mergeNodeId, slotId}; }

@@ -322,9 +322,9 @@ void ViewerEditor::importAndAddLayers() {
         return;
     // The drop path's own follow-up: the import commits first, then one undoable step adds layers
     // for what it imported, on top, at the playhead.
-    controller->requestImport(
-        this, importedLayersFollowUp(session_, session_.compositionId(),
-                                     LayerDropPlacement{.start = session_.currentTime()}));
+    const LayerDropPlacement placement{.start = session_.currentTime()};
+    controller->requestImport(this, importedLayersFollowUp(session_, session_.compositionId(), placement),
+                              placement);
 }
 
 // ---- Select ------------------------------------------------------------------------------------

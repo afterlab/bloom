@@ -349,8 +349,10 @@ void KRadioGroup::paintDiscrete(QPainter& painter) {
                                {}, Radius::Full);
         }
 
-        const QColor ink =
-            inkForState(state == State::Selected ? Color::Foreground : Color::Muted, state);
+        // An option that is not chosen is still an available choice: its text is the normal
+        // foreground (only a disabled option is dimmed), so it never reads as disabled. The chosen
+        // one is marked by its dot and ring.
+        const QColor ink = inkForState(Color::Foreground, state);
         painter.setPen(ink);
         const QRectF label = row.adjusted(markRect.width() + px(Spacing::S) + px(Spacing::XS), 0.0,
                                           -px(Spacing::XS), 0.0);

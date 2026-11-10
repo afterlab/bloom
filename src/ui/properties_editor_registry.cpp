@@ -13,6 +13,7 @@
 #include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
@@ -236,6 +237,20 @@ void PropertiesEditor::configureRegistryRows() {
                     section->bodyLayout()->addWidget(row);
                 }
             }
+            // #646: an image layer made from an SVG record draws nothing; say so by name.
+            if (const auto* current = session_.composition())
+                if (const auto warning =
+                        document::svgFootageWarning(session_.snapshot().project(), *current, *node)) {
+                    auto* label = kit::makePropertyRowLabel(tr("Warning"), section->body());
+                    auto* value = new kit::KLabel(QString::fromStdString(*warning), section->body());
+                    value->setObjectName(QStringLiteral("propertiesSvgFootageWarning"));
+                    value->setTone(kit::Color::Warn);
+                    value->setWordWrap(true);
+                    value->setToolTip(value->text());
+                    auto* row = new kit::KPropertyRow(label, nullptr, {value}, section->body());
+                    row->setProperty("rowLabel", tr("Warning"));
+                    section->bodyLayout()->addWidget(row);
+                }
             if (node->typeId == document::kImageSourceNodeType)
                 addImageSelectionRows(*node, section);
             if (node->typeId == document::kCompositionOutputNodeType)

@@ -9,6 +9,8 @@
 #include "import_progress_test_support.hpp"
 
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/merge_entries.hpp>
@@ -369,6 +371,54 @@ int main(int argc, char** argv) {
             require(!harness.controller.holdsVectorArtwork(layer) && !harness.controller.selectedVectorArtworkLayer(),
                     "a broken-apart layer holds no Vector Artwork");
             preview.beginShutdown();
+        }
+
+        // Several selected SVG layers break apart together, in one undo step; one scaled up is named in
+        // the job log as resampled.
+        {
+            rememberChoice(ui::SvgImportChoice::Layer);
+            Harness harness;
+            harness.controller.importFiles({first});
+            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 1; }),
+                    "the first SVG imports");
+            harness.controller.importFiles({second});
+            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 2; }),
+                    "the second SVG imports");
+            std::vector<document::LayerId> both;
+            for (const auto& entry : harness.composition().graph().layerStack().entries())
+                both.push_back(entry.layerId);
+            require(both.size() == 2, "two layers");
+            // The second layer is scaled up 2x.
+            {
+                const auto& graph = harness.composition().graph();
+                const auto* boundary = graph.findLayer(both.front());
+                const auto* binding = boundary ? document::layerParameterBinding(graph, *boundary, document::kScaleParameterRole) : nullptr;
+                require(binding != nullptr, "the layer has a scale");
+                commands::Transaction scale("Scale", harness.session.snapshot().revision());
+                scale.emplace<commands::SetParameterSource>(
+                    harness.session.compositionId(), binding->parameterId,
+                    document::ConstantValueSource{document::ParameterValue{document::Vec2d{2.0, 2.0}}});
+                require(harness.session.executeTransaction(std::move(scale)).succeeded(), "scale the layer up");
+            }
+            for (std::size_t index = 0; index < both.size(); ++index) {
+                const auto* boundary = harness.composition().graph().findLayer(both[index]);
+                harness.session.selectEntry({boundary->nodeId, *boundary->entrySlot}, index != 0);
+            }
+            require(harness.controller.selectedVectorArtworkLayers().size() == 2, "both SVG layers are selected");
+            const auto revision = harness.session.snapshot().revision();
+            harness.diagnostics.clear();
+            harness.controller.breakApartSvg(harness.session.compositionId(), harness.controller.selectedVectorArtworkLayers());
+            require(waitUntil([&] { return !harness.controller.busy() && harness.count(document::kVectorArtworkNodeType) == 0; }),
+                    "both layers are broken apart");
+            require(harness.count(kPathNodes) == 4, "both SVGs became their shapes");
+            require(harness.session.snapshot().revision().value() == revision.value() + 1,
+                    "one transaction commits for both");
+            const auto noted = std::ranges::count_if(harness.diagnostics, [](const QString& line) {
+                return line.contains(QStringLiteral("scaled up or turned")) && line.contains(QStringLiteral("softer"));
+            });
+            require(noted == 1, "only the scaled layer is named as resampled, once, as a note");
+            require(harness.session.undo() && harness.count(document::kVectorArtworkNodeType) == 2 && harness.count(kPathNodes) == 0,
+                    "one undo gives both one-layer SVGs back");
         }
         QSettings().clear();
         std::cout << "svg break apart ui: PASS\n";

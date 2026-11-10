@@ -14,6 +14,7 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/footage_interpretation_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -343,15 +344,63 @@ void AssetsEditor::newCompositionFromSelection() {
         return;
     // Sized from the first visual footage item, like a layer-based compositor; the active
     // composition (or the defaults) supplies what the footage does not state. The command is shared
-    // with bloom.composition.add-from-assets.
-    commands::Transaction transaction("New Composition from Selection", snapshot.revision());
+    // with bloom.composition.add-from-assets. An imported SVG becomes its artwork (#646), which the
+    // controller reads on its worker.
     const auto* current = session_.composition();
-    transaction.emplace<commands::AddCompositionFromFootage>(
-        footage, current != nullptr ? std::optional(session_.compositionId()) : std::nullopt,
-        tr("Composition %1").arg(project.compositions().size() + 1).toStdString(),
-        assets::targetFolder(tree_->currentItem()));
+    const auto name = tr("Composition %1").arg(project.compositions().size() + 1).toStdString();
+    const auto folder = assets::targetFolder(tree_->currentItem());
+    const QPointer<AssetsEditor> self(this);
+    const auto opened = [self](const commands::CommandResult& result) {
+        if (self == nullptr)
+            return;
+        if (const auto id = result.outputId<document::CompositionId>(commands::kAddCompositionOutput))
+            self->openComposition(*id);
+    };
+    const auto templateComposition = current != nullptr ? std::optional(session_.compositionId()) : std::nullopt;
+    if (auto* controller = session_.assetController()) {
+        controller->createCompositionFromAssets(std::move(footage), templateComposition, name, folder, opened);
+        return;
+    }
+    commands::Transaction transaction("New Composition from Selection", snapshot.revision());
+    transaction.emplace<commands::AddCompositionFromFootage>(footage, templateComposition, name, folder);
     const auto result = session_.executeTransaction(std::move(transaction));
-    if (const auto id = result.outputId<document::CompositionId>(commands::kAddCompositionOutput))
-        openComposition(*id);
+    if (result.succeeded())
+        opened(result);
+}
+void AssetsEditor::addSelectionToComposition() {
+    auto* controller = session_.assetController();
+    if (controller == nullptr || session_.composition() == nullptr)
+        return;
+    const auto& project = session_.snapshot().project();
+    std::vector<commands::LayerDropItem> items;
+    for (QTreeWidgetItemIterator it(tree_, QTreeWidgetItemIterator::Selected); *it; ++it) {
+        if (const auto asset = assets::assetId(*it); asset.isValid()) {
+            if (commands::droppableAsLayer(project, session_.compositionId(), asset))
+                items.emplace_back(asset);
+        } else if (const auto composition = assets::compositionId(*it); composition.isValid()) {
+            if (commands::droppableAsLayer(project, session_.compositionId(), composition))
+                items.emplace_back(composition);
+        }
+    }
+    if (items.empty())
+        return;
+    // On top at the playhead, the same placement as a drop with no insertion point.
+    const QPointer<CompositionSession> session(&session_);
+    controller->addToComposition(std::move(items), {.stack = commands::LayerDropPlacement::Stack::Top,
+                                                    .before = {},
+                                                    .start = session_.currentTime(),
+                                                    .sequence = false,
+                                                    .beforeLayer = {}},
+                                 [session](const commands::CommandResult& result) {
+                                     if (session == nullptr)
+                                         return;
+                                     std::vector<document::LayerId> layers;
+                                     for (const auto& output : result.outputs)
+                                         if (output.output.name == "layer")
+                                             if (const auto* id = std::get_if<document::LayerId>(&output.output.id))
+                                                 layers.push_back(*id);
+                                     for (auto it = layers.rbegin(); it != layers.rend(); ++it)
+                                         session->selectLayer(*it, it != layers.rbegin());
+                                 });
 }
 } // namespace bloom::ui

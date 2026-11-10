@@ -7,6 +7,7 @@
 #include <QTreeWidgetItemIterator>
 #include <algorithm>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -83,6 +84,9 @@ std::uint64_t sequenceFrames(const document::AssetRecord& asset) {
     return asset.manifest.members.size() * loops;
 }
 QString assetKindText(const document::AssetRecord& asset) {
+    // #646: an SVG is vector artwork, not a picture of a size; its Type says so.
+    if (document::isSvgSourceAsset(asset))
+        return QObject::tr("SVG");
     const auto extension = asset.locator.path.substr(asset.locator.path.find_last_of('.') + 1);
     switch (asset.kind) {
     case document::AssetKind::Lut:
@@ -360,6 +364,9 @@ void AssetsEditor::rebuild() {
         setColumn(item, TypeColumn, assetKindText(asset));
         if (!lut && !audio)
             setDimensions(item, asset.width, asset.height);
+        if (document::isSvgSourceAsset(asset))
+            item->setToolTip(DimensionsColumn, tr("The SVG's own size. Vector artwork draws at any "
+                                                  "resolution, so this is not a pixel size."));
         if (video) {
             const auto rate = videoFrameRate(asset);
             const auto length = rate ? document::footageDuration(asset, *rate) : std::nullopt;
@@ -489,11 +496,24 @@ void AssetsEditor::rebuild() {
                     QString::fromStdString(block.typeId),
                     QString::fromUtf8(kindName.data(), static_cast<qsizetype>(kindName.size()))));
             setColumn(item, TypeColumn, tr("Data block"));
+            // #646: the copy of an SVG file a one-layer import holds is named after that file.
+            if (document::isVectorArtworkBlock(block)) {
+                const auto* source = document::vectorArtworkSourceAsset(project, block);
+                item->setText(NameColumn, source != nullptr
+                                              ? tr("%1 · SVG data").arg(QString::fromStdString(source->name))
+                                              : tr("SVG data"));
+                setColumn(item, TypeColumn, tr("SVG data"));
+            }
             item->setData(0, kDataBlockRole, QVariant::fromValue<qulonglong>(id->value()));
             const auto digest = block.provenance.contentDigest.toLowercaseHex();
             item->setToolTip(
                 NameColumn,
-                tr("%1 · created %2 · digest %3")
+                document::isVectorArtworkBlock(block)
+                    ? tr("The SVG file's bytes, held in the project so a one-layer SVG draws without its "
+                         "file · %1 bytes · digest %2")
+                          .arg(static_cast<qulonglong>(block.payloadBytes()))
+                          .arg(QString::fromStdString(std::string(digest.data(), digest.size())))
+                    : tr("%1 · created %2 · digest %3")
                     .arg(QString::fromStdString(block.typeId),
                          QString::fromStdString(block.provenance.createdAt),
                          QString::fromStdString(std::string(digest.data(), digest.size()))));

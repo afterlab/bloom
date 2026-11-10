@@ -6,7 +6,10 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/core/sha256.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -319,6 +322,55 @@ void contextMenus(TestContext& context) {
                    "New Composition from Selection opens a clip-sized composition with its layer");
 }
 
+// #646: an imported SVG is listed as an SVG (vector artwork), and the copy a one-layer import holds is
+// named after its file, not by its internal type id.
+void svgRowsAndHeldCopy(TestContext& context) {
+    auto seed = document::makeNewProject("Svg", "Main", core::RationalTime::fromInteger(2));
+    document::AssetRecord asset;
+    asset.id = document::AssetId::fromRaw(1);
+    asset.kind = document::AssetKind::Image;
+    asset.name = "logo.svg";
+    asset.locator = {"file", "project-relative", "logo.svg", "file:///media/logo.svg"};
+    asset.width = 200;
+    asset.height = 100;
+    const std::vector<std::byte> bytes(40, std::byte{'x'});
+    core::Sha256Hasher hasher;
+    (void)hasher.update(bytes);
+    asset.contentDigest = hasher.finalize();
+    context.expect(seed.project.addAsset(asset), "SVG asset fixture");
+    document::DataBlockRecord block;
+    block.id = document::DataBlockRecordId::fromRaw(1);
+    block.kind = document::DataBlockKind::Opaque;
+    block.typeId = std::string(document::kVectorArtworkBlockTypeId);
+    block.schemaVersion = document::kVectorArtworkBlockSchemaVersion;
+    block.mediaType = std::string(document::kVectorArtworkBlockMediaType);
+    block.provenance.source = asset.locator;
+    block.provenance.contentDigest = asset.contentDigest;
+    block.payload = document::OpaqueExtensionPayload(bytes);
+    context.expect(seed.project.addDataBlock(std::move(block)), "SVG data block fixture");
+    document::Document document(std::move(seed.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, seed.initialCompositionId);
+    ui::AssetsEditor editor(session);
+    editor.resize(700, 500);
+    editor.show();
+    QApplication::processEvents();
+    auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
+    context.expect(tree != nullptr, "svg assets tree");
+    if (tree == nullptr)
+        return;
+    auto* row = findText(*tree, "logo.svg");
+    context.expect(row != nullptr && row->text(assets::TypeColumn) == "SVG",
+                   "an imported SVG is listed as an SVG, not an Image");
+    context.expect(row != nullptr && row->toolTip(assets::DimensionsColumn).contains("not a pixel size"),
+                   "its size says it is not a pixel size");
+    auto* held = findText(*tree, "logo.svg · SVG data");
+    context.expect(held != nullptr && held->text(assets::TypeColumn) == "SVG data",
+                   "the held copy is named after its file, not by the block's type id");
+    context.expect(findText(*tree, "bloom.vector-artwork.svg · opaque") == nullptr,
+                   "no row shows the raw block type id");
+}
+
 // #380: video, sequences and compositions share one duration format, timecode at the item's rate
 // with its frame count, in the Duration column and the selection header. A sequence plays one
 // member per composition frame, so it is timed at the active composition's rate.
@@ -543,6 +595,7 @@ int main(int argc, char** argv) {
     videoAssetRows(context);
     sortingAndColumns(context);
     contextMenus(context);
+    svgRowsAndHeldCopy(context);
     durationFormat(context);
     colourSpaceNames(context);
     revealPlans(context);

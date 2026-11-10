@@ -595,6 +595,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
 bool NodeItem::assetProblem() const {
     if (!(imageSource_ || audioSource_) || session_ == nullptr)
         return false;
+    if (!svgFootageWarning_.isEmpty())
+        return true;
     const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
     const auto* controller = session_->assetController();
     return asset == nullptr || asset->manifest.hasGaps() ||

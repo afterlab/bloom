@@ -259,6 +259,12 @@ void AssetsEditor::showContextMenu(const QPoint position) {
                    record.kind == document::AssetKind::Audio;
         };
         const auto selected = selectedAssets();
+        add(tr("Add to Composition"), "assetsAddToCompositionAction", [this] { addSelectionToComposition(); })
+            ->setEnabled(session_.composition() != nullptr &&
+                         std::ranges::any_of(selected, [&](const auto asset) {
+                             const auto* record = project.findAsset(asset);
+                             return record && layerable(*record);
+                         }));
         add(tr("New Composition from Selection"), "assetsNewCompositionFromSelectionAction",
             [this] { newCompositionFromSelection(); })
             ->setEnabled(std::ranges::any_of(selected, [&](const auto asset) {
@@ -297,6 +303,8 @@ void AssetsEditor::showContextMenu(const QPoint position) {
         menu->addSeparator();
     } else if (const auto composition = compositionId(item); composition.isValid()) {
         add(tr("Open"), "assetsOpenAction", [this, composition] { openComposition(composition); });
+        add(tr("Add to Composition"), "assetsAddToCompositionAction", [this] { addSelectionToComposition(); })
+            ->setEnabled(session_.composition() != nullptr && composition != session_.compositionId());
         add(tr("Composition Settings…"), "assetsCompositionSettingsAction", [this, composition] {
             (void)bloom::ui::showCompositionSettingsDialog(session_, composition, *this);
         });

@@ -45,6 +45,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/blend_mode.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
@@ -476,6 +477,8 @@ class TimelineLayerRow final : public kit::KRow {
         sharedMarker_ =
             marker(QStringLiteral("timelineSharedMarker"), kit::IconId::Link, kit::Color::Muted);
         sharedMarker_->setAccessibleName(TimelineEditor::tr("Shared Layer node"));
+        warningMarker_ = marker(QStringLiteral("timelineWarningMarker"), kit::IconId::Warning, kit::Color::Warn);
+        warningMarker_->setAccessibleName(TimelineEditor::tr("Layer warning"));
         disclosureButton()->setAccessibleName(TimelineEditor::tr("Expand layer properties"));
         connect(disclosureButton(), &QToolButton::clicked, this,
                 [this] { activateAt(chevronX(entry_.nesting) + kCellGap); });
@@ -605,6 +608,8 @@ class TimelineLayerRow final : public kit::KRow {
             shy_->setEnabled(true);
         }
         adjustmentMarker_->setVisible(entry.adjustment);
+        warningMarker_->setVisible(!entry.warning.isEmpty());
+        warningMarker_->setToolTip(entry.warning);
         sharedMarker_->setVisible(!entry.sharedWith.isEmpty());
         sharedMarker_->setToolTip(
             entry.sharedWith.isEmpty()
@@ -670,6 +675,7 @@ class TimelineLayerRow final : public kit::KRow {
     kit::KIconToggle* shy_ = nullptr;
     kit::KLabel* adjustmentMarker_ = nullptr;
     kit::KLabel* sharedMarker_ = nullptr;
+    kit::KLabel* warningMarker_ = nullptr;
     CompositionSession* session_ = nullptr;
     TimelineLayerEntry entry_{};
     bool bound_ = false;
@@ -1613,8 +1619,14 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
         breakApart->setToolTip(tr("Turn this SVG into editable shapes: a shape layer and a path node "
                                   "for every element. The layer keeps its transform and keys."));
         connect(breakApart, &QAction::triggered, this, [this, compositionId, layer = entry.layerId] {
-            if (auto* controller = session_.assetController())
-                controller->breakApartSvg(compositionId, layer);
+            auto* controller = session_.assetController();
+            if (controller == nullptr)
+                return;
+            // The row that was clicked, or every selected SVG layer when it is one of them.
+            auto layers = controller->selectedVectorArtworkLayers();
+            if (std::ranges::find(layers, layer) == layers.end())
+                layers = {layer};
+            controller->breakApartSvg(compositionId, std::move(layers));
         });
     }
     // #502: the entry's Layer node. Inserting one adopts the entry's values and removing it returns
@@ -1713,6 +1725,8 @@ QString TimelineLayerStack::toolTipAt(const QPoint position) const {
                     .arg(entry.slotId.value());
     if (!entry.sharedWith.isEmpty())
         text += QLatin1Char('\n') + tr("Shared Layer node: also in %1").arg(entry.sharedWith);
+    if (!entry.warning.isEmpty())
+        text += QLatin1Char('\n') + entry.warning;
     return text;
 }
 
@@ -2959,6 +2973,10 @@ void TimelineEditor::appendMergeRows(const document::NodeId mergeId, const int n
         row.nesting = nesting;
         row.groupMerge = group ? imageSource->id : document::NodeId{};
         row.adjustment = adjustment.has_value();
+        // #646: an image layer made from an SVG asset draws nothing; the row says so by name.
+        if (layer)
+            if (const auto warning = document::layerSvgFootageWarning(session_.snapshot().project(), *composition, layerId))
+                row.warning = QString::fromStdString(*warning);
         if (layer && !layer->entryOwned()) {
             if (imageSource && imageSource->id == layer->nodeId)
                 row.directLayerNode = layer->nodeId;

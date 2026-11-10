@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QSignalSpy>
@@ -13,6 +14,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -179,6 +182,38 @@ void testDisabledOptionsAreRefusedAndSkipped(Expectations& expectations) {
                         "arrow navigation steps back over it too, rather than stopping");
 }
 
+// An option that is not chosen but is available reads as available: its text is the foreground
+// colour, like the chosen option's. Only a disabled option is dimmed.
+void testAnUnchosenOptionIsNotDimmed(Expectations& expectations) {
+    kit::KRadioGroup group;
+    group.setPresentation(kit::KRadioGroup::Presentation::Discrete);
+    const int chosen = group.addOption(QStringLiteral("As one layer"));
+    const int other = group.addOption(QStringLiteral("As editable shapes"));
+    const int unavailable = group.addOption(QStringLiteral("As something else"));
+    group.setOptionEnabled(unavailable, false);
+    group.setCurrentIndex(chosen);
+    group.resize(300, kit::px(kit::Size::Control) * 3);
+    QCoreApplication::processEvents();
+    const QImage image = group.grab().toImage();
+    // The brightest pixel of the label area of one option: its text colour.
+    const auto textInk = [&](const int index) -> float {
+        const QRect row = group.optionRect(index);
+        const QRect label(row.left() + kit::px(kit::Spacing::XS) + kit::px(kit::Size::Control), row.top(),
+                          row.width() - kit::px(kit::Size::Control) - 2 * kit::px(kit::Spacing::XS), row.height());
+        float best = 0.0F;
+        for (int y = label.top(); y < label.bottom(); ++y)
+            for (int x = label.left(); x < label.right(); ++x)
+                best = std::max(best, image.pixelColor(x, y).lightnessF());
+        return best;
+    };
+    const float foreground = kit::color(kit::Color::Foreground).lightnessF();
+    expectations.expect(std::abs(textInk(other) - foreground) < 0.1F &&
+                            std::abs(textInk(chosen) - foreground) < 0.1F,
+                        "the chosen and the unchosen available option both draw in the foreground colour");
+    expectations.expect(textInk(unavailable) < textInk(other) - 0.08F,
+                        "a disabled option is still dimmed");
+}
+
 void testTheSwitchThumbTravelsWithTheFastMotion(Expectations& expectations) {
     kit::KSwitch toggle;
     toggle.resize(toggle.sizeHint());
@@ -251,6 +286,7 @@ int main(int argc, char** argv) {
     testBothPresentationsShareOneStateMachine(expectations);
     testASegmentedBarEndsFlush(expectations);
     testDisabledOptionsAreRefusedAndSkipped(expectations);
+    testAnUnchosenOptionIsNotDimmed(expectations);
     testTheSwitchThumbTravelsWithTheFastMotion(expectations);
     testTheSwitchHonoursReducedMotion(expectations);
     testTheSwitchStateMachineAndDisabled(expectations);
