@@ -316,6 +316,10 @@ void ViewerEditor::connectPreviewController() {
     connect(controller, &CompositionPreviewController::viewerResultsAvailable, this,
             &ViewerEditor::consumeProbe);
     connect(controller, &CompositionPreviewController::viewerResultsAvailable, this,
+            &ViewerEditor::consumeDrillPick);
+    connect(controller, &CompositionPreviewController::stateChanged, this,
+            &ViewerEditor::continueBreakApartDrill);
+    connect(controller, &CompositionPreviewController::viewerResultsAvailable, this,
             &ViewerEditor::pollResidentCpuFallback);
     connect(controller, &CompositionPreviewController::resolutionChanged, this, [this] {
         if (resolutionDropdown_ == nullptr)

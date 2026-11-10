@@ -280,6 +280,9 @@ class AssetController final : public QObject {
     // application purges the decoded media and finished-frame caches through the media purge, so
     // nothing rendered from the changed bytes stays cached.
     void footageChanged();
+    // #645: Break Apart committed: each of `layers` now holds its SVG as editable shapes.
+    void brokenApart(bloom::document::CompositionId composition,
+                     std::vector<bloom::document::LayerId> layers);
 
   private:
     using OperationHandle = std::shared_ptr<std::unique_ptr<commands::Operation>>;

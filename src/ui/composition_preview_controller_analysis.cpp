@@ -81,6 +81,47 @@ CompositionPreviewController::submitChannelListing(const document::NodeId node, 
     return submission;
 }
 
+const std::shared_ptr<runtime::ViewerPicker>& CompositionPreviewController::viewerPicker() {
+    if (!viewerPicker_) {
+        // No composition root installed one (a test, a secondary tool): compile with the built-in
+        // definitions, without the application's shared plan cache.
+        static const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        viewerPicker_ = std::make_shared<runtime::ViewerPicker>(
+            [](const runtime::SnapshotCompileRequest& request,
+               const runtime::CancellationToken& cancellation) {
+                return compiler.compile(request, cancellation);
+            });
+    }
+    return viewerPicker_;
+}
+
+runtime::TaskSubmission<std::shared_ptr<const runtime::ViewerPickResult>>
+CompositionPreviewController::submitViewerPick(runtime::ViewerPickRequest request) {
+    if (shuttingDown_)
+        return {};
+    runtime::TaskRequest task(
+        "Pick in the Viewer",
+        {.kind = runtime::TaskOwnerKind::PanelRequest,
+         .id = runtime::TaskOwnerId::fromRaw(request.composition.value())},
+        runtime::TaskPriority::Interactive);
+    auto submission = scheduler_.submit<std::shared_ptr<const runtime::ViewerPickResult>>(
+        std::move(task),
+        [picker = viewerPicker(), request = std::move(request)](runtime::TaskContext& context) {
+            using Result = runtime::TaskResult<std::shared_ptr<const runtime::ViewerPickResult>>;
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            auto result = picker->pick(request, context.cancellation());
+            if (context.isCancellationRequested() ||
+                result.status == runtime::ViewerPickStatus::Cancelled)
+                return Result::cancelled();
+            return Result::succeeded(
+                std::make_shared<const runtime::ViewerPickResult>(std::move(result)));
+        });
+    if (submission.accepted())
+        taskUiBridge_.wake();
+    return submission;
+}
+
 runtime::TaskSubmission<PreviewPreparationResultHandle>
 CompositionPreviewController::submitViewerPreparation(
     const runtime::PreviewRequestIdentity& identity, const bool displayRoute,

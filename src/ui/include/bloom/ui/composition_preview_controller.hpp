@@ -7,6 +7,7 @@
 #include <bloom/runtime/channel_inspection_listing.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/viewer_pick.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/viewer_channel_display.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
@@ -267,6 +268,16 @@ class CompositionPreviewController final : public QObject {
     }
     [[nodiscard]] runtime::TaskSubmission<std::shared_ptr<const runtime::ChannelInspectionListing>>
     submitChannelListing(document::NodeId node, std::string port);
+    // #645: the Viewer's pick on evaluated geometry (runtime::ViewerPicker). The composition root
+    // installs one that compiles through the preview's shared compiler and plan cache; without one
+    // the controller makes its own on first use. The pick always runs as a task, never on the UI
+    // thread.
+    void setViewerPicker(std::shared_ptr<runtime::ViewerPicker> picker) {
+        viewerPicker_ = std::move(picker);
+    }
+    [[nodiscard]] const std::shared_ptr<runtime::ViewerPicker>& viewerPicker();
+    [[nodiscard]] runtime::TaskSubmission<std::shared_ptr<const runtime::ViewerPickResult>>
+    submitViewerPick(runtime::ViewerPickRequest request);
     [[nodiscard]] const std::optional<runtime::ChannelInspection>&
     viewerChannelInspection() const noexcept {
         return settings_.channelInspection;
@@ -432,7 +443,10 @@ class CompositionPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
     CompositionPreviewSettings settings_;
+    void composeEnclosingGroups(std::vector<runtime::EvaluatedOperationBounds>& selected,
+                                const runtime::PreparedPreviewFrame& frame) const;
     ChannelListingProvider channelListingProvider_;
+    std::shared_ptr<runtime::ViewerPicker> viewerPicker_;
     bool colorIntentCaptured_ = false;
     const std::size_t legacyPixelStorageByteLimit_ = runtime::gpuPreviewRequestByteAllowance();
     PreviewFrameCacheHandle frameCache_;

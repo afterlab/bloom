@@ -2,6 +2,7 @@
 
 #include <bloom/runtime/channel_inspection_listing.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/viewer_pick.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_native_surface.hpp>
@@ -473,6 +474,14 @@ class ViewerEditor final : public QWidget,
     };
     [[nodiscard]] RemoteState remoteState() const;
 
+    // #645 drilling into groups (docs/user-guide/viewer.md, "Drilling into groups"). True while a
+    // pick on evaluated geometry runs on a worker for this Viewer.
+    [[nodiscard]] bool drillPickPendingForTest() const noexcept { return drillPickTask_.has_value(); }
+    // True while a Break Apart this Viewer offered is waiting to drill into its result.
+    [[nodiscard]] bool breakApartDrillPendingForTest() const noexcept {
+        return breakApartDrill_.has_value();
+    }
+
   signals:
     void displayedStateChanged();
     void anchorModeStateChanged();
@@ -935,6 +944,67 @@ class ViewerEditor final : public QWidget,
         bool additive = false;
     };
     std::optional<AnchorGesture> anchorGesture_;
+    // #645: one asynchronous pick on evaluated geometry (runtime::ViewerPicker) at a time; a newer
+    // click cancels the older pick, and a result for another revision, time, composition or level
+    // is dropped.
+    struct DrillPick final {
+        // Select: a single click picks a child of the level. Drill: a double-click enters what it
+        // hits. Reveal: after entering a group, select the child under the point.
+        enum class Intent : std::uint8_t { Select, Drill, Reveal };
+        Intent intent = Intent::Select;
+        QPointF screen;
+        ViewerMapping mapping;
+        document::Revision revision;
+        core::RationalTime time;
+        document::CompositionId composition;
+        std::vector<document::LayerId> level;
+        bool extend = false;
+        Qt::KeyboardModifiers modifiers;
+    };
+    // A Break Apart this Viewer offered: once it lands, enter the layer and (with a point) select
+    // what is under the point when the next frame arrives.
+    struct BreakApartDrill final {
+        document::CompositionId composition;
+        document::LayerId layer;
+        std::vector<document::LayerId> level;
+        std::optional<QPointF> screen;
+        bool landed = false;
+        // Checks for the broken-apart frame on screen so far.
+        int retries = 0;
+    };
+    // The displayed frame's screen-to-composition mapping for a pick: the frame of the current
+    // time and document, painted at the current viewport. Unlike currentMapping() it does not wait
+    // for a changed selection overlay to be painted, which a pick does not read.
+    [[nodiscard]] std::optional<ViewerMapping> drillMapping() const;
+    bool drillPress(QMouseEvent* event, const ViewerMapping& mapping, const ViewerHit& hit);
+    bool drillDoubleClick(QMouseEvent* event);
+    bool drillKey(QKeyEvent* event);
+    void submitDrillPick(DrillPick::Intent intent, QPointF screen, const ViewerMapping& mapping,
+                         bool extend, Qt::KeyboardModifiers modifiers);
+    void cancelDrillPick();
+    void consumeDrillPick();
+    void applyDrillPick(const DrillPick& pick, const runtime::ViewerPickResult& result);
+    // Double-click or Enter on `layer`, a child of the level: enter a group (selecting the child
+    // under `screen`, or the topmost child without one), edit a shape's points, offer Break Apart
+    // for a one-layer SVG, or edit a text layer's text.
+    bool drillInto(document::LayerId layer, std::optional<QPointF> screen);
+    void enterGroup(document::LayerId group, std::optional<QPointF> screen);
+    void offerBreakApart(document::LayerId layer, std::optional<QPointF> screen);
+    void onBrokenApart(document::CompositionId composition,
+                       const std::vector<document::LayerId>& layers);
+    void continueBreakApartDrill();
+    // Starts a move of the selected `layer` from `pressScreen`, as a press on it does.
+    bool beginSelectionMove(document::LayerId layer, const ViewerMapping& mapping,
+                            QPointF pressScreen, Qt::KeyboardModifiers modifiers);
+    std::optional<DrillPick> drillPick_;
+    std::optional<runtime::TaskHandle<std::shared_ptr<const runtime::ViewerPickResult>>>
+        drillPickTask_;
+    std::optional<BreakApartDrill> breakApartDrill_;
+    QMetaObject::Connection brokenApartConnection_;
+    // The left button is down from a press that asked for a pick: the move starts when it returns.
+    bool drillPressDown_ = false;
+    // A press inside the selection's box inside a group: a click without a drag picks again.
+    std::optional<QPointF> drillRepickPress_;
     path_editing::AnchorSet selectedAnchors_;
     document::ParameterId selectedAnchorsParameter_;
     // The contour of a compound path under edit, and the parameter it belongs to.

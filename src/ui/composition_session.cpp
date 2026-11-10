@@ -382,6 +382,10 @@ CompositionSession::CompositionSession(document::Document& document,
       compositionId_(compositionId) {
     tools_ = new ToolController(this);
     attachCommandObserver();
+    // #645: the Viewer's level follows a selection made anywhere but the Viewer. Connected first,
+    // so every other observer of selectionChanged already sees the matching level.
+    connect(this, &CompositionSession::selectionChanged, this,
+            &CompositionSession::followSelectionWithViewerLevel);
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = lowestCompositionId(snapshot_.project());
     }
@@ -442,6 +446,8 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     selectedEntries_.clear();
     primaryEntry_.reset();
     pendingEntryLayer_.reset();
+    const bool hadLevel = viewerLevel_ != ViewerLevel{};
+    viewerLevel_ = {};
     // The OLD document/command-stack are left untouched, but this session's own interaction state
     // targets them and must not survive the swap.
     transformInteraction_.reset();
@@ -459,6 +465,8 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     emit compositionChanged();
     emit currentTimeChanged();
     emit selectionChanged();
+    if (hadLevel)
+        emit viewerLevelChanged();
     emit historyChanged();
 }
 
@@ -998,6 +1006,7 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     selectedEntries_.clear();
     primaryEntry_.reset();
     pendingEntryLayer_.reset();
+    resetViewerLevel();
     emit compositionChanged();
     if (timeChanged) {
         emit currentTimeChanged();
@@ -2323,6 +2332,7 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         if (revisionAdvanced) {
             lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
             normalizeSelection();
+            normalizeViewerLevel();
             emit snapshotChanged();
             // A document command moved the time-indexed provenance. This is the distinct signal a
             // finite clip-range edit emits; evaluationChanged() is reserved for non-document

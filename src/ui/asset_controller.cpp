@@ -1339,6 +1339,7 @@ void AssetController::finishBreakApart(runtime::TaskResult<OperationHandle>& res
     if (executed.warnings.size() > kListed)
         emit diagnostic(tr("%1 more notes about this SVG are in the operation's warnings")
                             .arg(executed.warnings.size() - kListed));
+    emit brokenApart(job->composition, job->layers);
 }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())

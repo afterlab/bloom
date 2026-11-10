@@ -484,6 +484,7 @@ target_sources(
         audio_device_control.cpp
         composition_session_drivers.cpp
         composition_session_entries.cpp
+        composition_session_viewer_level.cpp
         entry_layer_session_operations.cpp
         entry_layer_session_operations.hpp
         composition_session_keyframes.cpp
@@ -715,6 +716,7 @@ target_sources(
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp
         viewer_editor_text.cpp
+        viewer_editor_drill.cpp
         viewer_editor_text_input.cpp
         viewer_editor_text_layout.cpp
         viewer_gpu_presenter.cpp

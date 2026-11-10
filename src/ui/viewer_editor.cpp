@@ -1188,6 +1188,13 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
     // SPLIT-2: read geometry translated to the CURRENT live graph, then order by the live Merge
     // entries. The raw frame bounds carry the retained snapshot's layer IDs, which after an
     // equivalent split name the head.
+    // #645: inside a group only the selection answers here (its handles and box, in composition
+    // space); every other child is picked on the evaluated outlines by the Viewer's worker pick.
+    if (!session_.viewerLevel().groups.empty()) {
+        const auto selected = previewController_->selectedLayerBounds(frame);
+        return hitTestViewer(mapping, point, selected, selected,
+                             pointTextLayers(session_, selected));
+    }
     const auto bounds = previewController_->currentLayerBounds(frame);
     if (const auto* stack = session_.timelineMerge()) {
         for (const auto& entry : stack->entries()) {
@@ -1369,13 +1376,19 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     const auto pressedViewport = contentRect();
     const auto pressedTransform = transform_;
     const auto hit = hitAt(*mapping, event->position());
+    if (drillPress(event, *mapping, hit))
+        return;
     if (hit.region == ViewerHitRegion::Empty) {
         session_.clearSelection();
         event->accept();
         return;
     }
     QPointer<ViewerEditor> self(this);
-    session_.selectLayer(hit.layerId, event->modifiers().testFlag(Qt::ShiftModifier));
+    if (session_.viewerLevel().groups.empty())
+        session_.selectLayer(hit.layerId, event->modifiers().testFlag(Qt::ShiftModifier));
+    else
+        session_.selectLayerFromViewer(hit.layerId,
+                                       event->modifiers().testFlag(Qt::ShiftModifier));
     if (!self)
         return;
     const auto actual = actualDisplayDescriptor();
@@ -1541,6 +1554,9 @@ void ViewerEditor::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton)
+        drillPressDown_ = false;
+    const auto repick = std::exchange(drillRepickPress_, std::nullopt);
     if (roiRelease(event))
         return;
     if (motionHandleRelease(event))
@@ -1571,6 +1587,7 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
+    const auto mapping = activeMapping_;
     if (mappingStillValid()) {
         session_.updateTransformInteraction(event->position(),
                                             {event->modifiers().testFlag(Qt::ShiftModifier),
@@ -1579,6 +1596,11 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
     } else {
         endDrag(false);
     }
+    // #645: inside a group a click (no drag) on the selection's box picks the topmost child there.
+    if (repick && mapping &&
+        QLineF(*repick, event->position()).length() < QApplication::startDragDistance())
+        submitDrillPick(DrillPick::Intent::Select, event->position(), *mapping, false,
+                        event->modifiers());
     event->accept();
 }
 
@@ -1641,6 +1663,10 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (textEditKey(event))
+        return;
+    // #645: Enter drills into the selected group or shape; Escape leaves point editing, then the
+    // entered group (after any gesture, creation or text edit above has had it).
+    if (drillKey(event))
         return;
     if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
         tool() == ViewerTool::Select && beginTextEditing()) {

@@ -271,6 +271,9 @@ void ViewerEditor::mouseDoubleClickEvent(QMouseEvent* event) {
         QWidget::mouseDoubleClickEvent(event);
         return;
     }
+    // #645: double-click enters groups and shapes, and on empty space backs out one level.
+    if (drillDoubleClick(event))
+        return;
     if (tool() == ViewerTool::Select && event->button() == Qt::LeftButton) {
         endDrag(false);
         if (const auto mapping = currentMapping()) {

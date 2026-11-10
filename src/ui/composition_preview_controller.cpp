@@ -9,7 +9,9 @@
 #include <bloom/runtime/missing_font_layers.hpp>
 
 #include <QThread>
+#include <QTransform>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -235,7 +237,69 @@ CompositionPreviewController::selectedLayerBounds(PreparedPreviewFrameHandle sou
         translated.layerId = currentLayer;
         result.push_back(translated);
     }
+    composeEnclosingGroups(result, frame);
     return result;
+}
+
+// #645: a layer inside a group is drawn into its group's Merge, so its evaluated polygon is in
+// that Merge's space. The Viewer's gizmo, anchors and gestures need composition space: compose
+// the enclosing groups' own content-to-parent maps (from the same frame) onto it. A top-level layer
+// is unchanged.
+void CompositionPreviewController::composeEnclosingGroups(
+    std::vector<runtime::EvaluatedOperationBounds>& selected,
+    const runtime::PreparedPreviewFrame& frame) const {
+    std::vector<runtime::EvaluatedOperationBounds> all;
+    for (auto& bounds : selected) {
+        const auto& groups = session_.enclosingGroups(bounds.layerId);
+        if (groups.empty())
+            continue;
+        if (all.empty()) {
+            const auto identity = frame.desiredIdentity();
+            for (const auto& raw : frame.evaluatedBounds()) {
+                if (!raw.layerId.isValid() || raw.output.empty())
+                    continue;
+                auto translated = raw;
+                translated.layerId = session_.currentLayerForRetained(
+                    identity.sourceRevision, identity.projectId, identity.time, raw.layerId);
+                all.push_back(translated);
+            }
+        }
+        QTransform world;
+        bool placed = true;
+        for (const auto group : groups) {
+            const auto found =
+                std::ranges::find(all, group, &runtime::EvaluatedOperationBounds::layerId);
+            if (found == all.end() || found->local.empty()) {
+                placed = false;
+                break;
+            }
+            const auto& p = found->polygon;
+            const auto width = found->local.right - found->local.left;
+            const auto height = found->local.bottom - found->local.top;
+            const QPointF x((p[1].x - p[0].x) / width, (p[1].y - p[0].y) / width);
+            const QPointF y((p[3].x - p[0].x) / height, (p[3].y - p[0].y) / height);
+            const QPointF origin = QPointF(p[0].x, p[0].y) - x * found->local.left -
+                                   y * found->local.top;
+            world = QTransform(x.x(), x.y(), y.x(), y.y(), origin.x(), origin.y()) * world;
+        }
+        if (!placed)
+            continue;
+        const auto map = [&world](const document::Vec2d point) {
+            const auto mapped = world.map(QPointF(point.x, point.y));
+            return document::Vec2d{mapped.x(), mapped.y()};
+        };
+        for (auto& point : bounds.polygon)
+            point = map(point);
+        bounds.anchor = map(bounds.anchor);
+        bounds.output = {bounds.polygon[0].x, bounds.polygon[0].y, bounds.polygon[0].x,
+                         bounds.polygon[0].y};
+        for (const auto point : bounds.polygon) {
+            bounds.output.left = std::min(bounds.output.left, point.x);
+            bounds.output.top = std::min(bounds.output.top, point.y);
+            bounds.output.right = std::max(bounds.output.right, point.x);
+            bounds.output.bottom = std::max(bounds.output.bottom, point.y);
+        }
+    }
 }
 
 std::vector<runtime::EvaluatedOperationBounds>

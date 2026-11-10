@@ -458,6 +458,14 @@ int main(int argc, char* argv[]) try {
                 cpuEvaluator.assetBaseDirectory(), time, colorIntent, cancellation);
         };
     previewController.setChannelListingProvider(channelListingProvider);
+    // #645: Viewer picks compile through the preview's compiler and shared plan cache, so a revision
+    // the Viewer already shows is not compiled again.
+    const auto viewerPicker = std::make_shared<bloom::runtime::ViewerPicker>(
+        [&snapshotCompiler, compiledPlanCache](const bloom::runtime::SnapshotCompileRequest& request,
+                                               const bloom::runtime::CancellationToken& cancellation) {
+            return compiledPlanCache->compile(snapshotCompiler, request, cancellation);
+        });
+    previewController.setViewerPicker(viewerPicker);
     // #536: a Viewer's own preview controller (a pinned Viewer, a secondary window's Viewer with
     // its own display transform): the same pipeline, shared frame cache, GPU display route and
     // processing policy as the application's controller. It reads and fills the shared cache but
@@ -473,6 +481,7 @@ int main(int argc, char* argv[]) try {
             previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, nullptr,
             processingPhasePolicy);
         controller->setChannelListingProvider(channelListingProvider);
+        controller->setViewerPicker(viewerPicker);
         QObject::connect(&memoryBudgetController,
                          &bloom::ui::MemoryBudgetController::sampleApplied, controller.get(),
                          &bloom::ui::CompositionPreviewController::notifyProcessingCapacityChanged);

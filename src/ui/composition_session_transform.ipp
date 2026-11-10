@@ -115,9 +115,12 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
             return TransformInteractionRejection::SingularTransform;
         // Qt composes row vectors left to right: world^-1 followed by childLocal.
         // With world = parent * child in column notation this is exactly parent^-1.
-        if (parentOf(*layerId))
+        // #645: a layer inside a group has its groups' maps composed into its polygon, so they
+        // are inverted here like a parent's.
+        if (parentOf(*layerId) || !enclosingGroups(*layerId).empty())
             inverseParent = inverseWorld * authoredLinear(scale, rotation);
-    } else if (parentOf(*layerId) || gesture.kind != TransformGesture::Kind::Move) {
+    } else if (parentOf(*layerId) || !enclosingGroups(*layerId).empty() ||
+               gesture.kind != TransformGesture::Kind::Move) {
         return TransformInteractionRejection::NoResolvableTransform;
     }
     transformInteraction_ = TransformInteraction{snapshot_.revision(),

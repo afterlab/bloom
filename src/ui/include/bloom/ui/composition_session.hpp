@@ -13,6 +13,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/drill_levels.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/layer_time.hpp>
 #include <bloom/document/merge_entries.hpp>
@@ -39,6 +40,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -87,6 +89,18 @@ struct MaskSelection final {
     document::LayerMaskId mask;
 
     friend bool operator==(const MaskSelection&, const MaskSelection&) = default;
+};
+
+// #645: the Viewer's drill level. `groups` are the entered group layers, outermost first, each a
+// child entry of the one before it (the first: of the composition's output Merge); `points` is a
+// shape layer, a child of the last group, whose points are being edited. Session/UI state only: it
+// is never saved, never part of undo, cleared on a composition switch or a project replacement and
+// trimmed to what still exists after every document change (document/drill_levels.hpp).
+struct ViewerLevel final {
+    std::vector<document::LayerId> groups;
+    std::optional<document::LayerId> points;
+
+    friend bool operator==(const ViewerLevel&, const ViewerLevel&) = default;
 };
 
 // #502: a MergeEntryRef is a Merge entry that has no layer yet (a plain entry, which behaves as an
@@ -312,6 +326,26 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::set<document::NodeId>
     dataBlockReaders(document::DataBlockRecordId blockId) const;
     void selectParameter(document::ParameterId parameterId);
+    // #645 The Viewer's drill level (ViewerLevel). setViewerLevel validates the chain with
+    // document::checkDrillLevel and refuses an invalid one (the refusal says why) without changing
+    // anything; it never changes the selection. Selecting a layer anywhere else (Timeline, node
+    // editor, Properties, MCP) sets the level to that layer's enclosing groups; a cleared selection
+    // keeps it. The Viewer's own picks go through the *FromViewer calls, which leave the level as
+    // the Viewer set it.
+    [[nodiscard]] const ViewerLevel& viewerLevel() const noexcept { return viewerLevel_; }
+    // The group layers enclosing `layer`, outermost first (document::drillAncestors); empty for a
+    // top-level layer or one no longer reachable. Kept per revision, so painting can ask freely.
+    [[nodiscard]] const std::vector<document::LayerId>&
+    enclosingGroups(document::LayerId layer) const;
+    [[nodiscard]] document::DrillLevelCheck setViewerLevel(ViewerLevel level);
+    void selectLayerFromViewer(document::LayerId layerId, bool extend = false);
+    void clearSelectionFromViewer();
+    // Selects the layer whose points the Viewer edits for `shape` (document::drillShape) and makes
+    // `shape` the level's points. False when `shape` is not a shape child of the current level.
+    [[nodiscard]] bool enterViewerPoints(document::LayerId shape);
+    // Up one level: from point editing back to the shape's group with the shape selected, else out
+    // of the innermost group with that group selected. False at the top level.
+    bool leaveViewerLevel();
     // Selects the layer and marks one of its masks as the Viewer's editable outline.
     void selectMask(document::LayerId layerId, document::LayerMaskId maskId);
     void clearMaskSelection();
@@ -921,6 +955,8 @@ class CompositionSession final : public QObject {
     void currentTimeChanged();
     void selectionChanged();
     void maskSelectionChanged();
+    // #645: the Viewer's drill level changed (viewerLevel()).
+    void viewerLevelChanged();
     void historyChanged();
     void commandRejected(const QString& message);
     // Emitted on begin/update/cancel/commit of a position interaction (docs/architecture/
@@ -1052,6 +1088,10 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::optional<document::LayerId>
     contextualLayerForParameter(document::ParameterId parameterId) const;
     void normalizeSelection();
+    // #645: the level after a document change, a selection made elsewhere, or a reset.
+    void normalizeViewerLevel();
+    void followSelectionWithViewerLevel();
+    void resetViewerLevel();
     void reportUnavailable(const QString& message);
     // Cancels an active position interaction whose frozen base revision no longer matches
     // snapshot_ (docs/architecture/animation-and-time.md: "snapshot changes that break the frozen
@@ -1155,6 +1195,16 @@ class CompositionSession final : public QObject {
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
     std::optional<MaskSelection> maskSelection_;
+    ViewerLevel viewerLevel_;
+    struct EnclosingGroupsCache final {
+        const void* project = nullptr;
+        document::Revision revision;
+        document::CompositionId composition;
+        std::unordered_map<document::LayerId, std::vector<document::LayerId>> chains;
+    };
+    mutable EnclosingGroupsCache enclosingGroups_;
+    // True while the Viewer writes the selection, so the level stays where the Viewer put it.
+    bool viewerSelecting_ = false;
     std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
     // #502: the entries selected together through the Timeline (entry layers and plain entries

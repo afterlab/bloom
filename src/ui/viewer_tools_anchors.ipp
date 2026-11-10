@@ -346,7 +346,9 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
         return false;
     if (maskOutlinePress(event, *mapping))
         return true;
-    if (target && hitAt(*mapping, event->position()).region == ViewerHitRegion::Empty)
+    // #645: inside a group outside point editing, a press off the selection picks another child.
+    if (target && hitAt(*mapping, event->position()).region == ViewerHitRegion::Empty &&
+        (session_.viewerLevel().groups.empty() || session_.viewerLevel().points))
         return start(AnchorGesture::Kind::Marquee, 0, path_editing::HandleSide::Out);
     return false;
 }
