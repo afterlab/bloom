@@ -241,6 +241,60 @@ draws the band along an image's alpha edge in image space instead, with a width,
 the path-only controls (trim, dash, taper, stamps, wiggle) belong to vector paths and do not apply
 there.
 
+## Resample Path
+
+`bloom.resample-path` (Text & Paths) answers the same path with its points placed along each contour:
+more points, fewer, or evenly spaced. It takes a Path operand and answers a Path, evaluated every frame
+from the operands of that frame. It adds no image lowering and needs no GPU coverage exception: the path
+it answers is drawn by Shape Source's production fill.
+
+| Operand | Meaning | Default |
+| --- | --- | --- |
+| Mode | Fixed count, Gap, By length or Percentage | Fixed count |
+| Count | Points per contour (Fixed count) | 32 |
+| Gap | Largest distance between neighbours, in pixels (Gap) | 10 |
+| Density | Points per 100 pixels of length (By length) | 10 |
+| Percentage | Share of the contour's own point count (Percentage) | 100 |
+| Keep corners | Existing corners stay as points | on |
+| Output | Straight segments or Curves | Curves |
+| Start offset | Slides the points along the contour, 0 to 100 percent | 0 |
+
+Every contour is resampled, open or closed, and the groups are kept. A closed contour has no duplicate
+point at its seam; Start offset wraps around it. An open contour always keeps its two ends and Start
+offset slides its inner points by up to one gap. Gap places the fewest evenly spaced points whose spacing
+does not pass the gap (a 100 px line at gap 10 gives 11 points); By length is Gap with a gap of 100
+divided by the density. A corner is an anchor where the direction of travel turns by more than half a
+degree; with Keep corners on, each span between corners is spaced on its own, so a square keeps its four
+corners. A count smaller than the corners need keeps the corners and ignores the rest.
+
+Curves are cubic segments through the new points that follow the original contour: a span inside one
+original segment is the exact sub-curve, and a span over several is a least-squares fit. Their
+deviation from the original is at most 0.25 px at the original density or finer. Straight joins the new
+points with lines.
+
+**Across frames.** Fixed count gives the same number of points on every contour at every frame, so two
+paths resampled to the same count have the same structure and interpolate (the path animation rule in
+path-value.md). Gap, By length and Percentage follow the path's length or point count, so the count may
+change from frame to frame, and such paths do not interpolate with each other.
+
+**Limits.** A contour holds at most 4096 points and a value 262144. A request beyond either, from any
+mode, is not clamped: the node fails with a diagnostic naming "Resample Path", the mode and the number
+requested, and answers the empty path. A count under 2 (open) or 3 (closed) is raised to that minimum.
+A contour of length zero answers copies of its point for Fixed count and is reported as a notice, not a
+failure. The result's anchors are charged to the evaluation's retained-path budget. Cancellation is
+observed between contours.
+
+The arithmetic (`src/runtime/path_resample.hpp`) is shared: the warp (#598) subdivides straight segments
+with it and the morph (#597) gives two contours the same number of points with `resampleToCount`.
+
+### Write to a Path
+
+The command `bloom.node.write-to-path` (node context menu "Write to a Path", MCP, Python
+`bloom.ops.node.write_to_path`, CLI) reads what any Path-producing value node answers at the playhead and
+writes the points into a Path node: a new one beside the source, or an existing constant, or a whole-path
+key at that time on an animated one. A driven Path node is refused. It is one undo step, and the groups
+and fill rule are kept. The read runs off the UI thread and is cancellable.
+
 ## Reference library
 
 Offset, union, difference, intersection and exclusive-or use a vendored polygon clipping library, the
@@ -250,6 +304,6 @@ types. Flattening is the render library's `flattenPathContour`, the one flatteni
 
 ## Groups
 
-Transform Path and Round Corners keep every contour and so every group. Trim Path keeps the groups of
+Resample Path, Transform Path and Round Corners keep every contour and so every group. Trim Path keeps the groups of
 the contours it keeps. Offset, Boolean and Merge answer geometry that does not descend one to one from
 contours, so they answer no groups; a consumer tracking a key finds it gone, as path-value.md allows.

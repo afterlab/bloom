@@ -662,6 +662,7 @@ target_sources(
         properties_driven_rows.cpp
         composition_parameter_vocabulary.cpp
         composition_driver_probe.cpp
+        node_path_writer.cpp
         properties_anchor_grid.cpp
         properties_sections.cpp
         value_presentation.cpp

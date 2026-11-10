@@ -202,6 +202,10 @@ class NodeControlsCardWidget final : public NodeCardWidget {
 
     [[nodiscard]] const std::vector<AngleDialRow*>& angleRows() const noexcept { return angles_; }
     [[nodiscard]] const std::vector<RangeRow*>& rangeRows() const noexcept { return ranges_; }
+    // #637: a single value on a track with its number (Resample Path's Percentage and Start offset).
+    [[nodiscard]] const std::vector<GradingValueRow*>& sliderRows() const noexcept {
+        return sliders_;
+    }
     [[nodiscard]] PointPadRow* padRow() const noexcept { return pad_; }
     [[nodiscard]] const std::vector<GradientParameterRow*>& gradientRows() const noexcept {
         return gradients_;
@@ -242,6 +246,7 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     std::vector<GradientParameterRow*> gradients_;
     std::vector<RangeRow*> ranges_;
     std::vector<AngleDialRow*> angles_;
+    std::vector<GradingValueRow*> sliders_;
     std::vector<CurveControl> curves_;
 };
 

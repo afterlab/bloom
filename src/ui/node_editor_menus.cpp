@@ -8,6 +8,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include "node_path_writer.hpp"
 #include <QPalette>
 #include <QPixmap>
 #include <QResizeEvent>
@@ -747,6 +748,15 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                                             commands::DuplicateNodes(composition, nodes, {24, 24})))
             action(tr("Duplicate"), QStringLiteral("nodeDuplicateAction"),
                    [this] { duplicateSelectedNodes(); });
+        // #637: a Path-producing node's result at the playhead, stored as points in a Path node.
+        if (nodes.size() == 1 && NodePathWriter::canWrite(graphComposition, *nodes.begin()))
+            action(tr("Write to a Path"), QStringLiteral("nodeWriteToPathAction"),
+                   [this, id = *nodes.begin()] {
+                       auto* writer = findChild<NodePathWriter*>();
+                       if (writer == nullptr)
+                           writer = new NodePathWriter(session_, this);
+                       writer->request(id);
+                   });
         if (nodes.size() == 1 && commands::canDissolveNode(graphComposition, *nodes.begin()))
             action(tr("Dissolve"), QStringLiteral("nodeDissolveAction"),
                    [this] { dissolveSelectedNode(); });

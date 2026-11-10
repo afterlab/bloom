@@ -166,8 +166,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // adds Image Statistics. #344 adds Transform Path, Trim Path and Offset Path; #530 adds Boolean
     // Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds
     // Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #509 adds Mask Path, Text
-    // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth.
-    expectations.expect(registry.definitions().size() == 242,
+    // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth; #637
+    // adds Resample Path.
+    expectations.expect(registry.definitions().size() == 243,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",

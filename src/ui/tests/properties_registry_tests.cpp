@@ -36,6 +36,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -1674,7 +1675,8 @@ void groupAndPlotRows() {
           document::kFunctionNodeType, document::kFunctionPlotNodeType, document::kAxesNodeType,
           document::kAxisTickNodeType, document::kTransformPathNodeType, document::kTrimPathNodeType,
           document::kOffsetPathNodeType, document::kBooleanPathsNodeType, document::kMergePathsNodeType,
-          document::kRoundCornersNodeType, document::kPathStrokeNodeType}) {
+          document::kRoundCornersNodeType, document::kPathStrokeNodeType,
+          document::kResamplePathNodeType}) {
         auto project = document::makeNewProject("Plot", "Main", core::RationalTime::fromInteger(10));
         document::Document document(std::move(project.project));
         commands::CommandStack stack(document);

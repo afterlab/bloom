@@ -25,6 +25,7 @@ target_sources(
         json_script.cpp
         live_session_host.cpp
         merge_entry_view.cpp
+        node_path_query.cpp
         node_reference.cpp
         operation_docs.cpp
         operation_docs.hpp
@@ -58,6 +59,7 @@ target_sources(
             include/bloom/scripting/json_script.hpp
             include/bloom/scripting/live_session_host.hpp
             include/bloom/scripting/merge_entry_view.hpp
+            include/bloom/scripting/node_path_query.hpp
             include/bloom/scripting/node_reference.hpp
             include/bloom/scripting/operation_reference.hpp
             include/bloom/scripting/operation_registry.hpp

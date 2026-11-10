@@ -1,4 +1,5 @@
 #include <bloom/ui/node_controls_widget.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/ui/motion_blur_widget.hpp>
 
 #include "properties_registry_row.hpp"
@@ -429,6 +430,16 @@ struct Controls final {
     QString padLabel;
     std::vector<RangeRow::Spec> ranges;
     std::vector<AngleDialRow::Spec> angles;
+    // #637: one value drawn as a row with a slider under its name and number.
+    struct ValueSlider final {
+        std::string role;
+        std::string schemaKey;
+        double minimum = 0.0;
+        double maximum = 100.0;
+        double neutral = 0.0;
+        double ticks = 0.0;
+    };
+    std::vector<ValueSlider> sliders;
     std::vector<GradientParameterRow::Spec> gradients;
     struct Curve final {
         std::string role;
@@ -537,6 +548,12 @@ struct Controls final {
         controls.connected = true;
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move Sample Region");
         controls.padActivityKey = std::string(document::kDenoiseSampleFromSchemaKey);
+    } else if (typeId == document::kResamplePathNodeType) {
+        // The share of points and the start offset are placed on a track, in percent.
+        controls.sliders.push_back({"percentage", std::string(document::kResamplePercentageSchemaKey),
+                                    0.0, 200.0, 100.0, 50.0});
+        controls.sliders.push_back({"startOffset", std::string(document::kResampleStartOffsetSchemaKey),
+                                    0.0, 100.0, 0.0, 25.0});
     } else if (typeId == "bloom.luma-key") {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,
@@ -708,6 +725,19 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
         angle.neutral = defaultScalar(session_, node_, angle.role);
         angles_.push_back(new AngleDialRow(session_, node_, std::move(angle), this));
     }
+    for (const auto& slider : controls.sliders) {
+        auto* row = new GradingValueRow(session_, node_, slider.role, slider.schemaKey,
+                                        parameterRowLabel(slider.schemaKey, slider.role),
+                                        slider.neutral, this);
+        GradingSliderSpec spec;
+        spec.mode = kit::KSlider::DragMode::Absolute;
+        spec.minimum = slider.minimum;
+        spec.maximum = slider.maximum;
+        spec.neutral = slider.neutral;
+        spec.ticks = slider.ticks;
+        row->setSlider(spec);
+        sliders_.push_back(row);
+    }
     for (auto& curve : controls.curves) {
         CurveControl control;
         control.role = curve.role;
@@ -771,6 +801,9 @@ bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
     for (const auto* angle : angles_)
         if (angle->role() == role)
             return false;
+    for (const auto* slider : sliders_)
+        if (slider->role() == role)
+            return false;
     for (const auto& curve : curves_)
         if (curve.role == role)
             return false;
@@ -787,6 +820,9 @@ std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) 
     for (const auto* angle : angles_)
         if (angle->role() == role && readsRole(role))
             return angle->y() + angle->socketY();
+    for (const auto* slider : sliders_)
+        if (slider->role() == role && roleActive(role))
+            return slider->y() + slider->socketY();
     return std::nullopt;
 }
 
@@ -801,6 +837,9 @@ int NodeControlsCardWidget::heightAt(const int width) const {
     for (const auto* angle : angles_)
         if (readsRole(angle->role()))
             height += angle->heightHint() + small();
+    for (const auto* slider : sliders_)
+        if (roleActive(slider->role()))
+            height += slider->heightHint() + small();
     for (const auto& curve : curves_)
         if (readsRole(curve.role))
             height +=
@@ -818,6 +857,8 @@ int NodeControlsCardWidget::minimumWidthHint() const {
         width = std::max(width, range->minimumWidthHint());
     for (const auto* angle : angles_)
         width = std::max(width, angle->minimumWidthHint());
+    for (const auto* slider : sliders_)
+        width = std::max(width, slider->minimumWidthHint());
     for (const auto& curve : curves_)
         width = std::max({width, curve.canvas->minimumSizeHint().width(),
                           curve.label->sizeHint().width()});
@@ -843,6 +884,8 @@ void NodeControlsCardWidget::place() {
         labels = std::max(labels, range->labelWidthHint());
     for (const auto* angle : angles_)
         labels = std::max(labels, angle->labelWidthHint());
+    for (const auto* slider : sliders_)
+        labels = std::max(labels, slider->labelWidthHint());
     int y = 0;
     for (auto* gradient : gradients_) {
         gradient->setLabelWidth(labels);
@@ -870,6 +913,15 @@ void NodeControlsCardWidget::place() {
         angle->setLabelWidth(labels);
         angle->setGeometry(0, y, width(), angle->heightHint());
         y += angle->heightHint() + small();
+    }
+    for (auto* slider : sliders_) {
+        const bool shown = roleActive(slider->role());
+        slider->setVisible(shown);
+        if (!shown)
+            continue;
+        slider->setLabelWidth(labels);
+        slider->setGeometry(0, y, width(), slider->heightHint());
+        y += slider->heightHint() + small();
     }
     for (const auto& curve : curves_) {
         const bool shown = readsRole(curve.role);
@@ -910,6 +962,8 @@ void NodeControlsCardWidget::refresh() {
         range->refresh(locked);
     for (auto* angle : angles_)
         angle->refresh(locked);
+    for (auto* slider : sliders_)
+        slider->refresh(locked);
     for (const auto& curve : curves_) {
         curve.canvas->setEnabled(!locked && curve.canvas->parameter().has_value());
         curve.canvas->update();

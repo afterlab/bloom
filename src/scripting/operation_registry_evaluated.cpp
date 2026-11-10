@@ -11,6 +11,7 @@
 #include <bloom/commands/layer_alignment_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/path_write_operations.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/graph.hpp>
@@ -21,6 +22,7 @@
 #include <bloom/runtime/layer_bounds_query.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/node_path_query.hpp>
 #include <bloom/scripting/readings.hpp>
 #include <bloom/scripting/render.hpp>
 
@@ -93,6 +95,22 @@ const std::string kCryptomattePick =
     R"(Cryptomatte layer); bloom.scripting.cancelled. )"
     R"(Undo: one step. )"
     R"(MCP example: {"op":"bloom.cryptomatte.pick","args":{"node":7,"point":[960,540]}}.)";
+
+const std::string kWriteToPath =
+    R"(Writes what a Path-producing value node (Resample Path, Trim Path, Transform Path, Offset Path, )"
+    R"(Path Stroke, a Path node, and the others that answer a Path) gives at `time` into a Path node )"
+    R"((bloom.value-path) as stored points, so the points can be moved and keyed by hand. The node is )"
+    R"(evaluated when the operation is created, off the UI thread, and stops when the request is )"
+    R"(cancelled. With no `target` a new Path node is added beside the source and wired to nothing; )"
+    R"(the source's links never change. With a `target` Path node, a constant value is replaced and )"
+    R"(an animated one gets a whole-path key at `time`. `port` names the Path output; the default is )"
+    R"(the node's first. Keys stay whole-path: all points of a path share their key times. )"
+    R"(Outputs: node (the Path node written). )"
+    R"(Errors: "Node N does not exist"; "Node N has no Path output"; the node's own diagnostic when it )"
+    R"(fails at that time (a count past the Path caps, a bad operand); "Node N is not a Path node"; )"
+    R"("The Path node's value is driven by another node; disconnect it first"; bloom.scripting.cancelled. )"
+    R"(Undo: one step removes the new node, or restores the target's value. )"
+    R"(MCP example: {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.)";
 
 [[nodiscard]] OperationCreateResult refuse(const std::string& op, std::string code,
                                            std::string argument, std::string message) {
@@ -473,6 +491,56 @@ OperationCreateResult cryptomattePick(const std::string& op, const Arguments& ar
         document::ParameterValue{runtime::joinCryptomatteMatteList(mattes)}));
 }
 
+OperationCreateResult writeToPath(const std::string& op, const Arguments& args,
+                                  const OperationContext& context) {
+    Reader read(op, args);
+    const auto compositionId = read.id<CompositionId>("composition");
+    const auto nodeId = read.id<NodeId>("node");
+    const auto target = read.id<NodeId>("target", false);
+    const auto port = read.text("port");
+    const auto time = read.time("time");
+    if (read.failed())
+        return read.error();
+    if (!context.source)
+        return noSource(op);
+    const auto source = context.source();
+    if (!source)
+        return noSource(op);
+    const auto* composition = source->snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return invalid(op, "composition",
+                       "Composition " + std::to_string(compositionId.value()) + " does not exist");
+    const auto* node = composition->graph().findNode(nodeId);
+    if (node == nullptr)
+        return invalid(op, "node", "Node " + std::to_string(nodeId.value()) + " does not exist");
+    if (target.isValid()) {
+        const auto* existing = composition->graph().findNode(target);
+        if (existing == nullptr || existing->typeId != document::kPathValueNodeType)
+            return invalid(op, "target",
+                           "Node " + std::to_string(target.value()) + " is not a Path node");
+    }
+    const auto queried = runCancellable<NodePathQuery>(
+        context.stop, "Write To Path", runtime::TaskExecutor::Cpu,
+        [&](const runtime::CancellationToken& cancellation) {
+            return queryNodePath(source->snapshot, compositionId, nodeId, port.value_or(""), *time,
+                                 cancellation);
+        });
+    if (queried.cancelled || (queried.value && queried.value->cancelled))
+        return cancelledRead(op);
+    if (!queried.value)
+        return refuse(op, "bloom.scripting.read-failed", {}, "The node could not be read");
+    if (!queried.value->path)
+        return invalid(op, "node", queried.value->diagnostic);
+    // Beside the source, clear of it; AddNode moves the card further when something is in the way.
+    document::Vec2d position{0.0, 0.0};
+    if (const auto found = composition->nodeLayout().find(nodeId);
+        found != composition->nodeLayout().end())
+        position = {found->second.position.x + found->second.width + 64.0, found->second.position.y};
+    return made(std::make_unique<commands::WriteValueToPath>(
+        compositionId, target.isValid() ? std::optional<NodeId>(target) : std::nullopt,
+        std::move(*queried.value->path), position, *time));
+}
+
 void addContextual(std::vector<OperationDescriptor>& descriptors, std::string id,
                    std::string description, std::vector<ArgumentSchema> arguments,
                    OperationCreateResult (*create)(const std::string&, const Arguments&,
@@ -518,6 +586,20 @@ void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors) {
                R"(as Alt-click does.)"),
          timeFromContext("The time whose frame is read. Defaults to the current playhead time.")},
         cryptomattePick);
+    addContextual(
+        descriptors, "bloom.node.write-to-path", kWriteToPath,
+        {composition(),
+         need("node", ValueKind::Id, StableId{1},
+              "Id. The node whose Path result is written (Resample Path and the other Path "
+              "producers)."),
+         maybe("port", ValueKind::String, "",
+               "The Path output to write. Defaults to the node's first Path output."),
+         maybe("target", ValueKind::Id, StableId{1},
+               "Id. An existing Path node to write into. Defaults to a new Path node beside the "
+               "source."),
+         timeFromContext("The time whose result is written (and where an animated target is "
+                         "keyed). Defaults to the current playhead time.")},
+        writeToPath);
 }
 
 [[nodiscard]] static LayerBoundsReading measureLayerBoundsReading(const OperationContext& context,

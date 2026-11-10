@@ -1,5 +1,6 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/font_id.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/compiled_plan_cache.hpp>

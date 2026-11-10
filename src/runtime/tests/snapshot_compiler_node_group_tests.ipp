@@ -1581,6 +1581,11 @@ void testPathProcessingFrames(Expectations& expectations) {
          {{kPathStrokeNodeType,
            {{"width", 30.0}, {"end", 70.0}, {"taperStart", 30.0}, {"taperEnd", 40.0},
             {"wiggle", 6.0}, {"coreWidth", 40.0}}}}},
+        {"resample-path-curves",
+         {{kResamplePathNodeType, {{"count", std::int64_t{12}}, {"keepCorners", true}}}}},
+        {"resample-path-gap-straight",
+         {{kResamplePathNodeType,
+           {{"mode", std::int64_t{1}}, {"gap", 35.0}, {"output", std::int64_t{0}}}}}},
         {"merge-paths-subtract",
          {{kMergePathsNodeType, {{"operation", std::int64_t{1}}}}}},
     };

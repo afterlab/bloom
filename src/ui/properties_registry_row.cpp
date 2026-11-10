@@ -57,6 +57,7 @@
 #include <limits>
 #include <memory>
 #include <tuple>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <utility>
 
 namespace bloom::ui {
@@ -265,6 +266,14 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == document::kTextParameterSchemaKey ? QObject::tr("Text")
         : schemaKey == "bloom.exposure.stops"            ? QObject::tr("Exposure")
         : schemaKey == "bloom.offset.amount"             ? QObject::tr("Offset")
+        // #637 Resample Path: what each value is for, and the mode and output choices.
+        : schemaKey == document::kResampleCountSchemaKey      ? QObject::tr("Points per contour")
+        : schemaKey == document::kResampleGapSchemaKey        ? QObject::tr("Gap (pixels)")
+        : schemaKey == document::kResampleDensitySchemaKey    ? QObject::tr("Points per 100 px")
+        : schemaKey == document::kResamplePercentageSchemaKey ? QObject::tr("Share of points (%)")
+        : schemaKey == document::kResampleStartOffsetSchemaKey ? QObject::tr("Start offset (%)")
+        : schemaKey == document::kResampleModeParameterSchemaKey ? QObject::tr("Mode")
+        : schemaKey == document::kResampleOutputParameterSchemaKey ? QObject::tr("Output")
         : schemaKey == "bloom.multiply.factor"           ? QObject::tr("Factor")
         // #501: what the switch clamps.
         : schemaKey == document::kLevelsClampSchemaKey ||
