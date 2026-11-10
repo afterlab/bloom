@@ -992,7 +992,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // #642: a content scale's input is that many times larger; the layer's pivot, anchor
             // and local bounds are the picture's at the frame's scale, as on the CPU.
             const double contentScale = layer->contentScale;
-            const bool scaledContent = contentScale != 1.0;
+            // #642: drawing into an oversampled group resamples through the content matrix too
+            // (which carries the output scale), as on the CPU.
+            const bool scaledContent = contentScale != 1.0 || layer->outputScale != 1.0;
             const auto inputCentre = inputLocal.pivot();
             const auto centre =
                 layer->framePivot
@@ -1027,10 +1029,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 contentComposed = parentMatrix->times(contentAuthored);
             }
             layerMatrices[index] = composed;
+            // #642: drawn into an oversampled group, its pixels land that many times larger; its
+            // children compose its plain matrix.
+            contentComposed = contentComposed.enlarged(layer->outputScale);
             std::optional<detail::GpuSceneVectorChain> chained;
             if (inputVec.has_value()) {
                 chained = GpuSceneVectorChain{inputVec->source,
-                                              (scaledContent ? contentComposed : composed)
+                                              (contentScale != 1.0
+                                                   ? contentComposed
+                                                   : composed.enlarged(layer->outputScale))
                                                   .times(inputVec->matrix),
                                               inputVec->opacity * opacity->value};
                 vectors[index] = *chained;
@@ -1396,6 +1403,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         .bypassLookNodes = request.bypassLookNodes,
     };
     const GpuSceneCommandIndex outputCommand = commandForOperation[request.output.value()];
+    // #642: a layer drawing into an oversampled group publishes its bounds at a scale of 1, as on
+    // the CPU.
+    detail::publishOutputScaledBounds(*plan, bounds);
     auto scene = std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
         std::move(commands), std::move(commandForOperation), outputCommand, std::move(identity),
         std::move(bounds), frameResolved.imageDescriptor, mediaStatistics));

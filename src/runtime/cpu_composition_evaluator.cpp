@@ -3422,7 +3422,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     content = layerMatrices[layer->parent->value()].times(content);
                 }
                 layerMatrices[index] = matrix;
-                contentMatrices[index] = content;
+                // #642: drawn into an oversampled group, its pixels land that many times larger;
+                // its children compose its plain matrix.
+                contentMatrices[index] = content.enlarged(layer->outputScale);
             }
             const auto& operation = plan->operations()[index];
             if ((std::holds_alternative<CompiledSolid>(operation) &&
@@ -3439,9 +3441,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     const auto& input = *inputVector;
                     const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
                     // #642: a content scale maps its larger input back (vector sources have no
-                    // pixel aspect of their own).
-                    const auto& own = layer->contentScale != 1.0 ? contentMatrices[index]
-                                                                 : layerMatrices[index];
+                    // pixel aspect of their own); an output scale draws into a larger group.
+                    const auto own = layer->contentScale != 1.0
+                                         ? contentMatrices[index]
+                                         : layerMatrices[index].enlarged(layer->outputScale);
                     vectors[index] = VectorChain{input.source, own.times(input.matrix),
                                                  opacity ? input.opacity * opacity->value : 0};
                 } else if (const auto opacity =
@@ -3781,6 +3784,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (step.contentScale != 1.0) {
                                 key.add(std::string("contentScale"));
                                 key.add(step.contentScale);
+                            }
+                            // #642: it draws into a group this many times larger.
+                            if (step.outputScale != 1.0) {
+                                key.add(std::string("outputScale"));
+                                key.add(step.outputScale);
                             }
                             // #343: the window it is drawn in follows what the frame shows of it.
                             for (const auto& window : {visible[index], matteWindowOf(index)}) {
@@ -4953,7 +4961,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // layer's pivot, anchor and local bounds are the picture's at the
                             // frame's scale, and it resamples through its content matrix.
                             const double contentScale = layer.contentScale;
-                            const bool scaledContent = contentScale != 1.0;
+                            // #642: drawing into an oversampled group resamples through its content
+                            // matrix too (which carries the output scale).
+                            const bool scaledContent =
+                                contentScale != 1.0 || layer.outputScale != 1.0;
                             const auto inputCentre = geometry.local.pivot();
                             const decltype(inputCentre) contentCentre{inputCentre.x / contentScale,
                                                                       inputCentre.y / contentScale};
@@ -5651,6 +5662,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             processImage = std::move(owned);
         }
+        // #642: a layer drawing into an oversampled group publishes its bounds at a scale of 1.
+        detail::publishOutputScaledBounds(*plan, bounds);
         const auto animationSamplingSemanticsVersion = plan->animationSamplingSemanticsVersion();
         ProcessFrameIdentity identity{
             .plan = std::move(plan),

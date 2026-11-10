@@ -1743,6 +1743,14 @@ struct CompiledLayerOutput {
     // children compose its plain matrix. A power of two, so every division is exact. Appended 1:
     // no existing plan changes meaning.
     double contentScale = 1.0;
+    // #642: the layer draws into a picture `outputScale` times larger about the composition's
+    // origin (document::VectorArtworkOversampledGroup: a group above a Vector Artwork drawn at its
+    // output scale). The matrix its pixels are resampled or covered through is its composed matrix
+    // times that scale; its children compose its plain matrix; it publishes the bounds it would
+    // publish at 1 (detail::publishOutputScaledBounds), while the Merge it draws into sees them at
+    // the larger scale, as the group's reader (with the same content scale) expects. A power of
+    // two. Appended 1: no existing plan changes meaning.
+    double outputScale = 1.0;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

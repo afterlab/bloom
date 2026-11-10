@@ -136,9 +136,12 @@ lowerLayerBoundary(const document::LayerOutputBoundary& boundary, const document
                 artwork.leaves.push_back(found->second);
         result.composedArtwork = std::move(artwork);
     }
-    // #642: a Vector Artwork layer whose artwork is drawn at its output scale (svg_artwork.hpp).
-    if (const auto oversampled = artwork_.oversampled.find(boundary.layerId); oversampled != artwork_.oversampled.end())
-        result.contentScale = oversampled->second.scale;
+    // #642: a Vector Artwork layer whose artwork is drawn at its output scale, a group's reader
+    // that maps its larger picture back, and a layer drawing into such a group (svg_artwork.hpp).
+    if (const auto content = artwork_.contentScales.find(boundary.layerId); content != artwork_.contentScales.end())
+        result.contentScale = content->second;
+    if (const auto output = artwork_.outputScales.find(boundary.layerId); output != artwork_.outputScales.end())
+        result.outputScale = output->second;
     return result;
 }
 

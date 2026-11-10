@@ -85,6 +85,14 @@ struct LayerMatrix {
         return authored(position, {pivot.x * contentScale, pivot.y * contentScale},
                         {scale.x * pixelAspect / contentScale, scale.y / contentScale}, degrees);
     }
+    // #642: this matrix followed by a scale of `factor` about the origin (a layer drawing into a
+    // picture `factor` times larger, CompiledLayerOutput::outputScale). Exact for a power of two;
+    // the matrix itself at a factor of 1.
+    [[nodiscard]] LayerMatrix enlarged(const double factor) const {
+        if (factor == 1.0)
+            return *this;
+        return {a * factor, b * factor, c * factor, d * factor, x * factor, y * factor};
+    }
 };
 
 // The exact conversion from the runtime's AUTHOR-space LayerMatrix (pixel-centre + 0.5 convention)

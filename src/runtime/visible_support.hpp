@@ -150,7 +150,8 @@ visibleSupportWindows(const CompiledCompositionPlan& plan, const ResolvedEvaluat
             content = layerMatrices[layer->parent->value()]->times(content);
         }
         layerMatrices[index] = matrix;
-        contentMatrices[index] = content;
+        // #642: drawn into an oversampled group, its pixels land that many times larger.
+        contentMatrices[index] = content.enlarged(layer->outputScale);
     };
     for (std::size_t index = 0; index < count; ++index)
         matrixOf(index);
@@ -244,12 +245,70 @@ visibleSupportWindows(const CompiledCompositionPlan& plan, const ResolvedEvaluat
                 continue;
             }
             const auto& kernel = effect->kernel;
+            // #642: a layer's masks multiply its content by their coverage over the content's own
+            // pixels, and the grades, keys and channel moves read only the pixel they write, so
+            // each reads its inputs exactly where it is read.
             if (std::holds_alternative<IdentityImageKernel>(kernel) ||
                 std::holds_alternative<ImageCombineKernel>(kernel) ||
                 std::holds_alternative<PointwiseImageKernel>(kernel) ||
                 std::holds_alternative<CstKernel>(kernel) ||
-                std::holds_alternative<FileTransformKernel>(kernel)) {
+                std::holds_alternative<FileTransformKernel>(kernel) ||
+                std::holds_alternative<LayerMaskKernel>(kernel) ||
+                std::holds_alternative<LumaKeyKernel>(kernel) ||
+                std::holds_alternative<LevelsKernel>(kernel) ||
+                std::holds_alternative<CurvesKernel>(kernel) ||
+                std::holds_alternative<HueSaturationKernel>(kernel) ||
+                std::holds_alternative<GradeKernel>(kernel) ||
+                std::holds_alternative<ChannelSelectKernel>(kernel) ||
+                std::holds_alternative<ChannelCombineKernel>(kernel) ||
+                std::holds_alternative<HighlightRollOffKernel>(kernel) ||
+                std::holds_alternative<AlphaAssociationKernel>(kernel) ||
+                std::holds_alternative<ColorizeKernel>(kernel) ||
+                std::holds_alternative<ColorToolKernel>(kernel)) {
                 everyInput(asked);
+                continue;
+            }
+            // #642: a Transform 2D that only moves (a Drop Shadow's offset) reads each pixel's
+            // source one move away, plus its resample's taps; its centre then decides nothing.
+            if (const auto* transform = std::get_if<Transform2DKernel>(&kernel)) {
+                const auto* scale = std::get_if<document::Vec2d>(&transform->scale.source);
+                const auto* rotation = std::get_if<double>(&transform->rotation.source);
+                const auto* skew = std::get_if<double>(&transform->skew.source);
+                const auto& resolved = resolvedForClock(frameResolved, clock);
+                const auto translate = resolveParameter(transform->translate, plan, resolved);
+                if (!asked.unbounded && translate && scale != nullptr && scale->x == 1.0 &&
+                    scale->y == 1.0 && rotation != nullptr && *rotation == 0.0 &&
+                    skew != nullptr && *skew == 0.0 && std::isfinite(translate->value.x) &&
+                    std::isfinite(translate->value.y) &&
+                    std::abs(translate->value.x * hScale) < static_cast<double>(kLimit) &&
+                    std::abs(translate->value.y * vScale) < static_cast<double>(kLimit)) {
+                    const auto dx =
+                        static_cast<std::int64_t>(std::floor(translate->value.x * hScale));
+                    const auto dy =
+                        static_cast<std::int64_t>(std::floor(translate->value.y * vScale));
+                    Demand moved = asked;
+                    moved.rectangle = {asked.rectangle.left - dx, asked.rectangle.top - dy,
+                                       asked.rectangle.right - dx, asked.rectangle.bottom - dy};
+                    everyInput(widened(moved, 2, 2));
+                    continue;
+                }
+                everyInput(unbounded);
+                continue;
+            }
+            // #642: a directional (Glow Streak) pass reads four taps up to three spacings along its
+            // ray, each a bilinear sample.
+            if (const auto* directional = std::get_if<DirectionalBlurKernel>(&kernel)) {
+                const auto& resolved = resolvedForClock(frameResolved, clock);
+                const auto spacing = resolveParameter(directional->spacing, plan, resolved);
+                if (spacing && std::isfinite(spacing->value)) {
+                    const double reach = 3.0 * std::abs(spacing->value) * std::max(hScale, vScale);
+                    if (reach < static_cast<double>(kLimit)) {
+                        const auto margin = static_cast<std::int64_t>(std::ceil(reach)) + 2;
+                        everyInput(widened(asked, margin, margin));
+                        continue;
+                    }
+                }
+                everyInput(unbounded);
                 continue;
             }
             if (const auto* blur = std::get_if<SeparableBlurKernel>(&kernel);
