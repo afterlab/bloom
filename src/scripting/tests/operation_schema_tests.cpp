@@ -136,7 +136,9 @@ void expect(const bool condition, const std::string& what) {
                                        .composition = 7,
                                        .selection = {11, 12},
                                        .layers = {21},
-                                       .time = core::RationalTime::create(1, 2)};
+                                       .time = core::RationalTime::create(1, 2),
+                                       .level = {},
+                                       .points = {}};
         auto contextual = registry.create(id, shortest, context);
         expect(static_cast<bool>(contextual),
                id + "'s example call constructs once bloom.context answers the rest" +
@@ -153,7 +155,9 @@ void expect(const bool condition, const std::string& what) {
                                 .composition = 1,
                                 .selection = {},
                                 .layers = {},
-                                .time = core::RationalTime::fromInteger(0)};
+                                .time = core::RationalTime::fromInteger(0),
+                                .level = {},
+                                .points = {}};
     auto rejected = registry.create("bloom.layer.add-solid", Arguments{}, live);
     expect(!rejected, "an empty add-solid call is rejected");
     if (rejected.diagnostic() != nullptr) {
@@ -195,8 +199,13 @@ void expect(const bool condition, const std::string& what) {
     expect(descriptor != nullptr, "set-enabled is registered");
     if (descriptor != nullptr) {
         Arguments arguments{{"enabled", Value(true)}, {"layer", Value(StableId{99})}};
-        const OperationContext context{
-            .project = 1, .composition = 7, .selection = {11}, .layers = {21}, .time = {}};
+        const OperationContext context{.project = 1,
+                                       .composition = 7,
+                                       .selection = {11},
+                                       .layers = {21},
+                                       .time = {},
+                                       .level = {},
+                                       .points = {}};
         const auto filled =
             bloom::scripting::applyContextDefaults(descriptor->schema, arguments, context);
         expect(filled.size() == 1 && filled.front() == "composition",
