@@ -72,7 +72,7 @@ bool NodeProjectionInputs::sameContent(const NodeProjectionInputs& other) const 
            compositions == other.compositions &&
            compositionColorSpace == other.compositionColorSpace &&
            colorSettings == other.colorSettings && workingColorSpace == other.workingColorSpace &&
-           colorConverterReady == other.colorConverterReady;
+           colorConverterReady == other.colorConverterReady && slotLabels == other.slotLabels;
 }
 } // namespace node_editor
 
@@ -98,6 +98,14 @@ NodeProjectionInputs projectionInputs(const document::Snapshot& snapshot,
         inputs.colorSettings = session->colorSettings();
         inputs.workingColorSpace = std::string(session->colorIntent().workingColorSpaceId);
         inputs.colorConverterReady = session->colorConverterReady();
+    }
+    for (const auto& node : composition.graph().nodes()) {
+        if (node.typeId != document::kNodeGroupNodeType)
+            continue;
+        for (const auto& slot : document::kNodeGroupSlots)
+            if (const auto label =
+                    nodeGroupSlotLabel(snapshot.project(), composition, node.id, slot.name))
+                inputs.slotLabels[{node.id.value(), std::string(slot.name)}] = *label;
     }
     return inputs;
 }
@@ -130,14 +138,7 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
     ++counters.projections;
 
     index_->links = buildProjectionIndex(*composition);
-    for (const auto& node : composition->graph().nodes()) {
-        if (node.typeId != document::kNodeGroupNodeType)
-            continue;
-        for (const auto& slot : document::kNodeGroupSlots)
-            if (const auto label =
-                    nodeGroupSlotLabel(snapshot.project(), *composition, node.id, slot.name))
-                index_->links.socketLabels[{node.id.value(), std::string(slot.name)}] = *label;
-    }
+    index_->links.socketLabels = inputs.slotLabels;
     const auto& links = index_->links;
     // Every link re-registers with its two cards below, kept or new.
     for (const auto& [id, card] : index_->nodes)

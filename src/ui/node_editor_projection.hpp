@@ -87,6 +87,10 @@ struct NodeProjectionInputs final {
     std::optional<document::ColorSettings> colorSettings;
     std::string workingColorSpace;
     bool colorConverterReady = false;
+    // #509: each Node Group instance's slot labels (nodeGroupSlotLabel), read from the group
+    // definition, another composition: an edit there that retargets a slot changes them without
+    // changing this composition's content.
+    std::map<std::pair<std::uint64_t, std::string>, QString> slotLabels;
 
     [[nodiscard]] bool sameContent(const NodeProjectionInputs& other) const;
 };

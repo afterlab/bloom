@@ -5,6 +5,8 @@
 #include "node_interaction_test_support.hpp"
 
 #include <bloom/commands/node_layout_placement.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -525,6 +527,47 @@ void testGlowingPathPresets() {
     expect(
         beamColor == QStringLiteral("Shape Fill Color"),
         ("Beam's colour slot names the stroke's fill (" + beamColor.toStdString() + ")").c_str());
+
+    // The label follows the slot's target, an edit inside the group (another composition) with
+    // nothing in this composition changed: disconnecting the slot inside the group leaves the
+    // socket its own name, and undoing the edit names it again, with no other redraw.
+    const auto colorLabel = [&] {
+        QString label = QStringLiteral("(no card)");
+        if (auto* card = f.card(*beamNode))
+            for (auto* socket : card->sockets())
+                if (socket->input && socket->name == QStringLiteral("color1"))
+                    label = socket->label;
+        return label;
+    };
+    const auto beamSnapshot = f.session.snapshot();
+    const auto& project = beamSnapshot.project();
+    const auto* beamRecord = f.session.composition()->graph().findNode(*beamNode);
+    const auto target = beamRecord != nullptr
+                            ? document::nodeGroupSlotTarget(project, *beamRecord,
+                                                            f.session.composition()->parameters(),
+                                                            "color1")
+                            : std::nullopt;
+    const auto group = beamRecord != nullptr ? document::nodeGroupReference(
+                                                 *beamRecord, f.session.composition()->parameters())
+                                           : std::nullopt;
+    expect(target.has_value() && group.has_value(), "Beam's colour slot has a target in its group");
+    if (!target || !group)
+        return;
+    const auto host = f.session.composition()->contentIdentity();
+    commands::Transaction retarget("Disconnect inside the group", f.session.snapshot().revision());
+    retarget.emplace<commands::DisconnectInput>(
+        *group, document::InputPortRef{document::NodeInputRef{target->node, target->role}});
+    expect(f.scene()->submit(std::move(retarget)).changed(), "the slot's link inside the group goes");
+    QCoreApplication::processEvents();
+    expect(f.session.composition()->contentIdentity() == host,
+           "the edit leaves the host composition's content as it was");
+    expect(colorLabel().isEmpty(), ("with no target the card shows the slot's own name (" +
+                                    colorLabel().toStdString() + ")")
+                                       .c_str());
+    expect(f.session.undo(), "the edit undoes");
+    QCoreApplication::processEvents();
+    expect(colorLabel() == QStringLiteral("Shape Fill Color"),
+           ("undone, the card names the target again (" + colorLabel().toStdString() + ")").c_str());
 }
 
 // Bug #401: with 25 animated layers, playback touches only the visible time-varying cards, once
