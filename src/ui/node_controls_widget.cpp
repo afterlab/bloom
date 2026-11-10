@@ -18,6 +18,7 @@
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -319,7 +320,7 @@ PointPadRow::PointPadRow(CompositionSession& session, const document::NodeId nod
     pad_->setToolTip(tr("Drag a point to move it; Shift-click to send the selected point there"));
     connect(pad_, &kit::KPointPad::editStarted, this, [this] {
         const auto ids = parameters();
-        editing_ = ids.size() == spec_.points.size() &&
+        editing_ = !ids.empty() && ids.size() == visibleCount() &&
                    session_.beginValueEdits(ids, spec_.commandLabel);
     });
     connect(pad_, &kit::KPointPad::pointsChanged, this, [this] {
@@ -327,8 +328,11 @@ PointPadRow::PointPadRow(CompositionSession& session, const document::NodeId nod
             return;
         const auto frame = spec_.frame ? spec_.frame() : compositionFrame(session_);
         std::vector<document::ParameterValue> values;
+        std::size_t shown = 0;
         for (std::size_t index = 0; index < spec_.points.size(); ++index) {
-            auto at = pad_->value(index);
+            if (!pointShown(index))
+                continue;
+            auto at = pad_->value(shown++);
             if (spec_.points[index].corner)
                 at -= frame.center() + QPointF(spec_.points[index].corner->x() * frame.width(),
                                                spec_.points[index].corner->y() * frame.height());
@@ -367,10 +371,30 @@ PointPadRow::PointPadRow(CompositionSession& session, const document::NodeId nod
 
 std::vector<document::ParameterId> PointPadRow::parameters() const {
     std::vector<document::ParameterId> ids;
-    for (const auto& point : spec_.points)
-        if (const auto id = nodeRoleParameter(session_, node_, point.role))
-            ids.push_back(*id);
+    for (std::size_t index = 0; index < spec_.points.size(); ++index)
+        if (pointShown(index))
+            if (const auto id = nodeRoleParameter(session_, node_, spec_.points[index].role))
+                ids.push_back(*id);
     return ids;
+}
+
+bool PointPadRow::pointShown(const std::size_t index) const {
+    return std::ranges::find(inactive_, spec_.points[index].role) == inactive_.end();
+}
+
+std::size_t PointPadRow::visibleCount() const {
+    std::size_t count = 0;
+    for (std::size_t index = 0; index < spec_.points.size(); ++index)
+        count += pointShown(index) ? 1U : 0U;
+    return count;
+}
+
+void PointPadRow::setInactive(std::vector<std::string> roles) {
+    if (roles == inactive_)
+        return;
+    inactive_ = std::move(roles);
+    if (!pad_->hasLiveEdit())
+        refresh(!pad_->isEnabled());
 }
 
 int PointPadRow::heightAt(const int width) const { return pad_->heightForWidth(width); }
@@ -396,7 +420,10 @@ void PointPadRow::refresh(const bool locked) {
     pad_->setFrame(frame);
     bool editable = !locked;
     std::vector<kit::KPointPad::Point> points;
-    for (const auto& point : spec_.points) {
+    for (std::size_t index = 0; index < spec_.points.size(); ++index) {
+        if (!pointShown(index))
+            continue;
+        const auto& point = spec_.points[index];
         const auto id = nodeRoleParameter(session_, node_, point.role);
         const auto value = id ? liveVector(session_, *id) : std::nullopt;
         editable = editable && id && value && scalarEditable(session_, *id);
@@ -528,6 +555,21 @@ struct Controls final {
         controls.connected = true;
         controls.nodeSizedFrame = true;
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move Gradient");
+    } else if (typeId == document::kTileMirrorNodeType) {
+        // #511: the one point each mode moves, on one pad (the others are inactive and not drawn),
+        // and the two angles: the mirror line's, clockwise from screen right (90 is vertical), and
+        // the kaleidoscope's turn, clockwise from up.
+        const auto tr = [](const char* text) {
+            return QCoreApplication::translate("NodeControls", text);
+        };
+        controls.points = {{"tileCenter", tr("Tile Center"), true},
+                           {"offset", tr("Offset"), true},
+                           {"mirrorPoint", tr("Line Point"), true},
+                           {"kaleidoscopeCenter", tr("Center"), true}};
+        controls.padLabel = tr("Move Point");
+        controls.angles.push_back(angle("mirrorAngle", "bloom.tile-mirror.mirrorAngle", true, false));
+        controls.angles.push_back(
+            angle("kaleidoscopeAngle", "bloom.tile-mirror.kaleidoscopeAngle", false, false));
     } else if (typeId == document::kFourColorGradientNodeType) {
         // The four points, in field units (pixels from the centre, +y up), moved on one pad.
         const auto point = [](std::string role, QString label) {
@@ -733,6 +775,10 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
         padShown_ = padShown();
     }
     inactive_ = inactiveRoles();
+    if (pad_ != nullptr) {
+        pad_->setInactive(inactive_);
+        padShown_ = padShown();
+    }
     for (auto& gradient : controls.gradients) {
         gradients_.push_back(new GradientParameterRow(session_, node_, std::move(gradient), this));
         // #543: the stops' rows open, close and follow their links.
@@ -784,6 +830,9 @@ bool NodeControlsCardWidget::readsRole(const std::string_view role) const {
 
 bool NodeControlsCardWidget::padShown() const {
     if (pad_ == nullptr)
+        return false;
+    // A pad whose every point is inactive in the node's mode is not drawn.
+    if (pad_->visibleCount() == 0)
         return false;
     if (padActivityKey_.empty())
         return true;
@@ -840,7 +889,7 @@ std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) 
         if (const auto at = range->socketY(role))
             return range->y() + *at;
     for (const auto* angle : angles_)
-        if (angle->role() == role && readsRole(role))
+        if (angle->role() == role && readsRole(role) && roleActive(role))
             return angle->y() + angle->socketY();
     for (const auto* slider : sliders_)
         if (slider->role() == role && roleActive(role))
@@ -857,7 +906,7 @@ int NodeControlsCardWidget::heightAt(const int width) const {
     for (const auto* range : ranges_)
         height += range->heightHint() + small();
     for (const auto* angle : angles_)
-        if (readsRole(angle->role()))
+        if (readsRole(angle->role()) && roleActive(angle->role()))
             height += angle->heightHint() + small();
     for (const auto* slider : sliders_)
         if (roleActive(slider->role()))
@@ -928,7 +977,7 @@ void NodeControlsCardWidget::place() {
         y += range->heightHint() + small();
     }
     for (auto* angle : angles_) {
-        const bool shown = readsRole(angle->role());
+        const bool shown = readsRole(angle->role()) && roleActive(angle->role());
         angle->setVisible(shown);
         if (!shown)
             continue;
@@ -965,6 +1014,15 @@ void NodeControlsCardWidget::refresh() {
     const bool locked = composition == nullptr || composition->nodeLocked(node_);
     for (auto* gradient : gradients_)
         gradient->refresh(locked);
+    // A value row appears or goes with what the node reads.
+    if (auto inactive = inactiveRoles(); inactive != inactive_) {
+        inactive_ = std::move(inactive);
+        if (pad_ != nullptr)
+            pad_->setInactive(inactive_);
+        place();
+        updateGeometry();
+        emit rowsChanged();
+    }
     if (pad_ != nullptr) {
         pad_->refresh(locked);
         // The pad appears or goes with the parameter it follows.
@@ -974,11 +1032,6 @@ void NodeControlsCardWidget::refresh() {
             updateGeometry();
             emit rowsChanged();
         }
-    }
-    // A value row appears or goes with what the node reads.
-    if (auto inactive = inactiveRoles(); inactive != inactive_) {
-        inactive_ = std::move(inactive);
-        emit rowsChanged();
     }
     for (auto* range : ranges_)
         range->refresh(locked);

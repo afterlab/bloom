@@ -17,6 +17,7 @@ namespace bloom::document {
 [[nodiscard]] NodeDefinition cornerPinDefinition();
 [[nodiscard]] NodeDefinition stMapDefinition();
 [[nodiscard]] NodeDefinition stabilizeDefinition();
+[[nodiscard]] NodeDefinition tileMirrorDefinition();
 [[nodiscard]] NodeDefinition displaceDefinition();
 
 } // namespace bloom::document

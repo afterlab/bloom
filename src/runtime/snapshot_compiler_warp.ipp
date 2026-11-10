@@ -298,3 +298,254 @@ lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOp
     const auto read = warpRead(build, where, slot, {*filter, warpEdge(*edges), 3, 4, 0, 1});
     return finishWarp(node, build, read, *input, operations, indices);
 }
+
+// #511 Tile & Mirror: four modes on the same inverse mapping, one field raster each. Field positions
+// are pixels from the frame's centre with y up; the node's points are pixels from the centre with
+// y down, moved into the program by the Homography instruction's translation mode, whose y flip
+// they need (held point P, zero second point): direction 0 reads p - P, direction 1 reads p + P.
+//
+//   Motion Tile   the pixel, in tiles (p / tile size, less the phase), folded into the cell (Transform
+//                 Tile, or Mirror with Mirror Edges), back to pixels, moved to the tile centre; with
+//                 Clamp to Output, a pixel beyond half the output size reads a position no image
+//                 reaches, so it is transparent. The canvas is the composition frame.
+//   Wrap Offset   the pixel reads p - shift, the edge rule Repeat about the input's data window. The
+//                 canvas is the input.
+//   Mirror        about the line through the point at the angle: p - P, turned so the line is the x
+//                 axis, y folded to one side (Min or Max with y negated), turned back, plus P.
+//   Kaleidoscope  p - C, turned by the rotation, divided by the size, folded into a wedge (Transform
+//                 Kaleidoscope), plus C.
+[[nodiscard]] int warpTranslate(FieldBuild& build, const int where,
+                                const runtime::CompiledVec2Parameter& point,
+                                const std::int64_t direction) {
+    const runtime::CompiledVec2Parameter none{document::ParameterId{}, document::Vec2d{}};
+    return fieldEmit(build, FieldOp::Homography, {where, -1, -1, -1}, {1, direction}, {},
+                     {point, none});
+}
+
+// The point as a position register (field units, y up): the translation applied to nothing. A point is
+// one operand of the program, so a mode that moves out of the point's frame and back reads this
+// register twice.
+int warpPosition(FieldBuild& build, const runtime::CompiledVec2Parameter& point) {
+    const auto nothing = fieldBroadcast(build, fieldConstant(0.0));
+    return warpTranslate(build, nothing, point, 1);
+}
+
+// A Math operation on `a` and `b` (the operation's index in core::field::FieldMathOperation).
+int warpMath(FieldBuild& build, const std::int64_t operation, const int a, const int b,
+             const runtime::CompiledScalarParameter angle = fieldConstant(0.0)) {
+    return fieldEmit(build, FieldOp::Math, {a, b, -1, -1}, {operation},
+                     {fieldConstant(0.1), angle});
+}
+
+[[nodiscard]] bool
+lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledOperation>& operations,
+                std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    constexpr std::int64_t kAdd = 0;
+    constexpr std::int64_t kSubtract = 1;
+    constexpr std::int64_t kMultiply = 2;
+    constexpr std::int64_t kDivide = 3;
+    constexpr std::int64_t kMin = 4;
+    constexpr std::int64_t kMax = 5;
+    constexpr std::int64_t kAbs = 7;
+    constexpr std::int64_t kDot = 13;
+    constexpr std::int64_t kRotate = 17;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    const auto fail = [this, &node] {
+        addTopologyFailure(node.id, "Tile & Mirror parameters could not be lowered.");
+        return false;
+    };
+    const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+    const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
+    if (mode == nullptr || filter == nullptr || *mode < kTileMirrorModeTile ||
+        *mode > kTileMirrorModeKaleidoscope || *filter < kWarpFilterBilinear ||
+        *filter > kWarpFilterBicubic)
+        return fail();
+    // Wrap Offset's edge rule is its own: Repeat.
+    std::int64_t edge = warpEdge(kWarpEdgeRepeat);
+    if (*mode != kTileMirrorModeWrapOffset) {
+        const auto* edges = parameterConstant<std::int64_t>(findParameterBinding(node, "edges"));
+        if (edges == nullptr || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror)
+            return fail();
+        edge = warpEdge(*edges);
+    }
+    const auto scalar = [this, &node](const std::string_view role) {
+        return compiledScalarParameter(findParameterBinding(node, role));
+    };
+    const auto point = [this, &node](const std::string_view role) {
+        return compiledVec2Parameter(findParameterBinding(node, role));
+    };
+    const auto flag = [this, &node](const std::string_view role) -> std::optional<bool> {
+        const auto* value = parameterConstant<bool>(findParameterBinding(node, role));
+        return value == nullptr ? std::nullopt : std::optional<bool>{*value};
+    };
+    // Every value of the mode is read before a muted node is passed through, so a bad node refuses.
+    std::optional<runtime::CompiledVec2Parameter> pointValue;
+    std::optional<runtime::CompiledScalarParameter> first;
+    std::optional<runtime::CompiledScalarParameter> second;
+    std::optional<runtime::CompiledScalarParameter> third;
+    std::optional<runtime::CompiledScalarParameter> fourth;
+    std::optional<runtime::CompiledScalarParameter> fifth;
+    std::optional<runtime::CompiledScalarParameter> sixth;
+    bool clamp = false;
+    bool linkedSize = false;
+    bool mirror = false;
+    bool upper = false;
+    std::int64_t segments = 6;
+    switch (*mode) {
+    case kTileMirrorModeTile: {
+        const auto link = flag("linkTileSize");
+        const auto clampValue = flag("clampToOutput");
+        const auto mirrorValue = flag("mirrorEdges");
+        pointValue = point("tileCenter");
+        first = scalar("tileWidth");
+        second = link.value_or(false) ? first : scalar("tileHeight");
+        third = scalar("horizontalPhase");
+        fourth = scalar("verticalPhase");
+        if (!link || !clampValue || !mirrorValue || !pointValue || !first || !second || !third ||
+            !fourth)
+            return fail();
+        clamp = *clampValue;
+        linkedSize = *link;
+        mirror = *mirrorValue;
+        if (clamp) {
+            fifth = scalar("outputWidth");
+            sixth = scalar("outputHeight");
+            if (!fifth || !sixth)
+                return fail();
+        }
+        break;
+    }
+    case kTileMirrorModeWrapOffset:
+        pointValue = point("offset");
+        if (!pointValue)
+            return fail();
+        break;
+    case kTileMirrorModeMirror: {
+        const auto* side = parameterConstant<std::int64_t>(findParameterBinding(node, "mirrorSide"));
+        pointValue = point("mirrorPoint");
+        first = scalar("mirrorAngle");
+        if (side == nullptr || *side < kTileMirrorSideLeftBelow || *side > kTileMirrorSideRightAbove ||
+            !pointValue || !first)
+            return fail();
+        upper = *side == kTileMirrorSideRightAbove;
+        break;
+    }
+    default: {
+        const auto* count =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "kaleidoscopeSegments"));
+        pointValue = point("kaleidoscopeCenter");
+        first = scalar("kaleidoscopeAngle");
+        second = scalar("kaleidoscopeSize");
+        if (count == nullptr || *count < kMinimumKaleidoscopeSegments ||
+            *count > kMaximumKaleidoscopeSegments || !pointValue || !first || !second)
+            return fail();
+        segments = *count;
+        break;
+    }
+    }
+    if (isMuted(node.id)) {
+        passWarpThrough(node, *input, indices);
+        return true;
+    }
+    const auto& format = composition_->format();
+    const auto width = static_cast<double>(format.width());
+    const auto height = static_cast<double>(format.height());
+    FieldBuild build;
+    build.operations = &operations;
+    build.indices = &indices;
+    const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+    const auto slot = warpSlot(build, node, *input);
+    if (slot < 0)
+        return false;
+    int where = c;
+    runtime::OperationIndex canvas = *input;
+    switch (*mode) {
+    case kTileMirrorModeTile: {
+        // The tile size in pixels, and the phase and output size in the units they are used in.
+        // A parameter is one operand of the program: a linked height reads the width's lane again.
+        const bool linked = linkedSize;
+        const auto sizes = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                     {*first, linked ? fieldConstant(0.0) : *second,
+                                      fieldConstant(0.0), fieldConstant(0.0)});
+        const auto tile = fieldSwizzle(build, sizes, {0, linked ? 0 : 1, 4, 4},
+                                       {width / 100.0, height / 100.0, 1.0, 1.0});
+        const auto phases = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                      {*third, *fourth, fieldConstant(0.0), fieldConstant(0.0)});
+        // 360 degrees is one tile; the picture moves right and down (y down) for a positive phase.
+        const auto shift = fieldSwizzle(build, phases, {0, 1, 4, 4}, {1.0 / 360.0, -1.0 / 360.0, 1.0, 1.0});
+        const auto tiles = warpMath(build, kDivide, c, tile);
+        const auto phased = warpMath(build, kSubtract, tiles, shift);
+        const runtime::CompiledVec2Parameter origin{document::ParameterId{}, document::Vec2d{}};
+        const runtime::CompiledVec2Parameter unit{document::ParameterId{}, document::Vec2d{1.0, 1.0}};
+        const auto cell = fieldEmit(build, FieldOp::Transform, {phased, -1, -1, -1},
+                                    {mirror ? 3 : 2, 6}, {fieldConstant(0.0), fieldConstant(0.0)},
+                                    {origin, unit, origin, unit});
+        const auto pixels = warpMath(build, kMultiply, cell, tile);
+        where = warpTranslate(build, pixels, *pointValue, 1);
+        if (clamp) {
+            const auto extent = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                          {*fifth, *sixth, fieldConstant(0.0), fieldConstant(0.0)});
+            const auto half = fieldSwizzle(build, extent, {0, 1, 4, 4}, {width / 200.0, height / 200.0, 1.0, 1.0});
+            const auto distance = warpMath(build, kAbs, c, c);
+            const auto beyond = warpMath(build, kSubtract, distance, half);
+            const auto none = fieldBroadcast(build, fieldConstant(0.0));
+            const auto outside = warpMath(build, kMax, beyond, none);
+            // A pixel past the output reads a position no texel holds, so it is transparent.
+            const auto far = fieldSwizzle(build, outside, {0, 1, 4, 4}, {1.0e19, 1.0e19, 1.0, 1.0});
+            where = warpMath(build, kAdd, where, far);
+        }
+        const auto solidCanvas = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledSolid{
+            node.id,
+            runtime::CompiledColorParameter{document::ParameterId{}, core::Color4d{0.0, 0.0, 0.0, 0.0}},
+            fieldConstant(width), fieldConstant(height)});
+        canvas = solidCanvas;
+        break;
+    }
+    case kTileMirrorModeWrapOffset:
+        where = warpTranslate(build, c, *pointValue, 0);
+        break;
+    case kTileMirrorModeMirror: {
+        // With the angle's cosine and sine from one turned unit vector (an operand is read once), the
+        // unit normal m = (sin, cos) is the side the line's angle names; d = q . m is the distance
+        // from the line, and the pixels on the far side read q - 2 d m, their reflection.
+        const auto origin = warpPosition(build, *pointValue);
+        const auto local = warpMath(build, kSubtract, c, origin);
+        const auto unit = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                    {fieldConstant(1.0), fieldConstant(0.0), fieldConstant(0.0),
+                                     fieldConstant(0.0)});
+        const auto turned = warpMath(build, kRotate, unit, -1, *first);
+        const auto normal = fieldSwizzle(build, turned, {1, 0, 4, 4});
+        const auto distance = warpMath(build, kDot, local, normal);
+        const auto none = fieldBroadcast(build, fieldConstant(0.0));
+        // Left or Below keeps the negative side of the normal, so the positive side is reflected.
+        const auto far = warpMath(build, upper ? kMin : kMax, distance, none);
+        const auto along = warpMath(build, kMultiply, far, normal);
+        const auto twice = fieldSwizzle(build, along, {0, 1, 4, 4}, {2.0, 2.0, 1.0, 1.0});
+        const auto reflected = warpMath(build, kSubtract, local, twice);
+        where = warpMath(build, kAdd, reflected, origin);
+        break;
+    }
+    default: {
+        const auto origin = warpPosition(build, *pointValue);
+        const auto local = warpMath(build, kSubtract, c, origin);
+        const auto turned = warpMath(build, kRotate, local, -1, *first);
+        const auto once = fieldEmit(build, FieldOp::Constant, {-1, -1, -1, -1}, {},
+                                    {*second, fieldConstant(0.0), fieldConstant(0.0), fieldConstant(0.0)});
+        const auto size = fieldSwizzle(build, once, {0, 0, 4, 4});
+        const auto divided = warpMath(build, kDivide, turned, size);
+        const auto scaled = fieldSwizzle(build, divided, {0, 1, 4, 4}, {100.0, 100.0, 1.0, 1.0});
+        const auto wedge = fieldEmit(build, FieldOp::Transform, {scaled, -1, -1, -1}, {4, segments},
+                                     {fieldConstant(0.0), fieldConstant(0.0)});
+        where = warpMath(build, kAdd, wedge, origin);
+        break;
+    }
+    }
+    const auto read = warpRead(build, where, slot, {*filter, edge, 3, 4, 0, 1});
+    return finishWarp(node, build, read, canvas, operations, indices);
+}

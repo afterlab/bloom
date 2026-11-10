@@ -6,6 +6,7 @@
 #include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -74,6 +75,33 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
             return exposure;
         if (schemaKey == kVignetteExposureSchemaKey)
             return !exposure;
+        return false;
+    }
+    // #511 Tile & Mirror: each mode reads only its own values (the lowering reads the same ones).
+    if (node.typeId == kTileMirrorNodeType) {
+        constexpr std::string_view prefix = "bloom.tile-mirror.";
+        if (!schemaKey.starts_with(prefix))
+            return false;
+        const auto role = schemaKey.substr(prefix.size());
+        const auto mode = constantOf(composition, node, "mode").value_or(kTileMirrorModeTile);
+        const bool tile = mode == kTileMirrorModeTile;
+        if (role == "edges")
+            return mode == kTileMirrorModeWrapOffset;
+        if (role == "tileHeight")
+            return !tile || constantOf(composition, node, "linkTileSize").value_or(0) != 0;
+        if (role == "outputWidth" || role == "outputHeight")
+            return !tile || constantOf(composition, node, "clampToOutput").value_or(1) == 0;
+        if (role == "tileCenter" || role == "tileWidth" || role == "linkTileSize" ||
+            role == "clampToOutput" || role == "mirrorEdges" || role == "horizontalPhase" ||
+            role == "verticalPhase")
+            return !tile;
+        if (role == "offset")
+            return mode != kTileMirrorModeWrapOffset;
+        if (role == "mirrorPoint" || role == "mirrorAngle" || role == "mirrorSide")
+            return mode != kTileMirrorModeMirror;
+        if (role == "kaleidoscopeCenter" || role == "kaleidoscopeSegments" ||
+            role == "kaleidoscopeAngle" || role == "kaleidoscopeSize")
+            return mode != kTileMirrorModeKaleidoscope;
         return false;
     }
     if (node.typeId == kFilmGrainNodeType) {

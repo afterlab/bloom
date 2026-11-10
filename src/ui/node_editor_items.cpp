@@ -82,6 +82,8 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Pad");
     if (typeId == "bloom.flip")
         return QCoreApplication::translate("node_editor", "Flip");
+    if (typeId == "bloom.tile-mirror")
+        return QCoreApplication::translate("node_editor", "Tile & Mirror");
     if (typeId == "bloom.rotate-90")
         return QCoreApplication::translate("node_editor", "Rotate 90");
     if (typeId == "bloom.gaussian-blur")

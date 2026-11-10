@@ -639,7 +639,7 @@ void testSearchKeyboardAndMenus() {
                  "Keying & Mattes holds the keys and mattes");
         hasGroup("Transform",
                  {"Camera Shake", "Crop", "Fit", "Flip", "Pad", "Resize", "Rotate 90", "Stabilize",
-                  "Transform 2D"},
+                  "Tile & Mirror", "Transform 2D"},
                  "Transform holds the geometric operations");
         hasGroup("Blur & Sharpen",
                  {"Box Blur", "Denoise", "Directional Blur", "Gaussian Blur", "Motion Blur", "Optical Flow",

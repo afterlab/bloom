@@ -214,7 +214,8 @@ void blurNodeReopen() {
                              "bloom.test-card",
                              "bloom.corner-pin",
                              "bloom.st-map",
-                             "bloom.displace"}) {
+                             "bloom.displace",
+                             "bloom.tile-mirror"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -376,9 +377,17 @@ void blurNodeReopen() {
                 : parameter.schemaKey.starts_with("bloom.rolling-shutter.")
                     ? document::ParameterValue{0.375}
                 // #348 Corner Pin, ST Map and Displace: moved choices, moved corners and amounts.
-                : parameter.schemaKey.starts_with("bloom.corner-pin.") &&
-                        document::isWarpPointSchemaKey(parameter.schemaKey)
+                : document::isWarpPointSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{document::Vec2d{17.5, -9.25}}
+                // #511 Tile & Mirror: a switch on, a whole number moved.
+                : document::warpParameterSpec(parameter.schemaKey) != nullptr &&
+                        document::warpParameterSpec(parameter.schemaKey)->kind ==
+                            document::WarpParameterKind::Boolean
+                    ? document::ParameterValue{true}
+                : document::warpParameterSpec(parameter.schemaKey) != nullptr &&
+                        document::warpParameterSpec(parameter.schemaKey)->kind ==
+                            document::WarpParameterKind::Integer
+                    ? document::ParameterValue{std::int64_t{9}}
                 : document::warpParameterSpec(parameter.schemaKey) != nullptr &&
                         document::warpParameterSpec(parameter.schemaKey)->kind ==
                             document::WarpParameterKind::Choice

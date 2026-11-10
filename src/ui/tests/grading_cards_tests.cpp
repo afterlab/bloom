@@ -1719,6 +1719,109 @@ void cornerPinCard() {
     capture(fixture, QStringLiteral("corner-pin-dragged"));
 }
 
+// #511: the Tile & Mirror card, one per mode: it paints inside its card with no label cut short, draws
+// the one point its mode moves on a pad and the one angle it turns on a dial (and no other), and every
+// widget edits the document through one command that changes its own value alone.
+void tileMirrorCards() {
+    struct Mode final {
+        std::int64_t value;
+        const char* name;
+        const char* point;
+        const char* angle;
+        bool angleFromRight;
+    };
+    const std::vector<Mode> modes{{0, "tile-mirror-tile", "tileCenter", nullptr, false},
+                                  {1, "tile-mirror-wrap-offset", "offset", nullptr, false},
+                                  {2, "tile-mirror-mirror", "mirrorPoint", "mirrorAngle", true},
+                                  {3, "tile-mirror-kaleidoscope", "kaleidoscopeCenter",
+                                   "kaleidoscopeAngle", false}};
+    for (const auto& mode : modes) {
+        CardFixture fixture(document::kTileMirrorNodeType);
+        auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(
+                                        fixture.item->cardWidget())
+                                  : nullptr;
+        expect(card != nullptr, "Tile & Mirror draws its card widget");
+        if (card == nullptr)
+            continue;
+        expect(fixture.session.setNodeParameterValue(fixture.node, "mode", mode.value,
+                                                     QStringLiteral("Set")),
+               "the mode is set through a command");
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << mode.name << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, mode.name))
+            ++failures;
+        capture(fixture, QString::fromLatin1(mode.name));
+        const auto vector = [&](const char* role) {
+            const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
+            const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+            const auto* value = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
+            return value ? *value : document::Vec2d{1.0e9, 1.0e9};
+        };
+        // The one point of the mode is on the pad; dragging it is one command that moves it alone.
+        expect(card->padRow() != nullptr && card->padRow()->pad() != nullptr &&
+                   card->padRow()->visibleCount() == 1,
+               "the pad holds the one point of the mode");
+        if (card->padRow() != nullptr && card->padRow()->pad() != nullptr) {
+            auto& pad = *card->padRow()->pad();
+            expect(pad.points().size() == 1, "the pad draws one point");
+            const auto commands = fixture.stack.size();
+            const QPointF from = pad.screenPoint(pad.value(0));
+            const QPointF to =
+                from + QPointF(pad.frameRect().width() * 0.2, pad.frameRect().height() * 0.15);
+            mouse(pad, QEvent::MouseButtonPress, from);
+            mouse(pad, QEvent::MouseMove, to);
+            mouse(pad, QEvent::MouseButtonRelease, to);
+            QApplication::processEvents();
+            const auto moved = vector(mode.point);
+            bool others = true;
+            for (const char* role : {"tileCenter", "offset", "mirrorPoint", "kaleidoscopeCenter"})
+                if (std::string_view(role) != mode.point)
+                    others = others && vector(role) == document::Vec2d{};
+            expect(fixture.stack.size() == commands + 1 && moved.x > 50.0 && moved.y > 20.0 && others,
+                   "dragging the point moves it, as one command, and leaves the others");
+            expect(fixture.session.undo() && vector(mode.point) == document::Vec2d{},
+                   "undo puts the point back");
+            expect(fixture.session.redo() && vector(mode.point) == moved, "redo moves it again");
+        }
+        if (mode.angle == nullptr) {
+            expect(card->angleRows().size() == 2 && !card->angleRows()[0]->isVisibleTo(&fixture.window) &&
+                       !card->angleRows()[1]->isVisibleTo(&fixture.window),
+                   "a mode with no angle draws no dial");
+            continue;
+        }
+        ui::AngleDialRow* row = nullptr;
+        for (auto* candidate : card->angleRows()) {
+            if (candidate->role() == mode.angle)
+                row = candidate;
+            else
+                expect(!candidate->isVisibleTo(&fixture.window),
+                       "the dial of another mode's angle is not drawn");
+        }
+        expect(row != nullptr && row->isVisibleTo(&fixture.window),
+               "the mode draws the dial of its angle");
+        if (row == nullptr)
+            continue;
+        auto& dial = *row->dial();
+        const auto before = stored(fixture.session, fixture.node, mode.angle);
+        const auto commands = fixture.stack.size();
+        const auto centre = dial.discRect().center();
+        const double reach = dial.discRect().width() * 0.4;
+        // A quarter turn clockwise: from screen right to down (zero at right), or from up to right.
+        const QPointF start = mode.angleFromRight ? QPointF(reach, 0.0) : QPointF(0.0, -reach);
+        const QPointF end = mode.angleFromRight ? QPointF(0.0, reach) : QPointF(reach, 0.0);
+        mouse(dial, QEvent::MouseButtonPress, centre + start);
+        mouse(dial, QEvent::MouseMove, centre + end);
+        mouse(dial, QEvent::MouseButtonRelease, centre + end);
+        const auto after = stored(fixture.session, fixture.node, mode.angle);
+        expect(before && after && std::abs(*after - (*before + 90.0)) < 1e-6 &&
+                   fixture.stack.size() == commands + 1,
+               "turning the dial a quarter turn adds 90 degrees as one command");
+    }
+}
+
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
 // and shows its node's rows; the graph follows the values, each handle's drag is one command that
 // moves its own value alone and its row follows; a slider drag is one command too.
@@ -2991,6 +3094,7 @@ int main(int argc, char** argv) {
     lensDistortionCard();
     chromaticAberrationCard();
     cornerPinCard();
+    tileMirrorCards();
     testCardCard();
     testCardExpectedReadout();
     lightRaysCard();

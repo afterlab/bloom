@@ -2421,6 +2421,30 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                                                               filter + 1),
                                  1U});
         id += 100;
+        // #511 Tile & Mirror: each mode through each filter (Tile with Mirror Edges and Clamp to Output
+        // on alternate filters, Mirror either side, Kaleidoscope at three segment counts).
+        kernels.emplace_back("tile filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::tileMirrorProgram(
+                                     id, 0, filter, filter + 1, filter == 1 ? 0 : 3),
+                                 1U});
+        id += 100;
+        kernels.emplace_back("wrap offset filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::tileMirrorProgram(id, 1, filter), 1U});
+        id += 100;
+        kernels.emplace_back("mirror filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::tileMirrorProgram(
+                                     id, 2, filter, filter + 1, filter % 2),
+                                 1U});
+        id += 100;
+        kernels.emplace_back("kaleidoscope filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::tileMirrorProgram(
+                                     id, 3, filter, filter + 1, 3 + 2 * filter),
+                                 1U});
+        id += 100;
         kernels.emplace_back("st map filter " + std::to_string(filter),
                              bloom::runtime::FieldRasterKernel{
                                  bloom::field_test_programs::stMapProgram(id, filter, filter + 1), 1U});

@@ -140,6 +140,9 @@ struct NodeControlsEstimate final {
         return {.sliders = 2};
     if (typeId == document::kShapeMorphNodeType)
         return {.sliders = 1};
+    // #511: the pad for the mode's point and the angle dial of Mirror or Kaleidoscope (one at a time).
+    if (typeId == document::kTileMirrorNodeType)
+        return {1, 0, true};
     if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
         return {0, 0, true, 1};
     if (typeId == "bloom.four-color-gradient")

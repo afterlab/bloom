@@ -167,8 +167,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds
     // Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #509 adds Mask Path, Text
     // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth; #637
-    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph.
-    expectations.expect(registry.definitions().size() == 246,
+    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror.
+    expectations.expect(registry.definitions().size() == 247,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -504,6 +504,23 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             stabilize->parameters[6].supportsAnimation && stabilize->outputs.size() == 1 &&
             stabilize->outputs[0].name == "image",
         "#513: Stabilize has constant choices and an animatable track point and position");
+    const auto* tileMirror = registry.find("bloom.tile-mirror", 1);
+    expectations.expect(
+        tileMirror != nullptr && tileMirror->inputs[0].name == "input" &&
+            tileMirror->parameters[0].role == "mode" && !tileMirror->parameters[0].supportsAnimation &&
+            tileMirror->parameters[3].role == "tileWidth" &&
+            tileMirror->parameters[3].supportsAnimation &&
+            tileMirror->parameters[5].role == "linkTileSize" &&
+            tileMirror->parameters[5].valueKind == document::ParameterValueKind::Boolean &&
+            !tileMirror->parameters[5].supportsAnimation &&
+            tileMirror->parameters[14].role == "kaleidoscopeSegments" &&
+            tileMirror->parameters[14].valueKind == document::ParameterValueKind::Integer &&
+            !tileMirror->parameters[14].supportsAnimation &&
+            tileMirror->parameters[17].role == "tileCenter" &&
+            tileMirror->parameters[17].supportsAnimation && tileMirror->outputs.size() == 1 &&
+            tileMirror->outputs[0].name == "image" && !document::hasEffectMask(*tileMirror),
+        "#511: Tile & Mirror has constant choices and switches and animatable sizes, phases, "
+        "angles and points");
     const auto* stMap = registry.find("bloom.st-map", 1);
     expectations.expect(
         stMap != nullptr && !document::hasEffectMask(*stMap) && stMap->inputs.size() == 2 &&

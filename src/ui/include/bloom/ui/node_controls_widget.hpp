@@ -168,6 +168,9 @@ class PointPadRow final : public QWidget {
                 QWidget* parent = nullptr);
 
     [[nodiscard]] kit::KPointPad* pad() const noexcept { return pad_; }
+    // #511: the roles the node does not read now; their points are not drawn or edited.
+    void setInactive(std::vector<std::string> roles);
+    [[nodiscard]] std::size_t visibleCount() const;
     [[nodiscard]] int heightAt(int width) const;
     [[nodiscard]] int minimumWidthHint() const;
     void refresh(bool locked);
@@ -177,9 +180,11 @@ class PointPadRow final : public QWidget {
 
   private:
     [[nodiscard]] std::vector<document::ParameterId> parameters() const;
+    [[nodiscard]] bool pointShown(std::size_t index) const;
     CompositionSession& session_;
     document::NodeId node_;
     Spec spec_;
+    std::vector<std::string> inactive_;
     kit::KPointPad* pad_ = nullptr;
     bool editing_ = false;
 };

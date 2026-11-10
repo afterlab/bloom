@@ -413,6 +413,41 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     return b.finish(joined, FieldResultKind::Premultiplied);
 }
 
+// Packs the virtual registers into the sixteen physical ones by last use, as the lowering does.
+inline void packRegisters(FieldProgram& program) {
+    const auto count = program.instructions.size();
+    std::vector<std::size_t> lastUse(count, 0);
+    for (std::size_t i = 0; i < count; ++i) {
+        lastUse[static_cast<std::size_t>(program.instructions[i].output)] = i;
+        for (const auto input : program.instructions[i].inputs)
+            if (input >= 0)
+                lastUse[static_cast<std::size_t>(input)] = i;
+    }
+    lastUse[program.result] = count;
+    std::vector<int> physicalOf(count, -1);
+    std::array<std::size_t, 16> freeAfter{};
+    std::array<bool, 16> used{};
+    for (std::size_t i = 0; i < count; ++i) {
+        auto& instruction = program.instructions[i];
+        const auto virtualOutput = static_cast<std::size_t>(instruction.output);
+        for (auto& input : instruction.inputs)
+            if (input >= 0)
+                input = static_cast<std::int8_t>(physicalOf[static_cast<std::size_t>(input)]);
+        // A register whose last read is this very instruction may be written by it.
+        for (std::size_t r = 0; r < 16; ++r)
+            if (used[r] && freeAfter[r] <= i)
+                used[r] = false;
+        std::size_t chosen = 0;
+        while (chosen < 16 && used[chosen])
+            ++chosen;
+        physicalOf[virtualOutput] = static_cast<int>(chosen);
+        used[chosen] = true;
+        freeAfter[chosen] = lastUse[virtualOutput];
+        instruction.output = static_cast<std::int8_t>(chosen);
+    }
+    program.result = static_cast<std::uint8_t>(physicalOf[program.result]);
+}
+
 // #568 Rolling Shutter: the program its lowering builds for a top-to-bottom readout of half a frame
 // over the 16 x 12 test composition, a Camera Shake behind both camera sockets and a flow image
 // connected, mirroring snapshot_compiler_fields.ipp's lowerRollingShutter (the snapshot compiler
@@ -470,38 +505,7 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const auto read = b.add(FieldOp::Image, {where}, {0, edges, 3, 4, 0, 1});
     b.last().slot = 0;
     auto program = b.finish(read, FieldResultKind::Premultiplied);
-    // The lowering packs virtual registers into the sixteen physical ones by last use; so does this.
-    const auto count = program.instructions.size();
-    std::vector<std::size_t> lastUse(count, 0);
-    for (std::size_t i = 0; i < count; ++i) {
-        lastUse[static_cast<std::size_t>(program.instructions[i].output)] = i;
-        for (const auto input : program.instructions[i].inputs)
-            if (input >= 0)
-                lastUse[static_cast<std::size_t>(input)] = i;
-    }
-    lastUse[program.result] = count;
-    std::vector<int> physicalOf(count, -1);
-    std::array<std::size_t, 16> freeAfter{};
-    std::array<bool, 16> used{};
-    for (std::size_t i = 0; i < count; ++i) {
-        auto& instruction = program.instructions[i];
-        const auto virtualOutput = static_cast<std::size_t>(instruction.output);
-        for (auto& input : instruction.inputs)
-            if (input >= 0)
-                input = static_cast<std::int8_t>(physicalOf[static_cast<std::size_t>(input)]);
-        // A register whose last read is this very instruction may be written by it.
-        for (std::size_t r = 0; r < 16; ++r)
-            if (used[r] && freeAfter[r] <= i)
-                used[r] = false;
-        std::size_t chosen = 0;
-        while (chosen < 16 && used[chosen])
-            ++chosen;
-        physicalOf[virtualOutput] = static_cast<int>(chosen);
-        used[chosen] = true;
-        freeAfter[chosen] = lastUse[virtualOutput];
-        instruction.output = static_cast<std::int8_t>(chosen);
-    }
-    program.result = static_cast<std::uint8_t>(physicalOf[program.result]);
+    packRegisters(program);
     return program;
 }
 
@@ -572,6 +576,89 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
     b.last().slot = 0;
     return b.finish(read, FieldResultKind::Premultiplied);
+}
+
+// #511 Tile & Mirror: the programs its lowering builds over the 16 x 12 test composition, mirroring
+// snapshot_compiler_warp.ipp (the snapshot compiler test holds each to the same instruction sequence).
+// `mode` 0 Tile (`flags` bit 0 Mirror Edges, bit 1 Clamp to Output), 1 Wrap Offset, 2 Mirror (`flags`
+// bit 0 the upper side), 3 Kaleidoscope (`flags` the segment count).
+[[nodiscard]] inline FieldProgram tileMirrorProgram(const std::uint64_t idBase, const std::int64_t mode,
+                                                    const std::int64_t filter = 0,
+                                                    const std::int64_t edge = 1,
+                                                    const std::int64_t flags = 0) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const Vec2d zero{};
+    const Vec2d unit{1.0, 1.0};
+    const auto translate = [&b](const int where, const std::int64_t direction, const Vec2d point) {
+        return b.add(FieldOp::Homography, {where}, {1, direction}, {}, {point, Vec2d{}});
+    };
+    int where = c;
+    std::int64_t readEdge = edge;
+    switch (mode) {
+    case 0: {
+        const auto sizes = b.add(FieldOp::Constant, {}, {}, {37.5, 62.5, 0.0, 0.0});
+        const auto tile = b.add(FieldOp::Swizzle, {sizes}, {0, 1, 4, 4}, {0.16, 0.12, 1.0, 1.0});
+        const auto phases = b.add(FieldOp::Constant, {}, {}, {90.0, -45.0, 0.0, 0.0});
+        const auto shift = b.add(FieldOp::Swizzle, {phases}, {0, 1, 4, 4},
+                                 {1.0 / 360.0, -1.0 / 360.0, 1.0, 1.0});
+        const auto tiles = b.add(FieldOp::Math, {c, tile}, {3}, {0.1, 0.0});
+        const auto phased = b.add(FieldOp::Math, {tiles, shift}, {1}, {0.1, 0.0});
+        const auto cell = b.add(FieldOp::Transform, {phased}, {(flags & 1) != 0 ? 3 : 2, 6},
+                                {0.0, 0.0}, {zero, unit, zero, unit});
+        const auto pixels = b.add(FieldOp::Math, {cell, tile}, {2}, {0.1, 0.0});
+        where = translate(pixels, 1, Vec2d{1.5, -1.0});
+        if ((flags & 2) != 0) {
+            const auto extent = b.add(FieldOp::Constant, {}, {}, {80.0, 90.0, 0.0, 0.0});
+            const auto half = b.add(FieldOp::Swizzle, {extent}, {0, 1, 4, 4}, {0.08, 0.06, 1.0, 1.0});
+            const auto distance = b.add(FieldOp::Math, {c, c}, {7}, {0.1, 0.0});
+            const auto beyond = b.add(FieldOp::Math, {distance, half}, {1}, {0.1, 0.0});
+            const auto none = b.add(FieldOp::Constant, {}, {}, {0.0, 0.0, 0.0, 0.0});
+            const auto outside = b.add(FieldOp::Math, {beyond, none}, {5}, {0.1, 0.0});
+            const auto far = b.add(FieldOp::Swizzle, {outside}, {0, 1, 4, 4}, {1.0e19, 1.0e19, 1.0, 1.0});
+            where = b.add(FieldOp::Math, {where, far}, {0}, {0.1, 0.0});
+        }
+        break;
+    }
+    case 1:
+        where = translate(c, 0, Vec2d{2.0, -1.0});
+        readEdge = 2;
+        break;
+    case 2: {
+        const auto nothing = b.add(FieldOp::Constant, {}, {}, {0.0, 0.0, 0.0, 0.0});
+        const auto origin = translate(nothing, 1, Vec2d{1.0, 0.5});
+        const auto local = b.add(FieldOp::Math, {c, origin}, {1}, {0.1, 0.0});
+        const auto basis = b.add(FieldOp::Constant, {}, {}, {1.0, 0.0, 0.0, 0.0});
+        const auto turned = b.add(FieldOp::Math, {basis}, {17}, {0.1, 30.0});
+        const auto normal = b.add(FieldOp::Swizzle, {turned}, {1, 0, 4, 4}, {1.0, 1.0, 1.0, 1.0});
+        const auto distance = b.add(FieldOp::Math, {local, normal}, {13}, {0.1, 0.0});
+        const auto none = b.add(FieldOp::Constant, {}, {}, {0.0, 0.0, 0.0, 0.0});
+        const auto far = b.add(FieldOp::Math, {distance, none}, {(flags & 1) != 0 ? 4 : 5}, {0.1, 0.0});
+        const auto along = b.add(FieldOp::Math, {far, normal}, {2}, {0.1, 0.0});
+        const auto twice = b.add(FieldOp::Swizzle, {along}, {0, 1, 4, 4}, {2.0, 2.0, 1.0, 1.0});
+        const auto reflected = b.add(FieldOp::Math, {local, twice}, {1}, {0.1, 0.0});
+        where = b.add(FieldOp::Math, {reflected, origin}, {0}, {0.1, 0.0});
+        break;
+    }
+    default: {
+        const auto nothing = b.add(FieldOp::Constant, {}, {}, {0.0, 0.0, 0.0, 0.0});
+        const auto origin = translate(nothing, 1, Vec2d{-1.0, 1.0});
+        const auto local = b.add(FieldOp::Math, {c, origin}, {1}, {0.1, 0.0});
+        const auto turned = b.add(FieldOp::Math, {local}, {17}, {0.1, 15.0});
+        const auto once = b.add(FieldOp::Constant, {}, {}, {150.0, 0.0, 0.0, 0.0});
+        const auto size = b.add(FieldOp::Swizzle, {once}, {0, 0, 4, 4}, {1.0, 1.0, 1.0, 1.0});
+        const auto divided = b.add(FieldOp::Math, {turned, size}, {3}, {0.1, 0.0});
+        const auto scaled = b.add(FieldOp::Swizzle, {divided}, {0, 1, 4, 4}, {100.0, 100.0, 1.0, 1.0});
+        const auto wedge = b.add(FieldOp::Transform, {scaled}, {4, flags}, {0.0, 0.0});
+        where = b.add(FieldOp::Math, {wedge, origin}, {0}, {0.1, 0.0});
+        break;
+    }
+    }
+    const auto read = b.add(FieldOp::Image, {where}, {filter, readEdge, 3, 4, 0, 1});
+    b.last().slot = 0;
+    auto program = b.finish(read, FieldResultKind::Premultiplied);
+    packRegisters(program);
+    return program;
 }
 
 } // namespace bloom::field_test_programs

@@ -251,6 +251,7 @@ void everyNodeGroupIsNamed() {
     pinned({"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
             "bloom.corner-pin", "bloom.st-map", "bloom.displace"},
            "distort");
+    pinned({"bloom.tile-mirror"}, "transform");
     pinned({"bloom.test-card"}, "sources");
     pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");
     pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},

@@ -2127,6 +2127,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_light_rays_tests.ipp"
 #include "snapshot_compiler_rolling_shutter_tests.ipp"
 #include "snapshot_compiler_warp_tests.ipp"
+#include "snapshot_compiler_tile_mirror_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
 #include "snapshot_compiler_four_color_gradient_tests.ipp"
@@ -2215,6 +2216,9 @@ int main() {
         testDisplaceLowering(expectations);
         testDisplacePixels(expectations);
         testStabilize(expectations);
+        testTileMirrorLowering(expectations);
+        testTileMirrorPixels(expectations);
+        testTileMirrorCacheIdentity(expectations);
         testTrackJob(expectations);
         testLightRaysLowering(expectations);
         testLightRaysPixels(expectations);

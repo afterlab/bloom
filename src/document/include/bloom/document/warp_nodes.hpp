@@ -37,6 +37,10 @@ inline constexpr std::string_view kDisplaceNodeType = "bloom.displace";
 // #513 Stabilize and Match Move: the picture moved by what a track followed (docs/architecture/
 // point-tracking.md). It shares the inverse mapping and the filter and edge choices of the three above.
 inline constexpr std::string_view kStabilizeNodeType = "bloom.stabilize";
+// #511 Tile & Mirror: the picture repeated, panned with wrap, reflected about a line, or folded into
+// a kaleidoscope (docs/architecture/image-filters.md, "Tile & Mirror"). It shares the inverse mapping
+// and the filter and edge choices of the nodes above.
+inline constexpr std::string_view kTileMirrorNodeType = "bloom.tile-mirror";
 inline constexpr std::uint32_t kWarpNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kWarpImagePort = "image";
@@ -65,7 +69,24 @@ inline constexpr double kMaximumDisplaceMidpoint = 1.0e3;
 inline constexpr std::int64_t kStabilizeModeStabilize = 0;
 inline constexpr std::int64_t kStabilizeModeMatchMove = 1;
 
-enum class WarpParameterKind : std::uint8_t { Choice, Scalar };
+// Tile & Mirror's mode and Mirror's side.
+inline constexpr std::int64_t kTileMirrorModeTile = 0;
+inline constexpr std::int64_t kTileMirrorModeWrapOffset = 1;
+inline constexpr std::int64_t kTileMirrorModeMirror = 2;
+inline constexpr std::int64_t kTileMirrorModeKaleidoscope = 3;
+inline constexpr std::int64_t kTileMirrorSideLeftBelow = 0;
+inline constexpr std::int64_t kTileMirrorSideRightAbove = 1;
+inline constexpr std::int64_t kMinimumKaleidoscopeSegments = 1;
+inline constexpr std::int64_t kMaximumKaleidoscopeSegments = 64;
+// Tile & Mirror's domains: a size in percent of the composition frame, a phase or an angle in
+// degrees.
+inline constexpr double kMinimumTilePercent = 0.01;
+inline constexpr double kMaximumTilePercent = 1.0e5;
+inline constexpr double kMaximumTileAngle = 1.0e6;
+
+// A Choice, an Integer (a whole number, a constant), a Scalar (animatable) or a Boolean (a switch,
+// a constant).
+enum class WarpParameterKind : std::uint8_t { Choice, Scalar, Integer, Boolean };
 
 struct WarpParameterSpec final {
     std::string_view role;
@@ -105,6 +126,48 @@ inline constexpr std::array kStabilize{
     WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
     WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
 };
+inline constexpr std::array<std::string_view, 4> kTileMirrorModes{"Tile", "Wrap Offset",
+                                                                  "Mirror", "Kaleidoscope"};
+inline constexpr std::array<std::string_view, 2> kMirrorSides{"Left or Below", "Right or Above"};
+// Every parameter of Tile & Mirror that is not a point, in the order its rows read. A size is a
+// percentage of the composition frame; a phase and an angle are degrees.
+inline constexpr std::array kTileMirror{
+    WarpParameterSpec{"mode", Kind::Choice, 0.0, 0.0, 3.0, kTileMirrorModes, "Mode"},
+    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
+    WarpParameterSpec{"tileWidth", Kind::Scalar, 100.0, kMinimumTilePercent, kMaximumTilePercent,
+                      {}, "Tile Width", 1.0, 400.0, 1.0, 1, "%"},
+    WarpParameterSpec{"tileHeight", Kind::Scalar, 100.0, kMinimumTilePercent, kMaximumTilePercent,
+                      {}, "Tile Height", 1.0, 400.0, 1.0, 1, "%"},
+    WarpParameterSpec{"linkTileSize", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Link Tile Size"},
+    WarpParameterSpec{"outputWidth", Kind::Scalar, 100.0, 0.0, kMaximumTilePercent, {},
+                      "Output Width", 0.0, 400.0, 1.0, 1, "%"},
+    WarpParameterSpec{"outputHeight", Kind::Scalar, 100.0, 0.0, kMaximumTilePercent, {},
+                      "Output Height", 0.0, 400.0, 1.0, 1, "%"},
+    WarpParameterSpec{"clampToOutput", Kind::Boolean, 1.0, 0.0, 1.0, {}, "Clamp to Output"},
+    WarpParameterSpec{"mirrorEdges", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Mirror Edges"},
+    WarpParameterSpec{"horizontalPhase", Kind::Scalar, 0.0, -kMaximumTileAngle, kMaximumTileAngle,
+                      {}, "Horizontal Phase", -360.0, 360.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"verticalPhase", Kind::Scalar, 0.0, -kMaximumTileAngle, kMaximumTileAngle,
+                      {}, "Vertical Phase", -360.0, 360.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"mirrorAngle", Kind::Scalar, 90.0, -kMaximumTileAngle, kMaximumTileAngle,
+                      {}, "Line Angle", -360.0, 360.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"mirrorSide", Kind::Choice, 0.0, 0.0, 1.0, kMirrorSides, "Reflect"},
+    WarpParameterSpec{"kaleidoscopeSegments", Kind::Integer, 6.0,
+                      static_cast<double>(kMinimumKaleidoscopeSegments),
+                      static_cast<double>(kMaximumKaleidoscopeSegments), {}, "Segments", 1.0,
+                      64.0, 1.0, 0},
+    WarpParameterSpec{"kaleidoscopeAngle", Kind::Scalar, 0.0, -kMaximumTileAngle,
+                      kMaximumTileAngle, {}, "Rotation", -360.0, 360.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"kaleidoscopeSize", Kind::Scalar, 100.0, 1.0, kMaximumTilePercent, {},
+                      "Size", 10.0, 400.0, 1.0, 1, "%"},
+};
+// Its four points, in pixels from the frame's centre, y down: the tile's centre, the wrap offset's
+// shift, a point on the mirror line, the kaleidoscope's centre.
+inline constexpr std::array<std::string_view, 4> kTileMirrorPointRoles{
+    "tileCenter", "offset", "mirrorPoint", "kaleidoscopeCenter"};
+inline constexpr std::array<std::string_view, 4> kTileMirrorPointLabels{
+    "Tile Center", "Offset", "Line Point", "Center"};
 inline constexpr std::array kCornerPin{
     WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
 };
@@ -155,6 +218,15 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
 [[nodiscard]] constexpr int stabilizeSearchRadius(const std::int64_t choice) noexcept {
     return choice <= 0 ? 16 : (choice == 1 ? 32 : 64);
 }
+[[nodiscard]] constexpr std::span<const WarpParameterSpec> tileMirrorParameters() noexcept {
+    return warp_parameters::kTileMirror;
+}
+[[nodiscard]] constexpr std::span<const std::string_view> tileMirrorPointRoles() noexcept {
+    return warp_parameters::kTileMirrorPointRoles;
+}
+[[nodiscard]] constexpr std::span<const std::string_view> tileMirrorPointLabels() noexcept {
+    return warp_parameters::kTileMirrorPointLabels;
+}
 [[nodiscard]] constexpr std::span<const WarpParameterSpec> cornerPinParameters() noexcept {
     return warp_parameters::kCornerPin;
 }
@@ -190,6 +262,8 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
         return spec;
     if (const auto* spec = find("bloom.stabilize.", warp_parameters::kStabilize))
         return spec;
+    if (const auto* spec = find("bloom.tile-mirror.", warp_parameters::kTileMirror))
+        return spec;
     return find("bloom.displace.", warp_parameters::kDisplace);
 }
 
@@ -198,7 +272,13 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
 [[nodiscard]] constexpr bool isWarpPointSchemaKey(const std::string_view key) noexcept {
     constexpr std::string_view corner = "bloom.corner-pin.";
     constexpr std::string_view stabilize = "bloom.stabilize.";
-    if (key.starts_with(corner)) {
+    constexpr std::string_view tileMirror = "bloom.tile-mirror.";
+    if (key.starts_with(tileMirror)) {
+        const auto role = key.substr(tileMirror.size());
+        for (const auto name : warp_parameters::kTileMirrorPointRoles)
+            if (name == role)
+                return true;
+    } else if (key.starts_with(corner)) {
         const auto role = key.substr(corner.size());
         for (const auto name : warp_parameters::kCornerRoles)
             if (name == role)
@@ -216,10 +296,10 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
     const auto* spec = warpParameterSpec(key);
     return spec != nullptr && spec->kind == WarpParameterKind::Scalar;
 }
-// A constant (every choice): no socket and no animation.
+// A constant (every choice, whole number and switch): no socket and no animation.
 [[nodiscard]] constexpr bool isWarpConstantSchemaKey(const std::string_view key) noexcept {
     const auto* spec = warpParameterSpec(key);
-    return spec != nullptr && spec->kind == WarpParameterKind::Choice;
+    return spec != nullptr && spec->kind != WarpParameterKind::Scalar;
 }
 // Whether the Scalar `value` lies in the parameter's domain; true for any other key.
 [[nodiscard]] constexpr bool isWarpScalarWithinDomain(const std::string_view key,

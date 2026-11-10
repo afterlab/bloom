@@ -310,6 +310,7 @@ int main() {
                              "bloom.corner-pin",
                              "bloom.st-map",
                              "bloom.displace",
+                             "bloom.tile-mirror",
                              "bloom.video-source",
                              "bloom.image-preview"})
         expect(completeRegistry.find(type, std::string_view(type) == "bloom.curves" ||

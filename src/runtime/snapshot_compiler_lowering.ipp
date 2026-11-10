@@ -561,6 +561,11 @@ lower(const std::vector<document::NodeId>& order) {
                 return {};
             continue;
         }
+        if (node->typeId == document::kTileMirrorNodeType) {
+            if (!lowerTileMirror(*node, operations, indices))
+                return {};
+            continue;
+        }
         if (node->typeId == document::kStMapNodeType) {
             if (!lowerStMap(*node, operations, indices))
                 return {};

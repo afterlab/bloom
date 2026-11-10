@@ -29,6 +29,8 @@ bool isWarpParameterValueValid(const std::string_view schemaKey, const Parameter
         return number != nullptr && std::isfinite(*number) && *number >= spec->minimum &&
                *number <= spec->maximum;
     }
+    if (spec->kind == WarpParameterKind::Boolean)
+        return std::holds_alternative<bool>(value);
     const auto* choice = std::get_if<std::int64_t>(&value);
     return choice != nullptr && static_cast<double>(*choice) >= spec->minimum &&
            static_cast<double>(*choice) <= spec->maximum;
@@ -52,6 +54,13 @@ NodeDefinition warpDefinition(const std::string_view nodeType,
                               NodeCardinality::Many,
                               NodeCategory::Transform};
     for (const auto& parameter : table) {
+        if (parameter.kind == WarpParameterKind::Boolean) {
+            definition.parameters.push_back({std::string(parameter.role),
+                                             warpSchemaKey(nodeType, parameter.role),
+                                             ParameterValueKind::Boolean, true, false,
+                                             ParameterValue{parameter.value != 0.0}});
+            continue;
+        }
         const bool scalar = parameter.kind == WarpParameterKind::Scalar;
         definition.parameters.push_back(
             {std::string(parameter.role), warpSchemaKey(nodeType, parameter.role),
@@ -81,6 +90,16 @@ NodeDefinition stabilizeDefinition() {
     auto definition = warpDefinition(kStabilizeNodeType, stabilizeParameters(), false);
     for (const auto role : stabilizePointRoles()) {
         definition.parameters.push_back({std::string(role), warpSchemaKey(kStabilizeNodeType, role),
+                                         ParameterValueKind::Vec2d, true, true, Vec2d{}});
+        definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
+    }
+    return definition;
+}
+
+NodeDefinition tileMirrorDefinition() {
+    auto definition = warpDefinition(kTileMirrorNodeType, tileMirrorParameters(), false);
+    for (const auto role : tileMirrorPointRoles()) {
+        definition.parameters.push_back({std::string(role), warpSchemaKey(kTileMirrorNodeType, role),
                                          ParameterValueKind::Vec2d, true, true, Vec2d{}});
         definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
     }

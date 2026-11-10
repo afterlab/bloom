@@ -657,6 +657,10 @@ std::optional<ParameterPresentation> warpPresentation(const std::string_view sch
         return std::nullopt;
     if (spec->kind == WarpParameterKind::Choice)
         return choice();
+    if (spec->kind == WarpParameterKind::Integer)
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum);
+    if (spec->kind == WarpParameterKind::Boolean)
+        return std::nullopt; // Presented as every Boolean is.
     return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
                   spec->decimals, spec->unit);
 }

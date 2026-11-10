@@ -1915,6 +1915,28 @@ displayProofRunner(const bool customView) {
                  "production Stabilize lowering: the picture moved by a tracked point, held "
                  "still or carried along, every filter and edge rule, full frame and ROI");
         base += 1000;
+        // #511 Tile & Mirror: the programs its four modes lower to, every filter and edge rule,
+        // Mirror Edges and Clamp to Output, either mirror side and several segment counts, full frame
+        // and ROI.
+        addField("node.bloom.tile-mirror",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base, 0, 0, 1, 3), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base + 100, 0, 1, 2, 0), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base + 200, 1, 2), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base + 300, 2, 0, 3, 0), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base + 400, 2, 1, 0, 1), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base + 500, 3, 0, 2, 6), 1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::tileMirrorProgram(base + 600, 3, 2, 3, 3), 1}},
+                 base + 700,
+                 "production Tile & Mirror lowering: tiles, wrap offset, mirror line and "
+                 "kaleidoscope, every filter and edge rule, full frame and ROI");
+        base += 1000;
         addField("node.bloom.st-map",
                  {bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::stMapProgram(base, 0, 1, 0, 1), 1},

@@ -234,6 +234,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kCornerPinNodeType)
         return QStringLiteral("corner pin perspective four point quad keystone pin warp distort "
                               "screen replacement sign billboard match move");
+    if (typeId == document::kTileMirrorNodeType)
+        return QStringLiteral("tile mirror repeat tiling pattern seamless wrap offset pan scroll "
+                              "kaleidoscope reflect reflection symmetry fold flip duplicate grid");
     if (typeId == document::kStabilizeNodeType)
         return QStringLiteral("stabilize stabilise track tracker tracking match move steady shake "
                               "motion follow lock point");

@@ -1167,6 +1167,43 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *stMapEdges,
                                ConstantValueSource{std::int64_t{4}});
 
+    // #511 Tile & Mirror: its sizes, angles, points, switches, whole number and choices edit within
+    // their domains and refuse outside them (a switch is a bool, the segment count 1 to 64, a size above
+    // zero); each edit is undoable.
+    const auto tile = addRecipe("bloom.tile-mirror");
+    const auto tileWidth = tile.outputId<ParameterId>("parameter.tileWidth");
+    const auto tileMode = tile.outputId<ParameterId>("parameter.mode");
+    const auto tileLink = tile.outputId<ParameterId>("parameter.linkTileSize");
+    const auto tileSegments = tile.outputId<ParameterId>("parameter.kaleidoscopeSegments");
+    const auto tileAngle = tile.outputId<ParameterId>("parameter.mirrorAngle");
+    const auto tileCentre = tile.outputId<ParameterId>("parameter.tileCenter");
+    const auto tileSide = tile.outputId<ParameterId>("parameter.mirrorSide");
+    if (!tileWidth || !tileMode || !tileLink || !tileSegments || !tileAngle || !tileCentre || !tileSide)
+        throw std::logic_error("Tile & Mirror exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *tileWidth, ConstantValueSource{35.5});
+    (void)exercise<SetParameterSource>(test, fixture, *tileMode, ConstantValueSource{std::int64_t{3}});
+    (void)exercise<SetParameterSource>(test, fixture, *tileLink, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *tileSegments,
+                                       ConstantValueSource{std::int64_t{12}});
+    (void)exercise<SetParameterSource>(test, fixture, *tileAngle, ConstantValueSource{-45.0});
+    (void)exercise<SetParameterSource>(test, fixture, *tileCentre,
+                                       ConstantValueSource{Vec2d{-120.0, 45.5}});
+    (void)exercise<SetParameterSource>(test, fixture, *tileSide, ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileWidth,
+                               ConstantValueSource{0.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileMode,
+                               ConstantValueSource{std::int64_t{4}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileLink,
+                               ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileSegments,
+                               ConstantValueSource{std::int64_t{0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileSegments,
+                               ConstantValueSource{std::int64_t{65}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileSide,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileCentre,
+                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+
     // #513 Stabilize: its choices and points edit within their domains and refuse outside them, and
     // a finished track is stored as one undo step: a Table block of the positions and the keys.
     const auto stabilize = addRecipe("bloom.stabilize");

@@ -49,6 +49,7 @@
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
+#include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -1638,6 +1639,135 @@ void warpRows() {
     }
 }
 
+// #511 Tile & Mirror in Properties: each mode shows its own rows in plain words, every label whole and
+// nothing wider than the panel, and none of the other modes' rows; the rows a switch turns off go with
+// it (the height follows a linked size, the output size follows Clamp to Output). The mode's angle is a
+// dial and its point a pad. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written for each mode at
+// each width (suffixed with the device pixel ratio).
+void tileMirrorRows() {
+    struct Mode final {
+        std::int64_t value;
+        const char* name;
+        std::vector<std::pair<std::string, std::string>> rows;
+        std::vector<std::string> absent;
+        std::size_t dials;
+        bool pad;
+    };
+    const std::vector<Mode> modes{
+        {0, "tile",
+         {{"mode", "Mode"}, {"filter", "Filter"}, {"edges", "Edges"}, {"tileCenter", "Tile Center"},
+          {"tileWidth", "Tile Width"}, {"tileHeight", "Tile Height"},
+          {"linkTileSize", "Link Tile Size"}, {"outputWidth", "Output Width"},
+          {"outputHeight", "Output Height"}, {"clampToOutput", "Clamp to Output"},
+          {"mirrorEdges", "Mirror Edges"}, {"horizontalPhase", "Horizontal Phase"},
+          {"verticalPhase", "Vertical Phase"}},
+         {"offset", "mirrorPoint", "mirrorAngle", "mirrorSide", "kaleidoscopeCenter",
+          "kaleidoscopeSegments", "kaleidoscopeAngle", "kaleidoscopeSize"},
+         0, true},
+        {1, "wrap-offset",
+         {{"mode", "Mode"}, {"filter", "Filter"}, {"offset", "Offset"}},
+         {"edges", "tileCenter", "tileWidth", "tileHeight", "linkTileSize", "outputWidth",
+          "clampToOutput", "mirrorEdges", "horizontalPhase", "mirrorPoint", "mirrorAngle",
+          "mirrorSide", "kaleidoscopeSegments", "kaleidoscopeAngle"},
+         0, true},
+        {2, "mirror",
+         {{"mode", "Mode"}, {"filter", "Filter"}, {"edges", "Edges"}, {"mirrorPoint", "Line Point"},
+          {"mirrorSide", "Reflect"}},
+         {"offset", "tileCenter", "tileWidth", "tileHeight", "clampToOutput", "mirrorEdges",
+          "horizontalPhase", "kaleidoscopeCenter", "kaleidoscopeSegments", "kaleidoscopeAngle",
+          "kaleidoscopeSize"},
+         1, true},
+        {3, "kaleidoscope",
+         {{"mode", "Mode"}, {"filter", "Filter"}, {"edges", "Edges"},
+          {"kaleidoscopeCenter", "Center"}, {"kaleidoscopeSegments", "Segments"},
+          {"kaleidoscopeSize", "Size"}},
+         {"offset", "tileCenter", "tileWidth", "tileHeight", "clampToOutput", "mirrorEdges",
+          "horizontalPhase", "mirrorPoint", "mirrorAngle", "mirrorSide"},
+         1, true}};
+    for (const auto& mode : modes) {
+        auto project = document::makeNewProject("Tile", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, document::kTileMirrorNodeType);
+        session.selectNode(node);
+        expect(session.setNodeParameterValue(node, "mode", mode.value, QStringLiteral("Set")),
+               "the mode is set through a command");
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1100);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& [role, name] : mode.rows) {
+                auto* found = row(properties, role.c_str());
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "a mode presents every value it reads");
+                if (found == nullptr)
+                    continue;
+                expect(found->property("rowLabel").toString() == QString::fromStdString(name),
+                       "a Tile & Mirror row is named in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == QString::fromStdString(name) &&
+                        candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "a Tile & Mirror row label is shown whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) &&
+                                   !field->isDisplayRounded(),
+                               "a Tile & Mirror value is shown whole");
+            }
+            for (const auto& role : mode.absent) {
+                auto* found = row(properties, role.c_str());
+                expect(found == nullptr || !found->isVisibleTo(&properties),
+                       "a mode shows no row for a value it does not read");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "Tile & Mirror's rows never exceed the panel's width");
+            auto* controls = properties.findChild<ui::NodeControlsCardWidget*>();
+            expect(controls != nullptr, "Tile & Mirror draws its controls");
+            if (controls != nullptr) {
+                std::size_t dials = 0;
+                for (auto* angle : controls->angleRows())
+                    dials += angle->isVisibleTo(&properties) ? 1U : 0U;
+                expect(dials == mode.dials, "the dial of the mode's angle is shown, and no other");
+                expect(controls->padRow() != nullptr &&
+                           controls->padRow()->isVisibleTo(&properties) == mode.pad,
+                       "the pad of the mode's point is shown");
+            }
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/tile-mirror-") +
+                                            QString::fromLatin1(mode.name) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the Tile & Mirror Properties capture\n";
+            }
+        }
+        // A switch turns its rows off.
+        if (mode.value == 0) {
+            expect(session.setNodeParameterValue(node, "linkTileSize", true, QStringLiteral("Set")) &&
+                       session.setNodeParameterValue(node, "clampToOutput", false,
+                                                     QStringLiteral("Set")),
+                   "the switches are set through commands");
+            QCoreApplication::processEvents();
+            for (const char* role : {"tileHeight", "outputWidth", "outputHeight"}) {
+                auto* found = row(properties, role);
+                expect(found == nullptr || !found->isVisibleTo(&properties),
+                       "a linked size and an unclamped output hide the rows they do not read");
+            }
+        }
+    }
+}
+
 // #569 audio effects in Properties: a row for every value of every effect, in plain words, each label
 // shown whole and nothing wider than the panel, at the widths of a wide, a normal and a narrow panel.
 // With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device
@@ -2753,6 +2883,7 @@ int main(int argc, char** argv) try {
     lineEndRows();
     extensionPropertiesRows();
     warpRows();
+    tileMirrorRows();
     audioEffectRows();
     groupAndPlotRows();
     resamplePathRowOrder();
