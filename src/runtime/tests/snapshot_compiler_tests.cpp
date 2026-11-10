@@ -5,6 +5,7 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
+#include <bloom/core/light_flicker.hpp>
 #include <bloom/core/camera_shake.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
@@ -2132,6 +2133,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_denoise_tests.ipp"
 #include "snapshot_compiler_audio_amplitude_tests.ipp"
 #include "snapshot_compiler_node_group_tests.ipp"
+#include "snapshot_compiler_node_proof_tests.ipp"
 
 } // namespace
 
@@ -2185,6 +2187,8 @@ int main() {
         testNodeGroupNesting(expectations);
         testNodeGroupDepthRefusal(expectations);
         testNodeGroupNodeCap(expectations);
+        testHslQualifierChainPixels(expectations);
+        testLightFlickerDrivesExposure(expectations);
         testFunctionGroups(expectations);
         testFunctionSharesGroupWithInstance(expectations);
         testFunctionPlot(expectations);
@@ -2224,6 +2228,7 @@ int main() {
         testTestCardPatchMatchesTheTransform(expectations);
         testTestCardKeepsLevelsBelowBlack(expectations);
         testTestCardBarsArePaddedNotStretched(expectations);
+        testTestCardEveryCardPixels(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);
         testFieldSampleDrivesAValue(expectations);

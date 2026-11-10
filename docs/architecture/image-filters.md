@@ -2031,6 +2031,10 @@ a color by its hue; the qualifier only selects, and a Mask from it limits any ot
 **Evidence.** `color_tool_tests.cpp` reads known windows (red, green, wrap past 360 degrees, soft and
 hard edges, gray, HDR white, invert, alpha) and the domain. `node.bloom.hsl-qualifier` prepares
 through the production builder, and the native harness holds three variants to the CPU oracle.
+`testHslQualifierChainPixels` compiles a checker through HSL Qualifier into Image Mix's `mask` and holds
+every pixel of the mixed picture to the first image plus `factor * coverage` of the second, the coverage
+computed per pixel in double precision from the documented model (a selected, a half-selected and an
+unselected cell, an inverted selection and a factor of 0.6); a muted qualifier mixes nothing.
 [Benchmarks](../development/benchmarks.md) lists `hsl-qualifier-2k`, written and not yet run.
 
 ## Edge Extend
@@ -2069,9 +2073,14 @@ its input through.
 **Evidence.** The direct recipe test compares the chain with an independent double-precision
 reference (a direct two-dimensional Gaussian, the alpha weighting, the division and the mix) at
 1e-4, and checks the alpha, the solid pixels, amount 0, distance 0 and a uniform color, at full and
-at half render scale. The compiler test reads the seven operations and the parameter identities
+at half render scale. At half scale the distance is half as many proxy pixels: the chain is held to the
+reference run over the proxy's own input with half the distance, and the reference with the unscaled
+distance must not match. Edge Extend's own cancellation (a pre-cancelled token, and a cancel arriving inside
+the chain) returns no frame, and a pixel budget under the output, or under the chain's working set, is
+refused with the pixel storage budget diagnostic and publishes nothing. The compiler test reads the seven operations and the parameter identities
 they use. `node.bloom.edge-extend` prepares through the production builder (full frame and ROI),
-and the native harness holds two variants to the CPU oracle with warm reuse and a changed amount.
+and the native harness holds two variants at full scale and the same two at half render scale to the CPU
+oracle with warm reuse and a changed amount.
 [Benchmarks](../development/benchmarks.md) lists `edge-extend-2k`, written and not yet run.
 
 ## Alpha Contour
@@ -2507,6 +2516,16 @@ the three shake copies and their offsets, the program against the coverage fixtu
 and on the CPU reference over a checker grid each pixel against an independent double-precision reading of
 the input through the quadratic of the shake's three samples, the quadratic's gap from the shake's exact
 motion, a flow image skewing by phase, a region of interest, the pixel budget and cancellation.
+`testRollingShutterDirectionsAndEdges` holds all four read directions (Top to Bottom, Bottom to Top,
+Left to Right, Right to Left), at a readout of 0.5 and of 1.0, shake-driven and flow-driven, with
+Transparent and with Extend edges, to 3e-4 against an independent double-precision reading that takes the
+phase of each direction from the composition pixels (`-y/height`, `y/height`, `x/width`, `-x/width`); the
+motion is large enough that rows or columns read past the picture, and the test asserts that a read
+entirely past the edge is transparent (Transparent) or the edge pixel (Extend), that the two modes agree
+exactly wherever no tap left the picture, that a horizontal read skews by the column's phase, and that a node
+that does not name its edges is Extend. The native harness holds the lowering's program for all four
+directions and both edge modes to the CPU oracle on a device (a test checks each program is the lowering's
+instruction sequence).
 [Benchmarks](../development/benchmarks.md#rolling-shutter-568) names the scenario and the suspected cost.
 
 ## Auto Exposure

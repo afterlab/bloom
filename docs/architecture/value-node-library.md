@@ -413,6 +413,14 @@ scrubbing and export, with no state carried from earlier frames; a value is host
 that it drives (Exposure) carries the pixel route. The value cache identity is the node's operands and the
 request time (the graph's usual time dependence).
 
+Evidence: `value_math_tests.cpp` reads the node through the kernel. `testLightFlickerDrivesExposure`
+(`snapshot_compiler_node_proof_tests.ipp`) drives an Exposure's `amount` from `stops` through a driver binding
+and holds every pixel of the CPU reference at five times to the plate times `2^stops(t)`; frames differ
+between times with depth above zero and are equal with depth 0 and no dropouts; the Exposure is time
+dependent, a warm frame at the same time is served from the cache and another time is not; each of the seven
+settings changes the compiled plan and, at a frame where the function changes, the pixels, and editing a
+value node nothing reads leaves the plan unchanged.
+
 ## Motion utilities
 
 `bloom.oscillator`, `bloom.wiggle` and `bloom.loop-value` (#341, group Values, listed under Math) are

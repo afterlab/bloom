@@ -97,6 +97,17 @@ to 1 are kept, which the PLUGE and HDR cards need). Time (the stepping Patch, th
 Bar, the Countdown) arrives as host-resolved scalars, so a still card is not time dependent. The Zone Plate and
 the Siemens Star run 16 sub-samples a pixel, the other cards 4.
 
+Evidence: `field_program_tests.cpp` (`testTestCard`) holds all sixteen cards at kernel level, the bars,
+Patch, Circle, Zone Plate, Siemens Star and Countdown among them. Through the production compile and the CPU
+reference `snapshot_compiler_test_card_tests.ipp` holds Patch, Circle, Custom size, the padded bars and the
+PLUGE steps (`testTestCardPixels` and its neighbours) and, in `testTestCardEveryCardPixels`, the Color Chart
+(all 24 patch centres), Gray Ramp (the ramp's pixels and the nine PLUGE segments), Grid (line and ground
+pixels at the spacing and width asked, yellow centre lines, square cells in a wide, a portrait and a square
+frame), Safe Areas (93% and 90% outlines and the four crop guides over the whole frame), UV Grid (cell colours,
+cell lines, the written column and row), Moving Bar (the bar at three times, both directions, and on a proxy)
+and Alpha Ramp (alpha by column, straight colour, premultiplied pixels, and on a proxy), each against the
+levels and fractions the user guide gives, taken through the colour library's Rec.709 transform.
+
 ### Four-Color Gradient
 
 The Four-Color Gradient source (`user-guide/four-color-gradient.md`, #524) lowers to a field raster built only
