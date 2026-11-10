@@ -10,6 +10,7 @@
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/image_preview.hpp>
@@ -627,6 +628,10 @@ PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
     if (schemaKey == document::kTextAlignmentParameterSchemaKey)
         return PropertiesRowControl::SegmentedEnum;
     if (schemaKey == document::kInnerGlowSourceSchemaKey)
+        return PropertiesRowControl::Radio;
+    // #527: Dither's two patterns and two domains, each a labelled radio.
+    if (schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "pattern") ||
+        schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "domain"))
         return PropertiesRowControl::Radio;
     if (schemaKey == document::kTextSizeParameterSchemaKey ||
         schemaKey == document::kTextLineHeightParameterSchemaKey ||

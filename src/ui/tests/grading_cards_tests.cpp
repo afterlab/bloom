@@ -76,6 +76,7 @@
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
+#include <bloom/ui/dither_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -3253,11 +3254,167 @@ void quantizeCards() {
     capture(fixture, QStringLiteral("quantize-posterize"));
 }
 
+// #527: the Dither card paints inside its card with every label whole and writes nothing of its own.
+// Its preview bands a ramp cut to 4 bits on the upper half and breaks the bands up with the node's
+// own pattern on the lower; the pattern and the domain are labelled radios on the card, the seed's
+// row carries Randomize seed, and the amplitude is a grading slider row (one command per gesture)
+// whose readout says what it is in the chosen bit depth and domain.
+void ditherCard() {
+    CardFixture fixture(document::kDitherNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::DitherCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    if (card == nullptr)
+        return expect(false, "Dither draws its card widget");
+    QApplication::processEvents();
+    expect(stored(fixture.session, fixture.node, "amplitude") == 1.0 &&
+               storedInteger(fixture.session, fixture.node, "pattern") == document::kDitherBlueNoise,
+           "a new Dither writes no value of its own: blue noise at 1 LSB");
+    expect(paintsInsideCard(*fixture.item), "the Dither card paints inside itself");
+    if (!cardContentFits(*fixture.item, "dither"))
+        ++failures;
+    capture(fixture, QStringLiteral("dither-blue-noise"));
+    expect(!card->showsRole("amplitude") && card->socketY("amplitude").has_value() &&
+               card->showsRole("pattern") && card->showsRole("seed") &&
+               card->showsRole("bitDepth") && !card->socketY("seed").has_value(),
+           "the card draws the amplitude with its socket; the choices are the node's own rows");
+    expect(card->readout() ==
+               QStringLiteral("1.00 LSB of 8-bit = 0.00392 of full scale, display encoded"),
+           "the readout says what 1 LSB of 8-bit is");
+
+    // The preview: the plain half holds the 16 levels in long runs, the dithered half breaks them.
+    const auto runs = [](const QImage& image, const int row) {
+        int count = 1;
+        for (int x = 1; x < image.width(); ++x)
+            count += image.pixel(x, row) != image.pixel(x - 1, row) ? 1 : 0;
+        return static_cast<double>(image.width()) / count;
+    };
+    const auto blue = card->preview()->preview(480, 64);
+    expect(runs(blue, 10) >= 25.0, "the plain ramp bands in long steps");
+    expect(runs(blue, 50) < runs(blue, 10) / 4.0, "the dithered ramp breaks the bands up");
+
+    // The pattern is a radio on the card: choosing Ordered (Bayer) is one command and redraws.
+    auto radioFor = [&](const char* role) -> ui::kit::KRadioGroup* {
+        for (auto* widget :
+             fixture.editor->graphScene()->nodeControlsForRoleForTest(fixture.node, QString::fromLatin1(role)))
+            if (auto* found = qobject_cast<ui::kit::KRadioGroup*>(widget))
+                return found;
+        return nullptr;
+    };
+    auto* pattern = radioFor("pattern");
+    expect(pattern != nullptr && pattern->count() == 2 && pattern->currentIndex() == 1,
+           "the card has the pattern radio, on Blue noise");
+    if (pattern != nullptr) {
+        const auto commands = fixture.stack.historyPosition();
+        pattern->setCurrentIndex(0);
+        QApplication::processEvents();
+        expect(storedInteger(fixture.session, fixture.node, "pattern") == document::kDitherOrdered &&
+                   fixture.stack.historyPosition() == commands + 1,
+               "choosing Ordered (Bayer) is one command");
+        const auto bayer = card->preview()->preview(480, 64);
+        expect(bayer != blue && runs(bayer, 50) < runs(bayer, 10) / 4.0,
+               "the preview redraws with the Bayer matrix and still breaks the bands");
+        expect(paintsInsideCard(*fixture.item), "the ordered card paints inside itself");
+        if (!cardContentFits(*fixture.item, "dither-ordered"))
+            ++failures;
+        capture(fixture, QStringLiteral("dither-ordered"));
+        expect(fixture.session.setNodeParameterValue(fixture.node, "matrixSize", std::int64_t{0},
+                                                     QStringLiteral("Set")),
+               "the matrix size is set");
+        QApplication::processEvents();
+        expect(card->preview()->preview(480, 64) != bayer, "the preview follows the matrix size");
+        capture(fixture, QStringLiteral("dither-ordered-2x2"));
+        expect(fixture.session.undo() && fixture.session.undo() &&
+                   (QApplication::processEvents(), pattern->currentIndex() == 1),
+               "undo puts the pattern back on Blue noise");
+    }
+    expect(radioFor("domain") != nullptr && radioFor("domain")->count() == 2,
+           "the domain is a radio on the card");
+
+    // Randomize seed is on the Seed row, one command that moves the pattern.
+    QWidget* seedRow = nullptr;
+    for (auto* child : fixture.item->childItems())
+        if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+            proxy != nullptr && proxy->isVisible() && proxy->widget() != nullptr &&
+            proxy->widget()->property("nodeParameterRole").toString() == QLatin1String("seed"))
+            seedRow = proxy->widget();
+    auto* randomise =
+        seedRow ? seedRow->findChild<ui::kit::KButton*>(QStringLiteral("randomiseSeed")) : nullptr;
+    expect(randomise != nullptr && randomise->isEnabled(), "Randomize seed is on the Seed row");
+    if (randomise != nullptr) {
+        const auto commands = fixture.stack.historyPosition();
+        randomise->click();
+        QApplication::processEvents();
+        const auto seed = storedInteger(fixture.session, fixture.node, "seed");
+        expect(fixture.stack.historyPosition() == commands + 1 && seed && *seed != 1,
+               "Randomize seed is one command that sets a new seed");
+        expect(card->preview()->preview(480, 64) != blue, "the preview follows the seed");
+        expect(fixture.session.undo() && storedInteger(fixture.session, fixture.node, "seed") == 1,
+               "undo restores the seed");
+        QApplication::processEvents();
+    }
+
+    // The amplitude slider: a drag is one command and the readout follows.
+    auto* slider = card->amplitudeRow()->slider();
+    const auto sliderCommands = fixture.stack.historyPosition();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    QApplication::processEvents();
+    const auto dragged = stored(fixture.session, fixture.node, "amplitude");
+    expect(fixture.stack.historyPosition() == sliderCommands + 1 && dragged && *dragged > 1.0,
+           "dragging the amplitude is one command");
+    expect(dragged && card->readout().startsWith(QString::number(*dragged, 'f', 2) +
+                                                 QStringLiteral(" LSB")),
+           "the readout follows the amplitude");
+    capture(fixture, QStringLiteral("dither-strong"));
+    expect(fixture.session.undo(), "the drag undoes");
+    QApplication::processEvents();
+    expect(fixture.session.setNodeParameterValue(fixture.node, "bitDepth", std::int64_t{1},
+                                                 QStringLiteral("Set")) &&
+               fixture.session.setNodeParameterValue(fixture.node, "domain", document::kDitherStored,
+                                                     QStringLiteral("Set")),
+           "the bit depth and domain are set");
+    QApplication::processEvents();
+    expect(card->readout() ==
+               QStringLiteral("1.00 LSB of 10-bit = 0.000978 of full scale, in the stored value"),
+           "the readout follows the bit depth and the domain");
+    if (!cardContentFits(*fixture.item, "dither-stored"))
+        ++failures;
+    capture(fixture, QStringLiteral("dither-10-bit-stored"));
+
+    // Monochrome moves the three channels together; amplitude 0 is no dither at all.
+    expect(fixture.session.setNodeParameterValue(fixture.node, "monochrome", true,
+                                                 QStringLiteral("Set")),
+           "Monochrome is set");
+    QApplication::processEvents();
+    const auto mono = card->preview()->preview(480, 64);
+    bool neutral = true;
+    for (int y = 0; y < mono.height(); ++y)
+        for (int x = 0; x < mono.width(); ++x)
+            neutral = neutral && qRed(mono.pixel(x, y)) == qGreen(mono.pixel(x, y)) &&
+                      qGreen(mono.pixel(x, y)) == qBlue(mono.pixel(x, y));
+    expect(neutral, "with Monochrome the preview's dither is neutral");
+    expect(fixture.session.setNodeParameterValue(fixture.node, "amplitude", 0.0, QStringLiteral("Set")),
+           "the amplitude is set to 0");
+    QApplication::processEvents();
+    const auto none = card->preview()->preview(480, 64);
+    expect(none.copy(0, 32, 480, 32) == none.copy(0, 0, 480, 32),
+           "at amplitude 0 the dithered half is the plain one");
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
     warpPathRefusal();
-    // BLOOM_GRADING_CARDS_ONLY=quantize runs only the Quantize card (the whole run writes every card).
+    // BLOOM_GRADING_CARDS_ONLY=quantize (or dither) runs only the Quantize (or Dither) card (the whole run writes every card).
+    if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("dither")) {
+        ditherCard();
+        if (failures != 0)
+            return 1;
+        std::cout << "PASS: Dither card\n";
+        return 0;
+    }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("quantize")) {
         quantizeCards();
         if (failures != 0)
@@ -3285,6 +3442,7 @@ int main(int argc, char** argv) {
     cornerPinCard();
     tileMirrorCards();
     quantizeCards();
+    ditherCard();
     testCardCard();
     testCardExpectedReadout();
     lightRaysCard();

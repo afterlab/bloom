@@ -1357,7 +1357,9 @@ class NodeItem final : public QGraphicsObject {
                                    declared->schemaKey == "bloom.video.asset" ||
                                    declared->schemaKey == "bloom.audio.asset" ||
                                    declared->schemaKey == "bloom.ocio-file.lut";
-        if (declared->schemaKey == document::kInnerGlowSourceSchemaKey) {
+        // #528, #527: a short closed set seen at once (Inner Glow's source, Dither's pattern and
+        // domain) is the same labelled radio the Properties row draws.
+        if (propertiesRowControl(declared->schemaKey) == PropertiesRowControl::Radio) {
             row.radio = new kit::KRadioGroup;
             row.radio->setObjectName(QStringLiteral("nodeOperandRadio"));
             row.radio->setAccessibleName(label);

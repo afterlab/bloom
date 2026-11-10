@@ -2381,7 +2381,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               tile-mirror-mirror tile-mirror-kaleidoscope inner-shadow
                               inner-glow-edge inner-glow-center quantize-threshold
                               quantize-threshold-soft quantize-posterize
-                              quantize-posterize-channels)
+                              quantize-posterize-channels dither-blue-noise
+                              dither-ordered dither-stored-mono dither-held)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2390,12 +2391,13 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             TIMEOUT 300
         )
     endforeach()
-    # #511, #528 and #519: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #511, #528, #519 and #527: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS tile-mirror-tile tile-mirror-wrap-offset tile-mirror-mirror
                               tile-mirror-kaleidoscope inner-shadow inner-glow-edge inner-glow-center
                               quantize-threshold quantize-threshold-soft quantize-posterize
-                              quantize-posterize-channels)
+                              quantize-posterize-channels dither-blue-noise dither-ordered
+                              dither-stored-mono dither-held)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4

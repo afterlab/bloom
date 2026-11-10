@@ -84,6 +84,9 @@ constexpr double kDialSide = 50.0;
 constexpr double kPadMaxHeight = 208.0;
 // #486: FilmGrainResponseGraph's height (film_grain_widget.cpp).
 constexpr double kFilmGrainGraphHeight = 120.0;
+// #527: DitherPreview's height (dither_widget.cpp) and its readout, at most two lines of text.
+constexpr double kDitherPreviewHeight = 48.0;
+constexpr double kDitherReadout = 40.0;
 // #486: SharpenProfileGraph's height (sharpen_widget.cpp).
 constexpr double kSharpenGraphHeight = 120.0;
 // A gradient row (gradient_parameter_row.cpp) is the gradient editor (Size::Control bar,
@@ -390,6 +393,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                             grainRows = 9.0;
         thumbnail = kFilmGrainGraphHeight + kSmall + grainRows * (kControl + kSmall) + kPadding;
     }
+    // #527: the Dither card's preview, its Amplitude row (a value over a slider) and its readout.
+    if (node->typeId == document::kDitherNodeType)
+        thumbnail = kDitherPreviewHeight + kSmall + (kControl + kSmall) + kSmall + kDitherReadout +
+                    kPadding;
     // #484: the Spin and Zoom Blur cards' centre pad.
     if (node->typeId == document::kSpinBlurNodeType || node->typeId == document::kZoomBlurNodeType)
         thumbnail = kPadMaxHeight + kSmall + kPadding;

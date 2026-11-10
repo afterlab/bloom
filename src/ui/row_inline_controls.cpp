@@ -2,6 +2,7 @@
 
 #include "properties_value_edits.hpp"
 
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -31,7 +32,9 @@ RowInline rowInlineFor(const std::string_view schemaKey) {
     if (schemaKey == document::imagePixelSchemaKey(document::kImageCompareNodeType, "angle"))
         return RowInline::AngleDial;
     if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, "seed") ||
-        schemaKey == document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed"))
+        schemaKey == document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed") ||
+        // #527 Dither's pattern placement.
+        schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "seed"))
         return RowInline::RandomiseSeed;
     return RowInline::None;
 }
@@ -77,7 +80,7 @@ makeRandomiseSeedButton(CompositionSession& session,
     button->setObjectName(QStringLiteral("randomiseSeed"));
     button->setVariant(kit::KButton::Variant::Secondary);
     button->setToolTip(
-        QCoreApplication::translate("RowInlineControls", "Give this shake a new random seed"));
+        QCoreApplication::translate("RowInlineControls", "Give this node a new random seed"));
     button->setFixedWidth(button->sizeHint().width());
     QObject::connect(button, &kit::KButton::clicked, button, [&session, parameter] {
         if (const auto id = parameter())

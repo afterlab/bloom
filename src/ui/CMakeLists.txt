@@ -590,6 +590,7 @@ target_sources(
         test_card_expectation.cpp
         light_rays_widget.cpp
         film_grain_widget.cpp
+        dither_widget.cpp
         motion_blur_widget.cpp
         sharpen_widget.cpp
         vignette_widget.cpp
@@ -803,6 +804,7 @@ target_sources(
             include/bloom/ui/test_card_widget.hpp
             include/bloom/ui/light_rays_widget.hpp
             include/bloom/ui/film_grain_widget.hpp
+            include/bloom/ui/dither_widget.hpp
             include/bloom/ui/motion_blur_widget.hpp
             include/bloom/ui/sharpen_widget.hpp
             include/bloom/ui/vignette_widget.hpp

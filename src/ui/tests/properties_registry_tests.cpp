@@ -66,6 +66,7 @@
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/test_card_widget.hpp>
 #include <functional>
+#include <bloom/ui/dither_widget.hpp>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -1872,6 +1873,134 @@ void quantizeRows() {
     }
 }
 
+// #527 Dither in Properties: each pattern shows the rows it reads, in plain words with every label and
+// value shown whole and nothing wider than the panel, at the widths of a wide, a normal and a narrow
+// panel. The pattern and the domain are labelled radios (choosing one is one command that undoes), the
+// seed's row carries Randomize seed, the matrix size shows only for Ordered (Bayer), and the amplitude
+// is the card's slider row with its readout. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written
+// at each width (suffixed with the device pixel ratio), one per pattern.
+void ditherRows() {
+    struct Case final {
+        std::int64_t pattern;
+        const char* name;
+    };
+    const std::vector<Case> cases{{document::kDitherBlueNoise, "blue-noise"},
+                                  {document::kDitherOrdered, "ordered"}};
+    const std::vector<std::pair<std::string, std::string>> rows{
+        {"pattern", "Pattern"},          {"bitDepth", "Target bit depth"},
+        {"domain", "Measured in"},       {"animation", "Pattern changes"},
+        {"seed", "Seed"},                {"monochrome", "Monochrome"}};
+    for (const auto& item : cases) {
+        auto project = document::makeNewProject("Dither", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, document::kDitherNodeType);
+        session.selectNode(node);
+        properties.resize(900, 1000);
+        properties.show();
+        QCoreApplication::processEvents();
+        auto* patternRow = row(properties, "pattern");
+        auto* radio = patternRow ? patternRow->findChild<ui::kit::KRadioGroup*>() : nullptr;
+        expect(radio != nullptr && radio->count() == 2 && radio->currentIndex() == 1 &&
+                   radio->optionText(0) == QStringLiteral("Ordered (Bayer)") &&
+                   radio->optionText(1) == QStringLiteral("Blue noise"),
+               "Dither's pattern is a labelled radio that starts on Blue noise");
+        auto* domainRow = row(properties, "domain");
+        auto* domain = domainRow ? domainRow->findChild<ui::kit::KRadioGroup*>() : nullptr;
+        expect(domain != nullptr && domain->count() == 2 &&
+                   domain->optionText(0) == QStringLiteral("Display (sRGB)") &&
+                   domain->optionText(1) == QStringLiteral("Stored value"),
+               "Dither's domain is a labelled radio");
+        if (radio != nullptr && item.pattern == document::kDitherOrdered) {
+            // The radio itself is set, so the edit goes through the widget and its command.
+            const auto commands = stack.historyPosition();
+            radio->setCurrentIndex(0);
+            QCoreApplication::processEvents();
+            expect(stack.historyPosition() == commands + 1 && radio->currentIndex() == 0,
+                   "clicking Ordered (Bayer) is one command");
+            expect(session.undo() && (QCoreApplication::processEvents(), radio->currentIndex() == 1),
+                   "one undo puts the pattern back on Blue noise and the radio follows");
+            radio->setCurrentIndex(0);
+            QCoreApplication::processEvents();
+        }
+        auto* seedRow = row(properties, "seed");
+        expect(seedRow != nullptr &&
+                   seedRow->findChild<ui::kit::KButton*>(QStringLiteral("randomiseSeed")) != nullptr,
+               "the Seed row carries Randomize seed");
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1100);
+            properties.show();
+            QCoreApplication::processEvents();
+            auto shownRows = rows;
+            if (item.pattern == document::kDitherOrdered)
+                shownRows.emplace_back("matrixSize", "Matrix size");
+            for (const auto& [role, name] : shownRows) {
+                auto* found = row(properties, role.c_str());
+                if (found == nullptr || !found->isVisibleTo(&properties))
+                    std::cerr << "dither " << item.name << " at " << width << ": row " << role
+                              << " is not shown\n";
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "a Dither pattern presents every value it reads");
+                if (found == nullptr)
+                    continue;
+                expect(found->property("rowLabel").toString() == QString::fromStdString(name),
+                       "a Dither row is named in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == QString::fromStdString(name) &&
+                        candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "a Dither row label is shown whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) && !field->isDisplayRounded(),
+                               "a Dither value is shown whole");
+                for (auto* button : found->findChildren<ui::kit::KRadioGroup*>())
+                    expect(button->width() <= found->width(), "a Dither radio fits its row");
+            }
+            if (item.pattern == document::kDitherBlueNoise) {
+                auto* matrix = row(properties, "matrixSize");
+                expect(matrix == nullptr || !matrix->isVisibleTo(&properties),
+                       "Blue noise shows no matrix size");
+            }
+            auto* card = properties.findChild<ui::DitherCardWidget*>();
+            expect(card != nullptr && card->isVisibleTo(&properties) &&
+                       card->amplitudeRow()->isVisibleTo(&properties),
+                   "the amplitude is the card's slider row in Properties");
+            if (card != nullptr) {
+                auto* label = card->amplitudeRow()->label();
+                expect(label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                       "the Amplitude label is shown whole");
+                auto* readout = card->findChild<QLabel*>(QStringLiteral("ditherReadout"));
+                expect(readout != nullptr && readout->text() == card->readout() &&
+                           readout->height() >= readout->heightForWidth(readout->width()),
+                       "the readout is as tall as its text needs");
+                expect(!card->amplitudeRow()->field()->paintedText().contains(QChar(0x2026)),
+                       "the amplitude is shown whole");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "Dither's rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/dither-") +
+                                            QString::fromLatin1(item.name) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the Dither Properties capture\n";
+            }
+        }
+    }
+}
+
 // #528 Inner Shadow and Inner Glow in Properties: every value a visible row in plain words, labels and
 // values shown whole, nothing wider than the panel, at the widths of a wide, a normal and a narrow
 // panel. Inner Glow's Source is a labelled Edge/Center radio that edits the node through a command and
@@ -3113,6 +3242,7 @@ int main(int argc, char** argv) try {
     warpRows();
     tileMirrorRows();
     quantizeRows();
+    ditherRows();
     innerRows();
     audioEffectRows();
     groupAndPlotRows();

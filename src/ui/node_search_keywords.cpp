@@ -199,6 +199,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kQuantizeNodeType)
         return QStringLiteral("threshold posterize posterise levels bands steps cut high contrast "
                               "black white bilevel binary cel toon limit colors colours");
+    // #527.
+    if (typeId == document::kDitherNodeType)
+        return QStringLiteral("dither dithering noise banding deband gradient steps bayer ordered "
+                              "blue noise void and cluster bit depth 8-bit 10-bit lsb grain");
     // #523.
     if (typeId == document::kHslQualifierNodeType)
         return QStringLiteral("hue saturation luminance qualifier secondary color select key "

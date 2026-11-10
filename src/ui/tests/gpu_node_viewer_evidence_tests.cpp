@@ -208,6 +208,25 @@ struct Scenario final {
                                            {"posterizeAlpha", true},
                                            {"alphaLevels", 5.0}},
                                           "redLevels", 2.0, 8.0};
+    // #527 Dither over a four-colour gradient (smooth, so the pattern shows on every tone): blue noise
+    // per channel in the display encoding, an 8 x 8 Bayer matrix, Monochrome in the stored value at
+    // 10 bits, and a held pattern, each with its amplitude keyed (the pattern itself moves every frame
+    // unless held).
+    out["dither-blue-noise"] = {"bloom.four-color-gradient", {}, "bloom.dither",
+                                {{"seed", std::int64_t{7}}},
+                                "amplitude", 1.0, 8.0};
+    out["dither-ordered"] = {"bloom.four-color-gradient", {}, "bloom.dither",
+                             {{"pattern", std::int64_t{0}}, {"matrixSize", std::int64_t{2}}},
+                             "amplitude", 2.0, 6.0};
+    out["dither-stored-mono"] = {"bloom.four-color-gradient", {}, "bloom.dither",
+                                 {{"domain", std::int64_t{1}},
+                                  {"bitDepth", std::int64_t{1}},
+                                  {"monochrome", true}},
+                                 "amplitude", 4.0, 16.0};
+    out["dither-held"] = {"bloom.four-color-gradient", {}, "bloom.dither",
+                          {{"animation", std::int64_t{1}}, {"pattern", std::int64_t{0}},
+                           {"matrixSize", std::int64_t{3}}},
+                          "amplitude", 1.0, 4.0};
     return out;
 }
 
