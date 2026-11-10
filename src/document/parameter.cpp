@@ -897,11 +897,19 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
         return value >= 0.0 && value <= 1.0;
     if (schemaKey == "bloom.transform-2d.skew")
         return std::abs(value) <= kMaximumTransformSkew;
-    // #598: a skew of a quarter turn or more is no slant; a size above zero, a tolerance in its range.
+    // #598: a skew of a quarter turn or more is no slant; a size from 0 (refused by the node with a
+    // diagnostic, not by the schema) to its maximum, a tolerance in its range.
     if (schemaKey == kPathSkewSchemaKey)
         return std::abs(value) <= kMaximumPathSkewDegrees;
     if (schemaKey == kWarpSizeSchemaKey)
-        return value > 0.0;
+        return value >= 0.0 && value <= kMaximumWarpSize;
+    // #637: a gap, density and percentage from 0 to their maximums (resample_path_nodes.hpp).
+    if (schemaKey == kResampleGapSchemaKey)
+        return value >= 0.0 && value <= kMaximumResampleGap;
+    if (schemaKey == kResampleDensitySchemaKey)
+        return value >= 0.0 && value <= kMaximumResampleDensity;
+    if (schemaKey == kResamplePercentageSchemaKey)
+        return value >= 0.0 && value <= kMaximumResamplePercentage;
     if (schemaKey == kWarpToleranceSchemaKey)
         return value >= 0.001 && value <= 1000.0;
     if (isFourColorGradientScalarSchemaKey(schemaKey))

@@ -305,7 +305,9 @@ mode, is not clamped: the node fails with a diagnostic naming "Resample Path", t
 requested, and answers the empty path. A count under 2 (open) or 3 (closed) is raised to that minimum.
 A contour of length zero answers copies of its point for Fixed count and is reported as a notice, not a
 failure. The result's anchors are charged to the evaluation's retained-path budget. Cancellation is
-observed between contours.
+observed between contours. A stored gap or density runs from 0 to 10^9 and a stored percentage from 0
+to 10^6; the schema, keys and the Properties field agree on that range. A gap or density of 0 is stored
+as written and fails the node with its diagnostic ("not above zero"), never clamped.
 
 The arithmetic (`src/runtime/path_resample.hpp`) is shared: `resampleToCount` gives a contour an exact
 count spread evenly by length. The morph (#597) gives two contours the same count by subdividing instead
@@ -377,8 +379,9 @@ tolerance there (the warp jumps, as a Ripple does through its own origin off a w
 reported as a notice, not a failure. A contour holds at most 4096 points and a value 262144: a warp that
 needs more fails with a diagnostic naming "Warp Path", the function, the tolerance and the least number of
 points it needs, and answers the empty path (raise the tolerance, lower the amount or widen the size).
-A size at or below 0, a tolerance outside its range, a skew past 89.9 degrees, an operand that is not
-finite and a coordinate beyond the bound fail the same way. Contour count and order, closed flags, the
+A stored size runs from 0 to 10^9 (the schema, keys and the field agree). A size at or below 0 (a
+stored 0, or a driven value), a tolerance outside its range, a skew past 89.9 degrees, an operand that
+is not finite and a coordinate beyond the bound fail the same way. Contour count and order, closed flags, the
 fill rule and the groups are kept, one contour to one contour. The result's anchors are charged to the
 evaluation's retained-path budget. Cancellation is observed between contours and every 64 steps inside
 one, and a cancelled evaluation keeps nothing.

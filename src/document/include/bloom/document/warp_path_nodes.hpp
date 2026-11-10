@@ -25,6 +25,10 @@ inline constexpr std::string_view kWarpToleranceSchemaKey = "bloom.warp.toleranc
 inline constexpr std::string_view kPathSkewSchemaKey = "bloom.path.skew";
 inline constexpr std::string_view kPathSkewAxisSchemaKey = "bloom.path.skew-axis";
 
+// The stored size runs from 0 to this: the schema and the field agree on it. A size of 0 is stored
+// as written and refused by the node with a diagnostic on its card and in Properties.
+inline constexpr double kMaximumWarpSize = 1.0e9;
+
 // The skew is a slant angle: a quarter turn is no slant at all, so the stored value stays inside.
 inline constexpr double kMaximumPathSkewDegrees = 89.9;
 

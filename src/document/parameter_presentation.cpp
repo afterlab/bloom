@@ -817,11 +817,11 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
     if (schemaKey == kResampleCountSchemaKey)
         return whole(0.0, 1.0e9, 2.0, 1024.0);
     if (schemaKey == kResampleGapSchemaKey)
-        return number(0.0, 1.0e9, 1.0, 100.0, 0.5, 2, kPixels);
+        return number(0.0, kMaximumResampleGap, 1.0, 100.0, 0.5, 2, kPixels);
     if (schemaKey == kResampleDensitySchemaKey)
-        return number(0.0, 1.0e9, 1.0, 100.0, 0.5, 2);
+        return number(0.0, kMaximumResampleDensity, 1.0, 100.0, 0.5, 2);
     if (schemaKey == kResamplePercentageSchemaKey)
-        return number(0.0, 1.0e6, 0.0, 200.0, 1.0, 1, kPercent);
+        return number(0.0, kMaximumResamplePercentage, 0.0, 200.0, 1.0, 1, kPercent);
     if (schemaKey == kResampleStartOffsetSchemaKey)
         return number(kLowest, kHighest, 0.0, 100.0, 0.5, 1, kPercent);
     // #598 Warp Path and the skew Transform Path shares with it: the amount's unit is the
@@ -835,7 +835,7 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
     // A size of 0 is storable and the node refuses it with a diagnostic on its card and in
     // Properties, so the field shows the stored 0 rather than a floor the document never wrote.
     if (schemaKey == kWarpSizeSchemaKey)
-        return number(0.0, 1.0e9, 10.0, 1000.0, 1.0, 2, kPixels);
+        return number(0.0, kMaximumWarpSize, 10.0, 1000.0, 1.0, 2, kPixels);
     if (schemaKey == kWarpPhaseSchemaKey || schemaKey == kPathSkewAxisSchemaKey)
         return number(kLowest, kHighest, -360.0, 360.0, 1.0, 1, kDegrees);
     if (schemaKey == kWarpToleranceSchemaKey)

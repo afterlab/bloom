@@ -22,6 +22,12 @@ inline constexpr std::string_view kResampleGapSchemaKey = "bloom.resample.gap";
 inline constexpr std::string_view kResampleDensitySchemaKey = "bloom.resample.density";
 inline constexpr std::string_view kResamplePercentageSchemaKey = "bloom.resample.percentage";
 inline constexpr std::string_view kResampleStartOffsetSchemaKey = "bloom.resample.start-offset";
+// The stored gap, density and percentage run from 0 to these: the schema and the field agree on
+// them. A value the mode cannot use (a gap or density of 0, a share that would pass the Path caps)
+// is stored as written and refused by the node with a diagnostic, never clamped.
+inline constexpr double kMaximumResampleGap = 1.0e9;
+inline constexpr double kMaximumResampleDensity = 1.0e9;
+inline constexpr double kMaximumResamplePercentage = 1.0e6;
 
 // How the number of points on each contour is decided: a set number, a set distance, a set number per
 // 100 pixels of length, or a share of the contour's own point count.
