@@ -40,6 +40,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.video-source", "Read|Footage|Movie"},
     {"bloom.audio-source", "AudioRead|Audio Footage"},
     {"bloom.composition-source", "Precomp|Pre-comp|Precompose|Pre-compose"},
+    {"bloom.text-source", "Text"},
     {"bloom.solid-source", "Constant|Solid Layer|Color Solid"},
     {"bloom.checker-source", "CheckerBoard|Checkerboard"},
     {"bloom.linear-gradient", "Ramp|Gradient Ramp"},

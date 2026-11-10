@@ -113,6 +113,17 @@ void KSearchPopup::filter() {
              std::max(nameRelevance(entry.label, query), aliasRelevance(entry.aliases, query)),
              index});
     }
+    // Typing a node's exact name, or the short name its own name begins with ("Text" for Text
+    // Source), is asking for that node: entries that merely contain the word (Text Outline) are not
+    // offered beside it, so the row Enter adds is the only row there is. An alias that is not the
+    // start of the name ("Read" for Image Source) narrows nothing.
+    const auto namedExactly = [&](const SearchEntry& entry) {
+        return nameRelevance(entry.label, query) == 4 ||
+               (entry.label.startsWith(query, Qt::CaseInsensitive) &&
+                aliasRelevance(entry.aliases, query) > 0);
+    };
+    if (std::ranges::any_of(matches, [&](const Match& match) { return namedExactly(*match.entry); }))
+        std::erase_if(matches, [&](const Match& match) { return !namedExactly(*match.entry); });
     std::vector<QString> sectionOrder;
     std::map<QString, std::pair<int, std::size_t>> sectionRank;
     for (const auto& match : matches) {
