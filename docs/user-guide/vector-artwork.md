@@ -59,10 +59,32 @@ The Vector Artwork node's card and the layer's Properties show a read-only **Art
 file's name and how much of it the project holds (`logo.svg · 1 KB held`). It changes only by
 importing again.
 
+### Reusing an imported SVG
+
+An imported SVG stays in **Assets** as an SVG (Type **SVG**; its Dimensions tooltip says it is not a
+pixel size). To use it again, add it to a composition the way you add any footage: drag it onto the
+Viewer, the Timeline or the node editor, or choose **Add to Composition** in its Assets menu, or
+**New Composition from Selection**. Every route builds the artwork through the SVG import, never an
+image layer, with the same chooser (asked once per batch) and the same remembered default as the
+first import, and it reuses the asset: no second asset record is made. Each add is one undo step.
+In the node editor the artwork's nodes are built, unconnected, at the drop point.
+
+The add uses the file if it is still there and unchanged. If the file is gone, the project's stored
+copy is used, so it works without the file. If the file changed, the add is refused by name; use
+**Reload Footage**. If there is neither a file nor a stored copy, the add is refused by name and
+nothing is added (the rest of a mixed batch is refused with it). A plain image layer cannot take an
+SVG asset: it is refused with the reason.
+
+An empty image layer that an older Bloom made from an SVG asset shows a named warning on the layer
+in the Timeline, in its node card and in Properties: "'logo.svg' is an SVG source, not footage: add
+it again from Assets to rebuild the artwork". The same warning appears in the `layers` and `nodes`
+queries of MCP and Python as `warnings`.
+
 ### Break Apart
 
 **Composition > Break Apart SVG**, or **Break Apart SVG** in a layer's right-click menu in the
-Timeline, turns a one-layer SVG into editable shapes in place, in one undo step. The layer keeps its
+Timeline, turns a one-layer SVG into editable shapes in place, in one undo step. With several
+one-layer SVGs selected it breaks all of them apart in one undo step. The layer keeps its
 name, transform and keys, parent, timing, masks, track matte, opacity, blend mode and effects, and
 now draws the shapes of the file's root group. Nothing is read from disk: the shapes come from the
 copy the project holds. Undo gives the one-layer SVG back exactly.
@@ -77,5 +99,7 @@ it can look softer when scaled up. Break Apart when you need the parts, not befo
 else is refused, naming both spellings. `bloom.layer.break-apart-svg` takes the `layer` and returns
 the new root group as `merge`. Both work from MCP `transact`, `bloom.ops.layer.add_svg(path=...,
 mode="shapes")` and `bloom.ops.layer.break_apart_svg(layer=...)` in Python, and `bloom-cli run`.
-The file is read and parsed when the call is made, on the calling thread, so a live session's
+Re-adding an imported SVG takes the same `mode` on `bloom.layer.add-from-assets`,
+`bloom.composition.add-from-assets` and `bloom.node.add-asset-source`; it never prompts, so the
+default is `"layer"`. The file is read and parsed when the call is made, on the calling thread, so a live session's
 interface stays responsive.

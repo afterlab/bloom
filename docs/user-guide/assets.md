@@ -47,7 +47,9 @@ identities, so organizing them preserves the nodes and layers that already use t
 
 SVG files import as a vector layer or as editable shapes, as you choose: Bloom asks once per
 import or drop, and **Remember my choice** (or **Preferences > Import > SVG files**) keeps the
-answer. See [Vector Artwork](vector-artwork.md#importing-an-svg).
+answer. See [Vector Artwork](vector-artwork.md#importing-an-svg). To use an imported SVG again, see
+[Reusing an imported SVG](vector-artwork.md#reusing-an-imported-svg); the held copy shows as an
+"SVG data" row.
 
 ### Import options
 

@@ -620,3 +620,15 @@ the evaluation take the same order, so what is admitted is what is held. Without
 bike, worldmap, firefox and the 4,000-element file now export at 3840 by 2160, and their PNGs equal
 the GPU's (byte-identical for tiger, bike and worldmap; within one 8-bit code for firefox and the
 4,000-element file).
+
+## Re-adding an imported SVG (#646)
+
+Every add-to-composition route for an SVG asset (`isSvgSourceAsset`, src/document) builds the
+artwork through `addSvgAssetArtwork` / `AddSvgAssetNodes` (src/commands/svg_import_operations.cpp)
+with the #642 mode, reusing the asset record. `prepareSvgAssetSource` reads the file when it is there
+and its digest matches, else uses the project's held copy, else refuses by name. Routes prepare on the
+asset controller's import worker (desktop) or on the client thread in the operation factory (script
+routes, `mode` default `layer`); `AddImageLayer` and `AddImageNode` refuse an SVG asset. An empty image
+layer made from an SVG asset by an older build is reported by `svgFootageWarning` /
+`layerSvgFootageWarning` (src/document) on the card, timeline row, Properties and the MCP/Python
+queries.
