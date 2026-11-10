@@ -204,10 +204,13 @@ int main(int argc, char** argv) {
             if (card == nullptr)
                 continue; // not drawn as an editable card row (special rows, hidden, path)
             if (isPickList(declared) && !hidden) {
-                // The font is the font field: a dropdown that opens the picker (#489).
+                // The font is the font field: a dropdown that opens the picker (#489). A short
+                // closed choice better seen than picked is a labelled radio group on the card, as
+                // in Properties (ui-grammar.md, #528).
                 expect(qobject_cast<ui::kit::KDropdown*>(card) != nullptr ||
+                           qobject_cast<ui::kit::KRadioGroup*>(card) != nullptr ||
                            qobject_cast<ui::FontField*>(card) != nullptr,
-                       "card shows a dropdown for " + label);
+                       "card shows a dropdown or radio group for " + label);
                 expect(qobject_cast<ui::kit::KDropdown*>(props) != nullptr ||
                            qobject_cast<ui::kit::KRadioGroup*>(props) != nullptr ||
                            qobject_cast<ui::FontField*>(props) != nullptr,
