@@ -512,6 +512,20 @@ void upstreamRows() {
     }
     expect(value && value->text() == "0",
            "detached driven graph resolves through background evaluator");
+    // The link button over the value text: the whole stack lies inside the row, so the text is
+    // never clipped under the button (the row grows to two lines when it is driven).
+    if (drivenRow && value) {
+        QCoreApplication::processEvents();
+        auto* link = drivenRow->findChild<ui::kit::KButton*>("propertiesDriverLink");
+        const QRect valueBox(value->mapTo(drivenRow, QPoint(0, 0)), value->size());
+        expect(drivenRow->rect().contains(valueBox),
+               "a driven row holds its value text inside the row");
+        expect(link && link->mapTo(drivenRow, QPoint(0, link->height())).y() <=
+                           valueBox.top() + 1,
+               "a driven row's value text sits below the link button, not under it");
+        expect(drivenRow->height() >= 2 * ui::kit::px(ui::kit::Size::PropertyRow) - 1,
+               "a driven row has two lines");
+    }
     expect(drivenRow && drivenRow->findChild<ui::kit::KButton*>("propertiesDriverLink") &&
                drivenRow->findChild<ui::kit::KButton*>("propertiesDriverLink")->text() == "Math",
            "driven row names the driver node");
@@ -760,6 +774,21 @@ void everyBuiltInLabelIsShownWhole() {
                                         text.toStdString() + "\" in " + typeId + where[key].toStdString())
                                            .c_str());
                 }
+            }
+            // A driven row's value text is inside its row at every width.
+            for (auto* label : properties.findChildren<QLabel*>("propertiesDrivenValue")) {
+                if (!label->isVisibleTo(&properties))
+                    continue;
+                ++checked;
+                QWidget* host = label->parentWidget();
+                while (host != nullptr && host->objectName() != "propertiesRow")
+                    host = host->parentWidget();
+                expect(host != nullptr &&
+                           host->rect().contains(QRect(label->mapTo(host, QPoint(0, 0)),
+                                                       label->size())),
+                       (std::string("a driven row clips its value text in ") + typeId + " at " +
+                        std::to_string(width))
+                           .c_str());
             }
             for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel")) {
                 if (!label->isVisibleTo(&properties) || label->toolTip().isEmpty())

@@ -168,6 +168,8 @@ void PropertiesEditor::configureDrivenRows() {
             display->setObjectName("propertiesDrivenDisplay");
             auto* layout = new QVBoxLayout(display);
             layout->setContentsMargins(0, 0, 0, 0);
+            // The button and the text are two control heights; the two-line row holds exactly that.
+            layout->setSpacing(0);
             auto* jump = new kit::KButton(display);
             jump->setObjectName("propertiesDriverLink");
             jump->setIconId(kit::IconId::Link);
@@ -177,7 +179,8 @@ void PropertiesEditor::configureDrivenRows() {
             value->setObjectName("propertiesDrivenValue");
             value->setFont(kit::font(kit::TypeRole::Value));
             value->setTextFormat(Qt::PlainText);
-            value->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            value->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            value->setFixedHeight(kit::px(kit::Size::Control));
             layout->addWidget(value);
             if (auto* horizontal = qobject_cast<QHBoxLayout*>(row->layout()))
                 horizontal->insertWidget(horizontal->count() - 1, display, 1);
@@ -213,6 +216,18 @@ void PropertiesEditor::configureDrivenRows() {
             }
         }
         display->setVisible(driver != nullptr);
+        // The driven display stacks the link button over the value text, so it needs two lines.
+        // Without them the fixed-height row clips the text under the button. The row's own line
+        // count comes back when the link is removed.
+        auto* host = qobject_cast<kit::KPropertyRow*>(display);
+        if (host == nullptr)
+            host = qobject_cast<kit::KPropertyRow*>(row);
+        if (host != nullptr) {
+            if (!host->property("drivenBaseLines").isValid())
+                host->setProperty("drivenBaseLines", std::max(1, host->property("rowLines").toInt()));
+            host->setLineCount(driver ? std::max(2, host->property("drivenBaseLines").toInt())
+                                      : host->property("drivenBaseLines").toInt());
+        }
         if (driver) {
             display->setEnabled(true);
             auto* jump = display->findChild<kit::KButton*>();

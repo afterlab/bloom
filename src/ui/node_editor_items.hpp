@@ -1173,7 +1173,8 @@ class NodeItem final : public QGraphicsObject {
                         return parameter && !refreshing_ ? parameter->id : document::ParameterId{};
                     });
                 valueRows_.push_back({tr("Text"), textContent_, nullptr, {}});
-            } else if (!shapeSource_ && role == document::kTextSizeParameterRole) {
+            } else if (!shapeSource_ && role == document::kTextSizeParameterRole &&
+                       declaresTextSize(node, role, registry)) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Size editor verbatim, so the
                 // same gesture in either surface produces the same value.
                 textSize_ =
@@ -1258,6 +1259,22 @@ class NodeItem final : public QGraphicsObject {
         }
         builtRoles_ = std::move(roles);
         fieldsBuilt_ = true;
+    }
+
+    // The text-size editor is for a parameter that IS a text size. Another node's "size" (Warp
+    // Path's, Glow's) has its own schema, range and unit, so it is an ordinary operand row: it must
+    // not clamp to the text-size range, and its value is the stored one (a size of 0 reads 0, not the
+    // text-size floor).
+    [[nodiscard]] static bool declaresTextSize(const document::NodeRecord& node,
+                                               const std::string_view role,
+                                               const document::NodeDefinitionRegistry& registry) {
+        const auto* definition = registry.find(node.typeId, node.schemaVersion);
+        if (definition == nullptr)
+            return true;
+        const auto declared =
+            std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+        return declared == definition->parameters.end() ||
+               declared->schemaKey == document::kTextSizeParameterSchemaKey;
     }
 
     // Builds the generic editor for `role` from the registry's declared kind, or answers false when
