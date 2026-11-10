@@ -301,7 +301,7 @@ void testSearchKeyboardAndMenus() {
     // the whole registry no longer fits under the shared popup's twelve-row cap, so the invariant
     // is pinned where it is observable -- a filtered list short enough to fit. The cap itself
     // belongs to the popup primitive and is tested there.
-    field->setText(QStringLiteral("merge"));
+    field->setText(QStringLiteral("merge paths"));
     int expectedHeight = 0;
     for (int row = 0; row < list->model()->rowCount(); ++row)
         expectedHeight += list->sizeHintForRow(row);
@@ -383,10 +383,32 @@ void testSearchKeyboardAndMenus() {
                rowForKey(list->model(), "bloom.point-set-read").isValid(),
            "Read still finds Video Source and the node with Read in its own name");
     field->setText(QStringLiteral("text"));
-    const auto textRow = rowForKey(list->model(), document::kTextSourceNodeType);
     // ADAPTED (task S3): text used to be a disabled row carrying AddTextLayer's real refusal; the
     // command now succeeds, so the same mechanism reports no refusal and leaves the row enabled.
-    expect(resultRows(list->model()) == 1 && textRow.isValid() &&
+    const auto firstResult = [&] {
+        for (int row = 0; row < list->model()->rowCount(); ++row)
+            if (!list->model()->index(row, 0).data(kit::kSearchSectionRole).toBool())
+                return list->model()->index(row, 0);
+        return QModelIndex{};
+    };
+    expect(firstResult().data(Qt::UserRole).toString() ==
+                   QString::fromUtf8(document::kTextSourceNodeType.data(),
+                                     static_cast<qsizetype>(document::kTextSourceNodeType.size())) &&
+               resultRows(list->model()) > 1,
+           "text lists Text Source first and the other fuzzy matches after it");
+    for (const auto* typo : {"txt src", "mrge"}) {
+        field->setText(QString::fromLatin1(typo));
+        const auto wanted = std::string_view{typo} == "mrge"
+                                ? rowForKey(list->model(), document::kLayerStackNodeType)
+                                : rowForKey(list->model(), document::kTextSourceNodeType);
+        expect(wanted.isValid(), QStringLiteral("the typo '%1' still finds its node")
+                                     .arg(QString::fromLatin1(typo))
+                                     .toUtf8()
+                                     .constData());
+    }
+    field->setText(QStringLiteral("text"));
+    const auto textRow = rowForKey(list->model(), document::kTextSourceNodeType);
+    expect(textRow.isValid() &&
                textRow.flags().testFlag(Qt::ItemIsEnabled) &&
                !textRow.data(Qt::ToolTipRole).toString().contains(QStringLiteral("CPU")),
            "text is listed as an enabled row with no refusal to report");
@@ -394,11 +416,15 @@ void testSearchKeyboardAndMenus() {
     expect(textRow.data().toString() ==
                node_editor::nodeTypeDisplayName(document::kTextSourceNodeType),
            "and its label is the node's name alone");
-    expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Text & Paths")},
-           "a filter that empties a section drops that section's heading with it");
+    expect(!sectionHeadings(list->model()).isEmpty() &&
+               sectionHeadings(list->model()).first() == QStringLiteral("Text & Paths"),
+           "the section holding the best match is listed first");
     history = f.stack.size();
     field->setText(QStringLiteral("layer output image"));
-    expect(resultRows(list->model()) == 1, "search combines display-name and socket-kind filters");
+    expect(resultRows(list->model()) >= 1 && firstResult().data(Qt::UserRole).toString() ==
+                                                  QString::fromUtf8(document::kLayerOutputNodeType.data(),
+                                                                    static_cast<qsizetype>(document::kLayerOutputNodeType.size())),
+           "search combines display-name and socket-kind filters and lists the best match first");
     QTest::keyClick(field, Qt::Key_Return);
     selected = f.session.selectedNode();
     expect(selected && selected->typeId == document::kLayerOutputNodeType &&

@@ -31,22 +31,35 @@ namespace {
     if (query.isEmpty())
         return 0;
     if (label.compare(query, Qt::CaseInsensitive) == 0)
-        return 4;
+        return 8;
     if (label.startsWith(query, Qt::CaseInsensitive))
-        return 3;
+        return 6;
     for (const auto& word : label.split(' ', Qt::SkipEmptyParts))
         if (word.startsWith(query, Qt::CaseInsensitive))
-            return 2;
+            return 4;
     if (label.contains(query, Qt::CaseInsensitive))
-        return 1;
+        return 2;
     return 0;
 }
 
 // Typing an entry's other name in full ranks it above a name that merely starts with those letters
-// and below a node actually called that (#554): "Read" lands on Image Source rather than on Point
+// (every other node still lists after it) and below a node actually called that (#554): "Read" lands on Image Source rather than on Point
 // Set Read, and "Merge" still means the node called Merge.
 [[nodiscard]] int aliasRelevance(const QStringList& aliases, const QString& query) {
-    return !query.isEmpty() && aliases.contains(query, Qt::CaseInsensitive) ? 3 : 0;
+    return !query.isEmpty() && aliases.contains(query, Qt::CaseInsensitive) ? 7 : 0;
+}
+
+// A word is fuzzy-found in text when its letters appear there in order, so a typo or a missing
+// letter ("mrge", "src") still finds the node. Exact substrings rank above these (relevance -1).
+[[nodiscard]] bool containsLettersInOrder(const QString& text, const QString& word) {
+    qsizetype at = 0;
+    for (const QChar letter : word) {
+        at = text.indexOf(letter, at, Qt::CaseInsensitive);
+        if (at < 0)
+            return false;
+        ++at;
+    }
+    return true;
 }
 
 } // namespace
@@ -104,26 +117,20 @@ void KSearchPopup::filter() {
     for (std::size_t index = 0; index < entries_.size(); ++index) {
         const auto& entry = entries_[index];
         const QString haystack = entry.label + ' ' + entry.keywords + ' ' + entry.aliases.join(' ');
-        if (!std::ranges::all_of(words, [&](const auto& word) {
-                return haystack.contains(word, Qt::CaseInsensitive);
+        const bool exact = std::ranges::all_of(words, [&](const auto& word) {
+            return haystack.contains(word, Qt::CaseInsensitive);
+        });
+        if (!exact && !std::ranges::all_of(words, [&](const auto& word) {
+                return containsLettersInOrder(entry.label + ' ' + entry.aliases.join(' '), word);
             }))
             continue;
         matches.push_back(
             {&entry,
-             std::max(nameRelevance(entry.label, query), aliasRelevance(entry.aliases, query)),
+             exact ? std::max(nameRelevance(entry.label, query),
+                              aliasRelevance(entry.aliases, query))
+                   : -1,
              index});
     }
-    // Typing a node's exact name, or the short name its own name begins with ("Text" for Text
-    // Source), is asking for that node: entries that merely contain the word (Text Outline) are not
-    // offered beside it, so the row Enter adds is the only row there is. An alias that is not the
-    // start of the name ("Read" for Image Source) narrows nothing.
-    const auto namedExactly = [&](const SearchEntry& entry) {
-        return nameRelevance(entry.label, query) == 4 ||
-               (entry.label.startsWith(query, Qt::CaseInsensitive) &&
-                aliasRelevance(entry.aliases, query) > 0);
-    };
-    if (std::ranges::any_of(matches, [&](const Match& match) { return namedExactly(*match.entry); }))
-        std::erase_if(matches, [&](const Match& match) { return !namedExactly(*match.entry); });
     std::vector<QString> sectionOrder;
     std::map<QString, std::pair<int, std::size_t>> sectionRank;
     for (const auto& match : matches) {
