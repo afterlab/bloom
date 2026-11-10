@@ -2726,13 +2726,24 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
         // #510 Procedural Warp: every mode through each filter on the 12 x 10 frame, the edge rule
         // and the mode's variant (wave shape and pinning, polar direction, magnify shape and link)
         // turning with the filter.
-        for (const std::int64_t mode : {0, 1, 2, 3, 4, 5, 6}) {
+        for (const std::int64_t mode : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}) {
             kernels.emplace_back("procedural warp mode " + std::to_string(mode) + " filter " +
                                      std::to_string(filter),
                                  bloom::runtime::FieldRasterKernel{
                                      bloom::field_test_programs::proceduralWarpProgram(
                                          id, mode, filter, (filter + mode) % 4, filter + mode % 2,
                                          12, 10),
+                                     1U});
+            id += 100;
+        }
+        // Every Warp style (the variant picks it) through each filter: four per filter, 0 to 15
+        // wrapping onto the 13 styles.
+        for (std::int64_t j = 0; j < 4; ++j) {
+            kernels.emplace_back("procedural warp style " + std::to_string((filter * 4 + j) % 13) +
+                                     " filter " + std::to_string(filter),
+                                 bloom::runtime::FieldRasterKernel{
+                                     bloom::field_test_programs::proceduralWarpProgram(
+                                         id, 7, filter, (filter + j) % 4, filter * 4 + j, 12, 10),
                                      1U});
             id += 100;
         }

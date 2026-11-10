@@ -1976,7 +1976,8 @@ displayProofRunner(const bool customView) {
         // #510 Procedural Warp: the programs its seven modes lower to (Twirl, Bulge/Pinch, Spherize,
         // Ripple, Wave in every shape and pinning, Polar Coordinates both ways, Magnify in both shapes
         // and every link, with its plain and magnified reads blended), every filter and edge rule, full
-        // frame and ROI.
+        // frame and ROI. Warp (all 13 styles), Bend, Split (with and without Mirror), Turbulent and
+        // Drizzle follow, and Magnify's pull and Ripple's pulse ride the odd variants.
         addField("node.bloom.procedural-warp",
                  {bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::proceduralWarpProgram(base + 0, 0, 0, 1, 0),
@@ -2031,11 +2032,95 @@ displayProofRunner(const bool customView) {
                       1},
                   bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::proceduralWarpProgram(base + 1700, 6, 0, 0, 3),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1800, 7, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1900, 7, 1, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2000, 7, 2, 3, 2),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2100, 7, 0, 0, 3),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2200, 7, 1, 1, 4),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2300, 7, 2, 2, 5),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2400, 7, 0, 3, 6),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2500, 7, 1, 0, 7),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2600, 7, 2, 1, 8),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2700, 7, 0, 2, 9),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2800, 7, 1, 3, 10),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 2900, 7, 2, 0, 11),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3000, 7, 0, 1, 12),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3100, 8, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3200, 8, 1, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3300, 8, 2, 3, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3400, 9, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3500, 9, 1, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3600, 9, 2, 0, 2),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3700, 9, 0, 3, 3),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3800, 10, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3900, 10, 1, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 4000, 10, 2, 3, 2),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 4100, 10, 0, 1, 3),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 4200, 11, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 4300, 11, 1, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 4400, 11, 2, 0, 2),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 4500, 11, 0, 3, 3),
                       1}},
-                 base + 1800,
-                 "production Procedural Warp lowering: every mode, wave shape, pinning, polar "
+                 base + 4600,
+                 "production Procedural Warp lowering: every mode, warp style, wave shape, pinning, polar "
                  "direction and magnify shape and link, every filter and edge rule, full frame and ROI");
-        base += 2000;
+        base += 5000;
         addField("node.bloom.st-map",
                  {bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::stMapProgram(base, 0, 1, 0, 1), 1},

@@ -530,6 +530,17 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[1]["mode"], "Twirl")
         self.assertIn("angle", effect[2]["keys"], "every frame is new")
 
+    def test_procedural_warp_turbulent_and_drizzle_scenarios_key_a_value_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        for name, mode, key in (("procedural-warp-turbulent-2k", "Turbulent", "evolution"),
+                                ("procedural-warp-drizzle-2k", "Drizzle", "phase")):
+            scenario = spec.SCENARIOS[name]
+            self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+            effect = scenario["layers"][0]["effects"][0]
+            self.assertEqual(effect[0], "bloom.procedural-warp")
+            self.assertEqual(effect[1]["mode"], mode)
+            self.assertIn(key, effect[2]["keys"], "every frame is new")
+
     def test_inner_shadow_and_glow_scenarios_key_a_value_on_a_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         for name, node, key in (("inner-shadow-2k", "bloom.inner-shadow", "distance"),

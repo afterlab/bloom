@@ -646,6 +646,31 @@ SCENARIOS["procedural-warp-2k"] = {
     ],
 }
 
+# #510: Procedural Warp's Turbulent mode (the dearest: two fractal noises a pixel) and its Drizzle,
+# each with a keyed value so every frame is new. Written, not run: no recorded numbers and no budget.
+SCENARIOS["procedural-warp-turbulent-2k"] = {
+    "description": "A PNG16 plate under Procedural Warp, a Turbulent with a keyed evolution.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.procedural-warp",
+                      {"mode": "Turbulent", "displacement": 60.0, "complexity": 4},
+                      {"keys": {"evolution": [[0, 0.0], [23, 360.0]]}}]]},
+    ],
+}
+SCENARIOS["procedural-warp-drizzle-2k"] = {
+    "description": "A PNG16 plate under Procedural Warp, a Drizzle of 64 drops with a keyed phase.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.procedural-warp",
+                      {"mode": "Drizzle", "radius": 200.0, "drops": 64},
+                      {"keys": {"phase": [[0, 0.0], [23, 180.0]]}}]]},
+    ],
+}
+
 # #528: Inner Shadow and Inner Glow over a plate, each with a keyed value so every frame is new. A
 # plate has no transparency of its own, so the shape is the plate's data window: the cost is the
 # one blur, the hold-out and the two Levels. Written, not run: no recorded numbers and no budget.
