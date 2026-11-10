@@ -67,6 +67,8 @@ struct PreviewFrameCacheKey final {
     std::string viewName;
     bool showLook = true;
     std::optional<runtime::ChannelInspection> channelInspection = std::nullopt;
+    // #645: the Viewer's isolation (a dimmed frame is a different picture).
+    std::vector<document::LayerId> isolation{};
 
     friend bool operator==(const PreviewFrameCacheKey&, const PreviewFrameCacheKey&) = default;
 };

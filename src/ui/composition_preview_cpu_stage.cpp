@@ -353,7 +353,8 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
             }
             prepared = runtime::PreparedPreviewFrame::createQualified(
                 desiredIdentity.requestGeneration, qualifiedResult.frame(),
-                desiredIdentity.resolutionPolicy, desiredIdentity.channelInspection);
+                desiredIdentity.resolutionPolicy, desiredIdentity.channelInspection,
+                desiredIdentity.isolation);
         } else {
             const runtime::ReferenceDisplayPreparationRequest displayRequest{
                 .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
@@ -393,7 +394,8 @@ runtime::PreviewCpuDisplayFallback makeCompositionPreviewCpuDisplayFallback(
             }
             prepared = runtime::PreparedPreviewFrame::create(
                 desiredIdentity.requestGeneration, displayResult.frame(),
-                desiredIdentity.resolutionPolicy, desiredIdentity.channelInspection);
+                desiredIdentity.resolutionPolicy, desiredIdentity.channelInspection,
+                desiredIdentity.isolation);
         }
         if (!prepared.has_value() || prepared->desiredIdentity() != desiredIdentity) {
             diagnostics.push_back(

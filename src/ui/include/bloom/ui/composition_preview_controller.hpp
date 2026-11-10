@@ -297,6 +297,11 @@ class CompositionPreviewController final : public QObject {
     submitViewerChannelDisplay(PreparedPreviewFrameHandle frame, ViewerChannel channel,
                                std::size_t retainedDisplayBytes);
     [[nodiscard]] std::optional<render::ImageWindow> regionOfInterest() const;
+    // #645 isolation: the groups the Viewer is inside (CompositionSession::viewerLevel), whose
+    // outside the Viewer's frames draw dimmed. Part of every Viewer, RAM Preview and background
+    // cache identity; empty at the top level and for a Viewer pinned to another composition.
+    // Exports, headless renders and MCP renders never read it.
+    [[nodiscard]] std::vector<document::LayerId> isolation() const;
     // Display pixels per composition pixel, including device pixel ratio. Unknown geometry uses 1.
     void setDisplayedCompositionScale(double scale);
 
@@ -468,6 +473,7 @@ class CompositionPreviewController final : public QObject {
     bool cachePurgeGate_ = false;
     double displayedCompositionScale_ = 1.0;
     std::optional<QRectF> regionOfInterest_;
+    std::vector<document::LayerId> lastIsolation_;
     std::optional<document::CompositionId> compositionTarget_;
     std::unique_ptr<PlaybackController> playbackController_;
     bool playbackActive_ = false;

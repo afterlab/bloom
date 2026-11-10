@@ -205,7 +205,8 @@ compilePreviewPlan(const runtime::SnapshotCompiler& compiler,
                               {.snapshot = snapshot,
                                .compositionId = desiredIdentity.compositionId,
                                .parameterOverrides = overrides,
-                               .channelInspection = desiredIdentity.channelInspection},
+                               .channelInspection = desiredIdentity.channelInspection,
+                               .isolation = desiredIdentity.isolation},
                               cancellation);
 }
 

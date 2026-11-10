@@ -95,6 +95,9 @@ std::size_t PreviewFrameCache::KeyHash::operator()(const PreviewFrameCacheKey& k
         for (const auto& channel : key.channelInspection->channels)
             add(channel);
     }
+    add(key.isolation.size());
+    for (const auto layer : key.isolation)
+        add(layer.value());
     return hash;
 }
 
@@ -123,7 +126,8 @@ PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identit
             .displayName = identity.displayName,
             .viewName = identity.viewName,
             .showLook = identity.showLook,
-            .channelInspection = identity.channelInspection};
+            .channelInspection = identity.channelInspection,
+            .isolation = identity.isolation};
 }
 
 PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,

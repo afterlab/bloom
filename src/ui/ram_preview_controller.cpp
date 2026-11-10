@@ -618,6 +618,7 @@ RamPreviewController::identityFor(const core::RationalTime time,
         .displayName = settings.displayName,
         .viewName = settings.viewName,
         .showLook = settings.showLook,
+        .isolation = previewController_.isolation(),
     };
 }
 

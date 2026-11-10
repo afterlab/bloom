@@ -126,6 +126,16 @@ CompositionPreviewController::CompositionPreviewController(
     });
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &CompositionPreviewController::handleCurrentTimeChanged);
+    // #645: entering or leaving a group re-renders the Viewer's frame with the outside dimmed or
+    // not (isolation() is part of the frame's identity); a change of points alone draws the same.
+    connect(&session_, &CompositionSession::viewerLevelChanged, this, [this] {
+        auto current = isolation();
+        if (current == lastIsolation_ || shuttingDown_)
+            return;
+        lastIsolation_ = std::move(current);
+        // The other level's frame may already be cached (a different identity, never this one).
+        requestPreview(false, PreviewRequestKind::Visible);
+    });
     // A composition pinned elsewhere is prepared from the live snapshot, so every revision the
     // session publishes may change its pixels (the retained provenance that lets the active
     // composition skip render-neutral edits does not describe it).
@@ -366,7 +376,16 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
         .viewName = settings_.viewName,
         .showLook = settings_.showLook,
         .channelInspection = settings_.channelInspection,
+        .isolation = isolation(),
     };
+}
+
+std::vector<document::LayerId> CompositionPreviewController::isolation() const {
+    // The level belongs to the session's composition; a Viewer pinned to another one shows it as
+    // it is.
+    if (targetIsElsewhere())
+        return {};
+    return session_.viewerLevel().groups;
 }
 
 void CompositionPreviewController::setRegionOfInterest(std::optional<QRectF> region) {
@@ -1010,6 +1029,7 @@ void CompositionPreviewController::requestPreview(
         .viewName = settings_.viewName,
         .showLook = settings_.showLook,
         .channelInspection = settings_.channelInspection,
+        .isolation = isolation(),
     };
 
     if (trace_)
@@ -1367,6 +1387,8 @@ void CompositionPreviewController::setCompositionTarget(
     if (compositionTarget_ == composition)
         return;
     compositionTarget_ = composition;
+    // #645: a target elsewhere has no isolation; the next level change compares against this.
+    lastIsolation_ = isolation();
     if (shuttingDown_)
         return;
     interactiveCadenceTimer_.stop();
