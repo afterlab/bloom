@@ -288,6 +288,48 @@ void cancellationAndBudget(Expectations& expectations, runtime::GpuSceneExecutor
     }
 }
 
+// Retirement: the line-end geometry a frame prepared is retained by the scene cache under its
+// operation key and nothing more. With room for two images, frames whose ends differ evict one
+// another (the geometry of an earlier end is retired, not kept), a cleared cache holds nothing,
+// and a frame whose geometry was retired renders again with the right pixels.
+void retirement(Expectations& expectations, render::GpuDevice& device, const States& keyed) {
+    runtime::GpuSceneCacheBudgets budgets;
+    budgets.maxRetainedImages = 2;
+    auto cache = runtime::GpuSceneCache::create(device, budgets);
+    expectations.expect(cache.hasValue(), "retirement: the small cache creates");
+    if (!cache)
+        return;
+    auto executor = runtime::GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(executor.hasValue(), "retirement: the executor creates");
+    if (!executor)
+        return;
+    const runtime::CpuGpuSceneBuilder builder;
+    for (const auto* state : {&keyed.start, &keyed.middle, &keyed.end}) {
+        const auto scene = builder.build(state->plan, state->request);
+        expectations.expect(scene.hasValue(), "retirement: the frame prepares");
+        if (!scene)
+            return;
+        expectations.expect(parity(runScene(*executor.executor, scene.scene),
+                                   state->frame->processImage().pixels()),
+                            "retirement: each frame matches the CPU reference in a small cache");
+        expectations.expect(cache.cache->entryCount() <= budgets.maxRetainedImages,
+                            "retirement: the cache holds no more than its image budget");
+    }
+    expectations.expect(cache.cache->counters().evictions > 0,
+                        "retirement: the geometry of an earlier end is evicted, not kept");
+    expectations.expect(!executor.executor->hasUnretiredSubmission(),
+                        "retirement: no submission is left unretired");
+    cache.cache->clear();
+    expectations.expect(cache.cache->entryCount() == 0 && cache.cache->retainedBytes() == 0,
+                        "retirement: a cleared cache retains no line-end geometry");
+    const auto again = builder.build(keyed.start.plan, keyed.start.request);
+    expectations.expect(again.hasValue() &&
+                            parity(runScene(*executor.executor, again.scene),
+                                   keyed.start.frame->processImage().pixels()),
+                        "retirement: a frame whose geometry was retired renders again, equal to the "
+                        "CPU reference");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -368,13 +410,14 @@ int main(int argc, char** argv) {
                                          keyedFixture);
             cancellationAndBudget(expectations, *identityExecutor.executor, keyed->start);
         }
+        retirement(expectations, *device.device, *keyed);
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " line end expectation(s) failed\n";
             return 1;
         }
         std::cout << "PASS: keyed and driven line ends on the GPU match the CPU reference, cold "
-                     "and warm, with cache identity, invalidation, cancellation and budget\n";
+                     "and warm, with cache identity, invalidation, cancellation, budget and retirement\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';
