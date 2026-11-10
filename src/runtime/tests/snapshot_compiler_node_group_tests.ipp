@@ -1363,6 +1363,163 @@ void testFunctionPlot(Expectations& expectations) {
     expectations.expect(gapKnown, "1 / x leaves a gap at zero: two contours of four known anchors");
 }
 
+// #598 Warp Path (Function): a group's function bends a path. The group is f(x) = sin(x), so a point
+// (x, y) goes to (x + amount * sin(y / size), y): the issue's own example, (x + sin y, y), as a group.
+constexpr auto kSineComposition = document::CompositionId::fromRaw(12);
+constexpr auto kWarpFunctionNode = document::NodeId::fromRaw(6601);
+constexpr auto kWarpFunctionShape = document::NodeId::fromRaw(6602);
+
+[[nodiscard]] document::Composition makeSineGroup() {
+    using namespace document;
+    using core::primitives::ScalarPrimitive;
+    auto group = makeStackedComposition(kSineComposition, "Sine", 8100);
+    std::uint64_t next = 8200;
+    addDefaultedNode(group, NodeId::fromRaw(8301), kGroupInputNodeType, next);
+    addDefaultedNode(group, NodeId::fromRaw(8302), kGroupOutputNodeType, next);
+    addDefaultedNode(group, NodeId::fromRaw(8303), kScalarMathNodeType, next,
+                     {{"operation", scalarOperationStoredValue(ScalarPrimitive::Sine)}});
+    connectDriver(group, NodeId::fromRaw(8303), "a", NodeId::fromRaw(8301), "scalar1");
+    connectDriver(group, NodeId::fromRaw(8302), "scalar1", NodeId::fromRaw(8303));
+    return group;
+}
+
+[[nodiscard]] document::Project makeWarpFunctionProject(const document::PathValue& path,
+                                                        const document::CompositionId group,
+                                                        const double amount, const double size,
+                                                        const double tolerance) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    require(project.addComposition(makeSineGroup()) && project.addComposition(makeReciprocalGroup()),
+            "the warp groups are added");
+    auto* composition = project.findComposition(kCompositionId);
+    std::uint64_t next = 7300;
+    require(composition->graph().eraseEdge(kFirstSourceEdge), "the solid is disconnected");
+    addDefaultedNode(*composition, kWarpFunctionShape, kShapeSourceNodeType, next,
+                     {{"kind", static_cast<std::int64_t>(ShapeKind::Path)}});
+    require(composition->graph().addEdge({EdgeId::fromRaw(7401),
+                                          {kWarpFunctionShape, "image"},
+                                          NodeInputRef{kFirstLayerNode,
+                                                       std::string(kLayerOutputContentInputPort)}}),
+            "the shape feeds the layer");
+    addDefaultedNode(*composition, kWarpFunctionNode, kWarpPathFunctionNodeType, next,
+                     {{"group", static_cast<std::int64_t>(group.value())},
+                      {"path", path},
+                      {"amount", amount},
+                      {"size", size},
+                      {"tolerance", tolerance}});
+    require(composition->parameters().setSource(parameterOf(*composition, kWarpFunctionShape, "path"),
+                                                DriverBindingSource{kWarpFunctionNode, "path"}),
+            "the shape reads the warp");
+    const auto validation = project.validate();
+    for (const auto& issue : validation.issues())
+        std::cerr << "warp function fixture: " << issue.path << ": " << issue.message << '\n';
+    require(validation.ok(), "the warp function fixture is valid document truth");
+    return project;
+}
+
+void testWarpPathFunction(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    // A grid of vertical lines through the sine group.
+    PathValue grid;
+    for (const double x : {-60.0, -20.0, 20.0, 60.0}) {
+        PathContour line;
+        line.anchors.push_back({{x, -80.0}, std::nullopt, std::nullopt, PathAnchorMode::Corner});
+        line.anchors.push_back({{x, 80.0}, std::nullopt, std::nullopt, PathAnchorMode::Corner});
+        grid.contours.push_back(std::move(line));
+    }
+    const double amount = 12.0, size = 30.0, tolerance = 0.05;
+    const auto compiled =
+        compile(makeWarpFunctionProject(grid, kSineComposition, amount, size, tolerance), registry);
+    expectations.expect(compiled.plan != nullptr, "a Warp Path (Function) reading a group compiles");
+    if (!compiled.plan)
+        return;
+    const runtime::CompiledValueOperation* found = nullptr;
+    for (const auto& operation : compiled.plan->valueOperations())
+        if (std::holds_alternative<runtime::CompiledValueWarpFunction>(operation.kernel))
+            found = &operation;
+    expectations.expect(found != nullptr, "the plan holds the warp");
+    if (found == nullptr)
+        return;
+    const auto evaluation = runtime::evaluateValueGraph(
+        compiled.plan->valueOperations(), compiled.plan->valueOutputCount(),
+        core::RationalTime::fromInteger(0), compiled.plan->format().frameRate());
+    expectations.expect(evaluation.diagnostics.empty(), "the warp evaluates without a diagnostic");
+    const auto* held = std::get_if<runtime::CompiledPathValue>(&evaluation.outputs.at(found->firstOutput.value()));
+    expectations.expect(held != nullptr && held->value->contours.size() == 4,
+                        "four lines in, four contours out");
+    if (held == nullptr || held->value->contours.size() != 4)
+        return;
+    // Every output point is (x + amount * sin(y / size), y) of a point of its original line, and the
+    // drawn curve stays within the tolerance of the analytic curve.
+    bool exact = true, curved = true;
+    double worst = 0.0;
+    const double xs[]{-60.0, -20.0, 20.0, 60.0};
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto& contour = held->value->contours[index];
+        curved = curved && contour.anchors.size() > 4;
+        for (const auto& anchor : contour.anchors)
+            exact = exact && std::abs(anchor.point.x - (xs[index] + amount * std::sin(anchor.point.y / size))) < 1e-9;
+        // Dense samples of the drawn cubic segments against the analytic x at that y.
+        for (std::size_t at = 0; at + 1 < contour.anchors.size(); ++at) {
+            const auto& a = contour.anchors[at];
+            const auto& b = contour.anchors[at + 1];
+            const Vec2d p0 = a.point, p1 = a.outHandle.value_or(a.point),
+                        p2 = b.inHandle.value_or(b.point), p3 = b.point;
+            for (int step = 0; step <= 16; ++step) {
+                const double t = step / 16.0, u = 1.0 - t;
+                const Vec2d q{u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+                              u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y};
+                worst = std::max(worst, std::abs(q.x - (xs[index] + amount * std::sin(q.y / size))));
+            }
+        }
+    }
+    expectations.expect(exact, "every point is (x + amount * sin(y / size), y) of its line's point");
+    expectations.expect(curved, "the straight lines became curves");
+    expectations.expect(worst <= 0.2, "the drawn curves follow the analytic warp (worst " +
+                                          std::to_string(worst) + " px horizontally)");
+
+    // A group with no answer at a point of the path (1 / x at zero) stops the warp with a diagnostic
+    // naming the node, and answers nothing.
+    const auto pole = compile(makeWarpFunctionProject(grid, kReciprocalComposition, amount, size, tolerance),
+                              registry);
+    expectations.expect(pole.plan != nullptr, "a warp reading 1 / x compiles");
+    if (pole.plan) {
+        const auto poled = runtime::evaluateValueGraph(
+            pole.plan->valueOperations(), pole.plan->valueOutputCount(),
+            core::RationalTime::fromInteger(0), pole.plan->format().frameRate());
+        const runtime::CompiledValueOperation* poleOperation = nullptr;
+        for (const auto& operation : pole.plan->valueOperations())
+            if (std::holds_alternative<runtime::CompiledValueWarpFunction>(operation.kernel))
+                poleOperation = &operation;
+        const auto* answer = poleOperation == nullptr
+                                 ? nullptr
+                                 : std::get_if<runtime::CompiledPathValue>(
+                                       &poled.outputs.at(poleOperation->firstOutput.value()));
+        // The knot at y = 0 of each line has no answer: the diagnostic is on the warp node.
+        expectations.expect(answer != nullptr && answer->value->contours.empty() &&
+                                std::ranges::any_of(poled.diagnostics,
+                                                    [](const auto& diagnostic) {
+                                                        return diagnostic.nodeId == kWarpFunctionNode &&
+                                                               diagnostic.summary.find("Warp Path") != std::string::npos;
+                                                    }),
+                            "a group with no answer at a point stops the warp with a diagnostic on the node");
+    }
+
+    // The node needs a group: with none named it does not compile.
+    const auto none = compile(makeWarpFunctionProject(grid, CompositionId::fromRaw(0), amount, size, tolerance),
+                              registry);
+    expectations.expect(none.plan == nullptr, "a Warp Path (Function) naming no group does not compile");
+
+    // A function group is scalar in, scalar out: the node is a function consumer like Function Plot.
+    expectations.expect(isFunctionConsumerType(kWarpPathFunctionNodeType) &&
+                            usesGroupReference(kWarpPathFunctionNodeType),
+                        "the node reads a group's function");
+}
+
 // With BLOOM_FRAME_CAPTURE_DIR set, the plot and its axes are rendered on the CPU reference and written
 // as binary PPM frames (a mid-gray backdrop under the straight-alpha picture, display gamma 2.2) so a
 // person can look at them.

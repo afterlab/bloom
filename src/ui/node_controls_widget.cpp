@@ -1,5 +1,6 @@
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/ui/motion_blur_widget.hpp>
 
@@ -556,7 +557,8 @@ struct Controls final {
         controls.sliders.push_back({"startOffset", std::string(document::kResampleStartOffsetSchemaKey),
                                     0.0, 100.0, 0.0, 25.0});
     } else if (typeId == document::kTransformPathNodeType ||
-               typeId == document::kWarpPathNodeType) {
+               typeId == document::kWarpPathNodeType ||
+               typeId == document::kWarpPathFunctionNodeType) {
         // #598: the matrix's position and anchor on one pad (path coordinates, from the centre,
         // +y down), its turn and the skew's direction on dials (clockwise on screen), the slant
         // and, for the warp, its amount on tracks.
@@ -566,7 +568,7 @@ struct Controls final {
         controls.angles.push_back(angle("rotation", "bloom.operand.scalar", false, false));
         controls.angles.push_back(
             angle("skewAxis", std::string(document::kPathSkewAxisSchemaKey), true, false));
-        if (typeId == document::kWarpPathNodeType)
+        if (typeId != document::kTransformPathNodeType)
             controls.sliders.push_back({"amount", std::string(document::kWarpAmountSchemaKey),
                                         -360.0, 360.0, 0.0, 90.0});
         controls.sliders.push_back({"skew", std::string(document::kPathSkewSchemaKey),

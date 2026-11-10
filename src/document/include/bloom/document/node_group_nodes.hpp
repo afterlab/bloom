@@ -49,6 +49,11 @@ inline constexpr std::int64_t kMinimumFunctionPlotSamples = 2;
 // One contour holds at most kMaximumPathAnchors, so a plot of this many samples is one contour.
 inline constexpr std::int64_t kMaximumFunctionPlotSamples = 4096;
 inline constexpr std::int64_t kDefaultFunctionPlotSamples = 256;
+// #598: Warp Path whose function is a group: the displacement across the warp's space is the group's
+// function of the distance along it. The operands are Warp Path's, less the built-in function's
+// selector and phase.
+inline constexpr std::string_view kWarpPathFunctionNodeType = "bloom.warp-path-function";
+inline constexpr std::string_view kWarpPathFunctionPathPort = "path";
 inline constexpr std::uint32_t kNodeGroupNodeSchemaVersion = 1;
 
 // The parameter on an instance (and on Function Plot) that names the definition.

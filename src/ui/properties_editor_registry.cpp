@@ -250,6 +250,10 @@ void PropertiesEditor::configureRegistryRows() {
                     return RowLayout{{"path", "position", "anchor", "scale", "rotation", "skew",
                                       "skewAxis"},
                                      "position"};
+                if (node->typeId == document::kWarpPathFunctionNodeType)
+                    return RowLayout{{"path", "position", "anchor", "size", "scale", "tolerance",
+                                      "amount", "rotation", "skew", "skewAxis"},
+                                     "position"};
                 if (node->typeId == document::kWarpPathNodeType)
                     return RowLayout{{"path", "function", "position", "anchor", "size", "phase",
                                       "scale", "tolerance", "amount", "rotation", "skew",

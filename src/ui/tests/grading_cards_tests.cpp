@@ -1527,6 +1527,7 @@ void pixelAndMotionCards() {
         {"bloom.resample-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}},
         // #598
         {"bloom.warp-path", {"bloom.text-source", "bloom.shape-source", "bloom.transform-path"}},
+        {"bloom.warp-path-function", {"bloom.function-plot", "bloom.shape-source", "bloom.warp-path"}},
         {"bloom.transform-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}}};
     for (const auto& spec : specs) {
         CardFixture fixture(spec.type);

@@ -2193,6 +2193,7 @@ int main() {
         testFunctionGroups(expectations);
         testFunctionSharesGroupWithInstance(expectations);
         testFunctionPlot(expectations);
+        testWarpPathFunction(expectations);
         testPathProcessingDrivesShape(expectations);
         testPathProcessingFrames(expectations);
         testPlotFrames(expectations);

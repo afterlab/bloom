@@ -16,6 +16,8 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace bloom::runtime::pathwarp {
 
@@ -90,5 +92,40 @@ struct Result final {
 // the tolerance, each stretch a cubic through its two mapped ends with the mapped tangents.
 [[nodiscard]] Result warpContour(const document::PathContour& contour, const PointMap& map,
                                  const Limits& limits);
+
+// The operands both warp nodes read, checked once: a refusal says what was wrong in the node's own
+// words, or nothing when they are usable. (`phase` is read only by the functions that use it; the
+// function-by-group node passes zero.)
+struct Refusal final {
+    std::string summary;
+    std::string detail;
+};
+[[nodiscard]] std::optional<Refusal>
+checkOperands(double amount, double size, double phase, double tolerance, document::Vec2d position,
+              document::Vec2d anchor, document::Vec2d scale, double rotation, double skew,
+              double skewAxis);
+
+// A whole path through the map, contour for contour (order, closed flags, the fill rule and the groups
+// are kept). Cancellation is observed between contours and inside a long one; a cancelled run keeps
+// nothing.
+struct PathResult final {
+    Status status = Status::Ok;
+    document::PathValue value;
+    // The contour that stopped it, how many points it needed at least, and whether that was the
+    // whole value's cap rather than the contour's.
+    std::size_t contour = 0;
+    std::size_t requested = 0;
+    bool wholeValue = false;
+    bool depthReached = false;
+};
+[[nodiscard]] PathResult warpPath(const document::PathValue& path, const PointMap& map,
+                                  double tolerance, const CancellationToken* cancellation);
+
+// The diagnostic for a failed `warpPath`, naming the node, the function (or "function group"), the
+// tolerance and the cap.
+[[nodiscard]] Refusal describeFailure(const PathResult& result, std::string_view node,
+                                      std::string_view function, double tolerance);
+// The notice for a run that stopped splitting at its depth limit.
+[[nodiscard]] Refusal depthNotice();
 
 } // namespace bloom::runtime::pathwarp

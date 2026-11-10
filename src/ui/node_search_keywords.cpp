@@ -155,6 +155,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
                             "Reduce Points|Space Points"},
     {"bloom.warp-path", "Distort Shape|Bend Shape|Twist|Ripple|Bulge|Pinch|Displace Path|Liquify|"
                         "Warp Shape|Squiggle"},
+    {"bloom.warp-path-function", "Custom Warp|Function Warp|Displace By Function|Warp By Group|"
+                                 "Equation Warp"},
     {"bloom.round-corners", "Rounded Corners|Fillet|Smooth Corners|Corner Radius"},
     {"bloom.function-plot", "Graph|Plot|Curve|Chart|Equation|Sine Wave"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},

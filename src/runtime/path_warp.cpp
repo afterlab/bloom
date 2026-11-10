@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 namespace bloom::runtime::pathwarp {
@@ -394,6 +396,96 @@ Result warpContour(const PathContour& contour, const PointMap& map, const Limits
             (anchor.outHandle && !finite(*anchor.outHandle)))
             return fail(Status::Unusable);
     return result;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Operands, whole paths and diagnostics
+// ---------------------------------------------------------------------------------------------
+
+std::optional<Refusal> checkOperands(const double amount, const double size, const double phase,
+                                     const double tolerance, const Vec2d position,
+                                     const Vec2d anchor, const Vec2d scale, const double rotation,
+                                     const double skew, const double skewAxis) {
+    const auto number = [](const double value) { return std::isfinite(value); };
+    const auto point = [&](const Vec2d value) { return number(value.x) && number(value.y); };
+    if (!number(amount) || !number(size) || !number(phase) || !number(rotation) ||
+        !number(skew) || !number(skewAxis) || !point(position) || !point(anchor) || !point(scale))
+        return Refusal{"Warp Path operand is not finite",
+                       "The amount, size, phase, position, anchor, scale, rotation, skew and skew "
+                       "axis must be finite numbers."};
+    if (!(size > 0.0))
+        return Refusal{"Warp Path size is not above zero",
+                       "The size is the width the function works over and must be above 0 pixels."};
+    if (!(tolerance >= 0.001 && tolerance <= 1000.0))
+        return Refusal{"Warp Path tolerance is out of range",
+                       "The tolerance must be between 0.001 and 1000 pixels."};
+    if (std::abs(skew) > document::kMaximumPathSkewDegrees)
+        return Refusal{"Warp Path skew is out of range",
+                       "The skew must be within 89.9 degrees either way: a quarter turn is no "
+                       "slant."};
+    if (scale.x == 0.0 || scale.y == 0.0)
+        return Refusal{"Warp Path scale is zero",
+                       "The warp runs in the space the scale describes, and a scale of zero "
+                       "flattens it."};
+    return std::nullopt;
+}
+
+PathResult warpPath(const document::PathValue& path, const PointMap& map, const double tolerance,
+                    const CancellationToken* cancellation) {
+    PathResult result;
+    result.value = path;
+    std::size_t total = 0;
+    for (std::size_t index = 0; index < path.contours.size(); ++index) {
+        if (cancellation != nullptr && cancellation->isCancellationRequested()) {
+            result.status = Status::Cancelled;
+            result.value = {};
+            return result;
+        }
+        Limits limits;
+        limits.tolerance = tolerance;
+        limits.maximumPoints = document::kMaximumPathAnchors;
+        limits.remainingPoints = document::kMaximumPathValueAnchors - total;
+        limits.cancellation = cancellation;
+        auto warped = warpContour(path.contours[index], map, limits);
+        if (warped.status != Status::Ok) {
+            result.status = warped.status;
+            result.value = {};
+            result.contour = index;
+            // The floor on the contour's points is the whole value's cap when it fits the contour's.
+            result.wholeValue = warped.status == Status::TooMany &&
+                                warped.requested <= document::kMaximumPathAnchors;
+            result.requested = result.wholeValue ? warped.requested + total : warped.requested;
+            return result;
+        }
+        result.depthReached = result.depthReached || warped.depthReached;
+        total += warped.contour.anchors.size();
+        result.value.contours[index] = std::move(warped.contour);
+    }
+    return result;
+}
+
+Refusal describeFailure(const PathResult& result, const std::string_view node,
+                        const std::string_view function, const double tolerance) {
+    if (result.status == Status::Unusable)
+        return Refusal{std::string(node) + " has no answer here",
+                       "The warp gave a point that is not a finite number a path can hold. Lower the "
+                       "amount or change the size."};
+    char buffer[384];
+    std::snprintf(buffer, sizeof buffer,
+                  "%s, function %s: contour %zu needs at least %zu points to stay within %g px of "
+                  "the warp and a %s holds at most %zu. Raise the tolerance, lower the amount or "
+                  "widen the size.",
+                  std::string(node).c_str(), std::string(function).c_str(), result.contour,
+                  result.requested, tolerance, result.wholeValue ? "path" : "contour",
+                  result.wholeValue ? document::kMaximumPathValueAnchors
+                                    : document::kMaximumPathAnchors);
+    return Refusal{std::string(node) + " needs too many points", buffer};
+}
+
+Refusal depthNotice() {
+    return Refusal{"Warp Path stopped splitting at its depth limit",
+                   "Near a place where the warp jumps, a segment was split as far as it goes and "
+                   "the curve there may stray from the warp by more than the tolerance."};
 }
 
 } // namespace bloom::runtime::pathwarp

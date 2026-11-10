@@ -10,6 +10,7 @@
 #include <bloom/runtime/image_statistics.hpp>
 #include "gradient_source.hpp"
 #include "operation_key.hpp"
+#include "path_warp.hpp"
 #include <deque>
 
 #include <bloom/core/scalar_primitives.hpp>
@@ -531,6 +532,8 @@ class Evaluator final {
                           const runtime::CompiledValueFunction& kernel);
     void evaluateFunctionPlot(const runtime::CompiledValueOperation& operation,
                               const runtime::CompiledValueFunctionPlot& kernel);
+    void evaluateWarpFunction(const runtime::CompiledValueOperation& operation,
+                              const runtime::CompiledValueWarpFunction& kernel);
     void evaluateAudioAmplitude(const runtime::CompiledValueOperation& operation,
                                 const runtime::CompiledValueAudioAmplitude& kernel);
     void evaluateImageStatistics(const runtime::CompiledValueOperation& operation,
@@ -599,6 +602,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateFunction(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFunctionPlot>) {
                 evaluateFunctionPlot(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueWarpFunction>) {
+                evaluateWarpFunction(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueAudioAmplitude>) {
                 evaluateAudioAmplitude(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueImageStatistics>) {
@@ -959,6 +964,128 @@ void Evaluator::evaluateFunctionPlot(const runtime::CompiledValueOperation& oper
              "The function gave no finite answer anywhere in the range.");
     write(operation, 0,
           runtime::CompiledPathValue{std::make_shared<document::PathValue>(std::move(value))});
+}
+
+// #598: Warp Path (Function). A point (x, y) of the warp's space goes to (x + amount * f(y / size), y),
+// f the group's function; the space is the matrix the position, anchor, scale, rotation and skew
+// describe. The arithmetic past the function is the built-in warp's (path_warp.cpp). A point where the
+// function has no answer (a pole, a domain edge) stops the evaluation with a diagnostic naming the
+// node: a path cannot be drawn through a hole.
+void Evaluator::evaluateWarpFunction(const runtime::CompiledValueOperation& operation,
+                                     const runtime::CompiledValueWarpFunction& kernel) {
+    const auto empty = [&] { write(operation, 0, runtime::CompiledPathValue{}); };
+    const auto unavailable = [&](const std::size_t index) {
+        fail(operation, index < kernel.operands.size() ? kernel.operands[index].id
+                                                       : document::ParameterId{},
+             "Warp Path input is unavailable",
+             "An input of the warp is not a value the value graph computed.");
+        empty();
+    };
+    if (kernel.body == nullptr || kernel.operands.size() != 10) {
+        unavailable(0);
+        return;
+    }
+    const auto scalar = [&](const std::size_t index) -> const double* {
+        const auto* value = operandOf(kernel.operands[index]);
+        return value == nullptr ? nullptr : std::get_if<double>(value);
+    };
+    const auto vector = [&](const std::size_t index) -> const document::Vec2d* {
+        const auto* value = operandOf(kernel.operands[index]);
+        return value == nullptr ? nullptr : std::get_if<document::Vec2d>(value);
+    };
+    const auto* pathOperand = operandOf(kernel.operands[0]);
+    const auto* held =
+        pathOperand == nullptr ? nullptr : std::get_if<runtime::CompiledPathValue>(pathOperand);
+    const auto* amount = scalar(1);
+    const auto* size = scalar(2);
+    const auto* tolerance = scalar(3);
+    const auto* position = vector(4);
+    const auto* anchor = vector(5);
+    const auto* scale = vector(6);
+    const auto* rotation = scalar(7);
+    const auto* skew = scalar(8);
+    const auto* skewAxis = scalar(9);
+    if (held == nullptr || amount == nullptr || size == nullptr || tolerance == nullptr ||
+        position == nullptr || anchor == nullptr || scale == nullptr || rotation == nullptr ||
+        skew == nullptr || skewAxis == nullptr) {
+        unavailable(0);
+        return;
+    }
+    if (const auto refusal = runtime::pathwarp::checkOperands(*amount, *size, 0.0, *tolerance,
+                                                              *position, *anchor, *scale,
+                                                              *rotation, *skew, *skewAxis)) {
+        fail(operation, {}, refusal->summary, refusal->detail);
+        empty();
+        return;
+    }
+    const auto& path = *held->value;
+    for (const auto& contour : path.contours)
+        for (const auto& each : contour.anchors) {
+            const auto usable = [](const document::Vec2d point) {
+                return std::isfinite(point.x) && std::isfinite(point.y) &&
+                       std::abs(point.x) <= document::kMaximumPathCoordinate &&
+                       std::abs(point.y) <= document::kMaximumPathCoordinate;
+            };
+            if (!usable(each.point) || (each.inHandle && !usable(*each.inHandle)) ||
+                (each.outHandle && !usable(*each.outHandle))) {
+                fail(operation, kernel.operands[0].id, "Warp Path path is out of range",
+                     "Every coordinate must be finite and within a billion pixels.");
+                empty();
+                return;
+            }
+        }
+    const auto matrix = runtime::pathwarp::Matrix::make(*position, *anchor, *scale, *rotation,
+                                                        *skew, *skewAxis);
+    runtime::FunctionEvaluator body(*kernel.body, time_, rate_, curves_, memoization_.cancellation);
+    std::string firstFailure;
+    const double amountValue = *amount;
+    const double sizeValue = *size;
+    const runtime::pathwarp::PointMap map =
+        [&](const document::Vec2d point) -> std::optional<document::Vec2d> {
+        const auto local = matrix.inverse(point);
+        const auto answer = body.at(local.y / sizeValue);
+        if (!answer.has_value() || !std::isfinite(*answer)) {
+            if (firstFailure.empty())
+                firstFailure = body.diagnostics().empty() ? "The group's answer is not a number."
+                                                          : body.diagnostics().front().detail;
+            body.clearDiagnostics();
+            return std::nullopt;
+        }
+        body.clearDiagnostics();
+        return matrix.forward({local.x + amountValue * *answer, local.y});
+    };
+    auto warped = runtime::pathwarp::warpPath(path, map, *tolerance, memoization_.cancellation);
+    switch (warped.status) {
+    case runtime::pathwarp::Status::Ok:
+        break;
+    case runtime::pathwarp::Status::Cancelled:
+        // Cancelled evaluations carry no diagnostic: the frame is being abandoned.
+        empty();
+        return;
+    case runtime::pathwarp::Status::Unusable: {
+        const auto refusal = runtime::pathwarp::describeFailure(warped, "Warp Path (Function)",
+                                                                "function group", *tolerance);
+        fail(operation, {}, refusal.summary,
+             firstFailure.empty() ? refusal.detail
+                                  : "The group gave no answer for a point of the path: " + firstFailure);
+        empty();
+        return;
+    }
+    case runtime::pathwarp::Status::TooMany: {
+        const auto refusal = runtime::pathwarp::describeFailure(warped, "Warp Path (Function)",
+                                                                "function group", *tolerance);
+        fail(operation, {}, refusal.summary, refusal.detail);
+        empty();
+        return;
+    }
+    }
+    if (warped.depthReached) {
+        const auto notice = runtime::pathwarp::depthNotice();
+        fail(operation, {}, notice.summary, notice.detail);
+    }
+    write(operation, 0,
+          runtime::CompiledPathValue{
+              std::make_shared<document::PathValue>(std::move(warped.value))});
 }
 
 void Evaluator::evaluateTime(const runtime::CompiledValueOperation& operation) {

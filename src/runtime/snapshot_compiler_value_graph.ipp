@@ -919,6 +919,19 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             plot.smooth = *std::move(smooth);
             return runtime::CompiledValueKernel{std::move(plot)};
         }
+        if (node.typeId == document::kWarpPathFunctionNodeType) {
+            // #598: the operands in the order Warp Path (Function) declares them.
+            runtime::CompiledValueWarpFunction warp;
+            warp.body = std::move(compiled);
+            for (const char* role : {"path", "amount", "size", "tolerance", "position", "anchor",
+                                     "scale", "rotation", "skew", "skewAxis"}) {
+                auto operand = operandOf(role);
+                if (!operand.has_value())
+                    return std::nullopt;
+                warp.operands.push_back(*std::move(operand));
+            }
+            return runtime::CompiledValueKernel{std::move(warp)};
+        }
         const auto argument = operandOf(document::kFunctionArgumentRole);
         if (!argument.has_value())
             return std::nullopt;

@@ -1682,6 +1682,8 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             body = function->body.get();
         else if (const auto* plot = std::get_if<CompiledValueFunctionPlot>(&kernel))
             body = plot->body.get();
+        else if (const auto* warpFunction = std::get_if<CompiledValueWarpFunction>(&kernel))
+            body = warpFunction->body.get();
         if (body != nullptr)
             for (const auto& inner : body->operations)
                 self(self, inner.kernel);

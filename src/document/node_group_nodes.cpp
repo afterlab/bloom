@@ -2,6 +2,7 @@
 
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -118,9 +119,47 @@ namespace {
     return definition;
 }
 
+// #598 Warp Path (Function): the group is read as `f`, and a point (x, y) of the warp's space goes to
+// (x + amount * f(y / size), y). Its operands are Warp Path's, in the same order, less the function
+// selector and the phase, so a set of value nodes that drives one drives the other.
+[[nodiscard]] NodeDefinition warpPathFunctionDefinition() {
+    NodeDefinition definition{{std::string(kWarpPathFunctionNodeType), kNodeGroupNodeSchemaVersion},
+                              NodeLoweringKind::ValueFunction,
+                              {},
+                              {{std::string(kWarpPathFunctionPathPort), SocketValueKind::Path}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Values};
+    definition.parameters.push_back({std::string(kNodeGroupReferenceRole),
+                                     std::string(kNodeGroupReferenceSchemaKey),
+                                     ParameterValueKind::Integer, true, false, std::int64_t{0}});
+    const auto operand = [&](const std::string_view role, const SocketValueKind kind,
+                             const std::string_view key, ParameterValue value) {
+        definition.inputs.push_back({std::string(role), kind, false});
+        definition.parameters.push_back({std::string(role), std::string(key),
+                                         kind == SocketValueKind::Path ? ParameterValueKind::Path
+                                                                       : parameterKindOf(kind),
+                                         true, isAnimatableSchemaKey(key), std::move(value)});
+    };
+    operand("path", SocketValueKind::Path, kPathOperandParameterSchemaKey, PathValue{});
+    operand("amount", SocketValueKind::Scalar, kWarpAmountSchemaKey, 20.0);
+    operand("size", SocketValueKind::Scalar, kWarpSizeSchemaKey, 100.0);
+    operand("tolerance", SocketValueKind::Scalar, kWarpToleranceSchemaKey, 0.25);
+    operand("position", SocketValueKind::Vector2, kVector2OperandParameterSchemaKey, Vec2d{0.0, 0.0});
+    operand("anchor", SocketValueKind::Vector2, kVector2OperandParameterSchemaKey, Vec2d{0.0, 0.0});
+    operand("scale", SocketValueKind::Vector2, kVector2OperandParameterSchemaKey, Vec2d{1.0, 1.0});
+    operand("rotation", SocketValueKind::Scalar, kScalarOperandParameterSchemaKey, 0.0);
+    operand("skew", SocketValueKind::Scalar, kPathSkewSchemaKey, 0.0);
+    operand("skewAxis", SocketValueKind::Scalar, kPathSkewAxisSchemaKey, 0.0);
+    return definition;
+}
+
 [[nodiscard]] NodeDefinition generatedDefinition(const std::string_view typeId) {
     if (typeId == kFunctionNodeType)
         return functionDefinition();
+    if (typeId == kWarpPathFunctionNodeType)
+        return warpPathFunctionDefinition();
     if (typeId == kFunctionPlotNodeType)
         return functionPlotDefinition();
     NodeDefinition definition{{std::string(typeId), kNodeGroupNodeSchemaVersion},
@@ -487,7 +526,8 @@ bool isNodeGroupBoundaryType(const std::string_view typeId) noexcept {
 }
 
 bool isFunctionConsumerType(const std::string_view typeId) noexcept {
-    return typeId == kFunctionNodeType || typeId == kFunctionPlotNodeType;
+    return typeId == kFunctionNodeType || typeId == kFunctionPlotNodeType ||
+           typeId == kWarpPathFunctionNodeType;
 }
 
 bool usesGroupReference(const std::string_view typeId) noexcept {
@@ -497,7 +537,7 @@ bool usesGroupReference(const std::string_view typeId) noexcept {
 std::vector<NodeDefinition> nodeGroupNodeDefinitions() {
     return {generatedDefinition(kGroupInputNodeType), generatedDefinition(kGroupOutputNodeType),
             generatedDefinition(kNodeGroupNodeType), generatedDefinition(kFunctionNodeType),
-            generatedDefinition(kFunctionPlotNodeType)};
+            generatedDefinition(kFunctionPlotNodeType), generatedDefinition(kWarpPathFunctionNodeType)};
 }
 
 bool hasValidNodeGroupShape(const NodeDefinition& definition) {

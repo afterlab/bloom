@@ -393,6 +393,20 @@ Phase, Tolerance, Skew and Skew axis can be keyed on the node and wired; Positio
 Rotation follow the value library's rule and are animated by wiring keyed value nodes to them.
 Benchmark scenario: `warp-path-2k` in `tools/bench` (written, not run).
 
+### Warp Path (Function)
+
+Warp Path (Function) (`bloom.warp-path-function`, Text & Paths) bends a path with a group's function, the
+custom case of #598. It is a function consumer like Function Plot: it names one group (scalar in, scalar
+out) and reads `f` through the same evaluator. A point `(x, y)` goes to `(x + amount * f(y / size), y)` in
+the matrix space (Position, Anchor, Scale, Rotation, Skew and Skew axis, as on Warp Path), so a group
+holding Sine is the issue's `(x + sin y, y)`. Rotate the space by 90 degrees to displace y by x, or chain
+two nodes to do both; this is the recorded default in place of a second function slot. The same adaptive
+subdivision, tolerance, limits and cancellation as Warp Path apply. A node naming no group does not
+compile. A group that has no answer at a point of the path (1 / x at zero) or answers a value that is not
+finite stops the warp with a diagnostic on the node and answers the empty path. Tests:
+`testWarpPathFunction` in the snapshot compiler tests (exact anchors, deviation from the analytic curve,
+no-answer refusal, unset group).
+
 ## Reference library
 
 Offset, union, difference, intersection and exclusive-or use a vendored polygon clipping library, the

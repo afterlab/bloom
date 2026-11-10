@@ -19,6 +19,7 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
         const auto* sample = std::get_if<CompiledValueGradientSample>(&operation.kernel);
         const auto* function = std::get_if<CompiledValueFunction>(&operation.kernel);
         const auto* plot = std::get_if<CompiledValueFunctionPlot>(&operation.kernel);
+        const auto* warpFunction = std::get_if<CompiledValueWarpFunction>(&operation.kernel);
         // #525: a Field Sample whose field reads the clock or a keyed curve.
         const auto* field = std::get_if<CompiledValueFieldSample>(&operation.kernel);
         bool fieldAnimated = field != nullptr && field->program != nullptr &&
@@ -40,6 +41,9 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
             // #590: a Function is as time-dependent as the body it runs.
             (function != nullptr && (function->body == nullptr || function->body->timeDependent)) ||
             (plot != nullptr && (plot->body == nullptr || plot->body->timeDependent)) ||
+            // #598: so is a warp by a function.
+            (warpFunction != nullptr &&
+             (warpFunction->body == nullptr || warpFunction->body->timeDependent)) ||
             // #347: the level of the audio at this time.
             std::holds_alternative<CompiledValueAudioAmplitude>(operation.kernel) ||
             // #349: the statistics of the picture at this time.

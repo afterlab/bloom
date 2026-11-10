@@ -418,6 +418,16 @@ struct CompiledValueFunctionPlot final {
     friend bool operator==(const CompiledValueFunctionPlot&, const CompiledValueFunctionPlot&);
 };
 
+// #598: Warp Path (Function). The body is run at each point's distance along the warp's space (divided
+// by `size`) and the answer, times `amount`, is how far the point slides across it. The operands, in
+// order: path, amount, size, tolerance, position, anchor, scale, rotation, skew, skew axis.
+struct CompiledValueWarpFunction final {
+    std::shared_ptr<const CompiledFunctionBody> body;
+    std::vector<CompiledValueOperand> operands;
+
+    friend bool operator==(const CompiledValueWarpFunction&, const CompiledValueWarpFunction&);
+};
+
 // #347 Audio Amplitude: the level of the audio of a source over a window around the frame, one
 // Scalar. The measurement is prepared on a worker before the frame is evaluated (audio_analysis.hpp)
 // and read here from the analysis cache; a frame whose analysis is not prepared reads 0 and says so.
@@ -457,7 +467,7 @@ using CompiledValueKernel =
                  CompiledValueGradientSample, CompiledValueFieldSample, CompiledValueShake,
                  CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
                  CompiledValueFunctionPlot, CompiledValueAudioAmplitude,
-                 CompiledValueImageStatistics>;
+                 CompiledValueImageStatistics, CompiledValueWarpFunction>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -505,6 +515,7 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 visit(step.value);
             } else if constexpr (std::is_same_v<Step, CompiledValueScalarMath> ||
                                  std::is_same_v<Step, CompiledValueUtility> ||
+                                 std::is_same_v<Step, CompiledValueWarpFunction> ||
                                  std::is_same_v<Step, CompiledValueGroupBoundary>) {
                 for (const auto& operand : step.operands)
                     visit(operand);
@@ -594,6 +605,11 @@ inline bool operator==(const CompiledValueFunctionPlot& left,
     return sameFunctionBody(left.body, right.body) && left.start == right.start &&
            left.end == right.end && left.samples == right.samples && left.origin == right.origin &&
            left.scale == right.scale && left.smooth == right.smooth;
+}
+
+inline bool operator==(const CompiledValueWarpFunction& left,
+                       const CompiledValueWarpFunction& right) {
+    return sameFunctionBody(left.body, right.body) && left.operands == right.operands;
 }
 
 inline bool operator==(const CompiledValueFunction& left, const CompiledValueFunction& right) {
