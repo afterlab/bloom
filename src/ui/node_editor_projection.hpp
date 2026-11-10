@@ -4,6 +4,7 @@
 // from the snapshot, never written back -- and both exist so a projection reconciles only what an
 // edit changed and a gesture finds its items without walking the scene.
 
+#include <QString>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
@@ -54,6 +55,9 @@ struct NodeProjectionIndex final {
     std::vector<document::EdgeRecord> links;
     std::set<NodeInputKey> edgeInputs;
     std::unordered_map<std::uint64_t, std::set<std::string>> linkedOutputs;
+    // #509: a Node Group instance's slot sockets named after what they drive in its group
+    // (nodeGroupSlotLabel), by node and slot; a socket not listed reads its own name.
+    std::map<std::pair<std::uint64_t, std::string>, QString> socketLabels;
 
     [[nodiscard]] bool edgeInto(const document::InputPortRef& input) const {
         return edgeInputs.contains(nodeInputKey(input));
@@ -61,6 +65,10 @@ struct NodeProjectionIndex final {
     [[nodiscard]] bool outputLinked(const document::NodeId node, const std::string& port) const {
         const auto found = linkedOutputs.find(node.value());
         return found != linkedOutputs.end() && found->second.contains(port);
+    }
+    [[nodiscard]] QString socketLabel(const document::NodeId node, const QString& port) const {
+        const auto found = socketLabels.find({node.value(), port.toStdString()});
+        return found == socketLabels.end() ? QString{} : found->second;
     }
 };
 [[nodiscard]] NodeProjectionIndex buildProjectionIndex(const document::Composition& composition);

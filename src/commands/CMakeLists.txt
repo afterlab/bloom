@@ -34,6 +34,7 @@ target_sources(
         node_duplication.cpp
         node_group_operations.cpp
         group_definition_operations.cpp
+        path_glow_presets.cpp
         node_operation_eligibility.cpp
         node_layout_operations.cpp
         render_footprint.cpp
@@ -53,6 +54,7 @@ target_sources(
             include/bloom/commands/export_queue_operations.hpp
             include/bloom/commands/node_operations.hpp
             include/bloom/commands/group_definition_operations.hpp
+            include/bloom/commands/path_glow_presets.hpp
             include/bloom/commands/entry_layer_operations.hpp
             include/bloom/commands/svg_import_operations.hpp
             include/bloom/commands/layer_operations.hpp

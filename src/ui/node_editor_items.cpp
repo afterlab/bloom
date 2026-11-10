@@ -572,10 +572,11 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
             row,
             static_cast<int>(Qt::AlignVCenter | (socket->input ? Qt::AlignLeft : Qt::AlignRight)),
             painter->fontMetrics().elidedText(
-                socket->multiInput() ? QStringLiteral("%1 (%2)")
-                                           .arg(displayTypeName(socket->name.toStdString()))
-                                           .arg(socket->orderedInputs().size())
-                                     : displayTypeName(socket->name.toStdString()),
+                socket->multiInput()       ? QStringLiteral("%1 (%2)")
+                                                 .arg(displayTypeName(socket->name.toStdString()))
+                                                 .arg(socket->orderedInputs().size())
+                : !socket->label.isEmpty() ? socket->label
+                                           : displayTypeName(socket->name.toStdString()),
                 Qt::ElideRight, static_cast<int>(row.width())));
     }
 
@@ -1128,6 +1129,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         socket->setAcceptsFieldKinds(spec.fieldKinds);
         socket->setAcceptsImageMatte(spec.imageMatte);
         socket->linked = spec.linked;
+        socket->label = links.socketLabel(node.id, spec.name);
         if (spec.pill && (!socket->multiInput() || socket->orderedInputs() != spec.ordered))
             socket->setOrderedInputs(std::move(spec.ordered));
         sockets_.push_back(socket);

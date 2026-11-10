@@ -97,6 +97,10 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Depth effects](user-guide/depth-effects.md) — Z Defocus and Depth Fog from any depth or mist
   pass: the depth channel and encoding, reading a pass as data, fog before defocus, the lens modes
   and bokeh, picking the focus in the Viewer and rack focus.
+- [Strokes and glowing paths](user-guide/strokes-and-glowing-paths.md) — Path Stroke's write-on,
+  tapers, dashes and brush stamps, stroking masks and letters with Mask Path and Text Outline,
+  outlining an image's alpha with Alpha Contour, and the ready-made Saber, Beam, Vegas, Write-on and
+  Stroke glows.
 - [Lens Flare](user-guide/lens-flare.md) — the element stack, presets, placing the light in 2D, from
   a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
 - [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount,

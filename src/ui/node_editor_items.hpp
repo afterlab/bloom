@@ -282,6 +282,9 @@ class SocketItem final : public QGraphicsItem {
     [[nodiscard]] QColor paintedInk() const;
 
     QString name;
+    // #509: what the card writes beside the socket when it is not the name (a Node Group slot named
+    // after what it drives); empty reads the name.
+    QString label;
     document::SocketValueKind kind;
     std::optional<document::InputPortRef> input;
     std::optional<document::OutputPortRef> output;
@@ -1311,6 +1314,7 @@ class NodeItem final : public QGraphicsObject {
             declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey ||
             isShuffleSlotSchema(declared->schemaKey) ||
             declared->schemaKey == document::kDataBlockParameterSchemaKey ||
+            document::isPathSourceParameterSchemaKey(declared->schemaKey) ||
             declared->schemaKey == document::kVideoAudioStreamParameterSchemaKey;
         // The same dropdown kinds Properties builds for the same schemas (see
         // PropertiesRegistryRow): OCIO color spaces, the LUT asset and the audio asset are
@@ -1332,6 +1336,7 @@ class NodeItem final : public QGraphicsObject {
                     ? "nodeCryptomatteLayer"
                 : isShuffleSlotSchema(declared->schemaKey)                      ? "nodeShuffleSlot"
                 : declared->schemaKey == document::kDataBlockParameterSchemaKey ? "nodeDataBlock"
+                : document::isPathSourceParameterSchemaKey(declared->schemaKey) ? "nodePathSource"
                 : declared->schemaKey == document::kVideoAudioStreamParameterSchemaKey
                     ? "nodeVideoAudioStream"
                 : colorSpaceSelector                           ? "nodeOperandColorSpace"
@@ -1509,7 +1514,7 @@ class NodeItem final : public QGraphicsObject {
             const auto axis = static_cast<std::size_t>(component);
             if (axis < axes.size() && row.numeric[axis])
                 (void)session_->setParameterComponentValue(row.parameterId, axes[axis],
-                                                           row.numeric[axis]->value());
+                                                           row.numeric[axis]->storedValue());
             return;
         }
         const auto value = [&]() -> std::optional<document::ParameterValue> {
@@ -1743,6 +1748,10 @@ class NodeItem final : public QGraphicsObject {
                            cardNode != nullptr && !timeOnly_ &&
                            parameter->schemaKey == document::kDataBlockParameterSchemaKey) {
                     refreshDataBlockSelector(*row.selector, *session_, *cardNode);
+                } else if (stored != nullptr && session_ && parameter != nullptr &&
+                           cardNode != nullptr && !timeOnly_ &&
+                           document::isPathSourceParameterSchemaKey(parameter->schemaKey)) {
+                    refreshPathSourceSelector(*row.selector, *session_, *cardNode);
                 } else if (stored != nullptr && session_ && parameter != nullptr &&
                            cardNode != nullptr && !timeOnly_ &&
                            parameter->schemaKey == document::kVideoAudioStreamParameterSchemaKey) {

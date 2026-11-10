@@ -4,6 +4,9 @@
 #include "node_editor_projection.hpp"
 
 #include "node_editor_interactions.hpp"
+#include "properties_registry_row.hpp"
+
+#include <bloom/document/node_group_nodes.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -127,6 +130,14 @@ void NodeGraphicsScene::setProjection(const document::Snapshot& snapshot,
     ++counters.projections;
 
     index_->links = buildProjectionIndex(*composition);
+    for (const auto& node : composition->graph().nodes()) {
+        if (node.typeId != document::kNodeGroupNodeType)
+            continue;
+        for (const auto& slot : document::kNodeGroupSlots)
+            if (const auto label =
+                    nodeGroupSlotLabel(snapshot.project(), *composition, node.id, slot.name))
+                index_->links.socketLabels[{node.id.value(), std::string(slot.name)}] = *label;
+    }
     const auto& links = index_->links;
     // Every link re-registers with its two cards below, kept or new.
     for (const auto& [id, card] : index_->nodes)

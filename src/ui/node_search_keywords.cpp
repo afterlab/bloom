@@ -64,9 +64,11 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.image-clamp", "Limit|Min Max|HDR Clamp|Clip"},
     // Tracking & Analysis
     {"bloom.histogram", "Scope|Levels Scope|Distribution|Analyze"},
-    {"bloom.audio-amplitude", "Level|Volume|Loudness|Meter|Envelope|Follower|Audio Reactive|Peak|RMS"},
+    {"bloom.audio-amplitude",
+     "Level|Volume|Loudness|Meter|Envelope|Follower|Audio Reactive|Peak|RMS"},
     {"bloom.audio-waveform", "Scope|Oscilloscope|Wave|Audio Visualizer|Audio Track|Sound"},
-    {"bloom.audio-spectrum", "Analyzer|FFT|Frequency|Equalizer|EQ Bars|Audio Visualizer|Bars|Sound"},
+    {"bloom.audio-spectrum",
+     "Analyzer|FFT|Frequency|Equalizer|EQ Bars|Audio Visualizer|Bars|Sound"},
     {"bloom.image-statistics",
      "Min Max|Range|Mean|Average|Auto Normalize|Normalize|Depth Range|Measure|Analyze|Stats"},
     {"bloom.image-compare", "Difference|Diff|Wipe|Split|Checkerboard|Before After|A B"},
@@ -140,9 +142,14 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.transform-path", "Move Path|Rotate Path|Scale Path|Path Transform|Transform Shape"},
     {"bloom.trim-path", "Trim Paths|Write On|Draw On|Reveal|Path Start End|Stroke Range"},
     {"bloom.offset-path", "Inflate|Expand Path|Contract|Grow Path|Shrink Path|Offset Paths"},
-    {"bloom.boolean-paths", "Pathfinder|Union|Subtract|Intersect|Exclude|Combine Shapes|Minus Front"},
+    {"bloom.boolean-paths",
+     "Pathfinder|Union|Subtract|Intersect|Exclude|Combine Shapes|Minus Front"},
     {"bloom.merge-paths", "Pathfinder|Merge Shapes|Combine Contours|Union|Weld"},
-    {"bloom.path-stroke", "Stroke|Beam|Write On|Glow Line|Dashed Line|Taper|Outline Stroke|Brush Stroke"},
+    {"bloom.path-stroke", "Stroke|Beam|Write On|Glow Line|Dashed Line|Taper|Outline Stroke|"
+                          "Brush Stroke|Stamp|Dotted Line|Square Stamp|Diamond Stamp|Dash Stamp"},
+    {"bloom.mask-path", "Mask Outline|Stroke Mask|Mask To Path|Mask Shape|Roto Path"},
+    {"bloom.text-outline", "Text To Shape|Glyph Outline|Stroke Text|Text Path|Create Outlines|"
+                           "Letter Outline"},
     {"bloom.round-corners", "Rounded Corners|Fillet|Smooth Corners|Corner Radius"},
     {"bloom.function-plot", "Graph|Plot|Curve|Chart|Equation|Sine Wave"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},
@@ -162,6 +169,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kEdgeExtendNodeType)
         return QStringLiteral("edge fringe halo dark edge bright edge matte color bleed spread "
                               "extend dilate rgb under alpha despill clean");
+    // #509.
+    if (typeId == document::kAlphaContourNodeType)
+        return QStringLiteral("outline stroke border edge rim contour alpha matte silhouette "
+                              "trace outer inner glowing outline neon");
     // #518.
     if (typeId == document::kToneMapNodeType)
         return QStringLiteral("soft clip highlight compression roll off shoulder knee hdr limiter "

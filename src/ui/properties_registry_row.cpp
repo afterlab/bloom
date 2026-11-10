@@ -311,9 +311,29 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == document::kTextLineHeightParameterSchemaKey ? QObject::tr("Line Height")
         : schemaKey == document::kTextLetterSpacingParameterSchemaKey
             ? QObject::tr("Letter Spacing")
-        : schemaKey == document::kTextSizeParameterSchemaKey
-            ? QObject::tr("Font Size")
+        : schemaKey == document::kTextSizeParameterSchemaKey ? QObject::tr("Font Size")
+        // #509 Path Stroke's stamps, and what Mask Path and Text Outline read.
+        : schemaKey == document::kStrokeStampParameterSchemaKey ? QObject::tr("Brush stamp")
+        : schemaKey == document::kStampAlignParameterSchemaKey  ? QObject::tr("Stamp direction")
+        : schemaKey == document::kMaskPathSourceParameterSchemaKey ? QObject::tr("Masks of")
+        : schemaKey == document::kTextOutlineSourceParameterSchemaKey
+            ? QObject::tr("Text to outline")
             : node_editor::displayTypeName(role);
+}
+
+std::optional<QString> nodeGroupSlotLabel(const document::Project& project,
+                                          const document::Composition& composition,
+                                          const document::NodeId node,
+                                          const std::string_view slot) {
+    const auto* record = composition.graph().findNode(node);
+    if (record == nullptr || record->typeId != document::kNodeGroupNodeType)
+        return std::nullopt;
+    const auto target =
+        document::nodeGroupSlotTarget(project, *record, composition.parameters(), slot);
+    if (!target)
+        return std::nullopt;
+    return QStringLiteral("%1 %2").arg(node_editor::nodeTypeDisplayName(target->typeId),
+                                       parameterRowLabel(target->schemaKey, target->role));
 }
 
 PropertiesRowVisibility
@@ -350,7 +370,12 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     setObjectName("propertiesRegistryRow");
     setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(parameter.value())));
     setProperty("role", QString::fromStdString(definition_.role));
-    const auto label = parameterRowLabel(definition_.schemaKey, definition_.role);
+    auto label = parameterRowLabel(definition_.schemaKey, definition_.role);
+    // #509: a ready-made group's slots read as what they drive.
+    if (const auto* composition = session_.composition())
+        if (const auto named = nodeGroupSlotLabel(session_.snapshot().project(), *composition,
+                                                  node_, definition_.role))
+            label = *named;
     setProperty("rowLabel", label);
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -401,6 +426,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     } else if (isInputColorSpaceSchema(definition_.schemaKey) || !items.empty() ||
                isShuffleSlotSchema(definition_.schemaKey) ||
                definition_.schemaKey == document::kDataBlockParameterSchemaKey ||
+               document::isPathSourceParameterSchemaKey(definition_.schemaKey) ||
                definition_.schemaKey == "bloom.ocio-file.lut" ||
                definition_.schemaKey == "bloom.image.asset" ||
                definition_.schemaKey == "bloom.video.asset" ||
@@ -420,6 +446,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             : isShuffleSlotSchema(definition_.schemaKey) ? "propertiesShuffleSlot"
             : definition_.schemaKey == document::kDataBlockParameterSchemaKey
                 ? "propertiesDataBlock"
+            : document::isPathSourceParameterSchemaKey(definition_.schemaKey)
+                ? "propertiesPathSource"
                 : "propertiesRegistryEnum");
         selector_->setControlSize(kit::KDropdown::ControlSize::Dense);
         if (isInputColorSpaceSchema(definition_.schemaKey)) {
@@ -428,8 +456,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         } else if (isShuffleSlotSchema(definition_.schemaKey)) {
             // A multi-pass render carries dozens of channels: type to find one.
             selector_->setSearchable(true);
-        } else if (definition_.schemaKey == document::kDataBlockParameterSchemaKey) {
-            // Filled on refresh from the project's blocks of the reader's kind.
+        } else if (definition_.schemaKey == document::kDataBlockParameterSchemaKey ||
+                   document::isPathSourceParameterSchemaKey(definition_.schemaKey)) {
+            // Filled on refresh from the project's blocks of the reader's kind, or the
+            // composition's nodes a Mask Path or Text Outline can read.
         } else {
             for (const auto& [name, stored] : items)
                 selector_->addItem(name, QVariant::fromValue(stored));
@@ -697,6 +727,9 @@ void PropertiesRegistryRow::refresh() {
             if (selector_ && node &&
                 definition_.schemaKey == document::kDataBlockParameterSchemaKey)
                 refreshDataBlockSelector(*selector_, session_, *node);
+            if (selector_ && node &&
+                document::isPathSourceParameterSchemaKey(definition_.schemaKey))
+                refreshPathSourceSelector(*selector_, session_, *node);
             if (integer_)
                 integer_->setIntegerValue(*integer);
             if (fields_[0])
@@ -709,14 +742,16 @@ void PropertiesRegistryRow::refresh() {
                         selector_->setCurrentIndex(index);
             }
         }
+        // A vector's fields show its components through the presentation's display scale (a
+        // 1.0 Transform 2D scale reads 100 %), exactly as a scalar field does.
         if (auto* vector = std::get_if<document::Vec2d>(&value); vector && fields_[1]) {
-            fields_[0]->setValue(vector->x);
-            fields_[1]->setValue(vector->y);
+            fields_[0]->setValue(vector->x * fields_[0]->displayScale());
+            fields_[1]->setValue(vector->y * fields_[1]->displayScale());
         }
         if (auto* vector = std::get_if<document::Vec3d>(&value); vector && fields_[2]) {
-            fields_[0]->setValue(vector->x);
-            fields_[1]->setValue(vector->y);
-            fields_[2]->setValue(vector->z);
+            fields_[0]->setValue(vector->x * fields_[0]->displayScale());
+            fields_[1]->setValue(vector->y * fields_[1]->displayScale());
+            fields_[2]->setValue(vector->z * fields_[2]->displayScale());
         }
         if (auto* color = std::get_if<core::Color4d>(&value); color && color_) {
             properties::refreshColor(session_, definition_.schemaKey, *color, color_,
@@ -783,7 +818,7 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
                               document::AnimationComponent::Z};
         if (*component < axes.size() && fields_[*component])
             (void)session_.setParameterComponentValue(parameter_, axes[*component],
-                                                      fields_[*component]->value());
+                                                      fields_[*component]->storedValue());
         refresh();
         return;
     }
@@ -822,9 +857,10 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
             return;
         value = *converted;
     } else if (fields_[2])
-        value = document::Vec3d{fields_[0]->value(), fields_[1]->value(), fields_[2]->value()};
+        value = document::Vec3d{fields_[0]->storedValue(), fields_[1]->storedValue(),
+                                fields_[2]->storedValue()};
     else if (fields_[1])
-        value = document::Vec2d{fields_[0]->value(), fields_[1]->value()};
+        value = document::Vec2d{fields_[0]->storedValue(), fields_[1]->storedValue()};
     else if (definition_.valueKind == document::ParameterValueKind::Integer)
         value = static_cast<std::int64_t>(fields_[0]->value());
     else

@@ -565,6 +565,9 @@ struct Controls final {
                typeId == "bloom.degrees-to-radians") {
         // Counter-clockwise from +X in a Y-up frame (value-node-library.md).
         controls.angles.push_back(angle("degrees", "bloom.operand.scalar", true, true));
+    } else if (typeId == "bloom.transform-path") {
+        // Clockwise on screen, as Transform turns a layer (path-processing.md).
+        controls.angles.push_back(angle("rotation", "bloom.operand.scalar", false, false));
     } else if (typeId == "bloom.radians-to-degrees") {
         controls.angles.push_back(angle("radians", "bloom.operand.scalar", true, true, true));
     } else if (document::isFieldNodeType(typeId)) {

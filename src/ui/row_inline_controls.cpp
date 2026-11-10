@@ -4,6 +4,7 @@
 
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -23,6 +24,9 @@ RowInline rowInlineFor(const std::string_view schemaKey) {
     for (const auto role : {"rollAmount", "shutterAngle", "shutterPhase"})
         if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, role))
             return RowInline::AngleDial;
+    // #509 Path Stroke's stamp rotation.
+    if (schemaKey == document::kStampRotationParameterSchemaKey)
+        return RowInline::AngleDial;
     // #349 Image Compare's split line turns about the middle of the image like a dial.
     if (schemaKey == document::imagePixelSchemaKey(document::kImageCompareNodeType, "angle"))
         return RowInline::AngleDial;

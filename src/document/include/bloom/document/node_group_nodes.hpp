@@ -119,6 +119,20 @@ struct NodeGroupBody final {
     std::vector<NodeId> nodes;
 };
 
+// #509: the one inner input a value slot of an instance's group feeds -- the node and parameter the
+// definition's Group Input wires that slot to -- when it feeds exactly one. Presentation names the
+// instance's slot after it ("Glow Size" rather than "Scalar 2"); nothing is stored for it, so a
+// rewired group renames its slot.
+struct NodeGroupSlotTarget final {
+    NodeId node;
+    std::string typeId;
+    std::string role;
+    std::string schemaKey;
+};
+[[nodiscard]] std::optional<NodeGroupSlotTarget>
+nodeGroupSlotTarget(const Project& project, const NodeRecord& instance,
+                    const ParameterStore& parameters, std::string_view slot);
+
 struct NodeGroupExpansion final {
     // The composition with every resolvable instance replaced by the nodes of its definition. Empty
     // when the composition holds no instance, so the caller keeps reading the original.

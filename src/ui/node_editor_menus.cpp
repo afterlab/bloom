@@ -16,6 +16,7 @@
 #include <QToolButton>
 #include <algorithm>
 #include <array>
+#include <bloom/commands/path_glow_presets.hpp>
 #include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -536,6 +537,34 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
                 [this, type = QString::fromStdString(candidate->key.typeId)] { addNode(type); });
             if (recordInto != nullptr)
                 recordInto->emplace_back(item, candidate->key.typeId);
+        }
+        // #509: the glowing path presets, ready-made Node Groups of Path Stroke, Shape Source and
+        // Glow, sit with Glow. Each adds its group and an instance in one undo step.
+        if (group == document::NodeGroup::LightShadow) {
+            auto* presets = kit::makeMenu(tr("Glowing paths"), sectionMenu);
+            presets->setObjectName(QStringLiteral("nodeAddPathGlowMenu"));
+            sectionMenu->addMenu(presets);
+            for (const auto preset : commands::kPathGlowPresets) {
+                auto* item = presets->addAction(
+                    QString::fromUtf8(commands::pathGlowPresetName(preset).data()));
+                item->setObjectName(
+                    QStringLiteral("nodeAddPathGlow.%1").arg(static_cast<int>(preset)));
+                item->setEnabled(scene_->canSubmit() && session_.composition());
+                connect(item, &QAction::triggered, this, [this, preset] {
+                    commands::Transaction transaction("Add Glowing Path", addRevision_);
+                    transaction.emplace<commands::CreatePathGlowPreset>(
+                        session_.compositionId(), preset, cardOriginAtCursor(addPosition_));
+                    const auto result = scene_->submit(std::move(transaction));
+                    if (const auto id =
+                            result.outputId<document::NodeId>(commands::kPathGlowPresetNodeOutput);
+                        result.succeeded() && id)
+                        session_.selectNode(*id);
+                    view_->setFocus(Qt::PopupFocusReason);
+                });
+                // Refreshed as a Node Group is: what it adds to this composition is one.
+                if (recordInto != nullptr)
+                    recordInto->emplace_back(item, std::string(document::kNodeGroupNodeType));
+            }
         }
     }
 }

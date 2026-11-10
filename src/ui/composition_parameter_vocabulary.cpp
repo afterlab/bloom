@@ -9,10 +9,11 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/core/scalar_primitives.hpp>
-#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/image_preview.hpp>
+#include <bloom/document/layer_masks.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -486,6 +487,75 @@ bool refreshDataBlockSelector(kit::KDropdown& selector, const CompositionSession
     selector.setToolTip(
         none ? QObject::tr("Add a %1 data block to the project to read it").arg(kindText)
              : selector.currentText());
+    return !missing && !none;
+}
+
+bool refreshPathSourceSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const document::NodeRecord& node) {
+    const QSignalBlocker blocker(selector);
+    selector.clearItems();
+    const auto* descriptor = document::findValueUtilityDescriptor(node.typeId);
+    const auto* composition = session.composition();
+    if (descriptor == nullptr || composition == nullptr ||
+        !document::isPathSourceReader(descriptor->kernel))
+        return false;
+    const auto kernel = descriptor->kernel;
+    const bool masks = kernel == document::ValueUtilityKernel::MaskPath;
+    std::int64_t stored = 0;
+    for (const auto& binding : node.parameters)
+        if (binding.role == document::kPathSourceParameterRole)
+            if (const auto* parameter = composition->parameters().find(binding.parameterId))
+                if (const auto* constant =
+                        std::get_if<document::ConstantValueSource>(&parameter->source))
+                    if (const auto* value = std::get_if<std::int64_t>(&constant->value))
+                        stored = *value;
+    const auto& graph = composition->graph();
+    for (const auto& candidate : graph.nodes()) {
+        if (!document::isPathSourceCandidate(graph, kernel, candidate) ||
+            candidate.id.value() >
+                static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+            continue;
+        QString label;
+        if (candidate.typeId == document::kTextSourceNodeType) {
+            // A text is named by what it says (a driven text by its node id).
+            const auto binding =
+                std::ranges::find(candidate.parameters, document::kTextParameterRole,
+                                  &document::ParameterBinding::role);
+            const auto content = binding == candidate.parameters.end()
+                                     ? std::nullopt
+                                     : session.constantStringValue(binding->parameterId);
+            auto text = content.value_or(QString{}).simplified();
+            if (text.size() > 24)
+                text = text.left(23) + QChar(0x2026);
+            label = text.isEmpty() ? QObject::tr("Text %1").arg(candidate.id.value())
+                                   : QObject::tr("Text \u201c%1\u201d").arg(text);
+        } else if (candidate.typeId == document::kMaskNodeType) {
+            label = QObject::tr("Mask node %1").arg(candidate.id.value());
+        } else {
+            label =
+                QObject::tr("%1 masks").arg(node_editor::nodeDisplayName(*composition, candidate));
+        }
+        const auto index = selector.addItem(
+            label, QVariant::fromValue(static_cast<std::int64_t>(candidate.id.value())));
+        selector.setItemToolTip(index, label);
+    }
+    const bool none = selector.count() == 0;
+    const auto* resolved = document::resolvePathSourceNode(graph, kernel, stored);
+    int index = resolved == nullptr ? -1
+                                    : selector.findData(QVariant::fromValue(
+                                          static_cast<std::int64_t>(resolved->id.value())));
+    const bool missing = index < 0 && stored > 0;
+    if (index < 0)
+        index = selector.addItem(missing ? QObject::tr("Missing source")
+                                 : masks ? QObject::tr("No masked layer or Mask node")
+                                         : QObject::tr("No text in the composition"),
+                                 QVariant::fromValue(stored));
+    selector.setCurrentIndex(index);
+    selector.setMutedValue(missing || none);
+    selector.setToolTip(none ? (masks ? QObject::tr("Add a mask to a layer, or a Mask node, to "
+                                                    "read its outline")
+                                      : QObject::tr("Add a text to read its glyph outlines"))
+                             : selector.currentText());
     return !missing && !none;
 }
 

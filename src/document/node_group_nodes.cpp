@@ -541,4 +541,51 @@ NodeGroupExpansion expandNodeGroups(const Project& project, const Composition& c
     return Expander(project, composition).run();
 }
 
+std::optional<NodeGroupSlotTarget> nodeGroupSlotTarget(const Project& project,
+                                                       const NodeRecord& instance,
+                                                       const ParameterStore& parameters,
+                                                       const std::string_view slot) {
+    if (instance.typeId != kNodeGroupNodeType)
+        return std::nullopt;
+    const auto reference = nodeGroupReference(instance, parameters);
+    const auto* group = reference ? project.findComposition(*reference) : nullptr;
+    const auto* input = group != nullptr ? findGroupInput(*group) : nullptr;
+    if (input == nullptr)
+        return std::nullopt;
+    std::optional<NodeGroupSlotTarget> found;
+    for (const auto& edge : group->graph().edges()) {
+        if (edge.source.nodeId != input->id || edge.source.port != slot)
+            continue;
+        const auto* destination = std::get_if<NodeInputRef>(&edge.destination);
+        if (destination == nullptr || found.has_value())
+            return std::nullopt;
+        const auto* node = group->graph().findNode(destination->nodeId);
+        const auto* definition =
+            node != nullptr ? builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
+                            : nullptr;
+        if (definition == nullptr)
+            return std::nullopt;
+        const auto parameter = std::ranges::find(definition->parameters, destination->port,
+                                                 &ParameterDefinition::role);
+        if (parameter == definition->parameters.end())
+            return std::nullopt;
+        found =
+            NodeGroupSlotTarget{node->id, node->typeId, destination->port, parameter->schemaKey};
+    }
+    // A value slot reaches an inner parameter as a driver binding rather than an edge.
+    for (const auto& node : group->graph().nodes())
+        for (const auto& binding : node.parameters) {
+            const auto* record = group->parameters().find(binding.parameterId);
+            const auto* driver =
+                record != nullptr ? std::get_if<DriverBindingSource>(&record->source) : nullptr;
+            if (driver == nullptr || driver->sourceNodeId != input->id ||
+                driver->outputPort != slot)
+                continue;
+            if (found.has_value())
+                return std::nullopt;
+            found = NodeGroupSlotTarget{node.id, node.typeId, binding.role, record->schemaKey};
+        }
+    return found;
+}
+
 } // namespace bloom::document

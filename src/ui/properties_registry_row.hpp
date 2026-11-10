@@ -65,12 +65,23 @@ bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const Composition
 // card widget's own row) take it from, so the two surfaces cannot name a value differently. A unit
 // is the field's, never the name's.
 [[nodiscard]] QString parameterRowLabel(std::string_view schemaKey, std::string_view role);
+// #509: a Node Group instance's value slot named after the one inner value its group wires it to
+// ("Glow Size", "Path Stroke Width"); nothing when the node is not an instance, the slot feeds
+// nothing or more than one value, or the group is missing. The card and Properties both ask.
+[[nodiscard]] std::optional<QString> nodeGroupSlotLabel(const document::Project& project,
+                                                        const document::Composition& composition,
+                                                        document::NodeId node,
+                                                        std::string_view slot);
 bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const document::NodeRecord& node, std::string_view schemaKey);
 // #487: a data reader's block, offered as the project's data blocks of the reader's kind; 0 (the
 // default) shows the first such block, which is the one it reads.
 bool refreshDataBlockSelector(kit::KDropdown& selector, const CompositionSession& session,
                               const document::NodeRecord& node);
+// #509: the node a Mask Path or Text Outline reads, offered as the composition's nodes it can read;
+// 0 (the default) shows the first such node, which is the one it reads.
+bool refreshPathSourceSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const document::NodeRecord& node);
 // #487: the Video source's audio stream, shared by Properties and the node card, and its commit.
 void refreshAudioStreamSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const document::NodeRecord& node);
