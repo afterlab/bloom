@@ -586,6 +586,20 @@ class DepthScenario(unittest.TestCase):
         self.assertLessEqual(len(chain["keys"][0][1]["contours"]) * step["values"]["count"], 262144)
         self.assertIn("startOffset", step["keys"], "every frame is new")
 
+    def test_warp_path_scenario_warps_every_contour_and_keys_the_phase(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["warp-path-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        chain = scenario["layers"][0]["pathChain"]
+        self.assertEqual([step["type"] for step in chain["steps"]],
+                         ["bloom.warp-path", "bloom.transform-path"])
+        warp = chain["steps"][0]
+        self.assertGreaterEqual(warp["values"]["tolerance"], 0.001)
+        self.assertGreater(warp["values"]["size"], 0)
+        self.assertIn("phase", warp["keys"], "every frame is new")
+        self.assertIn("skew", chain["steps"][1]["keys"])
+        self.assertLessEqual(abs(chain["steps"][1]["keys"]["skew"][-1][1]), 89.9)
+
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["auto-exposure-2k"]

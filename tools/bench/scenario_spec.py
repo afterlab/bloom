@@ -788,6 +788,31 @@ SCENARIOS["resample-path-2k"] = {
     ],
 }
 
+# #598: Warp Path over a keyed compound path of 64 contours: every contour is bent by a wave whose
+# phase is keyed (so every frame subdivides a new curve to the 0.1 px tolerance), then a skew keyed on
+# Transform Path moves the whole value by an exact matrix, then the shape fills the result. No media is
+# read. Written, not run.
+SCENARIOS["warp-path-2k"] = {
+    "description": "A Shape Source reading 64 keyed contours bent by a travelling wave and skewed.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Shape",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "pathChain": {
+             "keys": [
+                 [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}],
+                 [24, {"contours": [_ring(i, 40) for i in range(64)], "fillRule": "evenOdd"}]],
+             "steps": [
+                 {"type": "bloom.warp-path",
+                  "values": {"function": 0, "amount": 18.0, "size": 160.0, "phase": 0.0,
+                             "tolerance": 0.1},
+                  "keys": {"phase": [[0, 0.0], [23, 360.0]]}},
+                 {"type": "bloom.transform-path", "values": {"skew": 0.0, "skewAxis": 0.0},
+                  "keys": {"skew": [[0, 0.0], [23, 25.0]]}}]}},
+    ],
+}
+
 # #590, #595: group definitions a Function Plot can read, as Math nodes over Group Input's scalar1:
 # [[step, operation, {operand: "x" or an earlier step}], ...]; the last step is Group Output's scalar1.
 FUNCTION_GROUPS = {

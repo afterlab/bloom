@@ -828,6 +828,11 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
            schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.transform-2d.skew" ||
            schemaKey == "bloom.transform-2d.skew-axis" ||
+           // #598: the amount, size, phase and tolerance of Warp Path and the skew and its axis
+           // (Warp Path and Transform Path) are keyed like the rest of the new path operands.
+           schemaKey == kWarpAmountSchemaKey || schemaKey == kWarpSizeSchemaKey ||
+           schemaKey == kWarpPhaseSchemaKey || schemaKey == kWarpToleranceSchemaKey ||
+           schemaKey == kPathSkewSchemaKey || schemaKey == kPathSkewAxisSchemaKey ||
            schemaKey == "bloom.transform-2d.opacity" || schemaKey == "bloom.blur.radius-y" ||
            isFourColorGradientScalarSchemaKey(schemaKey) ||
            schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
@@ -884,6 +889,13 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
         return value >= 0.0 && value <= 1.0;
     if (schemaKey == "bloom.transform-2d.skew")
         return std::abs(value) <= kMaximumTransformSkew;
+    // #598: a skew of a quarter turn or more is no slant; a size above zero, a tolerance in its range.
+    if (schemaKey == kPathSkewSchemaKey)
+        return std::abs(value) <= kMaximumPathSkewDegrees;
+    if (schemaKey == kWarpSizeSchemaKey)
+        return value > 0.0;
+    if (schemaKey == kWarpToleranceSchemaKey)
+        return value >= 0.001 && value <= 1000.0;
     if (isFourColorGradientScalarSchemaKey(schemaKey))
         return isFourColorGradientBlendWithinDomain(value);
     if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high")

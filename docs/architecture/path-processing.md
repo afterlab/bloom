@@ -1,10 +1,11 @@
 # Path Processing
 
-Status: built (#344, #530, #509). This document owns the nodes that take a Path and answer a Path
-(Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners and Path Stroke) and
-the two that read a Path from what an artist already drew (Mask Path and Text Outline). The value they
-work on is [path-value.md](path-value.md). They live in Text & Paths and are value nodes, so they appear
-in a value graph and feed Shape Source's `path` socket like any other Path producer.
+Status: built (#344, #530, #509, #637, #598). This document owns the nodes that take a Path and answer
+a Path (Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners, Path Stroke,
+Resample Path and Warp Path) and the two that read a Path from what an artist already drew (Mask Path
+and Text Outline). The value they work on is [path-value.md](path-value.md). They live in Text & Paths
+and are value nodes, so they appear in a value graph and feed Shape Source's `path` socket like any
+other Path producer.
 
 ## What kind of node
 
@@ -75,12 +76,28 @@ counts or triggers cancellation at a chosen poll.
 
 ## Transform Path
 
-`bloom.transform-path`. Operands `path`, `position` (0, 0), `anchor` (0, 0), `scale` (1, 1, a multiplier shown as a percentage, as in Transform)
-and `rotation` (0, degrees, positive clockwise on screen).
+`bloom.transform-path`. Operands `path`, `position` (0, 0), `anchor` (0, 0), `scale` (1, 1, a multiplier shown as a percentage, as in Transform),
+`rotation` (0, degrees, positive clockwise on screen), `skew` (0, degrees, within 89.9 either way) and
+`skewAxis` (0, degrees clockwise from screen right).
 
-Each point and handle maps as `position + R(rotation) * S(scale) * (point - anchor)` with `S(scale)` the multiplier. A cubic maps to the
-cubic of its mapped controls, so the result is exact for curves. Contour order, closed flags, anchor
-modes, the fill rule and the groups are kept, so a subpath keeps its identity.
+Each point and handle maps as `position + R(rotation) * K(skew, skewAxis) * S(scale) * (point - anchor)`
+with `S(scale)` the multiplier and `K` the slant: a point slides along the skew axis by `tan(skew)`
+times its distance across that axis (skew 45 along the x axis moves each point right by its height).
+A cubic maps to the cubic of its mapped controls, so the result is exact for curves, and a pure matrix
+never adds a point. Contour order, closed flags, anchor modes, the fill rule and the groups are kept, so a
+subpath keeps its identity. A skew of zero is arithmetically the transform this node always did: the
+slant step is skipped, so older results are the same bytes.
+
+**Skew arrived after the node.** A Transform Path saved before skew has no `skew` or `skewAxis`
+parameter; it compiles and reads no skew, and its Properties show no skew rows, so to slant one, add a
+new Transform Path (the same rule Transform 2D's skew follows). A new node has both, keyable like
+Warp Path's amount.
+
+**The shared matrix.** The six matrix operands are named and meant the same on Transform Path and
+Warp Path. Wire one set of value nodes (a Vector2 for position, anchor and scale, a Scalar each for
+rotation, skew and skew axis) to the sockets of any number of either node and every path moves in the
+same space, whatever is keyed. This is how paths stay aligned until the named coordinate spaces of #591
+exist; they will take over from it. The matrix lives in `src/runtime/path_warp.hpp` (`Matrix`).
 
 ## Trim Path
 
@@ -290,8 +307,9 @@ A contour of length zero answers copies of its point for Fixed count and is repo
 failure. The result's anchors are charged to the evaluation's retained-path budget. Cancellation is
 observed between contours.
 
-The arithmetic (`src/runtime/path_resample.hpp`) is shared: the warp (#598) subdivides straight segments
-with it and the morph (#597) gives two contours the same number of points with `resampleToCount`.
+The arithmetic (`src/runtime/path_resample.hpp`) is shared: the morph (#597) gives two contours the same
+number of points with `resampleToCount`. Warp Path subdivides by curve parameter and not by length (see
+Warp Path), so it can follow a Resample Path in a chain but does not call it.
 
 ### Write to a Path
 
@@ -300,6 +318,80 @@ The command `bloom.node.write-to-path` (node context menu "Write to a Path", MCP
 writes the points into a Path node: a new one beside the source, or an existing constant, or a whole-path
 key at that time on an animated one. A Path node has no input socket, so its value is always a constant or keyed. It is one undo step, and the groups
 and fill rule are kept. The read runs off the UI thread and is cancellable.
+
+## Warp Path
+
+`bloom.warp-path` (Text & Paths) bends a path through a non-linear function of its points: a straight
+line cannot be bent by a transform or a skew, but it can by `(x, y) -> (x + A sin(y / w), y)`. It takes a
+Path operand and answers a Path, evaluated every frame from the operands of that frame. It adds no image
+lowering and needs no GPU coverage exception: the path it answers is drawn by Shape Source's production
+fill, which has CPU/GPU parity on every route.
+
+**Separate node.** Warp Path is its own node and not a mode of Transform Path (the choice #598 left
+open): Transform Path keeps its operands and its exact-curve guarantee, which older projects rely on,
+and the warp needs operands and a tolerance that a pure matrix does not. The affine matrix, with its
+skew, stays on Transform Path, and both nodes share the matrix operands (above).
+
+| Operand | Meaning | Default |
+| --- | --- | --- |
+| Function | Wave, Twist, Bulge / Pinch, Bend or Ripple | Wave |
+| Amount | How far: pixels (Wave, Ripple), degrees (Twist, Bend), percent (Bulge / Pinch); a track from -360 to 360 | 20 |
+| Size | The width the function works over, pixels, above 0 | 100 |
+| Phase | Where in its cycle, degrees (Wave and Ripple only) | 0 |
+| Tolerance | The farthest, in pixels, the drawn curve may stray from the exact warp, 0.001 to 1000 | 0.25 |
+| Position, Anchor, Scale, Rotation, Skew, Skew axis | The warp's space: Transform Path's matrix | identity |
+
+The function runs in the space the matrix describes: a point goes into that space by the matrix's
+inverse, through the function, and back out by the matrix, so the wave, twist or bend turns, slants,
+stretches and moves with the space (a scale of zero cannot be inverted and is refused). In the space, with
+`A` the amount, `w` the size and `p` the phase:
+
+| Function | Point `(x, y)` goes to |
+| --- | --- |
+| Wave | `(x + A sin(2 pi y / w + p), y)`: vertical lines become waves |
+| Twist | the plane turned about the origin by `A` degrees times `exp(-r^2 / w^2)` (`r` the distance from the origin) |
+| Bulge / Pinch | `(x, y)` times `1 + (A / 100) exp(-r^2 / w^2)`: out for a positive amount, in for a negative one |
+| Bend | the x axis curled into an arc turning `A` degrees over a length of `w`; `y` runs along the arc's radius |
+| Ripple | out along the line from the origin by `A sin(2 pi r / w + p)` |
+
+**Adaptive subdivision.** A warped straight segment is a curve, so every segment is split until the curve
+fits. Each stretch of a segment, between two parameters, is drawn as a cubic through the exact warped
+end points with the warped tangents (a central difference of the warp of the segment) as handles. The
+stretch is accepted when that cubic is within the tolerance of the exact warp at three parameters inside
+it (a quarter, a half and three quarters of the way), otherwise it halves. Every output point is exactly
+the warp of a point of the original (an anchor or a subdivision knot), anchors keep their own corner or
+curve (the tangent comes from the segment that leaves or arrives), and a segment the warp only moves,
+such as a horizontal line under a Wave, stays two points. The subdivision is in the segment's own
+parameter, so a path chained after Resample Path keeps the spacing Resample gave it; it does not need
+Resample's arc-length helper.
+
+The tolerance is checked at those three parameters, not proved everywhere: the tests measure the whole
+curve against the analytic warp (largest deviation at most the tolerance for a vertical grid under a Wave,
+a circle under a Ripple and a line under a Bend).
+
+**Limits.** A stretch splits at most 14 times along any one chain; one that is still outside the
+tolerance there (the warp jumps, as a Ripple does through its own origin off a whole cycle) is kept and
+reported as a notice, not a failure. A contour holds at most 4096 points and a value 262144: a warp that
+needs more fails with a diagnostic naming "Warp Path", the function, the tolerance and the least number of
+points it needs, and answers the empty path (raise the tolerance, lower the amount or widen the size).
+A size at or below 0, a tolerance outside its range, a skew past 89.9 degrees, an operand that is not
+finite and a coordinate beyond the bound fail the same way. Contour count and order, closed flags, the
+fill rule and the groups are kept, one contour to one contour. The result's anchors are charged to the
+evaluation's retained-path budget. Cancellation is observed between contours and every 64 steps inside
+one, and a cancelled evaluation keeps nothing.
+
+**Across frames.** The operands are read every frame, so an amount, phase or skew keyed on the node (or
+a value node wired to any operand) animates the warp, and an animated upstream path is warped at each
+frame. The count of points can change from frame to frame with the curve, so a warp's keys do not
+interpolate with each other the way a Fixed count Resample does; resample first when two warps must
+share a structure.
+
+**Controls.** The card and Properties show a pad with Position and Anchor, dials for Rotation and Skew
+axis (clockwise on screen), tracks for Amount and Skew, then Size, Phase (for Wave and Ripple), Scale and
+Tolerance. Properties list Path, Function, then the card, then the pad's X and Y rows. Amount, Size,
+Phase, Tolerance, Skew and Skew axis can be keyed on the node and wired; Position, Anchor, Scale and
+Rotation follow the value library's rule and are animated by wiring keyed value nodes to them.
+Benchmark scenario: `warp-path-2k` in `tools/bench` (written, not run).
 
 ## Reference library
 
@@ -310,6 +402,6 @@ types. Flattening is the render library's `flattenPathContour`, the one flatteni
 
 ## Groups
 
-Resample Path, Transform Path and Round Corners keep every contour and so every group. Trim Path keeps the groups of
+Resample Path, Warp Path, Transform Path and Round Corners keep every contour and so every group. Trim Path keeps the groups of
 the contours it keeps. Offset, Boolean and Merge answer geometry that does not descend one to one from
 contours, so they answer no groups; a consumer tracking a key finds it gone, as path-value.md allows.
