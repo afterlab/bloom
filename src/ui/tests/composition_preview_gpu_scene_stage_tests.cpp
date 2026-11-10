@@ -13,15 +13,19 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
@@ -35,6 +39,7 @@
 #include <QApplication>
 #include <QString>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -132,9 +137,12 @@ struct Fixture final {
         definitions.freeze();
     }
 
+    // #349: the device measure the stage hands Image Statistics to (empty: none).
+    bloom::runtime::ImageStatisticsDeviceMeasure statisticsMeasure;
+
     [[nodiscard]] bloom::runtime::PreviewGpuSceneStageFunction stage() const {
-        return bloom::ui::makeCompositionPreviewGpuSceneStage(compiler, builder, provider,
-                                                              planCache);
+        return bloom::ui::makeCompositionPreviewGpuSceneStage(
+            compiler, builder, provider, planCache, nullptr, statisticsMeasure);
     }
 };
 
@@ -558,6 +566,240 @@ void testPreCancellationStaysCancelled(Expectations& expectations) {
     }
 }
 
+// #349: a Solid on a layer whose opacity is the Solid's Image Statistics maximum, built through
+// commands as an artist's edits would be. (The native viewer and RAM preview run drives Levels and
+// Denoise; these host-only tests use no image effect, which needs the packaged shader tools.)
+struct StatisticsComposition final {
+    bloom::document::Document document;
+    bloom::commands::CommandStack commands;
+    bloom::document::CompositionId compositionId;
+    bloom::ui::CompositionSession session;
+    bool built = false;
+
+    explicit StatisticsComposition(bloom::document::NewProject project)
+        : document(std::move(project.project)), commands(document),
+          compositionId(project.initialCompositionId), session(document, commands, compositionId) {
+        using namespace bloom;
+        if (!session.addSolidLayer(QStringLiteral("Measured"), core::Color4d{0.6, 0.3, 0.15, 1.0}))
+            return;
+        const auto& graph = session.composition()->graph();
+        const auto layer = graph.layerOutputs().front().nodeId;
+        document::NodeId solid;
+        for (const auto& edge : graph.edges())
+            if (const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                input != nullptr && input->nodeId == layer && input->port == "image")
+                solid = edge.source.nodeId;
+        const auto add = [&](const std::string_view type) {
+            commands::Transaction transaction("Add", session.snapshot().revision());
+            transaction.emplace<commands::AddNode>(compositionId, std::string(type),
+                                                   document::Vec2d{});
+            return session.executeNodeTransaction(std::move(transaction))
+                .outputId<document::NodeId>(commands::kAddNodeOutput)
+                .value_or(document::NodeId{});
+        };
+        const auto connect = [&](const document::NodeId from, const std::string_view output,
+                                 const document::NodeId to, const std::string_view input) {
+            commands::Transaction transaction("Connect", session.snapshot().revision());
+            transaction.emplace<commands::ConnectPorts>(
+                compositionId, document::OutputPortRef{from, std::string(output)},
+                document::NodeInputRef{to, std::string(input)});
+            return session.executeNodeTransaction(std::move(transaction)).changed();
+        };
+        const auto statistics = add(document::kImageStatisticsNodeType);
+        built = solid.isValid() && statistics.isValid() &&
+                connect(solid, "image", statistics, "input") &&
+                connect(statistics, "maximum", layer, document::kOpacityParameterRole);
+    }
+};
+
+// The statistics the CPU reference measures for `query` in `frame`, labelled as `route` says (a
+// stand-in for the device route in these host-only tests; the native viewer and RAM preview run
+// measures them on the device).
+[[nodiscard]] bloom::runtime::ImageStatisticsRun
+measureOnCpu(const bloom::runtime::CpuCompositionEvaluator& evaluator,
+             const bloom::runtime::ImageStatisticsQuery& query,
+             const bloom::runtime::EvaluationRequest& frame,
+             const bloom::runtime::CancellationToken& token,
+             const bloom::runtime::ImageStatisticsRoute route) {
+    const auto evaluated =
+        evaluator.evaluate(query.plan, bloom::runtime::imageStatisticsRequest(frame, query), token);
+    if (evaluated.frame() == nullptr)
+        return {{bloom::runtime::ImageStatisticsOutcome::Unavailable, "not evaluated"}, {}};
+    auto values = bloom::runtime::readImageStatistics(evaluated.frame()->processImage(), route);
+    if (!values)
+        return {{bloom::runtime::ImageStatisticsOutcome::Unavailable, "not readable"}, {}};
+    return {{bloom::runtime::ImageStatisticsOutcome::Ready, {}}, *values};
+}
+
+[[nodiscard]] bool hasDiagnostic(const bloom::runtime::PreviewGpuSceneStageOutcome& outcome,
+                                 const std::string_view code) {
+    return std::ranges::any_of(outcome.diagnostics,
+                               [&](const auto& diagnostic) { return diagnostic.code == code; });
+}
+
+// Without a device measure, a frame that reads Image Statistics is not prepared: it takes the CPU
+// path, which measures them (the behaviour before the viewer measured them on the device).
+void testStatisticsWithoutMeasureTakeTheCpuPath(Expectations& expectations) {
+    bloom::runtime::clearImageStatistics();
+    Fixture fixture;
+    StatisticsComposition composition(makeProject());
+    expectations.expect(composition.built, "the statistics composition is built");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    const auto snapshot = composition.session.snapshot();
+    const auto identity = identityFor(snapshot, composition.compositionId);
+    const auto outcome =
+        runStage(fixture, identity, snapshot, {}, expectations, "Statistics without a measure");
+    expectations.expect(
+        outcome != nullptr && outcome->status == PreviewGpuSceneStageStatus::UnsupportedGpuSubset &&
+            outcome->stage == nullptr &&
+            hasDiagnostic(*outcome, "bloom.preview.gpu-scene.unsupported-operation"),
+        "without a device measure the statistics frame takes the CPU path");
+}
+
+// With a device measure, the stage prepares the frame on the GPU with the statistics the measure
+// gave for this frame (its own time), caches them under the frame's Device identity, and a second
+// frame with the same identity measures nothing.
+void testStatisticsMeasuredForTheFrameArePrepared(Expectations& expectations) {
+    bloom::runtime::clearImageStatistics();
+    Fixture fixture;
+    std::atomic<int> measures{0};
+    std::optional<bloom::core::RationalTime> measuredTime;
+    fixture.statisticsMeasure = [&](const bloom::runtime::ImageStatisticsQuery& query,
+                                    const bloom::runtime::EvaluationRequest& frame,
+                                    const bloom::runtime::CancellationToken& token) {
+        ++measures;
+        measuredTime = frame.time;
+        return measureOnCpu(fixture.evaluator, query, frame, token,
+                            bloom::runtime::ImageStatisticsRoute::Device);
+    };
+    StatisticsComposition composition(makeProject());
+    expectations.expect(composition.built, "the statistics composition is built");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    const auto snapshot = composition.session.snapshot();
+    auto identity = identityFor(snapshot, composition.compositionId);
+    identity.time = bloom::core::RationalTime::fromInteger(2);
+    const auto outcome =
+        runStage(fixture, identity, snapshot, {}, expectations, "Measured statistics");
+    expectations.expect(outcome != nullptr &&
+                            outcome->status == PreviewGpuSceneStageStatus::Prepared &&
+                            outcome->stage != nullptr && outcome->stage->scene() != nullptr,
+                        "a frame whose statistics the device measured is prepared on the GPU");
+    expectations.expect(measures.load() == 1 && measuredTime == identity.time,
+                        "the statistics were measured once, for the frame's own time");
+    const auto afterFirst = bloom::runtime::imageStatisticsCacheStatistics();
+    expectations.expect(afterFirst.computed == 1 && afterFirst.computedOnDevice == 1 &&
+                            afterFirst.entries == 1,
+                        "the measured statistics are cached as the device's");
+    // The CPU oracle measures its own (CPU reference) statistics, kept apart from the device's.
+    if (outcome != nullptr && outcome->stage != nullptr && outcome->stage->scene() != nullptr)
+        compareSceneToCpuOracle(fixture, *outcome->stage->scene(), snapshot, identity, expectations,
+                                "Measured statistics");
+    const auto again = runStage(fixture, identity, snapshot, {}, expectations, "Measured again");
+    expectations.expect(again != nullptr && again->status == PreviewGpuSceneStageStatus::Prepared,
+                        "the same frame is prepared again");
+    expectations.expect(measures.load() == 1 &&
+                            bloom::runtime::imageStatisticsCacheStatistics().computedOnDevice == 1,
+                        "the same frame's statistics are not measured again");
+    identity.time = bloom::core::RationalTime::fromInteger(3);
+    const auto later = runStage(fixture, identity, snapshot, {}, expectations, "Another frame");
+    expectations.expect(later != nullptr && later->status == PreviewGpuSceneStageStatus::Prepared &&
+                            measures.load() == 2 && measuredTime == identity.time,
+                        "another frame's statistics are measured for that frame");
+}
+
+// A measure the device could not make (Unavailable, or values labelled with another route) never
+// prepares the frame with unmeasured values: it is a GPU-subset refusal with the reason, and
+// nothing is cached.
+void testUnavailableStatisticsTakeTheCpuPath(Expectations& expectations) {
+    for (const bool mislabelled : {false, true}) {
+        bloom::runtime::clearImageStatistics();
+        Fixture fixture;
+        fixture.statisticsMeasure = [&](const bloom::runtime::ImageStatisticsQuery& query,
+                                        const bloom::runtime::EvaluationRequest& frame,
+                                        const bloom::runtime::CancellationToken& token)
+            -> bloom::runtime::ImageStatisticsRun {
+            if (mislabelled)
+                return measureOnCpu(fixture.evaluator, query, frame, token,
+                                    bloom::runtime::ImageStatisticsRoute::CpuReference);
+            return {{bloom::runtime::ImageStatisticsOutcome::Unavailable,
+                     "The device route is not ready to measure the picture."},
+                    {}};
+        };
+        StatisticsComposition composition(makeProject());
+        expectations.expect(composition.built, "the statistics composition is built");
+        fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+        const auto snapshot = composition.session.snapshot();
+        const auto identity = identityFor(snapshot, composition.compositionId);
+        const std::string label = mislabelled ? "CPU-labelled statistics" : "Unavailable device";
+        const auto outcome = runStage(fixture, identity, snapshot, {}, expectations, label);
+        expectations.expect(
+            outcome != nullptr &&
+                outcome->status == PreviewGpuSceneStageStatus::UnsupportedGpuSubset &&
+                outcome->stage == nullptr &&
+                hasDiagnostic(*outcome, "bloom.preview.gpu-scene.statistics-unavailable"),
+            label + ": the frame takes the CPU path and says why");
+        const auto statistics = bloom::runtime::imageStatisticsCacheStatistics();
+        expectations.expect(statistics.entries == 0 && statistics.computed == 0 &&
+                                statistics.failed == 1,
+                            label + ": nothing is cached");
+    }
+}
+
+// Cancelling the frame while the device measures it cancels the measure: the stage is cancelled and
+// nothing is cached.
+void testCancelledStatisticsCacheNothing(Expectations& expectations) {
+    bloom::runtime::clearImageStatistics();
+    Fixture fixture;
+    std::atomic_bool entered{false};
+    std::atomic_bool sawCancellation{false};
+    fixture.statisticsMeasure =
+        [&](const bloom::runtime::ImageStatisticsQuery&, const bloom::runtime::EvaluationRequest&,
+            const bloom::runtime::CancellationToken& token) -> bloom::runtime::ImageStatisticsRun {
+        entered.store(true);
+        const auto deadline = std::chrono::steady_clock::now() + 8s;
+        while (!token.isCancellationRequested() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        sawCancellation.store(token.isCancellationRequested());
+        return {{bloom::runtime::ImageStatisticsOutcome::Cancelled, {}}, {}};
+    };
+    StatisticsComposition composition(makeProject());
+    expectations.expect(composition.built, "the statistics composition is built");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    const auto snapshot = composition.session.snapshot();
+    const auto identity = identityFor(snapshot, composition.compositionId);
+    auto function = fixture.stage();
+    auto submission = fixture.scheduler.submit<StageValue>(
+        bloom::runtime::TaskRequest("statistics stage",
+                                    {.kind = bloom::runtime::TaskOwnerKind::Composition,
+                                     .id = bloom::runtime::TaskOwnerId::fromRaw(4)},
+                                    bloom::runtime::TaskPriority::Visible),
+        [&function, &snapshot, &identity](bloom::runtime::TaskContext& context) {
+            return function(snapshot, identity, bloom::ui::kDefaultPreviewPixelStorageByteLimit, {},
+                            context);
+        });
+    expectations.expect(submission.accepted(), "the statistics stage is accepted");
+    const auto enterDeadline = std::chrono::steady_clock::now() + 8s;
+    while (!entered.load() && std::chrono::steady_clock::now() < enterDeadline)
+        std::this_thread::sleep_for(1ms);
+    expectations.expect(entered.load(), "the stage asked the device to measure the picture");
+    submission.handle.cancel();
+    std::optional<TaskResult<StageValue>> result;
+    const auto deadline = std::chrono::steady_clock::now() + 8s;
+    while (!result && std::chrono::steady_clock::now() < deadline) {
+        if (auto taken = submission.handle.tryTakeResult())
+            result = std::move(*taken);
+        else
+            std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(sawCancellation.load(), "the cancellation reached the device measure");
+    expectations.expect(result.has_value() && result->state() == TaskState::Cancelled,
+                        "the stage is cancelled, not prepared and not a CPU fallback");
+    const auto statistics = bloom::runtime::imageStatisticsCacheStatistics();
+    expectations.expect(statistics.entries == 0 && statistics.computed == 0 &&
+                            statistics.cancelled == 1,
+                        "a cancelled measure caches nothing");
+}
+
 } // namespace
 
 int runTests(int argc, char** argv) {
@@ -573,6 +815,10 @@ int runTests(int argc, char** argv) {
     testFailedProviderFailsClosed(expectations);
     testOverrideChangesSceneWithoutPoisoningPlanCache(expectations);
     testPreCancellationStaysCancelled(expectations);
+    testStatisticsWithoutMeasureTakeTheCpuPath(expectations);
+    testStatisticsMeasuredForTheFrameArePrepared(expectations);
+    testUnavailableStatisticsTakeTheCpuPath(expectations);
+    testCancelledStatisticsCacheNothing(expectations);
 
     if (!expectations.ok()) {
         std::cerr << "GPU-scene-stage expectation(s) failed\n";

@@ -2409,6 +2409,17 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
     )
+    # #349: Image Statistics (driving Levels) and Denoise with Auto strength in the interactive
+    # viewer and RAM preview on the real service, each frame's statistics measured once on the
+    # application's device route and equal to the CPU reference's; a warm replay measures nothing,
+    # an edit measures again, and a refused device route takes the CPU path labelled CPU.
+    bloom_add_test(
+        NAME bloom.ui.gpu_ram_preview_image_statistics
+        COMMAND bloom_ui_gpu_ram_preview_route_proof_test --image-statistics
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu ram
+        TIMEOUT 300
+    )
 
     # Independent native acceptance for direct manipulation ON the genuine GPU-resident viewer
     # route: real blank project -> real first-composition/Solid commands -> real service resident

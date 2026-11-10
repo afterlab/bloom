@@ -229,6 +229,9 @@ struct Fixture final {
     std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle> processor;
     std::filesystem::path mediaDirectory;
     bloom::document::AssetRecord mediaAsset;
+    // #349: the device route the production stage measures Image Statistics on (empty: such a
+    // frame takes the CPU path). Set before productionGpuStage() is called.
+    bloom::runtime::ImageStatisticsDeviceMeasure statisticsMeasure;
 
     explicit Fixture(const std::filesystem::path& directory)
         : compiler(definitions), mediaDirectory(directory) {
@@ -252,7 +255,8 @@ struct Fixture final {
     // The unmodified production GPU-scene stage factory over the ONE media-aware builder. It
     // compiles whatever immutable snapshot it is handed, for every request generation.
     [[nodiscard]] PreviewGpuSceneStageFunction productionGpuStage() const {
-        return makeCompositionPreviewGpuSceneStage(compiler, *sceneBuilder, provider);
+        return makeCompositionPreviewGpuSceneStage(compiler, *sceneBuilder, provider, nullptr,
+                                                   nullptr, statisticsMeasure);
     }
 
     [[nodiscard]] PreviewCpuStageFunction productionCpuStage() const {

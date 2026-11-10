@@ -25,21 +25,40 @@
 // viewer and RAM-previewed through the same service. The viewer frame and every RAM frame must be
 // GPU-resident and match the CPU oracle, the warm replay must do no work, and an operand edit must
 // re-render every frame on the GPU against the edited CPU oracle.
+//
+// `--image-statistics` (#349) is another non-writing run of the same shape: a 512 x 288, four-frame
+// composition whose keyed Four Color Gradient goes through Denoise with Auto strength and then
+// Levels whose input black and white an Image Statistics node of the gradient drives. The viewer
+// and RAM preview prepare every frame on the GPU, with each frame's statistics measured once on the
+// application's device route (a GpuExportProvider's evaluator, as the application wires it) and
+// equal to the CPU reference's; the warm replay measures nothing; an upstream edit measures every
+// frame again; and with the device route refused, the frame takes the CPU path, labelled CPU.
+// `--montage <dir>` writes the source, the CPU frame and the GPU frame (sampled every 4th pixel)
+// of its first and last frames.
 
+#include "gpu_preview_test_phase.hpp"
 #include "gpu_route_proof_harness_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/four_color_gradient_nodes.hpp>
+#include <bloom/document/image_math_parameters.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
@@ -56,14 +75,21 @@
 #include <QVulkanInstance>
 #include <QWindow>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace bloom::ui::verticalproof;
@@ -88,6 +114,8 @@ struct HarnessOptions final {
     bool expireBeforeAdmission = false;
     bool animatedMask = false;
     bool pathNodes = false;
+    bool imageStatistics = false;
+    std::filesystem::path montage;
     std::uint64_t poolBytes = 1ULL << 30;
 };
 
@@ -114,6 +142,10 @@ struct HarnessOptions final {
             options.animatedMask = true;
         } else if (argument == "--path-nodes") {
             options.pathNodes = true;
+        } else if (argument == "--image-statistics") {
+            options.imageStatistics = true;
+        } else if (argument == "--montage" && index + 1 < argc) {
+            options.montage = argv[++index];
         } else if (argument == "--expect-partial") {
             options.expectPartial = true;
         } else if (argument == "--require-device") {
@@ -196,13 +228,15 @@ struct HarnessOptions final {
     return path;
 }
 
-// The `--path-nodes` document, built through commands as an artist's edits would be.
-struct PathNodesDocument final {
+// The `--path-nodes` and `--image-statistics` documents, built through commands as an artist's
+// edits would be.
+struct NodeDocument final {
     document::Document& document;
     commands::CommandStack& commands;
     document::CompositionId composition;
     Expectations& checks;
     document::NodeId booleanNode;
+    document::NodeId gradientNode;
 
     [[nodiscard]] const document::Composition& current() const {
         return *document.snapshot().project().findComposition(composition);
@@ -330,7 +364,134 @@ struct PathNodesDocument final {
         connect(core, "image", glow, "input");
         connect(glow, "image", current().graph().layerOutputs().back().nodeId, "image");
     }
+
+    // #349: a keyed Four Color Gradient on the layer `layerNode` shows (`source` is the document
+    // then), then the same gradient through Denoise (Auto strength) and Levels whose master input
+    // black and white are the gradient's Image Statistics minimum and maximum.
+    void buildStatistics(const std::int64_t frameCount, const document::NodeId layerNode,
+                         std::optional<document::Snapshot>& source) {
+        gradientNode = add(document::kFourColorGradientNodeType);
+        const auto color = parameter(gradientNode, "color1");
+        checks.expect(run<commands::SetKeyframeAtTimeForParameter>(
+                          composition, color, frameTime(0), core::Color4d{0.1, 0.1, 0.1, 1.0}) &&
+                          run<commands::SetKeyframeAtTimeForParameter>(
+                              composition, color, frameTime(frameCount - 1),
+                              core::Color4d{1.6, 0.3, 0.2, 1.0}),
+                      "the gradient's first color is keyed");
+        set(gradientNode, "color2", core::Color4d{0.3, 0.25, 0.05, 1.0});
+        set(gradientNode, "color3", core::Color4d{0.05, 0.2, 0.6, 1.0});
+        connect(gradientNode, "image", layerNode, "image");
+        source = document.snapshot();
+        const auto denoise = add("bloom.denoise");
+        set(denoise, "mode", std::int64_t{0});
+        set(denoise, "radius", 3.0);
+        set(denoise, "autoStrength", true);
+        connect(gradientNode, "image", denoise, "input");
+        const auto levels = add(document::kLevelsNodeType);
+        connect(denoise, "image", levels, "input");
+        const auto statistics = add(document::kImageStatisticsNodeType);
+        connect(gradientNode, "image", statistics, "input");
+        connect(statistics, "minimum", levels, document::levelsRole(0, 0));
+        connect(statistics, "maximum", levels, document::levelsRole(0, 1));
+        connect(levels, "image", layerNode, "image");
+    }
 };
+
+// #349: every statistics measure the production stage asked the device route for, with the frame
+// it was for, so the run can count them and compare each with the CPU reference's.
+struct StatisticsRecord final {
+    runtime::ImageStatisticsQuery query;
+    runtime::EvaluationRequest frame;
+    runtime::ImageStatisticsRun run;
+};
+struct StatisticsLog final {
+    std::mutex mutex;
+    std::vector<StatisticsRecord> records;
+    // Set: the device route is not available (no evaluator), as before its bootstrap.
+    std::atomic_bool refuse{false};
+    [[nodiscard]] std::size_t size() {
+        const std::scoped_lock lock(mutex);
+        return records.size();
+    }
+    [[nodiscard]] std::vector<StatisticsRecord> since(const std::size_t first) {
+        const std::scoped_lock lock(mutex);
+        return {records.begin() + static_cast<std::ptrdiff_t>(std::min(first, records.size())),
+                records.end()};
+    }
+};
+
+// The resident frame sampled every `stride` pixels, compared with the CPU oracle (one code per
+// colour channel, exact alpha, as the frame evidence compares), and the samples in `gpu`.
+[[nodiscard]] bool denseCompare(runtime::GpuPreviewDisplayService& service,
+                                const runtime::PreparedPreviewFrame& gpuFrame,
+                                const runtime::PreparedPreviewFrame& cpuFrame,
+                                const std::uint32_t stride, std::vector<render::Rgba8>& gpu,
+                                std::uint32_t& columns, std::uint32_t& rows, std::string& detail) {
+    const auto view = cpuFrame.displayBufferView();
+    if (!view.has_value() || gpuFrame.residentFrame() == nullptr) {
+        detail = "no CPU display buffer or no resident frame";
+        return false;
+    }
+    const auto width = view->displayWindow.extent().width();
+    const auto height = view->displayWindow.extent().height();
+    columns = (width + stride - 1) / stride;
+    rows = (height + stride - 1) / stride;
+    std::vector<render::ImagePixelCoordinate> coordinates;
+    for (std::uint32_t y = 0; y < height; y += stride)
+        for (std::uint32_t x = 0; x < width; x += stride)
+            coordinates.push_back({x, y});
+    runtime::detail::ResidentSparseSampleResult sampled;
+    if (!runtime::detail::GpuPreviewDisplayServiceTestAccess::sampleResidentFrameSparse(
+            service, gpuFrame.residentFrame()->lease(), coordinates, sampled,
+            std::chrono::seconds(30)) ||
+        sampled.pixels.size() != coordinates.size()) {
+        detail = "the dense sample was unavailable: " + sampled.diagnostic;
+        return false;
+    }
+    gpu = sampled.pixels;
+    std::size_t differing = 0;
+    for (std::size_t index = 0; index < coordinates.size(); ++index) {
+        const auto cpu = view->pixels[static_cast<std::size_t>(coordinates[index].y) * width +
+                                      coordinates[index].x];
+        const auto& sample = gpu[index];
+        const auto delta = [](const std::uint8_t a, const std::uint8_t b) {
+            return std::abs(static_cast<int>(a) - static_cast<int>(b));
+        };
+        if (delta(sample.red, cpu.red) > 1 || delta(sample.green, cpu.green) > 1 ||
+            delta(sample.blue, cpu.blue) > 1 || sample.alpha != cpu.alpha)
+            ++differing;
+    }
+    detail =
+        std::to_string(differing) + " of " + std::to_string(coordinates.size()) + " samples differ";
+    return differing == 0;
+}
+
+// A binary PPM of `pixels` (RGB, alpha dropped), `columns` by `rows`.
+void writePpm(const std::filesystem::path& path, const std::vector<render::Rgba8>& pixels,
+              const std::uint32_t columns, const std::uint32_t rows) {
+    std::ofstream out(path, std::ios::binary);
+    out << "P6\n" << columns << ' ' << rows << "\n255\n";
+    for (const auto& pixel : pixels) {
+        const std::array<char, 3> rgb{static_cast<char>(pixel.red), static_cast<char>(pixel.green),
+                                      static_cast<char>(pixel.blue)};
+        out.write(rgb.data(), rgb.size());
+    }
+}
+
+// The CPU frame's display pixels sampled every `stride` pixels, as denseCompare samples the GPU's.
+[[nodiscard]] std::vector<render::Rgba8> strided(const runtime::PreparedPreviewFrame& frame,
+                                                 const std::uint32_t stride) {
+    std::vector<render::Rgba8> out;
+    const auto view = frame.displayBufferView();
+    if (!view.has_value())
+        return out;
+    const auto width = view->displayWindow.extent().width();
+    const auto height = view->displayWindow.extent().height();
+    for (std::uint32_t y = 0; y < height; y += stride)
+        for (std::uint32_t x = 0; x < width; x += stride)
+            out.push_back(view->pixels[static_cast<std::size_t>(y) * width + x]);
+    return out;
+}
 
 } // namespace
 
@@ -347,8 +508,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   << platformName.toStdString() << ")\n";
         return options.requireDevice ? 1 : 0;
     }
-    if (options.loader.empty() ||
-        (options.proofDirectory.empty() && !options.animatedMask && !options.pathNodes)) {
+    if (options.loader.empty() || (options.proofDirectory.empty() && !options.animatedMask &&
+                                   !options.pathNodes && !options.imageStatistics)) {
         std::cout << "SKIP: RAM route proof needs --loader and --proof-dir\n";
         return options.requireDevice ? 1 : 0;
     }
@@ -365,7 +526,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setApplicationName(QStringLiteral("RamRouteProof"));
 
     std::string nonce;
-    if (!options.animatedMask && !options.pathNodes &&
+    if (!options.animatedMask && !options.pathNodes && !options.imageStatistics &&
         !routeproof::readProofNonce(options.proofDirectory, nonce)) {
         std::cout << "SKIP: no fresh run nonce in " << options.proofDirectory.string() << '\n';
         return options.requireDevice ? 1 : 0;
@@ -383,7 +544,79 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
 
     std::shared_ptr<const runtime::GpuSceneOcioContext> ocioContext;
-    if (options.animatedMask || options.pathNodes) {
+    // #349: the device route the Viewer and RAM Preview measure Image Statistics on, as the
+    // application wires it: a final-render provider's evaluator, reached through a weak handle so
+    // the provider is retired here, before its scheduler.
+    // As in the application, the provider and the preview service share one processing root,
+    // whose final host payloads retire through a packed host retirement owner.
+    runtime::TaskScheduler statisticsScheduler;
+    const auto packedHostRetirement = render::PackedHostRetirementOwner::create();
+    struct PackedHostTeardown final {
+        std::shared_ptr<render::PackedHostRetirementOwner> owner;
+        explicit PackedHostTeardown(std::shared_ptr<render::PackedHostRetirementOwner> retiring)
+            : owner(std::move(retiring)) {}
+        PackedHostTeardown(const PackedHostTeardown&) = delete;
+        PackedHostTeardown& operator=(const PackedHostTeardown&) = delete;
+        ~PackedHostTeardown() {
+            owner->beginShutdown();
+            while (!owner->exitAcknowledged())
+                std::this_thread::sleep_for(1ms);
+            while (!owner->collect())
+                std::this_thread::sleep_for(1ms);
+        }
+    } packedHostTeardown(packedHostRetirement);
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy;
+    std::jthread processingRefresh;
+    if (options.imageStatistics) {
+        processingPolicy =
+            std::make_shared<runtime::GpuProcessingPhasePolicy>(4, packedHostRetirement);
+        ui::test::refreshPreviewProcessingPhase(*processingPolicy);
+        processingRefresh = ui::test::refreshPreviewProcessingPhaseWhileRunning(processingPolicy);
+    }
+    std::shared_ptr<host::GpuExportProvider> statisticsProvider;
+    struct ProviderRetirement final {
+        std::shared_ptr<host::GpuExportProvider>& provider;
+        explicit ProviderRetirement(std::shared_ptr<host::GpuExportProvider>& owned)
+            : provider(owned) {}
+        ProviderRetirement(const ProviderRetirement&) = delete;
+        ProviderRetirement& operator=(const ProviderRetirement&) = delete;
+        ~ProviderRetirement() {
+            if (provider != nullptr)
+                static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(30)));
+        }
+    } statisticsRetirement{statisticsProvider};
+    const auto statisticsLog = std::make_shared<StatisticsLog>();
+    if (options.imageStatistics) {
+        runtime::GpuProcessFrameEvaluatorOptions evaluatorOptions;
+        evaluatorOptions.enabled = true;
+        evaluatorOptions.loaderPath = options.loader;
+        evaluatorOptions.processingPhasePolicy = processingPolicy;
+        evaluatorOptions.ocioResolver =
+            host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+        statisticsProvider = host::GpuExportProvider::create(evaluatorOptions);
+        statisticsProvider->prepare(statisticsScheduler);
+        if (!waitUntil([&] { return statisticsProvider->prepared(); }, 90s) ||
+            !statisticsProvider->deviceAvailable()) {
+            std::cout << "SKIP: the device route that measures Image Statistics is unavailable\n";
+            return options.requireDevice ? 1 : 0;
+        }
+        const auto device = runtime::makeImageStatisticsDeviceMeasure(
+            [provider = std::weak_ptr(statisticsProvider),
+             log = statisticsLog]() -> std::shared_ptr<runtime::GpuProcessFrameEvaluator> {
+                const auto owner = provider.lock();
+                return owner == nullptr || log->refuse.load() ? nullptr : owner->evaluator();
+            });
+        fixture.statisticsMeasure =
+            [device, log = statisticsLog](const runtime::ImageStatisticsQuery& query,
+                                          const runtime::EvaluationRequest& frame,
+                                          const runtime::CancellationToken& token) {
+                auto run = device(query, frame, token);
+                const std::scoped_lock lock(log->mutex);
+                log->records.push_back({query, frame, run});
+                return run;
+            };
+    }
+    if (options.animatedMask || options.pathNodes || options.imageStatistics) {
         ocioContext = packagedOcioContext();
         if (ocioContext == nullptr || ocioContext->preparer == nullptr) {
             std::cout << "SKIP: the animated-mask and path-nodes RAM runs need the packaged shader "
@@ -392,15 +625,29 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         }
         auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator);
         mediaContext.assetBaseDirectory = mediaDirectory;
-        fixture.sceneBuilder =
-            std::make_shared<CpuGpuSceneBuilder>(nullptr, std::move(mediaContext), *ocioContext);
+        // The statistics run's preview frames take their processing phase from the shared root,
+        // with the envelope the application's viewer stage states.
+        runtime::GpuScenePreparationPhase phase;
+        if (processingPolicy != nullptr)
+            phase = {
+                .policy = processingPolicy,
+                .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
+                             .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                             .growsRetainedSceneStorage = true,
+                             .requestedExecutorBytes = std::nullopt,
+                             .deviceWorkingBytes =
+                                 512ULL * 1024 * 1024 +
+                                 GpuPreviewDisplayServiceOptions{}.packedTransferByteAllowance}};
+        fixture.sceneBuilder = std::make_shared<CpuGpuSceneBuilder>(
+            nullptr, std::move(mediaContext), *ocioContext, std::move(phase));
     }
     const auto frameCount = options.sequence100    ? std::int64_t{100}
                             : options.animatedMask ? std::int64_t{24}
                             : options.pathNodes    ? std::int64_t{6}
                                                    : kFrameCount;
-    const std::uint32_t frameWidth = options.pathNodes ? 512U : options.half ? 960U : 1920U;
-    const std::uint32_t frameHeight = options.pathNodes ? 288U : options.half ? 540U : 1080U;
+    const bool smallFrame = options.pathNodes || options.imageStatistics;
+    const std::uint32_t frameWidth = smallFrame ? 512U : options.half ? 960U : 1920U;
+    const std::uint32_t frameHeight = smallFrame ? 288U : options.half ? 540U : 1080U;
     auto sequenceAsset = fixture.mediaAsset;
     if (options.sequence100) {
         sequenceAsset.kind = document::AssetKind::Sequence;
@@ -430,26 +677,37 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (!duration.has_value()) {
         return 2;
     }
-    auto newProject =
-        document::makeNewProject("RAM Route Proof", "Main", *duration,
-                                 options.pathNodes ? ramFormat(512U, 288U) : ramFormat());
+    auto newProject = document::makeNewProject("RAM Route Proof", "Main", *duration,
+                                               smallFrame ? ramFormat(512U, 288U) : ramFormat());
     if (options.sequence100)
         checks.expect(newProject.project.addAsset(sequenceAsset), "the sequence asset validates");
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
-    std::optional<PathNodesDocument> pathNodes;
+    std::optional<NodeDocument> pathNodes;
+    std::optional<document::Snapshot> statisticsSource;
     if (options.sequence100) {
         commands::Transaction addImage("Add RAM sequence");
         addImage.emplace<commands::AddImageLayer>(compositionId, sequenceAsset.id);
         checks.expect(commands.execute(std::move(addImage)).succeeded(),
                       "the genuine sequence layer is added");
     } else if (options.pathNodes) {
-        pathNodes.emplace(PathNodesDocument{document, commands, compositionId, checks, {}});
+        pathNodes.emplace(NodeDocument{document, commands, compositionId, checks, {}, {}});
         pathNodes->build(frameCount);
         checks.expect(session.setCurrentTime(frameTime(0)) || session.currentTime() == frameTime(0),
                       "the path-nodes session is at frame 0");
+    } else if (options.imageStatistics) {
+        checks.expect(
+            session.addSolidLayer(QStringLiteral("Measured"), core::Color4d{0.2, 0.2, 0.2, 1.0}),
+            "the statistics layer is created");
+        pathNodes.emplace(NodeDocument{document, commands, compositionId, checks, {}, {}});
+        const auto layers = session.composition()->graph().layerOutputs();
+        checks.expect(layers.size() == 1, "the composition has the one statistics layer");
+        if (!layers.empty())
+            pathNodes->buildStatistics(frameCount, layers.front().nodeId, statisticsSource);
+        checks.expect(session.setCurrentTime(frameTime(0)) || session.currentTime() == frameTime(0),
+                      "the statistics session is at frame 0");
     } else if (options.animatedMask) {
         checks.expect(session.addSolidLayer(QStringLiteral("Masked Solid"),
                                             core::Color4d{0.2, 0.4, 0.8, 1.0}),
@@ -496,6 +754,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     TaskScheduler scheduler(scheduling);
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
     auto nativeOptions = serviceOptions(options.loader);
+    if (processingPolicy != nullptr)
+        nativeOptions.processingPhasePolicy = processingPolicy;
     if (options.sequence100) {
         const auto configured = runtime::gpuResidentCapacityPlanConfigured(options.poolBytes);
         nativeOptions.residentLeaseBudgets = {configured.leaseBytes,
@@ -613,15 +873,80 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
                   30s),
         "the foreground frame settled before the RAM run");
-    if (options.pathNodes) {
+    const std::string mode = options.imageStatistics ? "statistics" : "path-nodes";
+    // #349: the measures since `first`: each made on the device, one per statistics node and frame,
+    // `expected` of them, and each equal to the CPU reference's measure of the same picture for the
+    // same frame (minimum, maximum, mean, deviation and count, exactly).
+    const auto checkMeasures = [&](const std::size_t first, const std::size_t expected,
+                                   const std::string& label) {
+        const auto records = statisticsLog->since(first);
+        std::set<std::pair<std::uint64_t, std::pair<std::int64_t, std::int64_t>>> distinct;
+        std::size_t equal = 0;
+        for (const auto& record : records) {
+            distinct.insert({record.query.node.value(),
+                             {record.query.time.numerator(), record.query.time.denominator()}});
+            const bool ready =
+                record.run.status.outcome == runtime::ImageStatisticsOutcome::Ready &&
+                record.run.values.has_value() &&
+                record.run.values->route == runtime::ImageStatisticsRoute::Device;
+            checks.expect(ready,
+                          label + ": the device measured the picture " + record.run.status.detail);
+            if (!ready)
+                continue;
+            const auto cpu = fixture.evaluator.evaluate(
+                record.query.plan, runtime::imageStatisticsRequest(record.frame, record.query), {});
+            const auto values =
+                cpu.frame() != nullptr
+                    ? runtime::readImageStatistics(cpu.frame()->processImage(),
+                                                   runtime::ImageStatisticsRoute::CpuReference)
+                    : std::nullopt;
+            const auto& device = *record.run.values;
+            const bool same = values.has_value() && values->minimum == device.minimum &&
+                              values->maximum == device.maximum && values->mean == device.mean &&
+                              values->deviation == device.deviation &&
+                              values->count == device.count;
+            equal += same ? 1U : 0U;
+            checks.expect(same, label + ": the device statistics equal the CPU reference's");
+            std::cout << "MEASURE " << label << " node=" << record.query.node.value()
+                      << " t=" << record.query.time.numerator() << '/'
+                      << record.query.time.denominator() << " device=(" << device.minimum << ' '
+                      << device.maximum << ' ' << device.mean << ' ' << device.deviation << ' '
+                      << device.count << ")";
+            if (values)
+                std::cout << " cpu=(" << values->minimum << ' ' << values->maximum << ' '
+                          << values->mean << ' ' << values->deviation << ' ' << values->count
+                          << ")";
+            std::cout << '\n';
+        }
+        checks.expect(records.size() == expected && distinct.size() == expected,
+                      label + ": each frame's statistics were measured once on the device");
+        std::cout << "PHASE statistics-" << label << " measures=" << records.size()
+                  << " distinct=" << distinct.size() << " expected=" << expected
+                  << " equalToCpu=" << equal << '\n';
+    };
+    if (options.pathNodes || options.imageStatistics) {
         // The interactive viewer route: the foreground frame is the service's GPU-resident frame,
         // nothing fell back to the CPU, and its pixels are the CPU oracle's.
         const auto viewerFrame = controller.state().frame;
         checks.expect(viewerFrame != nullptr && viewerFrame->provenance().provider ==
                                                     runtime::PreviewDisplayProvider::GpuResident,
-                      "the path-nodes viewer frame is GPU-resident");
+                      "the " + mode + " viewer frame is GPU-resident");
         checks.expect(service.status().counters.cpuFallbacks == 0U,
-                      "the path-nodes viewer frame did not fall back to the CPU");
+                      "the " + mode + " viewer frame did not fall back to the CPU");
+        if (options.imageStatistics) {
+            checks.expect(statisticsLog->size() == 2U,
+                          "the viewer frame measured its two statistics on the device");
+            if (viewerFrame == nullptr || viewerFrame->provenance().provider !=
+                                              runtime::PreviewDisplayProvider::GpuResident) {
+                const auto state = controller.state();
+                std::cout << "statistics viewer: frame=" << (viewerFrame != nullptr)
+                          << " activity=" << static_cast<int>(state.activity)
+                          << " message=" << state.message.toStdString() << '\n';
+                for (const auto& diagnostic : state.diagnostics)
+                    std::cout << "  diagnostic: " << diagnostic.code << ' ' << diagnostic.summary
+                              << ' ' << diagnostic.detail << '\n';
+            }
+        }
         if (viewerFrame != nullptr) {
             const auto identity = viewerFrame->desiredIdentity();
             const auto reference = snapshotCpuReferenceAtResolution(
@@ -631,12 +956,35 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(reference != nullptr &&
                               routeproof::buildFrameEvidence(service, *viewerFrame, *reference,
                                                              viewerEvidence, detail),
-                          "the path-nodes viewer frame matches the CPU oracle: " + detail);
-            std::cout << "PHASE path-viewer provider=GpuResident cpuFallbacks="
+                          "the " + mode + " viewer frame matches the CPU oracle: " + detail);
+            std::cout << "PHASE " << mode << "-viewer provider=GpuResident cpuFallbacks="
                       << service.status().counters.cpuFallbacks
                       << " nativeDispatches=" << service.status().counters.nativeDispatches
                       << " sparseSamples=" << viewerEvidence.sparseBytes / sizeof(render::Rgba8)
                       << '\n';
+        }
+        if (options.imageStatistics && viewerFrame != nullptr) {
+            // A warm viewer refresh of the same frame is served from the frame cache: no native
+            // work and no measure.
+            const auto beforeRefresh = service.status().counters;
+            const auto beforeRefreshMeasures = statisticsLog->size();
+            controller.requestRefresh();
+            checks.expect(waitUntil(
+                              [&] {
+                                  return controller.state().frame != nullptr &&
+                                         controller.state().activity !=
+                                             ui::PreviewActivity::Rendering;
+                              },
+                              30s),
+                          "the warm viewer refresh settled");
+            const auto afterRefresh = service.status().counters;
+            checks.expect(afterRefresh.nativeDispatches == beforeRefresh.nativeDispatches &&
+                              afterRefresh.cpuFallbacks == beforeRefresh.cpuFallbacks &&
+                              statisticsLog->size() == beforeRefreshMeasures,
+                          "the warm viewer refresh dispatched and measured nothing");
+            std::cout << "PHASE statistics-viewer-warm dispatches="
+                      << (afterRefresh.nativeDispatches - beforeRefresh.nativeDispatches)
+                      << " measures=" << (statisticsLog->size() - beforeRefreshMeasures) << '\n';
         }
     }
     if (options.expireBeforeAdmission) {
@@ -705,11 +1053,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto afterCold = service.status().counters;
     const auto afterColdPreparer = preparerCounters();
     const auto coldDispatches = afterCold.nativeDispatches - beforeCold.nativeDispatches;
-    if (options.pathNodes) {
+    if (options.pathNodes || options.imageStatistics) {
         checks.expect(afterCold.cpuFallbacks == beforeCold.cpuFallbacks,
-                      "every path-nodes frame rendered on the GPU (no CPU fallback)");
-        checks.expect(coldDispatches > 0, "the cold path-nodes fill dispatched native work");
-        std::cout << "PHASE path-cold frames=" << ram.cachedFrameCount()
+                      "every " + mode + " frame rendered on the GPU (no CPU fallback)");
+        checks.expect(coldDispatches > 0, "the cold " + mode + " fill dispatched native work");
+        if (options.imageStatistics)
+            checkMeasures(0, 2U * static_cast<std::size_t>(frameCount), "viewer+ram-cold");
+        std::cout << "PHASE " << mode << "-cold frames=" << ram.cachedFrameCount()
                   << " coldDispatches=" << coldDispatches
                   << " graphJobs=" << (afterCold.residentGraphJobs - beforeCold.residentGraphJobs)
                   << " cpuFallbacks=" << (afterCold.cpuFallbacks - beforeCold.cpuFallbacks) << '\n';
@@ -821,6 +1171,33 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (checks.failures() == 0) {
                 evidence.push_back(std::move(frameEvidence));
             }
+            if (options.imageStatistics) {
+                // Levels follows each frame's measured statistics: every 4th pixel of the GPU
+                // frame against the CPU oracle, and the first and last frames into the montage.
+                std::vector<render::Rgba8> gpu;
+                std::uint32_t columns = 0;
+                std::uint32_t rows = 0;
+                std::string denseDetail;
+                checks.expect(
+                    denseCompare(service, *frame, *reference, 4U, gpu, columns, rows, denseDetail),
+                    "the statistics frame matches the CPU oracle at every 4th pixel: " +
+                        denseDetail);
+                std::cout << "DENSE index=" << index << ' ' << denseDetail << '\n';
+                if (!options.montage.empty() && (index == 0 || index == frameCount - 1)) {
+                    std::filesystem::create_directories(options.montage);
+                    const auto stem = "statistics-frame" + std::to_string(index);
+                    writePpm(options.montage / (stem + "-gpu.ppm"), gpu, columns, rows);
+                    writePpm(options.montage / (stem + "-cpu.ppm"), strided(*reference, 4U),
+                             columns, rows);
+                    if (statisticsSource) {
+                        const auto source =
+                            snapshotCpuReferenceAtResolution(fixture, *statisticsSource, identity);
+                        if (source != nullptr)
+                            writePpm(options.montage / (stem + "-source.ppm"), strided(*source, 4U),
+                                     columns, rows);
+                    }
+                }
+            }
         }
         frames.push_back(std::move(frame));
     }
@@ -837,6 +1214,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // native work, and every cached resident frame must actually replay through the real presenter
     // (taking it back out of the controller cache and presenting it), not merely still be held.
     const auto beforeWarm = service.status().counters;
+    const auto beforeWarmMeasures = statisticsLog->size();
     const auto beforeWarmPreparer = preparerCounters();
     const auto warmStart = std::chrono::steady_clock::now();
     if (!options.expectPartial && !options.expireBeforeAdmission)
@@ -934,14 +1312,23 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       afterPresentation.nativeDispatches == beforeWarm.nativeDispatches &&
                       afterPresentation.fullFrameReadbacks == beforeWarm.fullFrameReadbacks,
                   "forward/reverse warm presentation performs zero evaluation or pixel dispatch");
-    if (options.pathNodes) {
-        std::cout << "PHASE path-warm cached=" << ram.cachedFrameCount() << " warmDispatches="
+    if (options.pathNodes || options.imageStatistics) {
+        checks.expect(statisticsLog->size() == beforeWarmMeasures,
+                      "the warm replay measured no statistics");
+        std::cout << "PHASE " << mode << "-warm cached=" << ram.cachedFrameCount()
+                  << " warmDispatches="
                   << (afterWarm.nativeDispatches - beforeWarm.nativeDispatches) << " warmGraphJobs="
                   << (afterWarm.residentGraphJobs - beforeWarm.residentGraphJobs)
+                  << " warmMeasures=" << (statisticsLog->size() - beforeWarmMeasures)
                   << " replayed=" << replayed << '\n';
-        // An operand edit (Boolean Paths: Subtract to Intersect) changes every frame: the next
-        // fill re-renders each on the GPU, and each matches the edited document's CPU oracle.
-        pathNodes->set(pathNodes->booleanNode, "operation", std::int64_t{2});
+        // An operand edit (Boolean Paths: Subtract to Intersect; the gradient's third color)
+        // changes every frame: the next fill re-renders each on the GPU, and each matches the
+        // edited document's CPU oracle.
+        const auto beforeEditMeasures = statisticsLog->size();
+        if (options.imageStatistics)
+            pathNodes->set(pathNodes->gradientNode, "color3", core::Color4d{0.05, 0.3, 1.4, 1.0});
+        else
+            pathNodes->set(pathNodes->booleanNode, "operation", std::int64_t{2});
         checks.expect(
             waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
                       30s),
@@ -975,14 +1362,77 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 reference != nullptr &&
                 routeproof::buildFrameEvidence(service, *frame, *reference, editedEvidence, detail);
             checks.expect(matched,
-                          "an edited path-nodes frame matches the edited CPU oracle: " + detail);
+                          "an edited " + mode + " frame matches the edited CPU oracle: " + detail);
             editedMatches += matched ? 1U : 0U;
         }
         checks.expect(editedMatches == static_cast<std::size_t>(frameCount),
                       "every edited frame was verified against the CPU oracle");
-        std::cout << "PHASE path-edit frames=" << editedMatches
+        std::cout << "PHASE " << mode << "-edit frames=" << editedMatches
                   << " dispatches=" << (afterEdit.nativeDispatches - beforeEdit.nativeDispatches)
                   << " cpuFallbacks=" << (afterEdit.cpuFallbacks - beforeEdit.cpuFallbacks) << '\n';
+        if (options.imageStatistics)
+            checkMeasures(beforeEditMeasures, 2U * static_cast<std::size_t>(frameCount), "edit");
+    }
+    if (options.imageStatistics) {
+        // With the device route refused (no evaluator, as before its bootstrap), the frame is not
+        // prepared with unmeasured statistics: it takes the CPU path, labelled CPU, and shows the
+        // CPU reference's pixels.
+        statisticsLog->refuse.store(true);
+        const auto beforeRefusal = service.status().counters;
+        const auto beforeRefusalMeasures = statisticsLog->size();
+        const auto previous = controller.state().frame;
+        pathNodes->set(pathNodes->gradientNode, "color3", core::Color4d{0.4, 0.1, 0.9, 1.0});
+        const bool shown = waitUntil(
+            [&] {
+                const auto frame = controller.state().frame;
+                return frame != nullptr && frame != previous &&
+                       controller.state().activity != ui::PreviewActivity::Rendering;
+            },
+            60s);
+        const auto frame = controller.state().frame;
+        const auto afterRefusal = service.status().counters;
+        const auto provider = frame != nullptr ? frame->provenance().provider
+                                               : runtime::PreviewDisplayProvider::GpuResident;
+        checks.expect(shown && (provider == runtime::PreviewDisplayProvider::CpuReference ||
+                                provider == runtime::PreviewDisplayProvider::CpuOcio),
+                      "with the device route refused the viewer frame is a CPU frame");
+        constexpr auto subset =
+            static_cast<std::size_t>(runtime::GpuPreviewCpuFallbackReason::UnsupportedGpuSubset);
+        checks.expect(afterRefusal.cpuFallbacksByReason[subset] >
+                          beforeRefusal.cpuFallbacksByReason[subset],
+                      "the refused frame was counted as a CPU fallback outside the GPU subset");
+        const auto refused = statisticsLog->since(beforeRefusalMeasures);
+        checks.expect(
+            !refused.empty() &&
+                std::ranges::all_of(refused,
+                                    [](const auto& record) {
+                                        return record.run.status.outcome ==
+                                                   runtime::ImageStatisticsOutcome::Unavailable &&
+                                               !record.run.values.has_value();
+                                    }),
+            "the refused measure is Unavailable and gives no values");
+        bool samePixels = false;
+        if (frame != nullptr) {
+            const auto reference = snapshotCpuReferenceAtResolution(
+                fixture, session.evaluationSnapshotForTime(frame->desiredIdentity().time),
+                frame->desiredIdentity());
+            const auto shownView = frame->displayBufferView();
+            const auto referenceView =
+                reference != nullptr ? reference->displayBufferView() : std::nullopt;
+            samePixels = shownView && referenceView &&
+                         std::ranges::equal(shownView->pixels, referenceView->pixels);
+        }
+        checks.expect(samePixels, "the CPU frame shows the CPU reference's pixels");
+        std::cout << "PHASE statistics-refused provider=" << static_cast<int>(provider)
+                  << " subsetFallbacks="
+                  << (afterRefusal.cpuFallbacksByReason[subset] -
+                      beforeRefusal.cpuFallbacksByReason[subset])
+                  << " measures=" << refused.size() << " detail="
+                  << (refused.empty() ? std::string{} : refused.front().run.status.detail)
+                  << " samePixels=" << samePixels << '\n';
+        for (const auto& diagnostic : controller.state().diagnostics)
+            std::cout << "  diagnostic: " << diagnostic.code << ' ' << diagnostic.summary << '\n';
+        statisticsLog->refuse.store(false);
     }
     std::cout << "PHASE ram-warm cached=" << ram.cachedFrameCount()
               << " warmDispatches=" << (afterWarm.nativeDispatches - beforeWarm.nativeDispatches)
@@ -1021,6 +1471,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cerr << "RAM route proof: " << checks.failures()
                   << " verification failure(s); no proof written\n";
         return 1;
+    }
+    if (options.imageStatistics) {
+        std::cout << "PASS: Image Statistics measured on the device in the viewer and RAM preview "
+                     "(frames="
+                  << frames.size() << ", measures=" << statisticsLog->size() << ")\n";
+        return 0;
     }
     if (options.pathNodes) {
         std::cout << "PASS: path-nodes viewer and RAM preview on the GPU (frames=" << frames.size()
