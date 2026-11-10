@@ -4875,7 +4875,9 @@ class LayerOps:
         Path Stroke. Transforms and the view box are baked into the points. The file is read here
         (nothing is fetched, no script runs); what could not be imported is listed by name in the
         operation's warnings. One undo step. `fit` (default true) scales the artwork to fit the
-        composition and centres it.
+        composition and centres it. `projectDirectory` (optional) is the project folder the source
+        file's recorded locator is made relative to; the file's path and SHA-256 are kept in the
+        project's assets.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
