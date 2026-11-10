@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -22,6 +23,9 @@ struct PythonContext {
     std::uint64_t project = 0, composition = 0;
     std::vector<std::uint64_t> selection;
     core::RationalTime time;
+    // #645: the Viewer's drill level and the shape in point editing.
+    std::vector<std::uint64_t> level{};
+    std::optional<std::uint64_t> points{};
 };
 
 struct ExecutionResult final {

@@ -294,9 +294,10 @@ void windowTools(std::vector<ReferenceEntry>& out) {
     auto viewer = makeEntry(
         ReferenceKind::Tool, "viewer.set", "window",
         "Set the Viewer's display, view, exposure, gamma, channel, zoom, resolution, look, "
-        "background, transparency grid and region of interest.",
+        "background, transparency grid, region of interest and drill level.",
         "Desktop application only. Display settings never reach a render, "
-        "an export, a capture or the project. Only the given fields change.");
+        "an export, a capture or the project. Only the given fields change. The drill level is "
+        "what double-clicking into groups sets: query kind=viewer and kind=context read it back.");
     viewer.effects = live;
     addArguments(
         viewer,
@@ -352,11 +353,21 @@ void windowTools(std::vector<ReferenceEntry>& out) {
           .type = "object or null",
           .summary = "The region the Viewer renders, as {x, y, width, height}; "
                      "null clears it. Clipped to the frame.",
-          .unit = kPixelUnit}});
+          .unit = kPixelUnit},
+         {.name = "level",
+          .type = "array of layer ids",
+          .summary = "The entered groups of the active composition, outermost first; [] is the "
+                     "top level. Each must be a group whose entry is in the one before it.",
+          .range = "at most 256 ids"},
+         {.name = "points",
+          .type = "layer id or null",
+          .summary = "A shape layer of the level whose points are edited; null leaves point "
+                     "editing."}});
     viewer.result = windowResult;
     viewer.errors = windowErrors();
     addExamples(viewer,
-                {{"mcp", R"({"name":"viewer.set","arguments":{"channel":"alpha","zoom":"fit"}})"}});
+                {{"mcp", R"({"name":"viewer.set","arguments":{"channel":"alpha","zoom":"fit"}})"},
+                 {"mcp", R"({"name":"viewer.set","arguments":{"level":[12,15]}})"}});
     addRelated(viewer, {"capture"});
     out.push_back(std::move(viewer));
 }

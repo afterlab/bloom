@@ -136,6 +136,10 @@ struct OperationContext final {
     // spaces -- so only a selected Layer Output boundary names a layer here.
     std::vector<std::uint64_t> layers;
     std::optional<core::RationalTime> time;
+    // #645: the Viewer's drill level (entered group layers, outermost first) and the shape layer in
+    // point editing. Empty for a headless client.
+    std::vector<std::uint64_t> level;
+    std::optional<std::uint64_t> points;
     // Absent when the client cannot evaluate. Operations that need evaluated geometry are then
     // created without it and rejected when they apply, naming what was missing.
     LayerGeometryProvider layerGeometry{};

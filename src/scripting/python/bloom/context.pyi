@@ -5,5 +5,7 @@ project: Proxy
 composition: Proxy | None
 selection: tuple[Proxy, ...]
 layers: tuple[Proxy, ...]
+level: tuple[Proxy, ...]
+points: Proxy | None
 time: Fraction
 headless: bool

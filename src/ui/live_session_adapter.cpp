@@ -43,6 +43,28 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
         return session_.transformInteractionActive() || session_.valueEditActive();
     };
     committer_->revision = [this] { return session_.snapshot().revision(); };
+    // #645: bloom.viewer.set_level, applied on the UI thread as viewer.set applies it for MCP.
+    committer_->viewerLevel = [this](const std::vector<std::uint64_t>& groups,
+                                     const std::optional<std::uint64_t> points) {
+        const auto* composition = session_.composition();
+        if (composition == nullptr)
+            return scripting::SessionViewerLevelResult{
+                "invalid-argument", "There is no active composition to drill into"};
+        ViewerLevel level;
+        for (const auto group : groups)
+            level.groups.push_back(document::LayerId::fromRaw(group));
+        if (points)
+            level.points = document::LayerId::fromRaw(*points);
+        const auto check = session_.setViewerLevel(level);
+        if (!check.ok())
+            return scripting::SessionViewerLevelResult{
+                check.refusal == document::DrillLevelRefusal::UnknownLayer ? "unknown-target"
+                                                                           : "invalid-argument",
+                document::drillLevelRefusalText(*composition, check)};
+        if (level.points)
+            (void)session_.enterViewerPoints(*level.points);
+        return scripting::SessionViewerLevelResult{"updated", "The Viewer's level changed"};
+    };
 
     replace();
     // Rebind refreshes can precede the project host's later sessionReplaced slots: revoke old
@@ -51,6 +73,7 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
     connect(&session_, &CompositionSession::snapshotChanged, this, &LiveSessionAdapter::publish);
     connect(&session_, &CompositionSession::compositionChanged, this, &LiveSessionAdapter::publish);
     connect(&session_, &CompositionSession::selectionChanged, this, &LiveSessionAdapter::publish);
+    connect(&session_, &CompositionSession::viewerLevelChanged, this, &LiveSessionAdapter::publish);
     connect(&session_, &CompositionSession::currentTimeChanged, this, &LiveSessionAdapter::publish);
     connect(&project_, &ProjectHost::sessionReplaced, this, &LiveSessionAdapter::replace);
     connect(&project_, &ProjectHost::colorSettingsChanged, this, &LiveSessionAdapter::publish);
@@ -158,6 +181,10 @@ void LiveSessionAdapter::publish() {
     for (const auto id : session_.selectedNodes())
         context.selection.push_back(id.value());
     context.layers = scripting::selectedLayers(snapshot, *context.composition, context.selection);
+    for (const auto group : session_.viewerLevel().groups)
+        context.level.push_back(group.value());
+    if (const auto points = session_.viewerLevel().points)
+        context.points = points->value();
     host_.publish(std::move(state));
 }
 

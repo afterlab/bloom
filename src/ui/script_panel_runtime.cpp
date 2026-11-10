@@ -188,7 +188,9 @@ void ScriptPanelRuntime::work(const std::shared_ptr<State>& state) {
                                 .project = context.project.value_or(0),
                                 .composition = context.composition.value_or(0),
                                 .selection = context.selection,
-                                .time = context.time.value_or(core::RationalTime::fromInteger(0))};
+                                .time = context.time.value_or(core::RationalTime::fromInteger(0)),
+                                .level = context.level,
+                                .points = context.points};
                         },
                         [state, lease] {
                             return lease->revoked() ||

@@ -146,6 +146,11 @@ nb::dict NativeHost::context() const {
         }
         result["layers"] = nb::tuple(layers);
         result["time"] = nb::make_tuple(context.time.numerator(), context.time.denominator());
+        nb::list level;
+        for (const auto id : context.level)
+            level.append(id);
+        result["level"] = nb::tuple(level);
+        result["points"] = context.points ? nb::cast(*context.points) : nb::none();
         return result;
     }
     const auto snapshot = facade_->query.snapshot();
@@ -157,6 +162,8 @@ nb::dict NativeHost::context() const {
     result["selection"] = nb::tuple();
     result["layers"] = nb::tuple();
     result["time"] = nb::make_tuple(0, 1);
+    result["level"] = nb::tuple();
+    result["points"] = nb::none();
     return result;
 }
 
@@ -614,6 +621,24 @@ void NativeHost::save(const std::string& path) {
     if (!result.succeeded()) {
         throw std::runtime_error(result.message);
     }
+}
+
+nb::dict NativeHost::setViewerLevel(std::vector<std::uint64_t> level,
+                                   const std::optional<std::uint64_t> points) {
+    if (std::this_thread::get_id() != owner_)
+        throw std::runtime_error("The Viewer's level changes on the host authoring thread");
+    const auto access = lockSession();
+    SessionViewerLevelResult result;
+    {
+        const nb::gil_scoped_release release;
+        result = session_->setViewerLevel(std::move(level), points);
+    }
+    if (!result.succeeded())
+        throw std::runtime_error(result.code + ": " + result.message);
+    nb::dict row;
+    row["code"] = result.code;
+    row["message"] = result.message;
+    return row;
 }
 
 nb::dict NativeHost::setColorSettings(const std::string& config,

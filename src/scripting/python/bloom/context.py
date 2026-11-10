@@ -28,6 +28,13 @@ def _read(name):
                      for identity in current["layers"])
     if name == "time":
         return Fraction(*current["time"])
+    if name == "level":
+        # #645: the Viewer's entered groups, outermost first; empty at the top level.
+        return tuple(Proxy(identity, "layers", current["composition"])
+                     for identity in current.get("level", ()))
+    if name == "points":
+        points = current.get("points")
+        return None if points is None else Proxy(points, "layers", current["composition"])
     if name == "headless":
         return _state.host().headless
     raise AttributeError(name)
@@ -40,8 +47,8 @@ class _ContextModule(ModuleType):
         return _read(name)
 
     def __dir__(self):
-        return ["DEFAULTS", "composition", "headless", "layers", "project", "selection",
-                "time"]
+        return ["DEFAULTS", "composition", "headless", "layers", "level", "points", "project",
+                "selection", "time"]
 
     def __repr__(self):
         try:

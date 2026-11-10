@@ -164,6 +164,14 @@ SessionRenderSourceSnapshot Session::renderSourceSnapshot() const {
             settings ? std::optional<document::ColorSettings>(*settings) : std::nullopt};
 }
 
+SessionViewerLevelResult Session::setViewerLevel(std::vector<std::uint64_t> level,
+                                                 const std::optional<std::uint64_t> points) {
+    if (!binding_ || !binding_->setViewerLevel)
+        return {"not-live", "The drill level belongs to the desktop application's Viewer; this "
+                            "session has none"};
+    return binding_->setViewerLevel(std::move(level), points);
+}
+
 SessionColorSettingsResult
 Session::setColorSettings(const std::string_view config,
                           std::optional<std::string> workingColorSpaceId) {

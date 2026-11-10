@@ -87,6 +87,15 @@ Proxies print as what they are: `<Composition 1 'Composition 1'>`, `<Node 12 'So
 `<Node 12 (stale)>` once the object is gone. `repr(bloom.context)` summarizes the project,
 composition, selection size and time.
 
+In the desktop application `bloom.context.level` is the Viewer's drill level, the group layers it
+has entered (outermost first; `()` at the top level), and `bloom.context.points` the shape whose
+points it edits (or `None`). `bloom.viewer.set_level(layers, points=None)` sets both, as
+double-clicking in the Viewer does: each layer must be a group child of the one before it, the
+first a top-level layer. A chain that does not resolve raises `OperationError` (code
+`invalid-argument`, or `unknown-target` for an unknown id) and changes nothing. The level is session
+state, never saved or undone; headless sessions have none, so it reads `()` there and setting it
+raises `OperationError` with code `not-live`.
+
 `bloom.data.snapshot()` returns an immutable revisioned projection. Collections such as
 `bloom.data.compositions`, `bloom.data.nodes(composition)` and
 `bloom.data.parameters(composition)` return stable-ID proxies. `collection.get(id)` resolves by ID;

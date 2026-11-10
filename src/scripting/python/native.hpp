@@ -40,6 +40,9 @@ class NativeHost final {
     // Project Settings > Colour (Session::setColorSettings): not undoable, marks the project dirty.
     [[nodiscard]] nanobind::dict setColorSettings(const std::string& config,
                                                   std::optional<std::string> workingSpace);
+    // #645 bloom.viewer.set_level: the desktop Viewer's drill level (Session::setViewerLevel).
+    [[nodiscard]] nb::dict setViewerLevel(std::vector<std::uint64_t> level,
+                                          std::optional<std::uint64_t> points);
     [[nodiscard]] nb::dict render(std::uint64_t composition, std::uint64_t first,
                                   std::uint64_t last, bool range, const std::string& preset,
                                   const std::string& destination, std::uint64_t cancellationTask,

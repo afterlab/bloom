@@ -94,7 +94,8 @@ int main(int argc, char** argv) {
                 return result;
             },
         .gestureOpen = [] { return false; },
-        .revision = [&] { return session->snapshot().revision(); }};
+        .revision = [&] { return session->snapshot().revision(); },
+        .viewerLevel = {}};
 
     runtime::TaskScheduler scheduler;
     auto gpu = [] {

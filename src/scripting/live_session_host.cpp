@@ -431,6 +431,21 @@ LiveSessionLease LiveSessionHost::acquire(LiveCallControl control) {
             return committer.history ? committer.history(redo, origin) : SessionCommandResult{};
         });
     };
+    binding.setViewerLevel = [hold](std::vector<std::uint64_t> level,
+                                    const std::optional<std::uint64_t> points) {
+        auto answer = std::make_shared<SessionViewerLevelResult>(
+            SessionViewerLevelResult{"not-live", "This window has no Viewer"});
+        const auto queued = hold->commit(
+            [answer, level = std::move(level), points](const LiveSessionCommitter& committer) {
+                if (committer.viewerLevel)
+                    *answer = committer.viewerLevel(level, points);
+                return SessionCommandResult{host::ProjectSessionCommandStatus::Completed,
+                                            std::nullopt, std::nullopt};
+            });
+        if (queued.diagnostic)
+            return SessionViewerLevelResult{queued.diagnostic->code, queued.diagnostic->message};
+        return *answer;
+    };
     binding.events = services.events ? services.events : std::make_shared<EventStream>();
     binding.publication = services.publication;
     binding.artifacts = services.artifacts;

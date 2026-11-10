@@ -1,10 +1,10 @@
 """Bloom's versioned artist API. All durable edits use the host command boundary."""
-from . import app, context, data, events, ops, render, scene, tasks, transactions
+from . import app, context, data, events, ops, render, scene, tasks, transactions, viewer
 from ._help import help
 from .errors import CancelledError, OperationError, StaleObjectError
 
 __all__ = ["app", "context", "data", "events", "ops", "render", "scene", "tasks", "transactions",
-           "CancelledError", "OperationError", "StaleObjectError", "help"]
+           "viewer", "CancelledError", "OperationError", "StaleObjectError", "help"]
 
 
 def __getattr__(name):

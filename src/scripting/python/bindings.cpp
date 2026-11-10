@@ -7,6 +7,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/vector.h>
 
 #include <iostream>
 #include <thread>
@@ -55,6 +56,8 @@ void bindHost(nb::module_& module) {
         .def("track_task", &NativeHost::trackTask, nb::keep_alive<0, 1>())
         .def("cancel", &NativeHost::cancel)
         .def("context", &NativeHost::context)
+        .def("set_viewer_level", &NativeHost::setViewerLevel, nb::arg("level"),
+             nb::arg("points") = nb::none())
         .def_prop_ro("cancellation_requested", &NativeHost::cancellationRequested)
         .def_prop_ro("cancellation_epoch", &NativeHost::cancellationEpoch)
         .def_ro("headless", &NativeHost::headless);

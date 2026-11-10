@@ -126,6 +126,10 @@ struct LiveSessionCommitter final {
     // The live document revision, so a revision-guarded history step (MCP `history` with
     // expectedRevision) is checked on the owner thread in the same slice that applies it.
     std::function<document::Revision()> revision;
+    // #645: sets the Viewer's drill level (Session::setViewerLevel). Absent: "not-live".
+    std::function<SessionViewerLevelResult(const std::vector<std::uint64_t>&,
+                                           std::optional<std::uint64_t>)>
+        viewerLevel;
 };
 
 // The calling request's cancellation and deadline, carried into the marshal so a queued commit

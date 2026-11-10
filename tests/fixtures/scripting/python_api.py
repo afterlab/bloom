@@ -243,6 +243,19 @@ class PythonApi(unittest.TestCase):
             bloom.ops.layer.set_enabled(False)
         self.assertIn('bloom.context', str(error.exception))
 
+    def test_viewer_level_is_desktop_state(self):
+        """#645: the Viewer's drill level reads empty headless and cannot be set without a Viewer."""
+        self.assertEqual(bloom.context.level, ())
+        self.assertIsNone(bloom.context.points)
+        self.assertIn('level', dir(bloom.context))
+        with self.assertRaises(bloom.OperationError) as error:
+            bloom.viewer.set_level([])
+        self.assertEqual(error.exception.diagnostics[0]['code'], 'not-live')
+        with self.assertRaises(TypeError):
+            bloom.viewer.set_level([0])
+        with self.assertRaises(TypeError):
+            bloom.viewer.set_level([], points=True)
+
     def test_names_roles_and_set_keys(self):
         """Layers by name, parameters by layer and role, string ids and one-step keys."""
         bloom.ops.layer.add_solid('Wash', (1, 0, 0, 1))

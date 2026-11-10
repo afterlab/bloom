@@ -3,14 +3,19 @@
 // embedded Python in the running session. With the Preferences switch off the call is refused and
 // nothing runs; with it on the script runs, its edits arrive through the normal transactions (one
 // undo step with the script's label, reverted by the window's Undo), a failing script reports its
-// error and changes nothing, and `events` names the edit's origin. Real window and session,
-// offscreen.
+// error and changes nothing, and `events` names the edit's origin; the Viewer's drill level (#645)
+// round-trips through viewer.set, the viewer and context queries and bloom.viewer.set_level. Real
+// window and session, offscreen.
 #include "mcp_http_client.hpp"
 #include "window_fixture.hpp"
 
 #include <QAction>
 #include <QSettings>
 #include <QTimer>
+#include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/document/drill_levels.hpp>
+#include <bloom/document/project.hpp>
 #include <bloom/mcp/server_service.hpp>
 #include <bloom/mcp/testing/server_service_driver.hpp>
 #include <bloom/scripting/live_session_host.hpp>
@@ -21,6 +26,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include "script_panel_runtime.hpp"
 
+#include <cstring>
 #include <future>
 #include <iostream>
 #include <string>
@@ -189,6 +195,66 @@ void exercise() {
     require(has(events, "\\\"origin\\\":\\\"user\\\"") && has(events, "\\\"origin\\\":\\\"script\\\"") &&
                 has(events, "\\\"origin\\\":\\\"agent\\\""),
             "events name the artist, the script and the agent as the origin of each edit");
+
+    // 6. #645: the Viewer's drill level, from an agent (viewer.set, query viewer and context) and
+    // from a script (bloom.viewer.set_level, bloom.context.level and points). Bad chains refused.
+    {
+        constexpr std::string_view svg =
+            R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100"><g id="outer"><rect id="box" x="10" y="10" width="80" height="60" fill="#cc3333"/></g></svg>)svg";
+        auto bytes = std::make_shared<std::vector<std::byte>>(svg.size());
+        std::memcpy(bytes->data(), svg.data(), svg.size());
+        const auto prepared = commands::prepareSvgSource(std::move(bytes), "level.svg");
+        require(prepared.source != nullptr, "The SVG is prepared");
+        commands::Transaction import("Import", fixture.session.snapshot().revision());
+        import.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), prepared.source,
+                                                "Levels", commands::SvgImportMode::Shapes, false);
+        const auto imported = fixture.session.executeTransaction(std::move(import));
+        const auto root = imported.outputId<document::LayerId>("layer");
+        require(imported.succeeded() && root.has_value(), "The SVG imports as editable shapes");
+        const auto* composition = fixture.session.composition();
+        const auto rootMerge = document::layerContentMerge(*composition, *root);
+        require(rootMerge.has_value(), "The SVG's root is a group");
+        const auto outer = document::mergeEntryLayers(*composition, *rootMerge).front();
+        const auto outerMerge = document::layerContentMerge(*composition, outer);
+        require(outerMerge.has_value(), "outer is a group");
+        const auto box = document::mergeEntryLayers(*composition, *outerMerge).front();
+        const auto r = std::to_string(root->value());
+        const auto o = std::to_string(outer.value());
+        const auto b = std::to_string(box.value());
+
+        const auto set = tool("viewer.set", R"({"level":[)" + r + "," + o + "]}");
+        require(has(set, "\"isError\":false") &&
+                    fixture.session.viewerLevel().groups == std::vector{*root, outer},
+                "viewer.set level enters the chain");
+        const auto level = "\\\"level\\\":[" + r + "," + o + "]";
+        require(has(tool("query", R"({"kind":"viewer"})"), level),
+                "query viewer reports the level");
+        require(has(tool("query", R"({"kind":"context"})"), level),
+                "query context reports the level");
+        const auto skipped = tool("viewer.set", R"({"level":[)" + o + "]}");
+        require(has(skipped, "\"isError\":true") &&
+                    fixture.session.viewerLevel().groups == std::vector{*root, outer},
+                "viewer.set refuses a chain that does not start at the top and changes nothing");
+        const auto malformed = tool("viewer.set", R"({"level":"outer"})");
+        require(has(malformed, "-32602") && has(malformed, "level is an array"),
+                "viewer.set refuses a level that is not an array of ids");
+
+        setSwitch(true);
+        const auto script = tool(
+            "script.run",
+            R"j({"source":"bloom.viewer.set_level([)j" + r + "," + o + "], points=" + b +
+                R"j()\nprint('LEVEL', [int(layer) for layer in bloom.context.level], int(bloom.context.points))\ntry:\n    bloom.viewer.set_level([)j" +
+                o +
+                R"j(])\nexcept bloom.OperationError as error:\n    print('REFUSED', error.diagnostics[0]['code'])\nbloom.viewer.set_level([])\nprint('TOP', bloom.context.level)"})j");
+        require(has(script, "\"isError\":false") &&
+                    has(script, "LEVEL [" + r + ", " + o + "] " + b) &&
+                    has(script, "REFUSED invalid-argument") && has(script, "TOP ()"),
+                "a script sets the level and the points, reads them back, and a bad chain is "
+                "refused");
+        require(fixture.session.viewerLevel() == ui::ViewerLevel{},
+                "the script's last level, the top, is the session's");
+        setSwitch(false);
+    }
 
     service.beginShutdown();
     require(waitFor([&] { return service.quiescent(); }), "Server shut down");

@@ -318,10 +318,11 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "Desktop application only. These are display settings; none reaches a render or the "
          "project. `display` and `view` are empty while the project default applies. `zoom` is "
          "\"fit\" or the factor (1.0 is 100 percent). `available` is false when no Viewer is "
-         "showing; show one with editor.reveal.",
-         "{revision, available, display, view, exposure (stops), gamma, channel (rgba|rgb|red|"
-         "green|blue|alpha), zoom (\"fit\"|factor), resolution (auto|full|half|quarter), "
-         "background (solid|gray|black|white), transparencyGrid, look, "
+         "showing; show one with editor.reveal. `level` (entered group layers, outermost first) "
+         "and `points` (the shape in point editing) are reported even then.",
+         "{revision, available, level, points|null, display, view, exposure (stops), gamma, "
+         "channel (rgba|rgb|red|green|blue|alpha), zoom (\"fit\"|factor), resolution "
+         "(auto|full|half|quarter), background (solid|gray|black|white), transparencyGrid, look, "
          "regionOfInterest:{x, y, width, height}|null (composition pixels)}",
          {}, R"({"name":"query","arguments":{"kind":"viewer"}})");
     kind("preview-cache", "RAM Preview: the filled range, fill rate, budget and why it stopped.",
@@ -416,10 +417,11 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
            .defaultValue = "the newest job of any composition"}},
          R"({"name":"query","arguments":{"kind":"render-route"}})");
     kind("context", "The editor context omitted contextual arguments fall back to.",
-         "In the desktop application: the Viewer's composition, the playhead, the selection and "
-         "the Viewer's display and view. On stdio: the session defaults (concept:context).",
+         "In the desktop application: the Viewer's composition, the playhead, the selection, "
+         "the Viewer's display and view and its drill level (the entered groups, outermost first, "
+         "and the shape in point editing). On stdio: the session defaults (concept:context).",
          "{revision, live, project:{id, name}, composition|null, selectedNodes, selectedLayers, "
-         "time:[n, d] (seconds), display, view, readOnly}",
+         "level, points|null, time:[n, d] (seconds), display, view, readOnly}",
          {}, R"({"name":"query","arguments":{"kind":"context"}})");
 }
 
@@ -546,8 +548,18 @@ void addPythonEntries(std::vector<ReferenceEntry>& out) {
         "result. bloom.transactions.undo() and redo() step the history.",
         "with bloom.transactions.group(\"Title\") as edit:\n"
         "    bloom.ops.layer.add_text(name=\"Title\", text=\"Hello\")");
-    api("bloom.context", "The editor context: project, composition, selection, layers, time.",
-        "Read-only. time is a Fraction of seconds.", "bloom.context.composition");
+    api("bloom.context",
+        "The editor context: project, composition, selection, layers, time, Viewer level.",
+        "Read-only. time is a Fraction of seconds. level is the Viewer's entered group layers, "
+        "outermost first (empty at the top level), and points the shape layer in point editing "
+        "or None; both are empty headless.",
+        "bloom.context.composition");
+    api("bloom.viewer.set_level", "Set the desktop Viewer's drill level, as a double-click does.",
+        "bloom.viewer.set_level(layers, points=None): layers are group layers from the top, "
+        "outermost first ([] is the top level); points is a shape layer of that level whose "
+        "points are edited. Session state: never saved, never undone. Raises OperationError with "
+        "unknown-target, invalid-argument or, headless, not-live.",
+        "bloom.viewer.set_level([group, inner])");
     api("bloom.data", "Read the project: compositions, assets, layers, nodes, parameters, curves.",
         "bloom.data.layers(composition), bloom.data.curves(composition) and the other "
         "collections return proxies whose attributes read the current snapshot. "

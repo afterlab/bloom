@@ -77,7 +77,8 @@ struct Owner final {
                         return result;
                     },
                 .gestureOpen = [this] { return gesture.load(); },
-                .revision = [this] { return session->snapshot().revision(); }};
+                .revision = [this] { return session->snapshot().revision(); },
+                .viewerLevel = {}};
     }
     // Drains until `predicate` holds, like the adapter's event-loop slices.
     template <typename Predicate> void drainUntil(Predicate predicate) {

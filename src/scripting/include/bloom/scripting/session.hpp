@@ -85,6 +85,16 @@ struct SessionCommandResult final {
     }
 };
 
+// #645: what Session::setViewerLevel did. `code` is "updated" or a refusal: "not-live" (this
+// session has no desktop Viewer), "unknown-target" (an id names no layer), "invalid-argument" (not
+// a group, not a chain, not a shape), or a bloom.live.* commit code.
+struct SessionViewerLevelResult final {
+    std::string code;
+    std::string message;
+
+    [[nodiscard]] bool succeeded() const noexcept { return code == "updated"; }
+};
+
 // A live client borrows typed host services and immutable reads, never mutable document
 // pointers. The owner revokes valid() before replacing or destroying its authoring session.
 struct SessionBinding final {
@@ -92,6 +102,9 @@ struct SessionBinding final {
     std::function<document::Snapshot()> snapshot;
     std::function<SessionCommandResult(commands::Transaction)> execute;
     std::function<SessionCommandResult(bool, commands::CommandOrigin)> history;
+    // #645: sets the desktop Viewer's drill level on the owner thread; absent headless.
+    std::function<SessionViewerLevelResult(std::vector<std::uint64_t>, std::optional<std::uint64_t>)>
+        setViewerLevel{};
     std::shared_ptr<EventStream> events;
     host::PublicationCoordinator* publication = nullptr;
     platform::StagedArtifactCoordinator* artifacts = nullptr;
@@ -185,6 +198,11 @@ class Session final {
     // project dirty and changes how every composition renders.
     [[nodiscard]] SessionColorSettingsResult
     setColorSettings(std::string_view config, std::optional<std::string> workingColorSpaceId);
+    // #645: the desktop Viewer's drill level (entered group layers, outermost first, and a shape of
+    // that level in point editing), set as a double-click sets it. A headless session has no
+    // Viewer and refuses with "not-live".
+    [[nodiscard]] SessionViewerLevelResult setViewerLevel(std::vector<std::uint64_t> level,
+                                                          std::optional<std::uint64_t> points);
 
     [[nodiscard]] commands::CommandStack* commandStack() noexcept;
     [[nodiscard]] document::Document* document() noexcept;
