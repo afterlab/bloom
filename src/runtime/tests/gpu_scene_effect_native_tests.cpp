@@ -821,6 +821,59 @@ void runDiscrete(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
     }
 }
 
+// A Merge entry that is a shape source read directly (no layer between): the entry is composited
+// like any other, so an effect chain that merges its source back (Drop Shadow, Light Wrap, Inner
+// Shadow) keeps the shape on the GPU exactly as the CPU reference does.
+void runShapeMergeEntry(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::DiscreteImageKernel;
+    std::uint64_t id = 30000;
+    for (const auto mode : {bloom::core::BlendMode::Atop, bloom::core::BlendMode::Normal}) {
+        cache.clear();
+        auto definition = effectPlan(CstKernel{}, id)->copyDefinition();
+        bloom::runtime::CompiledShape shape{};
+        shape.sourceNodeId = NodeId::fromRaw(id + 1);
+        shape.kind = bloom::document::ShapeKind::Rectangle;
+        shape.size = {ParameterId::fromRaw(id + 2), bloom::document::Vec2d{8, 6}};
+        shape.fillEnabled = true;
+        shape.fillColor = {ParameterId::fromRaw(id + 3), Color4d{0.75, 0.5, 0.25, 0.875}};
+        shape.strokeEnabled = false;
+        definition.operations[0] = shape;
+        std::get<CompiledImageEffect>(definition.operations[1]).kernel =
+            DiscreteImageKernel{true, false, 0};
+        definition.operations.resize(2);
+        definition.operations.emplace_back(CompiledMerge{
+            NodeId::fromRaw(id + 20),
+            {{LayerSlotId::fromRaw(id + 20), LayerId{}, OperationIndex::fromRaw(1), mode},
+             {LayerSlotId::fromRaw(id + 21), LayerId{}, OperationIndex::fromRaw(0),
+              bloom::core::BlendMode::Normal}}});
+        definition.operations.emplace_back(
+            CompiledCompositionOutput{NodeId::fromRaw(id + 22), OperationIndex::fromRaw(2)});
+        definition.output = OperationIndex::fromRaw(3);
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+        const auto request = requestFor(*plan);
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+        expectations.expect(prepared.hasValue(), "shape merge entry: production scene prepares");
+        const CpuCompositionEvaluator evaluator;
+        const auto oracle = evaluator.evaluate(plan, request, {});
+        expectations.expect(oracle.frame() != nullptr, "shape merge entry: CPU oracle evaluates");
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), "shape merge entry: executor creates");
+        if (!prepared || !oracle.frame() || !executor)
+            return;
+        const auto run = runScene(*executor.executor, prepared.scene);
+        std::string detail;
+        expectations.expect(run.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(run.pixels, oracle.frame()->processImage().pixels(), detail),
+                            "shape merge entry: the shape entry is composited and matches the CPU "
+                            "reference: " + detail);
+        bool anyAlpha = false;
+        for (const auto& pixel : run.pixels)
+            anyAlpha = anyAlpha || pixel.alpha() > 0.0F;
+        expectations.expect(anyAlpha, "shape merge entry: the merged result is not empty");
+        id += 100;
+    }
+}
+
 void runResizeFit(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     const CpuGpuSceneBuilder builder;
     const CpuCompositionEvaluator evaluator;
@@ -2156,6 +2209,38 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
                          AlphaGate::Exact, true});
         cases.push_back({Recipe::EdgeExtend, far, farChanged, 0,
                          "edge extend, fractional reach, half render scale", AlphaGate::Exact, true});
+    }
+    {
+        // #528 Inner Shadow and Inner Glow: the holes of a coverage blur, shaped and painted, over
+        // the HDR, partial-alpha gradient inside its own window. A changed opacity or intensity
+        // re-runs the paint Levels, a changed choke the shaping Levels as well.
+        RecipeValues shadow;
+        shadow.centred = true;
+        RecipeValues shadowChanged = shadow;
+        shadowChanged.opacity = 0.4;
+        cases.push_back({Recipe::InnerShadow, shadow, shadowChanged, 1, "inner shadow"});
+        RecipeValues shadowOnly = shadow;
+        shadowOnly.shadowOnly = true;
+        shadowOnly.direction = 135.0;
+        shadowOnly.distance = 2.5;
+        shadowOnly.choke = 0.3;
+        RecipeValues shadowOnlyChanged = shadowOnly;
+        shadowOnlyChanged.choke = 0.8;
+        cases.push_back(
+            {Recipe::InnerShadow, shadowOnly, shadowOnlyChanged, 2, "inner shadow only, choked"});
+        RecipeValues edge;
+        edge.centred = true;
+        edge.tint = {3.0, 1.5, 0.5, 1.0};
+        RecipeValues edgeChanged = edge;
+        edgeChanged.intensity = 0.5;
+        cases.push_back({Recipe::InnerGlow, edge, edgeChanged, 1, "inner glow edge"});
+        RecipeValues centre = edge;
+        centre.centre = true;
+        centre.glowOnly = true;
+        centre.choke = 0.2;
+        RecipeValues centreChanged = centre;
+        centreChanged.choke = 0.9;
+        cases.push_back({Recipe::InnerGlow, centre, centreChanged, 2, "inner glow centre only"});
     }
     {
         // #514 Denoise & Smooth Median over an HDR gradient whose coverage ramps (a soft alpha edge
@@ -4353,6 +4438,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runMultiplyAlpha(expectations, device, cache);
     runCanvas(expectations, device, cache);
     runDiscrete(expectations, device, cache);
+    runShapeMergeEntry(expectations, device, cache);
     runResizeFit(expectations, device, cache);
     runTransform2D(expectations, device, cache);
     runBlurs(expectations, device, cache);
