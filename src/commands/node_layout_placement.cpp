@@ -20,6 +20,10 @@
 #include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/shape_morph_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -100,6 +104,9 @@ struct NodeControlsEstimate final {
     int gradients = 0;
     // #525: a curve graph (curve_graph.cpp) with its caption above it.
     int curves = 0;
+    // #637, #598, #597: a value row with its slider under its name and number (GradingValueRow:
+    // two Size::Control lines) in place of the role's plain row.
+    int sliders = 0;
 };
 
 [[nodiscard]] NodeControlsEstimate nodeControlsEstimate(const std::string_view typeId) {
@@ -122,6 +129,17 @@ struct NodeControlsEstimate final {
         return {0, 1, true, 1};
     if (typeId == "bloom.transform-2d")
         return {1, 0, true};
+    // #598: the path matrix's position and anchor pad, its rotation and skew-axis dials, and the
+    // skew's slider; the warps add their amount's slider. #637 Resample Path's percentage and start
+    // offset and #597 Shape Morph's amount are sliders.
+    if (typeId == document::kTransformPathNodeType)
+        return {.angles = 2, .pad = true, .sliders = 1};
+    if (typeId == document::kWarpPathNodeType || typeId == document::kWarpPathFunctionNodeType)
+        return {.angles = 2, .pad = true, .sliders = 2};
+    if (typeId == document::kResamplePathNodeType)
+        return {.sliders = 2};
+    if (typeId == document::kShapeMorphNodeType)
+        return {.sliders = 1};
     if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
         return {0, 0, true, 1};
     if (typeId == "bloom.four-color-gradient")
@@ -405,7 +423,8 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +
                             static_cast<double>(controls.gradients) * (kGradientRow - kRow + kSmall) +
-                            (controls.pad ? kPadMaxHeight + kSmall : 0.0);
+                            (controls.pad ? kPadMaxHeight + kSmall : 0.0) +
+                            static_cast<double>(controls.sliders) * (2.0 * kControl - kRow + kSmall);
     const double controlsWidth =
         node->typeId == document::kFieldNoiseNodeType ? std::max(cardWidth, kFieldNoiseCardWidth)
         : controls.pad                                 ? std::max(cardWidth, kPadCardWidth)
