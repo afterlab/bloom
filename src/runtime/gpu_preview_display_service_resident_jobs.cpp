@@ -67,6 +67,26 @@ nativeNow(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
                                      : std::chrono::steady_clock::now();
 }
 
+// Polls the resident executor for `stage`. A native program created inside the poll (pipeline
+// creation, which includes the driver's shader compile when its on-disk cache is cold) is host
+// work with no device submission pending, so it moves the stage's dispatch deadline instead of
+// counting against it: a cold first frame prepares on the GPU instead of timing out.
+[[nodiscard]] GpuSceneExecutorPollResult
+pollResidentExecutorFor(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                        PreviewDisplayStageRecord& stage) noexcept {
+    const auto creationBefore = core->residentExecutor != nullptr
+                                    ? core->residentExecutor->counters().ocioProgramCreationNanoseconds
+                                    : 0U;
+    const auto poll = residentExecutorPoll(core);
+    if (core->residentExecutor != nullptr) {
+        const auto creationAfter = core->residentExecutor->counters().ocioProgramCreationNanoseconds;
+        if (creationAfter > creationBefore)
+            stage.nativeStartedAt += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::nanoseconds(creationAfter - creationBefore));
+    }
+    return poll;
+}
+
 [[nodiscard]] std::shared_ptr<PreviewDisplayStageRecord>
 pickResidentReadyStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     auto best = core->residentNativeReady.end();
@@ -342,7 +362,10 @@ void finishResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& 
         completeAwaitingCapacity(stage, *capacityWait);
         return;
     }
-    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure, *stage);
+    // A submission still pending at the dispatch deadline is named a time-out, not a failure.
+    core->recordCpuFallback(stage->nativeDeadlineExceeded ? GpuPreviewCpuFallbackReason::NativeTimeout
+                                                          : GpuPreviewCpuFallbackReason::NativeFailure,
+                            *stage);
     dispatchResidentCpuFallbackChild(core, stage);
 }
 
@@ -420,7 +443,7 @@ void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core
         selectStagePhase(core, *core->residentAhead);
         core->residentAhead->processingPhaseTouched = true;
         // A settled stage ahead holds only its output until it becomes active (#539).
-        if (residentExecutorPoll(core) == GpuSceneExecutorPollResult::Ready &&
+        if (pollResidentExecutorFor(core, *core->residentAhead) == GpuSceneExecutorPollResult::Ready &&
             core->residentAhead->gpuStage && core->residentAhead->gpuStage->phaseLease())
             core->residentAhead->gpuStage->phaseLease()->endDeviceExecution();
     }
@@ -823,10 +846,11 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
     case ResidentNativePhase::Executor: {
         // begin() only plans/pins. This is the first native-capable step, including OCIO upload.
         stage->processingPhaseTouched = true;
-        const auto poll = residentExecutorPoll(core);
+        const auto poll = pollResidentExecutorFor(core, *stage);
         if (poll == GpuSceneExecutorPollResult::Pending) {
             if (cancelled ||
                 nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
+                stage->nativeDeadlineExceeded = !cancelled;
                 beginResidentRetirement(core, stage, !cancelled);
             }
             return;
@@ -910,6 +934,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         if (poll == render::GpuResidentDisplayPollResult::Pending) {
             if (cancelled ||
                 nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
+                stage->nativeDeadlineExceeded = !cancelled;
                 beginResidentRetirement(core, stage, !cancelled);
             }
             return;
@@ -985,8 +1010,10 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                               : render::GpuDisplayTransferState::Failure;
         if (poll == render::GpuDisplayTransferState::Pending) {
             if (cancelled ||
-                nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline)
+                nativeNow(core) - stage->nativeStartedAt >= core->options.nativeDispatchDeadline) {
+                stage->nativeDeadlineExceeded = !cancelled;
                 beginResidentRetirement(core, stage, !cancelled);
+            }
             return;
         }
         if (core->packedTransfer && core->packedTransfer->hasUnretiredSubmission()) {

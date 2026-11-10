@@ -11,6 +11,7 @@
 #include "gpu_scene_executor_private.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -80,9 +81,14 @@ GpuSceneExecutor::Impl::acquireOcioProgram(const PreparedGpuOcioCommand& command
         .maxOwnedBytes = budgets.maxOcioOwnedBytesPerProgram,
         .maxLutBytes = budgets.maxOcioLutBytesPerProgram,
     };
+    const auto creationStart = std::chrono::steady_clock::now();
     auto created = render::GpuOcioProgram::create(
         *device, command.program(), words, programBudgets, [this]() { return cancelRequested; },
         phase);
+    counters.ocioProgramCreationNanoseconds += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
+                                                             creationStart)
+            .count());
     if (!created) {
         ++counters.ocioProgramRefusals;
         ocioAcquireDiagnostic = diagnosticFromOcio(created.diagnostic);

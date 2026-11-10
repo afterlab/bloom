@@ -132,6 +132,9 @@ struct PreviewDisplayStageRecord final {
     // allocation). Such a frame waits for room (and asks the device caches to give way) instead of
     // falling back to the CPU, unless it already had all the room the device could give.
     bool capacityShort = false;
+    // A native step was still pending at the dispatch deadline (the CPU fallback names a time-out).
+    bool nativeDeadlineExceeded = false;
+    // The dispatch deadline runs from here; native program creation moves it later (host work).
     std::chrono::steady_clock::time_point nativeStartedAt{};
     std::chrono::steady_clock::time_point packedTransferStartedAt{};
 

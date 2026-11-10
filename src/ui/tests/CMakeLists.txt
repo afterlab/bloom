@@ -2407,8 +2407,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         )
     endforeach()
     # #524: the node's frame as the process's first, through the application's lazily resolving
-    # viewer stage (no baseline, no tools resolved beforehand).
-    foreach(scenario IN ITEMS four-color-gradient denoise-temporal node-group)
+    # viewer stage (no baseline, no tools resolved beforehand) and an empty driver shader cache: a
+    # cold pipeline compile is host work and must not run out the native dispatch deadline.
+    foreach(scenario IN ITEMS four-color-gradient denoise-temporal node-group dither-blue-noise)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.cold-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --cold

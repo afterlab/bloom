@@ -160,6 +160,10 @@ struct GpuSceneExecutorCounters final {
     std::uint64_t ocioProgramReuses = 0;
     std::uint64_t ocioProgramEvictions = 0;
     std::uint64_t ocioProgramRefusals = 0;
+    // CPU steady-clock wall time spent creating native programs (pipeline creation, which includes
+    // the driver's own shader compile when its on-disk cache is cold). No device work is pending
+    // while a program is created, so a caller's dispatch deadline leaves this time out.
+    std::uint64_t ocioProgramCreationNanoseconds = 0;
     // Actual VMA retained bytes currently charged to the OCIO program cache.
     std::uint64_t ocioRetainedProgramBytes = 0;
     std::uint64_t dispatches = 0;

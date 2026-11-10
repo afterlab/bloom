@@ -388,7 +388,14 @@ Every request that takes the CPU path on either route increments `cpuFallbacks` 
 `cpuFallbacksByReason` entry (`GpuPreviewCpuFallbackReason`: GPU unavailable, non-Neutral request,
 not worthwhile under the measured cost model, ineligible stage, unsupported GPU subset, native
 failure or device loss, native timeout); a bounded-admission refusal is counted by
-`gpuAdmissionRefusals` instead.
+`gpuAdmissionRefusals` instead. On the resident route a step still pending at
+`nativeDispatchDeadline` is counted and named as a native timeout. The deadline measures device
+work only: the wall time the scene executor spends creating native programs
+(`ocioProgramCreationNanoseconds`, which includes the driver's own pipeline compile when its
+on-disk shader cache is cold, as for a new or changed kernel) moves the stage's deadline later.
+Before this, a cold first frame whose driver compile took longer than the deadline fell back to the
+CPU once and then prepared on the GPU from the next frame. The `cold-*` node viewer scenarios start
+with empty driver shader caches to keep that first frame on the GPU.
 A resident-route request made while the startup task is still pending, such as the first Viewer
 frame of a project opened at launch, does not take the CPU path as GPU unavailable (#542). It
 queues behind the startup on the owner's serial GPU executor and is routed when it starts, against

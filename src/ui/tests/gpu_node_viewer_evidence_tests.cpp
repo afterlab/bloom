@@ -394,6 +394,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.requireDevice ? 1 : 0;
     }
     qputenv("QT_VULKAN_LIB", options.loader.string().c_str());
+    // Cold: the device driver's own on-disk shader caches start empty too (a new or changed kernel
+    // on a machine that never compiled it), so the first frame also pays the driver's pipeline
+    // compile. Set before any device exists; the drivers that do not know a variable ignore it.
+    const auto driverCache =
+        std::filesystem::temp_directory_path() /
+        ("bloom-node-viewer-driver-cache-" + std::to_string(QCoreApplication::applicationPid()));
+    if (options.cold) {
+        std::filesystem::create_directories(driverCache);
+        qputenv("__GL_SHADER_DISK_CACHE_PATH", driverCache.string().c_str());
+        qputenv("MESA_SHADER_CACHE_DIR", driverCache.string().c_str());
+    }
 
     const auto settingsRoot =
         std::filesystem::temp_directory_path() /
@@ -620,6 +631,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 std::cout << '\n';
                 for (const auto& diagnostic : state.diagnostics)
                     std::cout << "  diagnostic: " << diagnostic.code << " " << diagnostic.summary << " " << diagnostic.detail << '\n';
+                std::cout << "  residentDetail: " << service.status().residentDetail << '\n';
             }
             if (frame != nullptr)
                 std::cout << label << ": displayed provider="
@@ -874,6 +886,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::error_code ignored;
     std::filesystem::remove_all(mediaDirectory, ignored);
     std::filesystem::remove_all(settingsRoot, ignored);
+    if (options.cold)
+        std::filesystem::remove_all(driverCache, ignored);
 
     if (checks.failures() != 0) {
         std::cerr << "node viewer evidence: " << checks.failures() << " verification failure(s)\n";
