@@ -140,7 +140,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.function", "Formula|Equation|f(x)|Graph Function"},
     {"bloom.axes", "Graph Frame|Grid|Chart Axes|Ticks|Plot Frame"},
     {"bloom.axis-tick", "Tick Label|Axis Label|Graph Label|Number Line"},
-    {"bloom.transform-path", "Move Path|Rotate Path|Scale Path|Path Transform|Transform Shape"},
+    {"bloom.transform-path", "Move Path|Rotate Path|Scale Path|Skew Path|Shear Path|Path Transform|Transform Shape"},
     {"bloom.trim-path", "Trim Paths|Write On|Draw On|Reveal|Path Start End|Stroke Range"},
     {"bloom.offset-path", "Inflate|Expand Path|Contract|Grow Path|Shrink Path|Offset Paths"},
     {"bloom.boolean-paths",
@@ -153,6 +153,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
                            "Letter Outline"},
     {"bloom.resample-path", "Add Points|Subdivide|Equal Spacing|Even Points|Point Count|Densify|"
                             "Reduce Points|Space Points"},
+    {"bloom.warp-path", "Distort Shape|Bend Shape|Twist|Ripple|Bulge|Pinch|Displace Path|Liquify|"
+                        "Warp Shape|Squiggle"},
     {"bloom.round-corners", "Rounded Corners|Fillet|Smooth Corners|Corner Radius"},
     {"bloom.function-plot", "Graph|Plot|Curve|Chart|Equation|Sine Wave"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},

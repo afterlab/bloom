@@ -1,5 +1,6 @@
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/ui/motion_blur_widget.hpp>
 
 #include "properties_registry_row.hpp"
@@ -554,6 +555,23 @@ struct Controls final {
                                     0.0, 200.0, 100.0, 50.0});
         controls.sliders.push_back({"startOffset", std::string(document::kResampleStartOffsetSchemaKey),
                                     0.0, 100.0, 0.0, 25.0});
+    } else if (typeId == document::kTransformPathNodeType ||
+               typeId == document::kWarpPathNodeType) {
+        // #598: the matrix's position and anchor on one pad (path coordinates, from the centre,
+        // +y down), its turn and the skew's direction on dials (clockwise on screen), the slant
+        // and, for the warp, its amount on tracks.
+        controls.points = {{"position", QCoreApplication::translate("NodeControls", "Position"), true},
+                           {"anchor", QCoreApplication::translate("NodeControls", "Anchor"), true}};
+        controls.padLabel = QCoreApplication::translate("NodeControls", "Move Path");
+        controls.angles.push_back(angle("rotation", "bloom.operand.scalar", false, false));
+        controls.angles.push_back(
+            angle("skewAxis", std::string(document::kPathSkewAxisSchemaKey), true, false));
+        if (typeId == document::kWarpPathNodeType)
+            controls.sliders.push_back({"amount", std::string(document::kWarpAmountSchemaKey),
+                                        -360.0, 360.0, 0.0, 90.0});
+        controls.sliders.push_back({"skew", std::string(document::kPathSkewSchemaKey),
+                                    -document::kMaximumPathSkewDegrees,
+                                    document::kMaximumPathSkewDegrees, 0.0, 15.0});
     } else if (typeId == "bloom.luma-key") {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,

@@ -42,6 +42,7 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -52,12 +53,14 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/point_pad.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/node_card_widget.hpp>
+#include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/test_card_widget.hpp>
@@ -1677,7 +1680,7 @@ void groupAndPlotRows() {
           document::kAxisTickNodeType, document::kTransformPathNodeType, document::kTrimPathNodeType,
           document::kOffsetPathNodeType, document::kBooleanPathsNodeType, document::kMergePathsNodeType,
           document::kRoundCornersNodeType, document::kPathStrokeNodeType,
-          document::kResamplePathNodeType}) {
+          document::kResamplePathNodeType, document::kWarpPathNodeType}) {
         auto project = document::makeNewProject("Plot", "Main", core::RationalTime::fromInteger(10));
         document::Document document(std::move(project.project));
         commands::CommandStack stack(document);
@@ -1783,6 +1786,93 @@ void resamplePathRowOrder() {
                                         QStringLiteral(".png")))
                 std::cerr << "could not write the Resample Path order capture\n";
         }
+    }
+}
+
+// #598 Warp Path and Transform Path in Properties: Path, Function, then the card (position and anchor
+// on a pad, rotation and skew axis on dials, the amount and the skew on tracks) with the pad's own
+// X and Y rows below it, then Size, Phase, Scale and Tolerance, top to bottom. Phase is shown only for
+// the functions that travel a cycle.
+void warpPathRowOrder() {
+    auto project = document::makeNewProject("Warp", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.resize(900, 1800);
+    properties.show();
+    const auto node = addNode(session, document::kWarpPathNodeType);
+    session.selectNode(node);
+    QCoreApplication::processEvents();
+    const auto* record = session.composition()->graph().findNode(node);
+    document::ParameterId functionParameter;
+    for (const auto& binding : record->parameters)
+        if (binding.role == "function")
+            functionParameter = binding.parameterId;
+    const auto top = [&](QWidget* widget) {
+        return widget == nullptr || !widget->isVisibleTo(&properties)
+                   ? -1
+                   : widget->mapTo(&properties, QPoint(0, 0)).y();
+    };
+    const auto tracks = [](QWidget* card) {
+        std::vector<std::string> roles;
+        for (auto* each : card->findChildren<ui::GradingValueRow*>())
+            roles.push_back(each->role());
+        return roles;
+    };
+    for (const std::int64_t function : {0, 1, 3}) {
+        expect(session.setParameterValue(functionParameter, function, "Set"), "the function is set");
+        QCoreApplication::processEvents();
+        const auto path = top(row(properties, "path"));
+        const auto chooser = top(row(properties, "function"));
+        auto* card = properties.findChild<ui::NodeCardWidget*>();
+        const auto cardTop = top(card);
+        const auto position = top(row(properties, "position"));
+        const auto anchor = top(row(properties, "anchor"));
+        const auto size = top(row(properties, "size"));
+        const auto phase = top(row(properties, "phase"));
+        const auto scale = top(row(properties, "scale"));
+        const auto tolerance = top(row(properties, "tolerance"));
+        expect(path >= 0 && chooser > path && cardTop > chooser && position > cardTop &&
+                   anchor > position && size > anchor && scale > size && tolerance > scale,
+               "Warp Path rows run Path, Function, the card, Position, Anchor, Size, Scale, Tolerance");
+        expect((phase >= 0) == (function == 0), "only Wave reads Phase here (Twist and Bend do not)");
+        expect(phase < 0 || (phase > size && phase < scale), "Phase sits between Size and Scale");
+        // The dials and the tracks are the card's, so they have no row of their own.
+        for (const char* held : {"rotation", "skew", "skewAxis", "amount"})
+            expect(top(row(properties, held)) < 0,
+                   (std::string("the card holds ") + held + ", so it has no row of its own").c_str());
+        expect(card != nullptr && card->findChild<ui::kit::KPointPad*>() != nullptr,
+               "Warp Path's card has the position and anchor pad");
+        expect(card != nullptr && card->findChildren<ui::AngleDialRow*>().size() == 2,
+               "Warp Path's card has the rotation and skew axis dials");
+        if (card != nullptr) {
+            const auto roles = tracks(card);
+            expect(std::ranges::find(roles, "amount") != roles.end() &&
+                       std::ranges::find(roles, "skew") != roles.end(),
+                   "Warp Path's card has the amount and skew tracks");
+        }
+    }
+    // Ripple reads the phase too.
+    expect(session.setParameterValue(functionParameter, std::int64_t{4}, "Set"), "Ripple is set");
+    QCoreApplication::processEvents();
+    expect(top(row(properties, "phase")) >= 0, "Ripple shows Phase");
+    // Transform Path: Path, the card, Position, Anchor, Scale.
+    const auto transform = addNode(session, document::kTransformPathNodeType);
+    session.selectNode(transform);
+    QCoreApplication::processEvents();
+    auto* card = properties.findChild<ui::NodeCardWidget*>();
+    const auto path = top(row(properties, "path"));
+    const auto scale = top(row(properties, "scale"));
+    expect(path >= 0 && card != nullptr && top(card) > path && top(row(properties, "position")) > top(card) &&
+               scale > top(row(properties, "anchor")),
+           "Transform Path rows run Path, the card, Position, Anchor, Scale");
+    expect(card != nullptr && card->findChild<ui::kit::KPointPad*>() != nullptr &&
+               card->findChildren<ui::AngleDialRow*>().size() == 2,
+           "Transform Path's card has the pad and the rotation and skew axis dials");
+    if (card != nullptr) {
+        const auto roles = tracks(card);
+        expect(std::ranges::find(roles, "skew") != roles.end(), "Transform Path's card has the skew track");
     }
 }
 
@@ -2627,6 +2717,7 @@ int main(int argc, char** argv) try {
     audioEffectRows();
     groupAndPlotRows();
     resamplePathRowOrder();
+    warpPathRowOrder();
     cameraShakeRows();
     matteBlurRows();
     matteKeyRows();

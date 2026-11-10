@@ -58,6 +58,7 @@
 #include <memory>
 #include <tuple>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <utility>
 
 namespace bloom::ui {
@@ -272,6 +273,14 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == document::kResampleDensitySchemaKey    ? QObject::tr("Points per 100 px")
         : schemaKey == document::kResamplePercentageSchemaKey ? QObject::tr("Share of points (%)")
         : schemaKey == document::kResampleStartOffsetSchemaKey ? QObject::tr("Start offset (%)")
+        // #598 Warp Path and the skew Transform Path shares with it.
+        : schemaKey == document::kWarpFunctionParameterSchemaKey ? QObject::tr("Function")
+        : schemaKey == document::kWarpAmountSchemaKey         ? QObject::tr("Amount")
+        : schemaKey == document::kWarpSizeSchemaKey           ? QObject::tr("Size (pixels)")
+        : schemaKey == document::kWarpPhaseSchemaKey          ? QObject::tr("Phase (degrees)")
+        : schemaKey == document::kWarpToleranceSchemaKey      ? QObject::tr("Tolerance (pixels)")
+        : schemaKey == document::kPathSkewSchemaKey           ? QObject::tr("Skew (degrees)")
+        : schemaKey == document::kPathSkewAxisSchemaKey       ? QObject::tr("Skew axis (degrees)")
         : schemaKey == document::kResampleModeParameterSchemaKey ? QObject::tr("Mode")
         : schemaKey == document::kResampleOutputParameterSchemaKey ? QObject::tr("Output")
         : schemaKey == "bloom.multiply.factor"           ? QObject::tr("Factor")

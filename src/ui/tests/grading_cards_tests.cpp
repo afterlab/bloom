@@ -1524,7 +1524,10 @@ void pixelAndMotionCards() {
         // #509
         {"bloom.path-stroke", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}},
         // #637
-        {"bloom.resample-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}}};
+        {"bloom.resample-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}},
+        // #598
+        {"bloom.warp-path", {"bloom.text-source", "bloom.shape-source", "bloom.transform-path"}},
+        {"bloom.transform-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}}};
     for (const auto& spec : specs) {
         CardFixture fixture(spec.type);
         expect(fixture.item != nullptr, "a new node draws a card");

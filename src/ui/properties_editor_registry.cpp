@@ -17,6 +17,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -233,10 +234,30 @@ void PropertiesEditor::configureRegistryRows() {
             if (hasNodeCardWidget(node->typeId))
                 cardWidget_ =
                     makeNodeCardWidget(session_, node->id, node->typeId, false, section->body());
-            // #637: Resample Path draws its card widget (the share and the start offset sliders)
-            // among the rows, after the mode's own control, instead of above them.
-            const bool cardAmongRows =
-                cardWidget_ != nullptr && node->typeId == document::kResamplePathNodeType;
+            // #637, #598: the path nodes draw their card widget among the rows, after the rows
+            // that say what the node does, instead of above everything.
+            struct RowLayout final {
+                std::vector<std::string_view> order;
+                std::string_view cardBefore;
+            };
+            const auto rowLayout = [&]() -> std::optional<RowLayout> {
+                if (node->typeId == document::kResamplePathNodeType)
+                    return RowLayout{{"path", "mode", "count", "gap", "density", "keepCorners",
+                                      "startOffset", "output"},
+                                     "keepCorners"};
+                // The pad keeps its points' own X and Y rows below it, so the card sits above them.
+                if (node->typeId == document::kTransformPathNodeType)
+                    return RowLayout{{"path", "position", "anchor", "scale", "rotation", "skew",
+                                      "skewAxis"},
+                                     "position"};
+                if (node->typeId == document::kWarpPathNodeType)
+                    return RowLayout{{"path", "function", "position", "anchor", "size", "phase",
+                                      "scale", "tolerance", "amount", "rotation", "skew",
+                                      "skewAxis"},
+                                     "position"};
+                return std::nullopt;
+            }();
+            const bool cardAmongRows = cardWidget_ != nullptr && rowLayout.has_value();
             if (cardWidget_ != nullptr) {
                 if (!cardAmongRows)
                     section->bodyLayout()->addWidget(cardWidget_);
@@ -338,11 +359,9 @@ void PropertiesEditor::configureRegistryRows() {
             for (const auto& declared : definition->parameters)
                 orderedParameters.push_back(&declared);
             if (cardAmongRows) {
-                constexpr std::array<std::string_view, 8> order{
-                    "path", "mode", "count", "gap", "density", "keepCorners", "startOffset", "output"};
                 const auto rank = [&](const document::ParameterDefinition* declared) {
-                    const auto found = std::ranges::find(order, declared->role);
-                    return static_cast<std::size_t>(found - order.begin());
+                    const auto found = std::ranges::find(rowLayout->order, declared->role);
+                    return static_cast<std::size_t>(found - rowLayout->order.begin());
                 };
                 std::ranges::stable_sort(orderedParameters,
                                          [&](const auto* left, const auto* right) {
@@ -355,7 +374,7 @@ void PropertiesEditor::configureRegistryRows() {
                 if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
                     PropertiesRowVisibility::Hidden)
                     continue;
-                if (!cardPlaced && declared.role == "keepCorners") {
+                if (!cardPlaced && declared.role == rowLayout->cardBefore) {
                     section->bodyLayout()->addWidget(cardWidget_);
                     cardPlaced = true;
                 }
