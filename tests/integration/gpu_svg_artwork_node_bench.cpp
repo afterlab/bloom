@@ -16,7 +16,9 @@
 // Cases: the cheap reference (a Grade over a frame-sized solid), and a generated file of N filled
 // and stroked shapes (N stepped: the heaviest parameter, since the expansion draws one Shape layer
 // per element) imported as editable shapes (the comparable) and as one layer, at the identity and
-// scaled and turned (the composed route, every shape covered through the layer's matrix).
+// scaled and turned (the composed route, every shape covered through the layer's matrix), masked and
+// scaled 8x (the oversampled route at 8x, only the window the frame shows drawn) and held in a group
+// scaled 3x (the group and the artwork drawn at 4x, the window clipped likewise).
 //
 //   bloom_runtime_gpu_svg_artwork_node_bench [--tiers 1080p,2160p] [--repeats N] [--json FILE]
 //                                            [--smoke] [--loader PATH]
@@ -27,12 +29,15 @@
 #include "gpu_coverage_ocio_support.hpp"
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
@@ -160,6 +165,51 @@ struct Doc {
         run<commands::SetParameterSource>(composition, rotation,
                                           document::ConstantValueSource{document::ParameterValue{20.0}});
     }
+    void scale(const document::LayerId layer, const double factor) {
+        const auto snapshot = document.snapshot();
+        const auto& layers = snapshot.project().findComposition(composition)->graph();
+        const auto parameter =
+            document::layerParameterBinding(layers, *layers.findLayer(layer), document::kScaleParameterRole)->parameterId;
+        run<commands::SetParameterSource>(composition, parameter,
+                                          document::ConstantValueSource{document::ParameterValue{document::Vec2d{factor, factor}}});
+    }
+    // #642 B3: the layer masked (a quad over the frame's middle) and scaled 8x: its artwork is drawn
+    // at 8x, and only the window the frame shows.
+    void maskedEightTimes(const document::LayerId layer) {
+        document::PathValue mask;
+        document::PathContour contour;
+        contour.closed = true;
+        const double w = width;
+        const double h = height;
+        for (const auto& point : {document::Vec2d{w * 0.40, h * 0.30}, document::Vec2d{w * 0.62, h * 0.32},
+                                  document::Vec2d{w * 0.60, h * 0.70}, document::Vec2d{w * 0.38, h * 0.68}})
+            contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+        mask.contours.push_back(contour);
+        run<commands::AddLayerMask>(composition, layer, mask);
+        scale(layer, 8.0);
+    }
+    // #642 B3: the layer's artwork held in a new group (a Merge whose one entry layer is at its
+    // defaults) read by the layer, scaled 3x: the group and the artwork are drawn at 4x.
+    void inGroupThreeTimes(const document::LayerId layer) {
+        const auto* boundary = graph().findLayer(layer);
+        const auto top = boundary->nodeId;
+        const auto slot = *boundary->entrySlot;
+        std::optional<document::NodeId> artwork;
+        for (const auto& candidate : graph().nodes())
+            if (candidate.typeId == document::kVectorArtworkNodeType)
+                artwork = candidate.id;
+        if (!artwork)
+            throw std::runtime_error("the layer holds no Vector Artwork node");
+        const auto merge = node(document::kLayerStackNodeType);
+        const auto entered = run<commands::ConnectPorts>(
+            composition, document::OutputPortRef{*artwork, "image"},
+            document::LayerStackInputRef{merge, {}, std::string(document::kLayerStackContentInputRole)});
+        const auto inner = *entered.outputId<document::LayerSlotId>(commands::kConnectPortsSlotOutput);
+        run<commands::ConnectPorts>(composition, document::OutputPortRef{merge, "image"},
+                                    document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)});
+        run<commands::EnsureEntryLayer>(composition, merge, inner);
+        scale(layer, 3.0);
+    }
     // `count` filled and stroked ellipses and triangles over the file's 320 x 180 viewport, in
     // groups of 100 (runs and nested Merges as an artist's file has them). Deterministic.
     static std::string artwork(const std::size_t count) {
@@ -218,6 +268,14 @@ std::vector<Case> cases() {
         add("svg-layer-" + n + "-turned", "bloom.vector-artwork scaled 1.5x and turned (" + n + " shapes)",
             "svg-shapes-" + n,
             [count](Doc& doc) { doc.turn(doc.svg(count, commands::SvgImportMode::Layer)); }, "shapes",
+            static_cast<std::int64_t>(count));
+        add("svg-layer-" + n + "-masked-8x", "bloom.vector-artwork masked and scaled 8x, drawn at 8x (" + n + " shapes)",
+            "svg-layer-" + n + "-turned",
+            [count](Doc& doc) { doc.maskedEightTimes(doc.svg(count, commands::SvgImportMode::Layer)); }, "shapes",
+            static_cast<std::int64_t>(count));
+        add("svg-layer-" + n + "-group-3x", "bloom.vector-artwork in a group scaled 3x, drawn at 4x (" + n + " shapes)",
+            "svg-layer-" + n + "-turned",
+            [count](Doc& doc) { doc.inGroupThreeTimes(doc.svg(count, commands::SvgImportMode::Layer)); }, "shapes",
             static_cast<std::int64_t>(count));
     }
     return list;
