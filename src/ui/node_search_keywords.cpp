@@ -195,6 +195,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kToneMapNodeType)
         return QStringLiteral("soft clip highlight compression roll off shoulder knee hdr limiter "
                               "shadows highlights recovery gamut compress");
+    // #519.
+    if (typeId == document::kQuantizeNodeType)
+        return QStringLiteral("threshold posterize posterise levels bands steps cut high contrast "
+                              "black white bilevel binary cel toon limit colors colours");
     // #523.
     if (typeId == document::kHslQualifierNodeType)
         return QStringLiteral("hue saturation luminance qualifier secondary color select key "

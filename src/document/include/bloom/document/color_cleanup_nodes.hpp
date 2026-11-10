@@ -1,12 +1,21 @@
 #pragma once
 
-// #518 Tone Map, #517 Color Matrix and #523 HSL Qualifier: the durable vocabulary of the
+// #518 Tone Map, #517 Color Matrix, #523 HSL Qualifier and #519 Quantize: the durable vocabulary of the
 // per-pixel color nodes. Every node takes an Image on `input`; Tone Map and Color Matrix give an
 // Image on `image` (and take the optional effect mask every grade takes), the HSL Qualifier gives a
 // Mask on `mask`. Schema keys are "<type id>.<role>", like the depth effects'. Every Scalar is
 // animatable, drivable and has a socket of its own; every Choice and Boolean is a constant with no
-// socket. docs/architecture/image-filters.md, "Tone Map", "Color Matrix" and "HSL Qualifier", are
-// the specification.
+// socket. docs/architecture/image-filters.md, "Tone Map", "Color Matrix", "HSL Qualifier" and
+// "Quantize", are the specification.
+//
+//   Quantize (`bloom.quantize`) works on the straight working-space color and, in Threshold mode,
+//     leaves alpha alone. `mode` Threshold or Posterize. Threshold: `basis` Luma (Rec. 709 luma, one
+//     result for all three channels) or Per channel; a value at or above `level` is 1 and below it 0,
+//     or with `softness` above 0 a smooth ramp of that width centred on the level (smoothstep); `invert`
+//     swaps white and black. Posterize: each straight channel, clamped to [0, 1], snaps to the nearest
+//     of `levels` equally spaced values (exact halves round up); `linkLevels` gives red, green and blue
+//     the master `levels`, off they read `redLevels`, `greenLevels` and `blueLevels`; `posterizeAlpha`
+//     also snaps alpha to `alphaLevels`.
 //
 //   Color Matrix (`bloom.color-matrix`) mixes the straight channels with a 3 x 3 or 4 x 4 matrix
 //     (`rr` is the red result's share of the red input, `rg` of green, and so on; the alpha row
@@ -52,6 +61,7 @@ namespace bloom::document {
 inline constexpr std::string_view kToneMapNodeType = "bloom.tone-map";
 inline constexpr std::string_view kColorMatrixNodeType = "bloom.color-matrix";
 inline constexpr std::string_view kHslQualifierNodeType = "bloom.hsl-qualifier";
+inline constexpr std::string_view kQuantizeNodeType = "bloom.quantize";
 inline constexpr std::string_view kColorCleanupMaskOutputPort = "mask";
 inline constexpr std::uint32_t kColorCleanupNodeSchemaVersion = 1;
 
@@ -73,6 +83,16 @@ inline constexpr std::int64_t kColorModelHsv = 2;
 inline constexpr std::int64_t kColorModelYCbCr = 3;
 inline constexpr std::int64_t kColorModelLab = 4;
 inline constexpr std::int64_t kColorModelCount = 5;
+// Stored values of Quantize's mode and threshold basis.
+inline constexpr std::int64_t kQuantizeThreshold = 0;
+inline constexpr std::int64_t kQuantizePosterize = 1;
+inline constexpr std::int64_t kQuantizeBasisLuma = 0;
+inline constexpr std::int64_t kQuantizeBasisPerChannel = 1;
+// The levels of a posterize: at least two, at most 256 (an 8-bit step).
+inline constexpr double kMinimumQuantizeLevels = 2.0;
+inline constexpr double kMaximumQuantizeLevels = 256.0;
+// A threshold level or softness is finite and within this.
+inline constexpr double kMaximumQuantizeThreshold = 16.0;
 // A matrix element is finite and within this.
 inline constexpr double kMaximumColorMatrixElement = 100.0;
 
@@ -92,6 +112,17 @@ inline constexpr std::array<std::string_view, 7> kMatrixPresets{
 inline constexpr std::array<std::string_view, 2> kMatrixSizes{"3 x 3 (color)",
                                                               "4 x 4 (color and alpha)"};
 inline constexpr std::array<std::string_view, 5> kColorModels{"RGB", "HSL", "HSV", "YCbCr", "Lab"};
+
+inline constexpr std::array<std::string_view, 2> kQuantizeModes{"Threshold", "Posterize"};
+inline constexpr std::array<std::string_view, 2> kQuantizeBases{"Luma", "Per channel"};
+
+// A Boolean that is on by default.
+inline constexpr DepthParameterSpec booleanOn(const std::string_view role,
+                                              const std::string_view label) {
+    auto spec = boolean(role, label);
+    spec.value[0] = 1.0;
+    return spec;
+}
 
 inline constexpr double kV = kMaximumToneMapValue;
 inline constexpr double kL = 1.0e4;
@@ -131,6 +162,25 @@ inline constexpr std::array kColorMatrixParameters{
     scalar("aa", 1.0, -kM, kM, "Alpha from alpha", -2.0, 2.0, 0.01, 3),
 };
 
+inline constexpr double kQ = kMaximumQuantizeThreshold;
+inline constexpr double kLevelsMin = kMinimumQuantizeLevels;
+inline constexpr double kLevelsMax = kMaximumQuantizeLevels;
+
+inline constexpr std::array kQuantizeParameters{
+    choice("mode", kQuantizeModes, kQuantizeThreshold, "Mode"),
+    choice("basis", kQuantizeBases, kQuantizeBasisLuma, "Threshold on"),
+    scalar("level", 0.5, 0.0, kQ, "Level", 0.0, 1.0, 0.01, 3),
+    scalar("softness", 0.0, 0.0, kQ, "Softness", 0.0, 1.0, 0.01, 3),
+    boolean("invert", "Invert"),
+    scalar("levels", 8.0, kLevelsMin, kLevelsMax, "Levels", 2.0, 64.0, 1.0, 0),
+    booleanOn("linkLevels", "Link levels"),
+    scalar("redLevels", 8.0, kLevelsMin, kLevelsMax, "Red levels", 2.0, 64.0, 1.0, 0),
+    scalar("greenLevels", 8.0, kLevelsMin, kLevelsMax, "Green levels", 2.0, 64.0, 1.0, 0),
+    scalar("blueLevels", 8.0, kLevelsMin, kLevelsMax, "Blue levels", 2.0, 64.0, 1.0, 0),
+    boolean("posterizeAlpha", "Posterize alpha"),
+    scalar("alphaLevels", 8.0, kLevelsMin, kLevelsMax, "Alpha levels", 2.0, 64.0, 1.0, 0),
+};
+
 inline constexpr std::array kHslQualifierParameters{
     scalar("hueCenter", 0.0, 0.0, 360.0, "Hue", 0.0, 360.0, 1.0, 1, "\xC2\xB0"),
     scalar("hueWidth", 360.0, 0.0, 360.0, "Hue width", 0.0, 360.0, 1.0, 1, "\xC2\xB0"),
@@ -148,7 +198,7 @@ inline constexpr std::array kHslQualifierParameters{
 
 [[nodiscard]] constexpr bool isColorCleanupNodeType(const std::string_view typeId) noexcept {
     return typeId == kToneMapNodeType || typeId == kColorMatrixNodeType ||
-           typeId == kHslQualifierNodeType;
+           typeId == kHslQualifierNodeType || typeId == kQuantizeNodeType;
 }
 
 // The parameters of a color cleanup node in definition order, or an empty span.
@@ -160,13 +210,16 @@ colorCleanupParameters(const std::string_view typeId) noexcept {
         return color_cleanup_parameters::kColorMatrixParameters;
     if (typeId == kHslQualifierNodeType)
         return color_cleanup_parameters::kHslQualifierParameters;
+    if (typeId == kQuantizeNodeType)
+        return color_cleanup_parameters::kQuantizeParameters;
     return {};
 }
 
 // The spec of a "<type id>.<role>" schema key, or null.
 [[nodiscard]] constexpr const DepthParameterSpec*
 colorCleanupParameterSpec(const std::string_view schemaKey) noexcept {
-    for (const auto type : {kToneMapNodeType, kColorMatrixNodeType, kHslQualifierNodeType}) {
+    for (const auto type :
+         {kToneMapNodeType, kColorMatrixNodeType, kHslQualifierNodeType, kQuantizeNodeType}) {
         if (schemaKey.size() <= type.size() + 1 || !schemaKey.starts_with(type) ||
             schemaKey[type.size()] != '.')
             continue;

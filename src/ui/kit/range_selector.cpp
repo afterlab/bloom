@@ -9,6 +9,9 @@
 #include <QEvent>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QLinearGradient>
+#include <QPainter>
+#include <QPen>
 #include <QSignalBlocker>
 #include <QMouseEvent>
 #include <QPainter>
@@ -92,6 +95,11 @@ void KRangeSelector::setValues(const double lower, const double upper) {
 
 void KRangeSelector::setHandlesMayCross(const bool cross) {
     cross_ = cross;
+    update();
+}
+
+void KRangeSelector::setLumaStrip(const bool strip) {
+    strip_ = strip;
     update();
 }
 
@@ -422,8 +430,19 @@ void KRangeSelector::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     const State state = visualState();
 
-    fillRoundedSurface(painter, trackRect(), color(surfaceForState(Color::Field, state)), {},
-                       Radius::Full);
+    if (strip_) {
+        // The luma strip: the track runs from black to white, so the handles read as values.
+        QLinearGradient ramp(trackRect().left(), 0.0, trackRect().right(), 0.0);
+        ramp.setColorAt(0.0, QColor(0, 0, 0));
+        ramp.setColorAt(1.0, QColor(255, 255, 255));
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(color(borderForState(state)), 1.0));
+        painter.setBrush(ramp);
+        painter.drawRoundedRect(trackRect(), trackRect().height() / 2.0, trackRect().height() / 2.0);
+    } else {
+        fillRoundedSurface(painter, trackRect(), color(surfaceForState(Color::Field, state)), {},
+                           Radius::Full);
+    }
 
     QColor accent = color(Color::Accent);
     if (state == State::Hover) {
@@ -435,7 +454,8 @@ void KRangeSelector::paintEvent(QPaintEvent* event) {
     }
     const QRectF span = spanRect();
     if (span.width() > 0.0) {
-        fillRoundedSurface(painter, span, accent, {}, Radius::Full);
+        fillRoundedSurface(painter, span, strip_ ? withOpacity(accent, 0.55) : accent, {},
+                           Radius::Full);
     }
 
     QColor handleFill = color(Color::Foreground);

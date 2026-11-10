@@ -2370,6 +2370,40 @@ lowerImageEffect(const document::NodeRecord& node,
             choice("outputModel", 3, document::kColorModelCount - 1);
             scalars({"rr", "rg", "rb", "ra", "gr", "gg", "gb", "ga", "br", "bg", "bb", "ba", "ar",
                      "ag", "ab", "aa"});
+        } else if (node.typeId == document::kQuantizeNodeType) {
+            // #519 Quantize: the mode, basis, invert and the two link switches are constants; a
+            // scalar the mode does not read is a fixed constant, never a curve nothing references,
+            // so a keyed value of the other mode neither varies the picture nor invalidates it.
+            kernel.operation = runtime::ColorToolOperation::Quantize;
+            choice("mode", 0, document::kQuantizePosterize);
+            choice("basis", 1, document::kQuantizeBasisPerChannel);
+            flag("invert", 2);
+            const auto* link = parameterConstant<bool>(findParameterBinding(node, "linkLevels"));
+            const auto* alpha =
+                parameterConstant<bool>(findParameterBinding(node, "posterizeAlpha"));
+            lowered = lowered && link != nullptr && alpha != nullptr;
+            const bool linked = link != nullptr && *link;
+            const bool alphaOn = alpha != nullptr && *alpha;
+            kernel.choices[3] = (linked ? 1 : 0) | (alphaOn ? 2 : 0);
+            const bool posterize = kernel.choices[0] == document::kQuantizePosterize;
+            const auto fixed = runtime::CompiledScalarParameter{document::ParameterId{}, 0.0};
+            const auto one = [&](const std::string_view role, const std::size_t slot, const bool read) {
+                if (!read) {
+                    kernel.values[slot] = fixed;
+                    return;
+                }
+                const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
+                lowered = lowered && parameter.has_value();
+                if (parameter)
+                    kernel.values[slot] = *parameter;
+            };
+            one("level", 0, !posterize);
+            one("softness", 1, !posterize);
+            one("levels", 2, posterize && linked);
+            one("redLevels", 3, posterize && !linked);
+            one("greenLevels", 4, posterize && !linked);
+            one("blueLevels", 5, posterize && !linked);
+            one("alphaLevels", 6, posterize && alphaOn);
         } else if (node.typeId == document::kHslQualifierNodeType) {
             // #523 HSL Qualifier: an Image to a Mask.
             kernel.operation = runtime::ColorToolOperation::HslQualifier;

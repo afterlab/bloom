@@ -104,6 +104,11 @@ class RangeRow final : public QWidget {
         double minimum = 0.0;
         double maximum = 1.0;
         bool mayCross = true;
+        // #519: the two roles are a centre (lowRole) and a full width (highRole); the track shows the
+        // span centre +- width / 2, and a handle drag writes the new centre and width.
+        bool centreWidth = false;
+        // The track is a black-to-white luma strip.
+        bool lumaStrip = false;
     };
 
     RangeRow(CompositionSession& session, document::NodeId node, Spec spec,
@@ -113,6 +118,7 @@ class RangeRow final : public QWidget {
     [[nodiscard]] GradingValueRow* highRow() const noexcept { return high_; }
     [[nodiscard]] kit::KRangeSelector* selector() const noexcept { return selector_; }
     [[nodiscard]] bool draws(std::string_view role) const;
+    [[nodiscard]] const std::string& lowRole() const noexcept { return spec_.lowRole; }
     void setLabelWidth(int width);
     [[nodiscard]] int labelWidthHint() const;
     [[nodiscard]] int heightHint() const;
@@ -135,6 +141,9 @@ class RangeRow final : public QWidget {
     // track) value rather than the clamped one the track shows.
     double editLow_ = 0.0;
     double editHigh_ = 1.0;
+    // centreWidth: the span the track shows while a gesture runs.
+    double trackLow_ = 0.0;
+    double trackHigh_ = 1.0;
     bool editing_ = false;
 };
 

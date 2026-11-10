@@ -156,7 +156,7 @@ struct NodeControlsEstimate final {
         return {1, 0, false};
     if (typeId == "bloom.map-range")
         return {0, 2, false};
-    if (typeId == document::kToneMapNodeType)
+    if (typeId == document::kToneMapNodeType || typeId == document::kQuantizeNodeType)
         return {0, 1, false};
     if (typeId == "bloom.luma-key" || typeId == "bloom.clamp" || typeId == "bloom.in-range" ||
         typeId == "bloom.random" || typeId == "bloom.wrap" || typeId == "bloom.smoothstep")

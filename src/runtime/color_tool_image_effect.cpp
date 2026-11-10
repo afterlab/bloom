@@ -593,6 +593,142 @@ constexpr float kQualifierOperation = 2.0F;
     return true;
 }
 
+// --- Quantize ------------------------------------------------------------------------------------
+
+constexpr float kQuantizeOperation = 3.0F;
+
+// The table: vec4 0 [operation, mode, basis, invert], vec4 1 [soft, level, low edge, 1 / softness],
+// vec4 2 [red steps, green steps, blue steps, alpha steps] (levels less one), vec4 3 [alpha on, 0, 0, 0].
+// A soft threshold ramps with smoothstep over [level - softness / 2, level + softness / 2]; a hard one
+// (softness 0) is 1 at and above the level. A posterize snaps the straight channel clamped to [0, 1] to
+// round(x * steps) / steps, a half rounding up, the product and the fraction above its floor taken in
+// binary32 (the fraction is exact, so the half-way test is).
+
+[[nodiscard]] float quantizeStep(const float v, const float level, const float soft, const float low,
+                                 const float inverse) noexcept {
+    if (soft == 0.0F)
+        return v >= level ? 1.0F : 0.0F;
+    const float shifted = v - low;
+    const float scaled = shifted * inverse;
+    const float u = std::min(std::max(scaled, 0.0F), 1.0F);
+    const float twice = -2.0F * u + 3.0F;
+    const float square = u * u;
+    return square * twice;
+}
+
+[[nodiscard]] float quantizeSnap(const float x, const float steps) noexcept {
+    const float clamped = std::min(std::max(x, 0.0F), 1.0F);
+    const float scaled = clamped * steps;
+    const float whole = std::floor(scaled);
+    // The fraction of a binary32 value above its floor is exact, so the half-way test is too.
+    const float fraction = scaled - whole;
+    const float level = fraction >= 0.5F ? whole + 1.0F : whole;
+    return level / steps;
+}
+
+[[nodiscard]] bool quantizePixel(const std::vector<float>& d, std::array<float, 4>& pixel) noexcept {
+    const float a = pixel[3];
+    if (a == 0.0F) {
+        pixel = {0.0F, 0.0F, 0.0F, 0.0F};
+        return true;
+    }
+    const std::array<float, 3> c{pixel[0] / a, pixel[1] / a, pixel[2] / a};
+    if (!std::isfinite(c[0]) || !std::isfinite(c[1]) || !std::isfinite(c[2]))
+        return false;
+    std::array<float, 3> o{};
+    float alpha = a;
+    if (d[1] == 0.0F) {
+        const float level = d[5];
+        const float soft = d[4];
+        const float low = d[6];
+        const float inverse = d[7];
+        if (d[2] == 0.0F) {
+            const float ya = kLumaR * c[0];
+            const float yb = kLumaG * c[1];
+            const float yc = kLumaB * c[2];
+            const float yab = ya + yb;
+            const float luma = yab + yc;
+            const float t = quantizeStep(luma, level, soft, low, inverse);
+            o = {t, t, t};
+        } else {
+            for (std::size_t i = 0; i < 3; ++i)
+                o[i] = quantizeStep(c[i], level, soft, low, inverse);
+        }
+        if (d[3] != 0.0F)
+            for (auto& value : o)
+                value = 1.0F - value;
+    } else {
+        for (std::size_t i = 0; i < 3; ++i)
+            o[i] = quantizeSnap(c[i], d[8 + i]);
+        if (d[12] != 0.0F) {
+            alpha = quantizeSnap(a, d[11]);
+            if (alpha == 0.0F) {
+                pixel = {0.0F, 0.0F, 0.0F, 0.0F};
+                return true;
+            }
+        }
+    }
+    pixel = {o[0] * alpha, o[1] * alpha, o[2] * alpha, alpha};
+    return true;
+}
+
+[[nodiscard]] std::optional<PreparedColorGrade> prepareQuantize(const ColorToolKernel& kernel,
+                                                                const std::span<const double> v) {
+    if (v.size() != colorToolScalarCount(ColorToolOperation::Quantize) || kernel.choices[0] < 0 ||
+        kernel.choices[0] > document::kQuantizePosterize || kernel.choices[1] < 0 ||
+        kernel.choices[1] > document::kQuantizeBasisPerChannel || kernel.choices[2] < 0 ||
+        kernel.choices[2] > 1 || kernel.choices[3] < 0 || kernel.choices[3] > 3)
+        return std::nullopt;
+    constexpr double kMaxLevel = document::kMaximumQuantizeThreshold;
+    constexpr double kLow = document::kMinimumQuantizeLevels;
+    constexpr double kHigh = document::kMaximumQuantizeLevels;
+    const bool posterize = kernel.choices[0] == document::kQuantizePosterize;
+    const bool linked = (kernel.choices[3] & 1) != 0;
+    const bool alphaOn = (kernel.choices[3] & 2) != 0;
+    PreparedColorGrade grade{ColorGradeKind::ColorTool, std::vector<float>(kColorToolFloats, 0.0F),
+                             false};
+    auto& d = grade.data;
+    d[0] = kQuantizeOperation;
+    d[1] = posterize ? 1.0F : 0.0F;
+    d[2] = static_cast<float>(kernel.choices[1]);
+    d[3] = static_cast<float>(kernel.choices[2]);
+    if (!posterize) {
+        if (!within(v[0], 0.0, kMaxLevel) || !within(v[1], 0.0, kMaxLevel))
+            return std::nullopt;
+        d[4] = static_cast<float>(v[1]);
+        d[5] = static_cast<float>(v[0]);
+        // The ramp's low edge and the reciprocal of its width, in double and then narrowed.
+        d[6] = static_cast<float>(v[0] - 0.5 * v[1]);
+        d[7] = v[1] > 0.0 ? static_cast<float>(1.0 / v[1]) : 0.0F;
+        if (v[1] > 0.0 && !std::isfinite(d[7]))
+            return std::nullopt;
+        // A threshold reads no steps; they stay valid ones.
+        d[8] = d[9] = d[10] = d[11] = 1.0F;
+        return grade;
+    }
+    const auto steps = [&](const double levels) { return static_cast<float>(levels - 1.0); };
+    if (linked) {
+        if (!within(v[2], kLow, kHigh))
+            return std::nullopt;
+        d[8] = d[9] = d[10] = steps(v[2]);
+    } else {
+        if (!within(v[3], kLow, kHigh) || !within(v[4], kLow, kHigh) || !within(v[5], kLow, kHigh))
+            return std::nullopt;
+        d[8] = steps(v[3]);
+        d[9] = steps(v[4]);
+        d[10] = steps(v[5]);
+    }
+    if (alphaOn) {
+        if (!within(v[6], kLow, kHigh))
+            return std::nullopt;
+        d[11] = steps(v[6]);
+        d[12] = 1.0F;
+    } else {
+        d[11] = 1.0F;
+    }
+    return grade;
+}
+
 } // namespace
 
 std::optional<PreparedColorGrade> prepareColorToolGrade(const ColorToolKernel& kernel,
@@ -604,6 +740,8 @@ std::optional<PreparedColorGrade> prepareColorToolGrade(const ColorToolKernel& k
         return prepareColorMatrix(kernel, values);
     case ColorToolOperation::HslQualifier:
         return prepareHslQualifier(kernel, values);
+    case ColorToolOperation::Quantize:
+        return prepareQuantize(kernel, values);
     }
     return std::nullopt;
 }
@@ -618,6 +756,8 @@ bool colorToolPixel(const std::vector<float>& table, std::array<float, 4>& pixel
         return colorMatrixPixel(table, pixel);
     case 2:
         return hslQualifierPixel(table, pixel);
+    case 3:
+        return quantizePixel(table, pixel);
     default:
         return false;
     }
@@ -629,8 +769,15 @@ bool validColorToolProgramData(const std::vector<float>& data) noexcept {
     const auto whole = [](const float value, const float high) {
         return value >= 0.0F && value <= high && value == std::floor(value);
     };
-    if (!whole(data[0], 2.0F))
+    if (!whole(data[0], 3.0F))
         return false;
+    if (data[0] == 3.0F) {
+        // Steps are at least one; a hard threshold has no reciprocal, a soft one a positive one.
+        const bool soft = data[4] > 0.0F;
+        return whole(data[1], 1.0F) && whole(data[2], 1.0F) && whole(data[3], 1.0F) &&
+               data[4] >= 0.0F && (!soft || data[7] > 0.0F) && data[8] >= 1.0F && data[9] >= 1.0F &&
+               data[10] >= 1.0F && data[11] >= 1.0F && data[12] >= 0.0F && data[12] <= 1.0F;
+    }
     if (data[0] == 2.0F)
         return whole(data[1], 1.0F);
     if (data[0] == 1.0F)
@@ -995,9 +1142,67 @@ vec4 bct_hsl_qualifier(vec4 p) {
  precise float covered = m * a;
  return vec4(covered);
 }
+float bct_quantize_step(float v, float level, float soft, float low, float inverse) {
+ if (soft == 0.0) { return v >= level ? 1.0 : 0.0; }
+ precise float shifted = v - low;
+ precise float scaled = shifted * inverse;
+ float u = min(max(scaled, 0.0), 1.0);
+ precise float twice = -2.0 * u + 3.0;
+ precise float square = u * u;
+ precise float t = square * twice;
+ return t;
+}
+float bct_quantize_snap(float x, float steps) {
+ float clamped = min(max(x, 0.0), 1.0);
+ precise float scaled = clamped * steps;
+ float whole = floor(scaled);
+ precise float fraction = scaled - whole;
+ precise float level = fraction >= 0.5 ? whole + 1.0 : whole;
+ return bloom_ocio_cpu_div(level, steps);
+}
+vec4 bct_quantize(vec4 p) {
+ float a = p.a;
+ if (a == 0.0) { return vec4(0.0); }
+ vec3 c = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a));
+ if (!bct_finite(c.r) || !bct_finite(c.g) || !bct_finite(c.b)) { return vec4(0.0, 0.0, 0.0, 2.0); }
+ vec3 o = vec3(0.0);
+ float alpha = a;
+ if (bct(1) == 0.0) {
+  float level = bct(5);
+  float soft = bct(4);
+  float low = bct(6);
+  float inverse = bct(7);
+  if (bct(2) == 0.0) {
+   precise float ya = 0.2126 * c.r;
+   precise float yb = 0.7152 * c.g;
+   precise float yc = 0.0722 * c.b;
+   precise float yab = ya + yb;
+   precise float luma = yab + yc;
+   float t = bct_quantize_step(luma, level, soft, low, inverse);
+   o = vec3(t);
+  } else {
+   o = vec3(bct_quantize_step(c.r, level, soft, low, inverse),
+            bct_quantize_step(c.g, level, soft, low, inverse),
+            bct_quantize_step(c.b, level, soft, low, inverse));
+  }
+  if (bct(3) != 0.0) {
+   precise vec3 flipped = vec3(1.0 - o.r, 1.0 - o.g, 1.0 - o.b);
+   o = flipped;
+  }
+ } else {
+  o = vec3(bct_quantize_snap(c.r, bct(8)), bct_quantize_snap(c.g, bct(9)), bct_quantize_snap(c.b, bct(10)));
+  if (bct(12) != 0.0) {
+   alpha = bct_quantize_snap(a, bct(11));
+   if (alpha == 0.0) { return vec4(0.0); }
+  }
+ }
+ precise vec3 premultiplied = vec3(o.r * alpha, o.g * alpha, o.b * alpha);
+ return vec4(premultiplied, alpha);
+}
 vec4 bloom_color_tool(ivec2 c) {
  vec4 p = imageLoad(bloom_ocio_input, c);
  int op = int(bct(0));
+ if (op == 3) { return bct_quantize(p); }
  if (op == 2) { return bct_hsl_qualifier(p); }
  if (op == 1) { return bct_color_matrix(p); }
  return bct_tone_map(p);

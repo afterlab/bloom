@@ -193,6 +193,7 @@ RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spe
     selector_->setAccessibleName(spec_.name);
     selector_->setHandlesMayCross(spec_.mayCross);
     selector_->setRange(spec_.minimum, spec_.maximum);
+    selector_->setLumaStrip(spec_.lumaStrip);
     selector_->setToolTip(tr("Drag either end of %1; the numbers above take exact values")
                               .arg(spec_.name.toLower()));
     connect(selector_, &kit::KRangeSelector::editStarted, this, [this] {
@@ -205,22 +206,35 @@ RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spe
         if (editing_) {
             editLow_ = *lowValue;
             editHigh_ = *highValue;
+            trackLow_ = spec_.centreWidth ? *lowValue - 0.5 * *highValue : *lowValue;
+            trackHigh_ = spec_.centreWidth ? *lowValue + 0.5 * *highValue : *highValue;
         }
     });
     const auto update = [this] {
         if (editing_ && !session_.updateValueEdits({editLow_, editHigh_}))
             selector_->cancelEdit();
     };
-    connect(selector_, &kit::KRangeSelector::lowerValueChanged, this, [this, update](double v) {
+    // A centre and a width: the two handles are the span's ends, the document keeps its middle and
+    // its extent.
+    const auto place = [this](const bool lower, const double v) {
+        if (spec_.centreWidth) {
+            (lower ? trackLow_ : trackHigh_) = v;
+            editLow_ = 0.5 * (trackLow_ + trackHigh_);
+            editHigh_ = std::max(0.0, trackHigh_ - trackLow_);
+        } else {
+            (lower ? editLow_ : editHigh_) = v;
+        }
+    };
+    connect(selector_, &kit::KRangeSelector::lowerValueChanged, this, [this, update, place](double v) {
         if (!editing_)
             return;
-        editLow_ = v;
+        place(true, v);
         update();
     });
-    connect(selector_, &kit::KRangeSelector::upperValueChanged, this, [this, update](double v) {
+    connect(selector_, &kit::KRangeSelector::upperValueChanged, this, [this, update, place](double v) {
         if (!editing_)
             return;
-        editHigh_ = v;
+        place(false, v);
         update();
     });
     connect(selector_, &kit::KRangeSelector::editFinished, this, [this] {
@@ -304,7 +318,10 @@ void RangeRow::refresh(const bool locked) {
     const auto highValue = high ? liveScalar(session_, *high) : std::nullopt;
     if (lowValue && highValue) {
         const QSignalBlocker blocker(selector_);
-        selector_->setValues(*lowValue, *highValue);
+        if (spec_.centreWidth)
+            selector_->setValues(*lowValue - 0.5 * *highValue, *lowValue + 0.5 * *highValue);
+        else
+            selector_->setValues(*lowValue, *highValue);
     }
 }
 
@@ -628,6 +645,17 @@ struct Controls final {
         controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
                                    QCoreApplication::translate("NodeControls", "Key range"), 0.0,
                                    1.0, true});
+    } else if (typeId == document::kQuantizeNodeType) {
+        // #519: the threshold as a span on a luma strip, its centre the level and its width the
+        // softness (a hard step is a span of no width).
+        RangeRow::Spec spec{"level", "softness",
+                            document::colorCleanupSchemaKey(typeId, "level"),
+                            document::colorCleanupSchemaKey(typeId, "softness"),
+                            QCoreApplication::translate("NodeControls", "Threshold"), 0.0, 1.0,
+                            false};
+        spec.centreWidth = true;
+        spec.lumaStrip = true;
+        controls.ranges.push_back(std::move(spec));
     } else if (typeId == document::kToneMapNodeType) {
         // #518: where the highlight roll-off starts and the value it approaches, on one track.
         controls.ranges.push_back(
@@ -907,7 +935,8 @@ int NodeControlsCardWidget::heightAt(const int width) const {
     if (padShown_)
         height += pad_->heightAt(width) + small();
     for (const auto* range : ranges_)
-        height += range->heightHint() + small();
+        if (roleActive(range->lowRole()))
+            height += range->heightHint() + small();
     for (const auto* angle : angles_)
         if (readsRole(angle->role()) && roleActive(angle->role()))
             height += angle->heightHint() + small();
@@ -975,6 +1004,11 @@ void NodeControlsCardWidget::place() {
         }
     }
     for (auto* range : ranges_) {
+        // A range follows the mode that reads it (Quantize's threshold is hidden while posterizing).
+        const bool shown = roleActive(range->lowRole());
+        range->setVisible(shown);
+        if (!shown)
+            continue;
         range->setLabelWidth(labels);
         range->setGeometry(0, y, width(), range->heightHint());
         y += range->heightHint() + small();

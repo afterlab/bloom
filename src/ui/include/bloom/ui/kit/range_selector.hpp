@@ -51,6 +51,10 @@ class KRangeSelector final : public QWidget {
     // whichever is greater. Off by default: a work area or a trim keeps its order.
     void setHandlesMayCross(bool cross);
     [[nodiscard]] bool handlesMayCross() const noexcept { return cross_; }
+    // #519: the track is a black-to-white strip over the range (a luma scale) instead of a plain field,
+    // and the span between the handles is a translucent band on it. Off by default.
+    void setLumaStrip(bool strip);
+    [[nodiscard]] bool lumaStrip() const noexcept { return strip_; }
 
     [[nodiscard]] QRectF trackRect() const;
     [[nodiscard]] QRectF spanRect() const;
@@ -111,6 +115,7 @@ class KRangeSelector final : public QWidget {
     double lowerBase_ = 0.0;
     double upperBase_ = 0.0;
     bool cross_ = false;
+    bool strip_ = false;
 };
 
 } // namespace bloom::ui::kit

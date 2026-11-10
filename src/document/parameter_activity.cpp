@@ -1,5 +1,6 @@
 #include <bloom/document/parameter_activity.hpp>
 
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
@@ -75,6 +76,30 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
             return exposure;
         if (schemaKey == kVignetteExposureSchemaKey)
             return !exposure;
+        return false;
+    }
+    // #519 Quantize: Threshold reads the basis, level, softness and invert; Posterize the levels (the
+    // master while linked, the three channels' otherwise) and, with Posterize Alpha, the alpha's.
+    if (node.typeId == kQuantizeNodeType) {
+        constexpr std::string_view prefix = "bloom.quantize.";
+        if (!schemaKey.starts_with(prefix))
+            return false;
+        const auto role = schemaKey.substr(prefix.size());
+        const bool posterize =
+            constantOf(composition, node, "mode").value_or(kQuantizeThreshold) == kQuantizePosterize;
+        if (role == "basis" || role == "level" || role == "softness" || role == "invert")
+            return posterize;
+        const bool linked = constantOf(composition, node, "linkLevels").value_or(1) != 0;
+        if (role == "linkLevels")
+            return !posterize;
+        if (role == "levels")
+            return !posterize || !linked;
+        if (role == "redLevels" || role == "greenLevels" || role == "blueLevels")
+            return !posterize || linked;
+        if (role == "posterizeAlpha")
+            return !posterize;
+        if (role == "alphaLevels")
+            return !posterize || constantOf(composition, node, "posterizeAlpha").value_or(0) == 0;
         return false;
     }
     // #511 Tile & Mirror: each mode reads only its own values (the lowering reads the same ones).

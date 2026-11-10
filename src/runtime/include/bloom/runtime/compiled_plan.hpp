@@ -1026,7 +1026,7 @@ struct PixelMathKernel final {
     friend bool operator==(const PixelMathKernel&, const PixelMathKernel&) = default;
 };
 
-// #518 Tone Map, #517 Color Matrix and #523 HSL Qualifier (docs/architecture/image-filters.md): one
+// #518 Tone Map, #517 Color Matrix, #523 HSL Qualifier and #519 Quantize (docs/architecture/image-filters.md): one
 // per-pixel function of the input's straight color, a grade kind (color_tool_image_effect.hpp).
 // `choices` are the node's constants in its definition order, `values` its scalars in
 // forEachColorGradeOperand order (colorToolScalarCount of them).
@@ -1036,7 +1036,10 @@ struct PixelMathKernel final {
 //            from, to and softness, luma from, to and softness. Gives mask coverage in all four channels.
 //   ColorMatrix  choices: preset, size, input model, output model; values: the matrix row by row
 //            (output red, green, blue, alpha; each from red, green, blue, alpha).
-enum class ColorToolOperation : std::uint8_t { ToneMap, ColorMatrix, HslQualifier };
+//   Quantize  choices: mode (0 Threshold, 1 Posterize), basis (0 Luma, 1 Per channel), invert, flags
+//            (bit 0 link levels, bit 1 posterize alpha); values: level, softness, levels, red, green and
+//            blue levels, alpha levels. A value the mode does not read is a constant the lowering fixes.
+enum class ColorToolOperation : std::uint8_t { ToneMap, ColorMatrix, HslQualifier, Quantize };
 inline constexpr std::size_t kColorToolMaxScalars = 24;
 [[nodiscard]] constexpr std::size_t colorToolScalarCount(const ColorToolOperation operation) noexcept {
     switch (operation) {
@@ -1046,6 +1049,8 @@ inline constexpr std::size_t kColorToolMaxScalars = 24;
         return 16;
     case ColorToolOperation::HslQualifier:
         return 9;
+    case ColorToolOperation::Quantize:
+        return 7;
     }
     return 0;
 }
