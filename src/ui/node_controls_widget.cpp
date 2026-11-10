@@ -590,6 +590,17 @@ struct Controls final {
         controls.angles.push_back(angle("mirrorAngle", "bloom.tile-mirror.mirrorAngle", true, false));
         controls.angles.push_back(
             angle("kaleidoscopeAngle", "bloom.tile-mirror.kaleidoscopeAngle", false, false));
+    } else if (typeId == document::kProceduralWarpNodeType) {
+        // #510: the centre of the radial modes on one pad (Wave and Polar Coordinates have none),
+        // Twirl's turn (clockwise, from up) and the direction a Wave travels (clockwise from up).
+        const auto tr = [](const char* text) {
+            return QCoreApplication::translate("NodeControls", text);
+        };
+        controls.points = {{"center", tr("Center"), true}};
+        controls.padLabel = tr("Move Center");
+        controls.angles.push_back(angle("angle", "bloom.procedural-warp.angle", false, false));
+        controls.angles.push_back(
+            angle("direction", "bloom.procedural-warp.direction", false, false));
     } else if (typeId == document::kFourColorGradientNodeType) {
         // The four points, in field units (pixels from the centre, +y up), moved on one pad.
         const auto point = [](std::string role, QString label) {

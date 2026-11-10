@@ -10,6 +10,7 @@
 #include <bloom/document/warp_nodes.hpp>
 
 #include <algorithm>
+#include <initializer_list>
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -133,6 +134,38 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
         if (role == "kaleidoscopeCenter" || role == "kaleidoscopeSegments" ||
             role == "kaleidoscopeAngle" || role == "kaleidoscopeSize")
             return mode != kTileMirrorModeKaleidoscope;
+        return false;
+    }
+    // #510 Procedural Warp: each mode reads only its own values (the lowering reads the same ones).
+    if (node.typeId == kProceduralWarpNodeType) {
+        constexpr std::string_view prefix = "bloom.procedural-warp.";
+        if (!schemaKey.starts_with(prefix))
+            return false;
+        const auto role = schemaKey.substr(prefix.size());
+        const auto mode = constantOf(composition, node, "mode").value_or(kProceduralWarpTwirl);
+        const auto in = [mode](const std::initializer_list<std::int64_t> modes) {
+            return std::ranges::find(modes, mode) != modes.end();
+        };
+        if (role == "center" || role == "radius")
+            return !in({kProceduralWarpTwirl, kProceduralWarpBulgePinch, kProceduralWarpSpherize,
+                        kProceduralWarpRipple, kProceduralWarpMagnify});
+        if (role == "falloff")
+            return !in({kProceduralWarpTwirl, kProceduralWarpBulgePinch, kProceduralWarpRipple});
+        if (role == "angle")
+            return mode != kProceduralWarpTwirl;
+        if (role == "amount")
+            return !in({kProceduralWarpBulgePinch, kProceduralWarpSpherize});
+        if (role == "refraction")
+            return mode != kProceduralWarpSpherize;
+        if (role == "wavelength" || role == "amplitude" || role == "phase" || role == "speed")
+            return !in({kProceduralWarpRipple, kProceduralWarpWave});
+        if (role == "direction" || role == "waveShape" || role == "pinning")
+            return mode != kProceduralWarpWave;
+        if (role == "polarDirection" || role == "interpolation")
+            return mode != kProceduralWarpPolar;
+        if (role == "magnifyShape" || role == "magnification" || role == "magnifyLink" ||
+            role == "feather")
+            return mode != kProceduralWarpMagnify;
         return false;
     }
     if (node.typeId == kFilmGrainNodeType) {

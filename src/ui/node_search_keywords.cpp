@@ -251,6 +251,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kCornerPinNodeType)
         return QStringLiteral("corner pin perspective four point quad keystone pin warp distort "
                               "screen replacement sign billboard match move");
+    if (typeId == document::kProceduralWarpNodeType)
+        return QStringLiteral("procedural warp twirl swirl spiral whirl bulge pinch spherize sphere "
+                              "lens fisheye magnify zoom loupe ripple pond water wave waves "
+                              "sine polar coordinates rectangular distort");
     if (typeId == document::kTileMirrorNodeType)
         return QStringLiteral("tile mirror repeat tiling pattern seamless wrap offset pan scroll "
                               "kaleidoscope reflect reflection symmetry fold flip duplicate grid");

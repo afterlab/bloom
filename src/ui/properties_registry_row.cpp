@@ -247,12 +247,15 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     if (document::isWarpPointSchemaKey(schemaKey)) {
         const bool stabilize = schemaKey.starts_with("bloom.stabilize.");
         const bool tileMirror = schemaKey.starts_with("bloom.tile-mirror.");
-        const auto roles = tileMirror  ? document::tileMirrorPointRoles()
-                           : stabilize ? document::stabilizePointRoles()
-                                       : document::cornerPinCornerRoles();
-        const auto labels = tileMirror  ? document::tileMirrorPointLabels()
-                            : stabilize ? document::stabilizePointLabels()
-                                        : document::cornerPinCornerLabels();
+        const bool proceduralWarp = schemaKey.starts_with("bloom.procedural-warp.");
+        const auto roles = proceduralWarp ? document::proceduralWarpPointRoles()
+                           : tileMirror   ? document::tileMirrorPointRoles()
+                           : stabilize    ? document::stabilizePointRoles()
+                                          : document::cornerPinCornerRoles();
+        const auto labels = proceduralWarp ? document::proceduralWarpPointLabels()
+                            : tileMirror   ? document::tileMirrorPointLabels()
+                            : stabilize    ? document::stabilizePointLabels()
+                                           : document::cornerPinCornerLabels();
         for (std::size_t index = 0; index < roles.size(); ++index)
             if (schemaKey.ends_with(roles[index]))
                 return QCoreApplication::translate("PropertiesRow",

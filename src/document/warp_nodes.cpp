@@ -106,6 +106,17 @@ NodeDefinition tileMirrorDefinition() {
     return definition;
 }
 
+NodeDefinition proceduralWarpDefinition() {
+    auto definition = warpDefinition(kProceduralWarpNodeType, proceduralWarpParameters(), false);
+    for (const auto role : proceduralWarpPointRoles()) {
+        definition.parameters.push_back({std::string(role),
+                                         warpSchemaKey(kProceduralWarpNodeType, role),
+                                         ParameterValueKind::Vec2d, true, true, Vec2d{}});
+        definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
+    }
+    return definition;
+}
+
 NodeDefinition stMapDefinition() {
     return warpDefinition(kStMapNodeType, stMapParameters(), true);
 }

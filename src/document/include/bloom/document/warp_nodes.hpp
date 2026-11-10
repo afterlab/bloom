@@ -41,6 +41,11 @@ inline constexpr std::string_view kStabilizeNodeType = "bloom.stabilize";
 // a kaleidoscope (docs/architecture/image-filters.md, "Tile & Mirror"). It shares the inverse mapping
 // and the filter and edge choices of the nodes above.
 inline constexpr std::string_view kTileMirrorNodeType = "bloom.tile-mirror";
+// #510 Procedural Warp: one node, one mode at a time, each an inverse map from the output pixel to
+// the position to read (docs/architecture/image-filters.md, "Procedural Warp"; the field
+// operation's arithmetic is docs/architecture/fields.md, "Procedural warp"). It shares the
+// inverse mapping and the filter and edge choices of the nodes above.
+inline constexpr std::string_view kProceduralWarpNodeType = "bloom.procedural-warp";
 inline constexpr std::uint32_t kWarpNodeSchemaVersion = 1;
 
 inline constexpr std::string_view kWarpImagePort = "image";
@@ -83,6 +88,30 @@ inline constexpr std::int64_t kMaximumKaleidoscopeSegments = 64;
 inline constexpr double kMinimumTilePercent = 0.01;
 inline constexpr double kMaximumTilePercent = 1.0e5;
 inline constexpr double kMaximumTileAngle = 1.0e6;
+
+// Procedural Warp's modes, as stored (a new mode is added at the end), and the choices of its modes.
+inline constexpr std::int64_t kProceduralWarpTwirl = 0;
+inline constexpr std::int64_t kProceduralWarpBulgePinch = 1;
+inline constexpr std::int64_t kProceduralWarpSpherize = 2;
+inline constexpr std::int64_t kProceduralWarpRipple = 3;
+inline constexpr std::int64_t kProceduralWarpWave = 4;
+inline constexpr std::int64_t kProceduralWarpPolar = 5;
+inline constexpr std::int64_t kProceduralWarpMagnify = 6;
+inline constexpr std::int64_t kProceduralWarpLastMode = kProceduralWarpMagnify;
+inline constexpr std::int64_t kWarpPinNone = 0;
+inline constexpr std::int64_t kWarpPinAllEdges = 1;
+inline constexpr std::int64_t kWarpPinLastChoice = 7;
+inline constexpr std::int64_t kPolarRectToPolar = 0;
+inline constexpr std::int64_t kPolarPolarToRect = 1;
+inline constexpr std::int64_t kMagnifyLinkNone = 0;
+inline constexpr std::int64_t kMagnifyLinkSize = 1;
+inline constexpr std::int64_t kMagnifyLinkSizeAndFeather = 2;
+// Procedural Warp's domains: a length in pixels, an angle or a phase in degrees, a speed in cycles a
+// second, a magnification in percent.
+inline constexpr double kMaximumWarpLength = 1.0e5;
+inline constexpr double kMaximumWarpAngle = 1.0e6;
+inline constexpr double kMaximumWarpSpeed = 1.0e3;
+inline constexpr double kMaximumMagnification = 1.0e4;
 
 // A Choice, an Integer (a whole number, a constant), a Scalar (animatable) or a Boolean (a switch,
 // a constant).
@@ -168,6 +197,63 @@ inline constexpr std::array<std::string_view, 4> kTileMirrorPointRoles{
     "tileCenter", "offset", "mirrorPoint", "kaleidoscopeCenter"};
 inline constexpr std::array<std::string_view, 4> kTileMirrorPointLabels{
     "Tile Center", "Offset", "Line Point", "Center"};
+inline constexpr std::array<std::string_view, 7> kProceduralWarpModes{
+    "Twirl", "Bulge / Pinch", "Spherize / Lens", "Ripple", "Wave", "Polar Coordinates", "Magnify"};
+inline constexpr std::array<std::string_view, 4> kWaveShapes{"Sine", "Triangle", "Square", "Saw"};
+// The frame edges a Wave holds still (the order of the choice; the lowering turns it into a mask).
+inline constexpr std::array<std::string_view, 8> kWavePins{
+    "None", "All Edges", "Left", "Right", "Top", "Bottom", "Left and Right", "Top and Bottom"};
+inline constexpr std::array<std::string_view, 2> kPolarDirections{"Rectangular to Polar",
+                                                                  "Polar to Rectangular"};
+inline constexpr std::array<std::string_view, 2> kMagnifyShapes{"Circle", "Square"};
+inline constexpr std::array<std::string_view, 3> kMagnifyLinks{"Nothing", "Size", "Size and Feather"};
+// Every parameter of Procedural Warp that is not a point, in the order its rows read. Lengths are
+// pixels of the full-resolution frame; Falloff, Amount, Interpolation and Magnification are
+// percent; angles, Phase and Direction are degrees (Angle turns the picture clockwise, Direction is
+// clockwise from up); Speed is cycles a second. Each mode reads only its own rows.
+inline constexpr std::array kProceduralWarp{
+    WarpParameterSpec{"mode", Kind::Choice, 0.0, 0.0, static_cast<double>(kProceduralWarpLastMode),
+                      kProceduralWarpModes, "Mode"},
+    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
+    WarpParameterSpec{"radius", Kind::Scalar, 300.0, 0.0, kMaximumWarpLength, {}, "Radius", 0.0,
+                      1500.0, 1.0, 1, "px"},
+    WarpParameterSpec{"falloff", Kind::Scalar, 100.0, 0.0, 100.0, {}, "Falloff", 0.0, 100.0, 1.0,
+                      1, "%"},
+    WarpParameterSpec{"angle", Kind::Scalar, 90.0, -kMaximumWarpAngle, kMaximumWarpAngle, {},
+                      "Angle", -720.0, 720.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"amount", Kind::Scalar, 50.0, -100.0, 100.0, {}, "Amount", -100.0, 100.0,
+                      1.0, 1, "%"},
+    WarpParameterSpec{"refraction", Kind::Scalar, 1.5, 1.0, 4.0, {}, "Refraction Index", 1.0, 3.0,
+                      0.01, 2},
+    WarpParameterSpec{"wavelength", Kind::Scalar, 40.0, 1.0, kMaximumWarpLength, {}, "Wavelength",
+                      2.0, 400.0, 1.0, 1, "px"},
+    WarpParameterSpec{"amplitude", Kind::Scalar, 10.0, -kMaximumWarpLength, kMaximumWarpLength, {},
+                      "Amplitude", -100.0, 100.0, 0.5, 1, "px"},
+    WarpParameterSpec{"phase", Kind::Scalar, 0.0, -kMaximumWarpAngle, kMaximumWarpAngle, {},
+                      "Phase", -360.0, 360.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"speed", Kind::Scalar, 0.0, -kMaximumWarpSpeed, kMaximumWarpSpeed, {},
+                      "Speed", -5.0, 5.0, 0.05, 2, "cycles/s"},
+    WarpParameterSpec{"direction", Kind::Scalar, 90.0, -kMaximumWarpAngle, kMaximumWarpAngle, {},
+                      "Direction", 0.0, 360.0, 1.0, 1, "\xc2\xb0"},
+    WarpParameterSpec{"waveShape", Kind::Choice, 0.0, 0.0, 3.0, kWaveShapes, "Wave"},
+    WarpParameterSpec{"pinning", Kind::Choice, 0.0, 0.0, static_cast<double>(kWarpPinLastChoice),
+                      kWavePins, "Pin Edges"},
+    WarpParameterSpec{"polarDirection", Kind::Choice, 0.0, 0.0, 1.0, kPolarDirections,
+                      "Conversion"},
+    WarpParameterSpec{"interpolation", Kind::Scalar, 100.0, 0.0, 100.0, {}, "Interpolation", 0.0,
+                      100.0, 1.0, 1, "%"},
+    WarpParameterSpec{"magnifyShape", Kind::Choice, 0.0, 0.0, 1.0, kMagnifyShapes, "Shape"},
+    WarpParameterSpec{"magnification", Kind::Scalar, 200.0, 1.0, kMaximumMagnification, {},
+                      "Magnification", 100.0, 800.0, 1.0, 1, "%"},
+    WarpParameterSpec{"magnifyLink", Kind::Choice, 0.0, 0.0, 2.0, kMagnifyLinks,
+                      "Grow with Magnification"},
+    WarpParameterSpec{"feather", Kind::Scalar, 0.0, 0.0, kMaximumWarpLength, {}, "Feather", 0.0,
+                      200.0, 1.0, 1, "px"},
+};
+// Its point, in pixels from the frame's centre, y down: the centre of a radial mode.
+inline constexpr std::array<std::string_view, 1> kProceduralWarpPointRoles{"center"};
+inline constexpr std::array<std::string_view, 1> kProceduralWarpPointLabels{"Center"};
 inline constexpr std::array kCornerPin{
     WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
 };
@@ -227,6 +313,15 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
 [[nodiscard]] constexpr std::span<const std::string_view> tileMirrorPointLabels() noexcept {
     return warp_parameters::kTileMirrorPointLabels;
 }
+[[nodiscard]] constexpr std::span<const WarpParameterSpec> proceduralWarpParameters() noexcept {
+    return warp_parameters::kProceduralWarp;
+}
+[[nodiscard]] constexpr std::span<const std::string_view> proceduralWarpPointRoles() noexcept {
+    return warp_parameters::kProceduralWarpPointRoles;
+}
+[[nodiscard]] constexpr std::span<const std::string_view> proceduralWarpPointLabels() noexcept {
+    return warp_parameters::kProceduralWarpPointLabels;
+}
 [[nodiscard]] constexpr std::span<const WarpParameterSpec> cornerPinParameters() noexcept {
     return warp_parameters::kCornerPin;
 }
@@ -264,6 +359,8 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
         return spec;
     if (const auto* spec = find("bloom.tile-mirror.", warp_parameters::kTileMirror))
         return spec;
+    if (const auto* spec = find("bloom.procedural-warp.", warp_parameters::kProceduralWarp))
+        return spec;
     return find("bloom.displace.", warp_parameters::kDisplace);
 }
 
@@ -273,7 +370,13 @@ inline constexpr std::array<std::string_view, 2> kStabilizePointLabels{"Track Po
     constexpr std::string_view corner = "bloom.corner-pin.";
     constexpr std::string_view stabilize = "bloom.stabilize.";
     constexpr std::string_view tileMirror = "bloom.tile-mirror.";
-    if (key.starts_with(tileMirror)) {
+    constexpr std::string_view proceduralWarp = "bloom.procedural-warp.";
+    if (key.starts_with(proceduralWarp)) {
+        const auto role = key.substr(proceduralWarp.size());
+        for (const auto name : warp_parameters::kProceduralWarpPointRoles)
+            if (name == role)
+                return true;
+    } else if (key.starts_with(tileMirror)) {
         const auto role = key.substr(tileMirror.size());
         for (const auto name : warp_parameters::kTileMirrorPointRoles)
             if (name == role)

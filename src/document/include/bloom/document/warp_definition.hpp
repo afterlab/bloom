@@ -18,6 +18,7 @@ namespace bloom::document {
 [[nodiscard]] NodeDefinition stMapDefinition();
 [[nodiscard]] NodeDefinition stabilizeDefinition();
 [[nodiscard]] NodeDefinition tileMirrorDefinition();
+[[nodiscard]] NodeDefinition proceduralWarpDefinition();
 [[nodiscard]] NodeDefinition displaceDefinition();
 
 } // namespace bloom::document

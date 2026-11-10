@@ -569,3 +569,186 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
     const auto read = warpRead(build, where, slot, {*filter, edge, 3, 4, 0, 1});
     return finishWarp(node, build, read, canvas, operations, indices);
 }
+
+// #510 Procedural Warp: one field raster, the Procedural Warp instruction moving the pixel's position
+// to the one to read (docs/architecture/fields.md, "Procedural warp"). Each mode reads only its own
+// values (parameter_activity.cpp names the same ones): another mode's value is a constant of the
+// program at its default, so it neither keys the plan nor compiles a curve. Magnify reads the input
+// twice, at the pixel and at the magnified position, and blends the two by the instruction's
+// weight (its feather). The canvas is the input, read whole (an inverse map may reach any of it);
+// the frame size Wave pins to and Polar converts about is the composition's. A muted node, a
+// radial mode with a constant radius of 0 and a mode whose strength is a constant zero are the
+// input itself.
+//
+// The instruction's operands (runtime/field_raster.hpp): choices [mode, wave, pinned edges mask,
+// polar direction, shape, link, frame width, frame height]; scalars [radius, angle, falloff,
+// amount, refraction, wavelength, amplitude, phase, speed, direction, interpolation,
+// magnification, feather]; vectors [centre].
+[[nodiscard]] static std::int64_t warpPinMask(const std::int64_t choice) {
+    using core::field::kWarpPinBottom;
+    using core::field::kWarpPinLeft;
+    using core::field::kWarpPinRight;
+    using core::field::kWarpPinTop;
+    constexpr std::array<std::uint8_t, 8> masks{
+        0, kWarpPinLeft | kWarpPinRight | kWarpPinTop | kWarpPinBottom, kWarpPinLeft,
+        kWarpPinRight, kWarpPinTop, kWarpPinBottom, kWarpPinLeft | kWarpPinRight,
+        kWarpPinTop | kWarpPinBottom};
+    return choice >= 0 && choice < static_cast<std::int64_t>(masks.size())
+               ? masks[static_cast<std::size_t>(choice)]
+               : 0;
+}
+
+[[nodiscard]] bool
+lowerProceduralWarp(const document::NodeRecord& node,
+                    std::vector<runtime::CompiledOperation>& operations,
+                    std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    using namespace document;
+    constexpr std::int64_t kLerp = 9;
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return false;
+    }
+    const auto fail = [this, &node] {
+        addTopologyFailure(node.id, "Procedural Warp parameters could not be lowered.");
+        return false;
+    };
+    const auto constant = [this, &node](const std::string_view role) -> std::optional<std::int64_t> {
+        const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+        return value == nullptr ? std::nullopt : std::optional<std::int64_t>{*value};
+    };
+    const auto mode = constant("mode");
+    const auto filter = constant("filter");
+    const auto edges = constant("edges");
+    if (!mode || !filter || !edges || *mode < kProceduralWarpTwirl ||
+        *mode > kProceduralWarpLastMode || *filter < kWarpFilterBilinear ||
+        *filter > kWarpFilterBicubic || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror)
+        return fail();
+    // The scalars in operand order, each the default of its row until the mode reads it.
+    constexpr std::array<std::string_view, 13> kRoles{
+        "radius",    "angle",     "falloff", "amount", "refraction",    "wavelength",   "amplitude",
+        "phase",     "speed",     "direction", "interpolation", "magnification", "feather"};
+    std::vector<runtime::CompiledScalarParameter> scalars;
+    for (const auto role : kRoles) {
+        double value = 0.0;
+        for (const auto& spec : proceduralWarpParameters())
+            if (spec.role == role)
+                value = spec.value;
+        scalars.push_back(fieldConstant(value));
+    }
+    const auto read = [&](const std::initializer_list<std::size_t> which) {
+        for (const auto index : which) {
+            auto value = compiledScalarParameter(findParameterBinding(node, kRoles[index]));
+            if (!value)
+                return false;
+            scalars[index] = std::move(*value);
+        }
+        return true;
+    };
+    std::vector<std::int64_t> choices(8, 0);
+    choices[0] = *mode;
+    const auto& format = composition_->format();
+    choices[6] = static_cast<std::int64_t>(format.width());
+    choices[7] = static_cast<std::int64_t>(format.height());
+    runtime::CompiledVec2Parameter centre{ParameterId{}, Vec2d{}};
+    bool radial = true;
+    // The value whose constant zero leaves the picture as it is.
+    std::size_t strength = 1;
+    double still = 0.0;
+    bool ok = true;
+    switch (*mode) {
+    case kProceduralWarpTwirl:
+        ok = read({0, 1, 2});
+        strength = 1;
+        break;
+    case kProceduralWarpBulgePinch:
+        ok = read({0, 2, 3});
+        strength = 3;
+        break;
+    case kProceduralWarpSpherize:
+        ok = read({0, 3, 4});
+        strength = 3;
+        break;
+    case kProceduralWarpRipple:
+        ok = read({0, 2, 5, 6, 7, 8});
+        strength = 6;
+        break;
+    case kProceduralWarpWave: {
+        ok = read({5, 6, 7, 8, 9});
+        const auto shape = constant("waveShape");
+        const auto pins = constant("pinning");
+        ok = ok && shape && pins && *shape >= 0 && *shape <= 3 && *pins >= kWarpPinNone &&
+             *pins <= kWarpPinLastChoice;
+        if (ok) {
+            choices[1] = *shape;
+            choices[2] = warpPinMask(*pins);
+        }
+        radial = false;
+        strength = 6;
+        break;
+    }
+    case kProceduralWarpPolar: {
+        ok = read({10});
+        const auto direction = constant("polarDirection");
+        ok = ok && direction && *direction >= kPolarRectToPolar && *direction <= kPolarPolarToRect;
+        if (ok)
+            choices[3] = *direction;
+        radial = false;
+        strength = 10;
+        break;
+    }
+    default: {
+        ok = read({0, 11, 12});
+        const auto shape = constant("magnifyShape");
+        const auto link = constant("magnifyLink");
+        ok = ok && shape && link && *shape >= 0 && *shape <= 1 && *link >= kMagnifyLinkNone &&
+             *link <= kMagnifyLinkSizeAndFeather;
+        if (ok) {
+            choices[4] = *shape;
+            choices[5] = *link;
+        }
+        strength = 11;
+        still = 100.0;
+        break;
+    }
+    }
+    if (!ok)
+        return fail();
+    if (radial) {
+        auto point = compiledVec2Parameter(findParameterBinding(node, "center"));
+        if (!point)
+            return fail();
+        centre = std::move(*point);
+    }
+    const auto constantIs = [](const runtime::CompiledScalarParameter& value, const double what) {
+        const auto* number = std::get_if<double>(&value.source);
+        return number != nullptr && *number == what;
+    };
+    if (isMuted(node.id) || constantIs(scalars[strength], still) ||
+        (radial && constantIs(scalars[0], 0.0))) {
+        passWarpThrough(node, *input, indices);
+        return true;
+    }
+    // A speed that is not a constant zero advances the phase with the clock.
+    const bool waves = *mode == kProceduralWarpRipple || *mode == kProceduralWarpWave;
+    FieldBuild build;
+    build.operations = &operations;
+    build.indices = &indices;
+    build.usesTime = waves && !constantIs(scalars[8], 0.0);
+    const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
+    const auto slot = warpSlot(build, node, *input);
+    if (slot < 0)
+        return false;
+    const auto where = fieldEmit(build, FieldOp::ProceduralWarp, {c, -1, -1, -1}, std::move(choices),
+                                 std::move(scalars), {centre});
+    const std::vector<std::int64_t> sampling{*filter, warpEdge(*edges), 3, 4, 0, 1};
+    auto result = warpRead(build, where, slot, sampling);
+    if (*mode == kProceduralWarpMagnify) {
+        // The plain picture, and the magnified one over it by the weight.
+        const auto plain = warpRead(build, c, slot, sampling);
+        const auto weight = fieldSwizzle(build, where, {2, 4, 4, 4});
+        result = fieldEmit(build, FieldOp::Math, {plain, result, weight, -1}, {kLerp},
+                           {fieldConstant(0.1), fieldConstant(0.0)});
+    }
+    return finishWarp(node, build, result, *input, operations, indices);
+}

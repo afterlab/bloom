@@ -37,13 +37,13 @@ constexpr std::array<std::string_view, 10> kTransform{
     "bloom.transform-2d", "bloom.camera-shake", "bloom.stabilize", "bloom.crop",
     "bloom.pad",          "bloom.fit",          "bloom.resize",    "bloom.flip",
     "bloom.rotate-90",    "bloom.tile-mirror"};
-// Planned: Procedural Warp.
-constexpr std::array<std::string_view, 6> kDistort{"bloom.lens-distortion",
+constexpr std::array<std::string_view, 7> kDistort{"bloom.lens-distortion",
                                                    "bloom.chromatic-aberration",
                                                    "bloom.rolling-shutter",
                                                    "bloom.corner-pin",
                                                    "bloom.st-map",
-                                                   "bloom.displace"};
+                                                   "bloom.displace",
+                                                   "bloom.procedural-warp"};
 constexpr std::array<std::string_view, 12> kBlurSharpen{"bloom.gaussian-blur",
                                                         "bloom.box-blur",
                                                         "bloom.z-defocus",

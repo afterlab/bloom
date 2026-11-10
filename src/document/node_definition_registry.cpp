@@ -650,6 +650,8 @@ template <typename Definition>
             return definition == stabilizeDefinition();
         if (definition.key.typeId == kTileMirrorNodeType)
             return definition == tileMirrorDefinition();
+        if (definition.key.typeId == kProceduralWarpNodeType)
+            return definition == proceduralWarpDefinition();
         if (definition.key.typeId == kDisplaceNodeType)
             return definition == displaceDefinition();
         // #486 Chromatic Aberration: the exact generated shape.
@@ -1854,6 +1856,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         stMapDefinition(),
         stabilizeDefinition(),
         tileMirrorDefinition(),
+        proceduralWarpDefinition(),
         displaceDefinition(),
         testCardDefinition(),
         fourColorGradientDefinition(),
