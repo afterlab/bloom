@@ -2776,3 +2776,26 @@ target_include_directories(bloom_stabilize_test PRIVATE ${CMAKE_CURRENT_SOURCE_D
 target_link_libraries(bloom_stabilize_test PRIVATE bloom_ui bloom_commands)
 bloom_enable_warnings(bloom_stabilize_test)
 bloom_add_test(NAME bloom.ui.stabilize COMMAND bloom_stabilize_test LABELS ui integration TIMEOUT 180 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Issue #637: Resample Path (a keyed Path node feeding it, feeding a Path Shape Source) through the
+# Viewer, a cold and warm RAM preview at Half, and the still, range and movie export routes. The CPU
+# half always runs; the GPU half runs with a Vulkan loader and a qualified device and prints NotRun
+# otherwise (--require-device fails instead).
+add_executable(bloom_ui_viewer_export_resample_path_test viewer_export_resample_path_tests.cpp)
+target_link_libraries(bloom_ui_viewer_export_resample_path_test PRIVATE bloom_ui bloom_host)
+if(TARGET bloom-media-worker)
+    add_dependencies(bloom_ui_viewer_export_resample_path_test bloom-media-worker)
+endif()
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_export_resample_path_test
+        PRIVATE BLOOM_UI_RESAMPLE_ROUTES_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_export_resample_path_test)
+endif()
+bloom_enable_warnings(bloom_ui_viewer_export_resample_path_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_export_resample_path
+    COMMAND bloom_ui_viewer_export_resample_path_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
