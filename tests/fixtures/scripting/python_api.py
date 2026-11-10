@@ -390,6 +390,40 @@ class PythonApi(unittest.TestCase):
             self.assertEqual(command.returncode, 0, command.stderr.decode())
             self.assertIn(b'executed 2 transaction(s)', command.stdout)
 
+    def test_cli_imports_an_svg_in_either_mode(self):
+        """#642: bloom-cli run takes `mode` on bloom.layer.add-svg (omitted: one layer), refuses an
+        invalid one by name, and bloom.layer.break-apart-svg turns the one-layer artwork into shapes."""
+        with tempfile.TemporaryDirectory(prefix='bloom-cli-svg-') as directory:
+            svg = pathlib.Path(directory) / 'art.svg'
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+                           '<rect x="10" y="10" width="80" height="60" fill="#c33"/>'
+                           '<circle cx="150" cy="50" r="30" fill="#36c"/></svg>')
+
+            def run(name, edits):
+                script = pathlib.Path(directory) / name
+                script.write_text(json.dumps(edits))
+                return subprocess.run([CLI, 'run', str(script)], capture_output=True, timeout=60)
+
+            omitted = run('layer.json', [{'op': 'bloom.layer.add-svg', 'args': {'path': str(svg)}}])
+            self.assertEqual(omitted.returncode, 0, omitted.stderr.decode())
+            shapes = run('shapes.json', [{'op': 'bloom.layer.add-svg',
+                                          'args': {'path': str(svg), 'mode': 'shapes'}}])
+            self.assertEqual(shapes.returncode, 0, shapes.stderr.decode())
+            both = run('break.json', [{'op': 'bloom.layer.add-svg', 'args': {'path': str(svg), 'mode': 'layer'}},
+                                      {'op': 'bloom.layer.break-apart-svg', 'args': {'layer': 1}}])
+            self.assertEqual(both.returncode, 0, both.stderr.decode())
+            self.assertIn(b'executed 2 transaction(s)', both.stdout)
+            bad = run('bad.json', [{'op': 'bloom.layer.add-svg', 'args': {'path': str(svg), 'mode': 'flat'}}])
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn(b"argument 'mode'", bad.stderr)
+            self.assertIn(b'"shapes"', bad.stderr)
+            # A layer that holds no one-layer SVG is refused (the CLI reports the rejected operation;
+            # the rejection's reason is asserted in bloom.scripting.svg-import-modes).
+            none = run('none.json', [{'op': 'bloom.layer.add-solid', 'args': {'name': 'Red', 'color': [1, 0, 0, 1]}},
+                                     {'op': 'bloom.layer.break-apart-svg', 'args': {'layer': 1}}])
+            self.assertNotEqual(none.returncode, 0)
+            self.assertIn(b'bloom.layer.break-apart-svg', none.stderr)
+
     def test_cli_export_renders_the_saved_queue(self):
         """ADR 0033: bloom-cli export renders a saved queue headlessly and reports the result."""
         if sys.platform != 'linux':

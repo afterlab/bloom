@@ -38,6 +38,11 @@ enum class SvgError : std::uint8_t;
 namespace bloom::platform {
 struct FontCatalogue;
 }
+namespace bloom::document {
+class Composition;
+class Project;
+struct NodeRecord;
+} // namespace bloom::document
 
 namespace bloom::commands {
 
@@ -126,6 +131,12 @@ class AddSvgArtwork final : public Operation {
         fonts_ = std::move(fonts);
         return *this;
     }
+    // The file could not be prepared where it was read (a client thread): applying then rejects with
+    // this reason and reads nothing, so no route reads or parses a file on the thread that applies.
+    AddSvgArtwork& withPreparationFailure(std::string reason) {
+        preparationFailure_ = std::move(reason);
+        return *this;
+    }
     [[nodiscard]] SvgImportMode mode() const noexcept { return mode_; }
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.layer.add-svg"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -143,6 +154,56 @@ class AddSvgArtwork final : public Operation {
     SvgImportMode mode_ = kDefaultSvgImportMode;
     std::filesystem::path projectDirectory_;
     std::shared_ptr<const platform::FontCatalogue> fonts_;
+    std::optional<std::string> preparationFailure_;
 };
+
+// #642: "Break Apart". Turns the Vector Artwork a layer holds into the editable shapes the other
+// import mode makes, in place and as one undo step. The Vector Artwork node is replaced by the
+// artwork's root Merge (the group that import makes), so the holding layer stays exactly as it is:
+// its transform and keys, parent, timing and trim, masks, track matte, opacity, blend mode, effects
+// between the artwork and the layer, and the layers parented to it, now apply to the root group as
+// they apply to the root group of an editable import. The SVG's data block and the Assets record
+// stay in the project (undo gives the layer back; a block nothing names is left to the project's
+// ordinary cleanup).
+//
+// The scene is built from the block's bytes, so nothing is read from disk. Fonts for text come from
+// `prepared` (read where file I/O may happen); without it a file with text enumerates the system's
+// fonts when the operation applies, as AddSvgArtwork does.
+//
+// Output names: "layer" (the holding layer, unchanged), "merge" (the root group) and the named
+// warnings as issues.
+class BreakApartSvgArtwork final : public Operation {
+  public:
+    BreakApartSvgArtwork(document::CompositionId composition, document::LayerId layer);
+    // The artwork's parsed block, so applying reads nothing: see prepareVectorArtworkSource().
+    BreakApartSvgArtwork& withPrepared(std::shared_ptr<const PreparedSvgSource> prepared) {
+        prepared_ = std::move(prepared);
+        return *this;
+    }
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.layer.break-apart-svg"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    std::shared_ptr<const PreparedSvgSource> prepared_;
+};
+
+// The Vector Artwork node that draws `layer`'s picture: the one its content input reads, through
+// the nodes between. Null when the layer holds none.
+[[nodiscard]] const document::NodeRecord* findLayerVectorArtwork(const document::Composition& composition,
+                                                                 document::LayerId layer);
+
+// The SVG a Vector Artwork layer holds, read from the project's data block and prepared (parsed,
+// fonts when the file has text) exactly as an imported file is, for BreakApartSvgArtwork. Run it
+// where file I/O and font enumeration may happen, never on the UI thread. `diagnostic` says why it
+// returned null (no such layer, no Vector Artwork, its block missing).
+[[nodiscard]] std::shared_ptr<const PreparedSvgSource>
+prepareVectorArtworkSource(const document::Project& project, document::CompositionId composition,
+                           document::LayerId layer, std::string& diagnostic, const std::function<bool()>& cancel = {},
+                           const std::function<void(SvgPreparePhase)>& phase = {});
 
 } // namespace bloom::commands

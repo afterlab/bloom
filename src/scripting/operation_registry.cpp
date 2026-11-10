@@ -17,7 +17,9 @@
 #include <limits>
 #include <map>
 #include <ranges>
+#include <memory>
 #include <set>
+#include <stop_token>
 #include <string>
 #include <utility>
 
@@ -932,6 +934,52 @@ setKeysOperation(const std::string& op, const std::uint64_t composition,
     return fromContext("layer", ValueKind::Id, ContextSource::Layer, StableId{1},
                        "The layer to edit: a layer id, not its node's id. Defaults to the first "
                        "selected layer.");
+}
+
+// bloom.layer.add-svg (#642): reads, hashes and parses the file where the operation is created (the
+// calling client thread, stopped by `stop`), with the installed fonts when the file has text, so
+// applying it on the application's thread reads nothing (AGENTS.md: no media I/O on the interface
+// thread). A file that cannot be prepared still makes the operation; it rejects when it applies,
+// naming the reason, as an unreadable file always has.
+[[nodiscard]] OperationCreateResult createAddSvg(const std::string& op, const Arguments& args,
+                                                 const std::stop_token& stop) {
+    OperationCreateResult error(nullptr, std::nullopt);
+    const auto composition = id(args, op, "composition", error);
+    const auto path = text(args, op, "path", error);
+    const auto name = text(args, op, "name", error, false);
+    const auto fit = boolean(args, op, "fit", error, false);
+    const auto modeName = text(args, op, "mode", error, false);
+    if (!composition || !path || error) {
+        return error;
+    }
+    const auto directory = text(args, op, "projectDirectory", error, false);
+    if (error) {
+        return error;
+    }
+    const auto mode = modeName ? commands::svgImportModeFromName(*modeName)
+                               : std::optional<commands::SvgImportMode>(commands::kDefaultSvgImportMode);
+    if (!mode) {
+        return failure(op, "mode",
+                       "expects \"layer\" (one Vector Artwork layer) or \"shapes\" (editable shapes), not \"" +
+                           *modeName + "\"");
+    }
+    std::filesystem::path file(*path);
+    const std::filesystem::path base = directory ? std::filesystem::path(*directory) : std::filesystem::path{};
+    if (file.is_relative() && !base.empty())
+        file = base / file;
+    const auto compositionId = document::CompositionId::fromRaw(*composition);
+    const auto displayName = name.value_or(std::string{});
+    auto read = commands::prepareSvgSource(file, [stop] { return stop.stop_requested(); });
+    std::unique_ptr<commands::AddSvgArtwork> artwork;
+    if (read.source) {
+        artwork = std::make_unique<commands::AddSvgArtwork>(compositionId, read.source, displayName, *mode,
+                                                            fit.value_or(true));
+    } else {
+        artwork = std::make_unique<commands::AddSvgArtwork>(compositionId, nullptr, file, displayName, fit.value_or(true), *mode);
+        artwork->withPreparationFailure(read.cancelled() ? std::string("The import was cancelled") : read.diagnostic);
+    }
+    artwork->withProjectDirectory(base);
+    return OperationCreateResult(std::move(artwork), std::nullopt);
 }
 
 [[nodiscard]] ArgumentSchema nodeSetArgument(std::string name) {
@@ -2775,41 +2823,23 @@ OperationRegistry OperationRegistry::builtIn() {
          need("path", ValueKind::String, "/art/logo.svg",
               "The SVG file to import: an absolute path, or one relative to the project directory."),
          maybe("name", ValueKind::String, "Logo",
-               "The name of the group layer that holds the artwork. Defaults to the file's name."),
+               "The name of the layer that holds the artwork. Defaults to the file's name."),
          maybe("fit", ValueKind::Boolean, true,
                "Scale the artwork to fit inside the composition and center it (the default); false keeps "
                "its own pixel size, centered."),
          maybe("projectDirectory", ValueKind::String, ".",
                "The project directory the source file's record is made relative to, and a relative path "
                "is read under. Omit it when the path is absolute: the saved project's folder is used, and "
-               "an unsaved project records the file as external.")},
-        [](const std::string& op, const Arguments& args) {
-            OperationCreateResult error(nullptr, std::nullopt);
-            const auto composition = id(args, op, "composition", error);
-            const auto path = text(args, op, "path", error);
-            const auto name = text(args, op, "name", error, false);
-            const auto fit = boolean(args, op, "fit", error, false);
-            if (!composition || !path || error) {
-                return error;
-            }
-            const auto directory = text(args, op, "projectDirectory", error, false);
-            if (error) {
-                return error;
-            }
-            std::filesystem::path file(*path);
-            const std::filesystem::path base = directory ? std::filesystem::path(*directory) : std::filesystem::path{};
-            if (file.is_relative() && !base.empty())
-                file = base / file;
-            auto artwork = std::make_unique<commands::AddSvgArtwork>(
-                document::CompositionId::fromRaw(*composition), nullptr, std::move(file),
-                name.value_or(std::string{}), fit.value_or(true), commands::SvgImportMode::Shapes);
-            artwork->withProjectDirectory(base);
-            return OperationCreateResult(std::move(artwork), std::nullopt);
-        });
-    // Without projectDirectory, the record is made relative to the saved project's folder.
-    all.back().contextualFactory = [factory = all.back().factory](
-                                       const std::string& op, const Arguments& args,
-                                       const OperationContext& context) {
+               "an unsaved project records the file as external."),
+         maybe("mode", ValueKind::String, "layer",
+               "How to import: \"layer\" (the default) makes one Vector Artwork layer that stays crisp at "
+               "any scale and holds the file in the project; \"shapes\" breaks the file into editable "
+               "Shape layers with a Path node per element.")},
+        [](const std::string& op, const Arguments& args) { return createAddSvg(op, args, {}); });
+    // Without projectDirectory, the record is made relative to the saved project's folder. The file
+    // is read and parsed in the factory, on the client thread with the call's stop token.
+    all.back().contextualFactory = [](const std::string& op, const Arguments& args,
+                                      const OperationContext& context) {
         if (!args.contains("projectDirectory") && context.source) {
             if (const auto source = context.source();
                 source && !source->assetBaseDirectory.empty()) {
@@ -2818,10 +2848,48 @@ OperationRegistry OperationRegistry::builtIn() {
                 resolved.insert_or_assign(
                     "projectDirectory",
                     Value(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size())));
-                return factory(op, resolved);
+                return createAddSvg(op, resolved, context.stop);
             }
         }
-        return factory(op, args);
+        return createAddSvg(op, args, context.stop);
+    };
+
+    add("bloom.layer.break-apart-svg",
+        {compositionArgument(), layerArgument()},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            if (!composition || !layer)
+                return error;
+            return OperationCreateResult(
+                std::make_unique<commands::BreakApartSvgArtwork>(document::CompositionId::fromRaw(*composition),
+                                                                 document::LayerId::fromRaw(*layer)),
+                std::nullopt);
+        });
+    // The SVG's fonts are matched where the operation is created (the client thread), not where it
+    // applies: with a session source the held copy is prepared here.
+    all.back().contextualFactory = [factory = all.back().factory](
+                                       const std::string& op, const Arguments& args, const OperationContext& context) {
+        auto created = factory(op, args);
+        if (!created || !context.source)
+            return created;
+        OperationCreateResult error(nullptr, std::nullopt);
+        const auto composition = id(args, op, "composition", error);
+        const auto layer = id(args, op, "layer", error);
+        const auto source = context.source();
+        if (!composition || !layer || !source)
+            return created;
+        std::string diagnostic;
+        const auto stop = context.stop;
+        auto prepared = commands::prepareVectorArtworkSource(
+            source->snapshot.project(), document::CompositionId::fromRaw(*composition),
+            document::LayerId::fromRaw(*layer), diagnostic, [stop] { return stop.stop_requested(); });
+        // A layer that holds no artwork is refused when it applies, by name.
+        auto operation = std::move(created).takeOperation();
+        if (prepared)
+            static_cast<commands::BreakApartSvgArtwork&>(*operation).withPrepared(std::move(prepared));
+        return OperationCreateResult(std::move(operation), std::nullopt);
     };
 
     add("bloom.layer.add-solid",

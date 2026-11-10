@@ -4870,18 +4870,23 @@ class LayerOps:
         bloom.animation.set-keyframe-at-time-for-parameter, transact
         """
         ...
-    def add_svg(self, path: str, name: str = ..., fit: bool = ..., projectDirectory: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_svg(self, path: str, name: str = ..., fit: bool = ..., projectDirectory: str = ..., mode: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-svg  (operation, layer)
-        Imports an SVG file as native layers: every drawn element becomes a Shape layer driven by its
-        own Path node (keyable points, Trim Path, Offset Path, Boolean Paths and the other path nodes
-        can be wired to it), every group a nested Merge that keeps its name and order, and text a Text
-        layer. Gradients, clips, masks and dash patterns are built from Gradient nodes, track mattes and
-        Path Stroke. Transforms and the view box are baked into the points. The file is read here
-        (nothing is fetched, no script runs); what could not be imported is listed by name in the
-        operation's warnings. One undo step. `fit` (default true) scales the artwork to fit the
-        composition and centres it. `projectDirectory` (optional) is the project folder the source
-        file's recorded locator is made relative to; the file's path and SHA-256 are kept in the
-        project's assets.
+        Imports an SVG file in one of two modes (`mode`, default "layer"). As one layer: a single Vector
+        Artwork layer that keeps the file's bytes in the project and draws its geometry at the output
+        resolution, so it stays crisp at any scale, rotation and render size; the graph holds one layer
+        and one node, and bloom.layer.break-apart-svg turns it into editable shapes later. As editable
+        shapes ("shapes"): every drawn element becomes a Shape layer driven by its own Path node
+        (keyable points, Trim Path, Offset Path, Boolean Paths and the other path nodes can be wired to
+        it), every group a nested Merge that keeps its name and order, and text a Text layer. Gradients,
+        clips, masks and dash patterns are built from Gradient nodes, track mattes and Path Stroke. Both
+        modes draw the same picture; transforms and the view box are baked into the points. The file is
+        read and parsed before the operation is queued, on the calling client thread, never on the
+        application's interface thread (nothing is fetched, no script runs); what could not be imported
+        is listed by name in the operation's warnings. One undo step. `fit` (default true) scales the
+        artwork to fit the composition and centres it. `projectDirectory` (optional) is the project
+        folder the source file's recorded locator is made relative to; the file's path and SHA-256 are
+        kept in the project's assets.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -4891,7 +4896,7 @@ class LayerOps:
           path  str  required
               The SVG file to import: an absolute path, or one relative to the project directory.
           name  str  optional
-              The name of the group layer that holds the artwork. Defaults to the file's name.
+              The name of the layer that holds the artwork. Defaults to the file's name.
           fit  bool  optional
               Scale the artwork to fit inside the composition and center it (the default); false keeps
               its own pixel size, centered.
@@ -4900,6 +4905,13 @@ class LayerOps:
               read under. Omit it when the path is absolute: the saved project's folder is used, and an
               unsaved project records the file as external.
               Unit: directory path; relative locators are made relative to it
+          mode  str  optional, default layer
+              How to import: "layer" (the default) makes one Vector Artwork layer that stays crisp at
+              any scale and holds the file in the project; "shapes" breaks the file into editable Shape
+              layers with a Path node per element.
+              Values:
+                "layer"  As one layer: a Vector Artwork layer that stays crisp at any scale
+                "shapes"  As editable shapes: a Shape layer and a Path node per element
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -4907,15 +4919,24 @@ class LayerOps:
           layer layer
           slot layer-slot
           merge merge
+          node node
+          dataBlock data-block
+          asset asset
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
 
         Result:
           The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, slot,
-          merge (each {operationIndex, name, id}).
+          merge, node, dataBlock, asset (each {operationIndex, name, id}).
 
         Errors:
+          bloom.scripting.invalid-argument
+              When: mode is neither "layer" nor "shapes"
+              Do: use one of them.
+          bloom.scripting.command-rejected
+              When: The file cannot be read or is not an SVG
+              Do: the rejection names the reason; nothing is added.
           bloom.scripting.invalid-argument
               When: an argument is missing, of the wrong kind or out of range
               Do: the message names the argument and a working example call
@@ -4934,7 +4955,7 @@ class LayerOps:
           CLI:
             bloom-cli run edits.json   # [{"op":"bloom.layer.add-svg","args":{"path":"/art/logo.svg"}}]
 
-        Related: query:layers, bloom.node.set-parameter-value, transact
+        Related: query:layers, bloom.layer.break-apart-svg, bloom.node.set-parameter-value, transact
         """
         ...
     def add_text(self, name: str, text: str, position: tuple[float, float] = ..., opacity: float = ..., size: float = ..., color: tuple[float, float, float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
@@ -5163,6 +5184,60 @@ class LayerOps:
             bloom-cli run edits.json   # [{"op":"bloom.layer.animate-mask-path","args":{"mask":1}}]
 
         Related: bloom.layer.set-mask-path, bloom.layer.stop-animating-mask-path, transact
+        """
+        ...
+    def break_apart_svg(self, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.break-apart-svg  (operation, layer)
+        Turns a Vector Artwork layer (an SVG imported as one layer) into editable shapes in place, as
+        one undo step: the layer keeps its transform and keys, parent, timing and trim, masks, track
+        matte, opacity, blend mode and effects, and now draws the file's root group of Shape layers and
+        Path nodes (what mode "shapes" imports). The picture is unchanged. The SVG comes from the copy
+        the project holds, so the original file is not needed. A layer that does not hold a Vector
+        Artwork is refused by name.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          layer layer
+          merge merge
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, merge
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.break-apart-svg","args":{}}]}}
+          Python:
+            bloom.ops.layer.break_apart_svg()
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.break-apart-svg","args":{}}]
+
+        Related: query:layers, bloom.layer.add-svg, transact
         """
         ...
     def clear_mask_matte(self, mask: int | Proxy, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:

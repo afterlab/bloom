@@ -250,6 +250,12 @@ SvgSourceRead finishPrepare(media::SvgReadResult read, std::shared_ptr<const std
     out.diagnostic = read.diagnostic;
     if (read.error != media::SvgError::None || !read.scene)
         return out;
+    // Asked to stop while the file was read: nothing is returned, however small the file was.
+    if (cancel && cancel()) {
+        out.error = media::SvgError::Cancelled;
+        out.diagnostic = "Cancelled.";
+        return out;
+    }
     auto prepared = std::make_shared<PreparedSvgSource>();
     prepared->path = path;
     prepared->bytes = std::move(bytes);
@@ -373,6 +379,8 @@ OperationResult AddSvgArtwork::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
         return detail::missingComposition(composition_);
+    if (preparationFailure_ && !source_ && !scene_)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, "SVG import failed: " + *preparationFailure_);
     // One layer keeps the file's bytes; a caller that gave only a scene has the file read here,
     // as a caller that gave nothing has always had.
     std::shared_ptr<const PreparedSvgSource> source = source_;
@@ -405,6 +413,161 @@ OperationResult AddSvgArtwork::apply(document::Draft& draft) const {
             return *failure;
     }
     return result;
+}
+
+// ---- #642: Break Apart ----
+
+const document::NodeRecord* findLayerVectorArtwork(const document::Composition& composition,
+                                                   const document::LayerId layerId) {
+    const auto& graph = composition.graph();
+    const auto* layer = graph.findLayer(layerId);
+    if (layer == nullptr)
+        return nullptr;
+    // The edge into the layer's content: its Merge slot's content input, or its Layer node's image.
+    const auto reading = [&](const auto& matches) -> const document::EdgeRecord* {
+        for (const auto& edge : graph.edges())
+            if (matches(edge.destination))
+                return &edge;
+        return nullptr;
+    };
+    const document::EdgeRecord* edge = reading([&](const document::InputPortRef& destination) {
+        if (layer->entryOwned()) {
+            const auto* slot = std::get_if<document::LayerStackInputRef>(&destination);
+            return slot != nullptr && slot->stackNodeId == layer->nodeId && slot->slotId == *layer->entrySlot &&
+                   slot->role == document::kLayerStackContentInputRole;
+        }
+        const auto* input = std::get_if<document::NodeInputRef>(&destination);
+        return input != nullptr && input->nodeId == layer->nodeId && input->port == document::kLayerOutputContentInputPort;
+    });
+    for (std::size_t step = 0; edge != nullptr && step <= graph.nodes().size(); ++step) {
+        const auto* node = graph.findNode(edge->source.nodeId);
+        if (node == nullptr)
+            return nullptr;
+        if (node->typeId == document::kVectorArtworkNodeType)
+            return node;
+        // Walk up through the node's first image input (a blur, a colour node, a reroute).
+        const auto* definition = document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+        if (definition == nullptr || definition->inputs.empty())
+            return nullptr;
+        const auto port = definition->inputs.front().name;
+        edge = reading([&](const document::InputPortRef& destination) {
+            const auto* input = std::get_if<document::NodeInputRef>(&destination);
+            return input != nullptr && input->nodeId == node->id && input->port == port;
+        });
+    }
+    return nullptr;
+}
+
+std::shared_ptr<const PreparedSvgSource>
+prepareVectorArtworkSource(const document::Project& project, const document::CompositionId compositionId,
+                           const document::LayerId layer, std::string& diagnostic, const std::function<bool()>& cancel,
+                           const std::function<void(SvgPreparePhase)>& phase) {
+    const auto* composition = project.findComposition(compositionId);
+    if (composition == nullptr) {
+        diagnostic = "The composition does not exist";
+        return nullptr;
+    }
+    const auto* node = findLayerVectorArtwork(*composition, layer);
+    if (node == nullptr) {
+        diagnostic = "The layer does not hold an SVG as one Vector Artwork layer";
+        return nullptr;
+    }
+    const auto* block = document::vectorArtworkBlock(project, *node, composition->parameters());
+    if (block == nullptr) {
+        diagnostic = "The SVG this layer holds is missing from the project";
+        return nullptr;
+    }
+    const auto& payload = std::get<document::OpaqueExtensionPayload>(block->payload);
+    auto bytes = std::make_shared<const std::vector<std::byte>>(payload.bytes().begin(), payload.bytes().end());
+    std::filesystem::path path;
+    if (const auto* asset = document::vectorArtworkSourceAsset(project, *block))
+        path = std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(asset->locator.path.data()),
+                                                   asset->locator.path.size()));
+    auto read = prepareSvgSource(std::move(bytes), path, cancel, phase);
+    if (!read.source)
+        diagnostic = read.diagnostic;
+    return read.source;
+}
+
+BreakApartSvgArtwork::BreakApartSvgArtwork(const document::CompositionId composition, const document::LayerId layer)
+    : composition_(composition), layer_(layer) {}
+
+OperationResult BreakApartSvgArtwork::apply(document::Draft& draft) const {
+    auto& project = draft.project();
+    auto* composition = project.findComposition(composition_);
+    if (composition == nullptr)
+        return detail::missingComposition(composition_);
+    const auto* layer = composition->graph().findLayer(layer_);
+    if (layer == nullptr)
+        return detail::missingLayer(composition, composition_, layer_);
+    const auto* found = findLayerVectorArtwork(*composition, layer_);
+    if (found == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Layer " + std::to_string(layer_.value()) +
+                                             " does not hold an SVG as one Vector Artwork layer, so there is nothing to "
+                                             "break apart");
+    const document::NodeRecord source = *found;
+    const auto* block = document::vectorArtworkBlock(project, source, composition->parameters());
+    if (block == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The SVG this layer holds is missing from the project");
+    // The scene: the prepared one when it is this block's bytes, else the block parsed here.
+    std::shared_ptr<const media::SvgScene> scene;
+    std::shared_ptr<const platform::FontCatalogue> fonts;
+    if (prepared_ && prepared_->scene && prepared_->digest == block->provenance.contentDigest) {
+        scene = prepared_->scene;
+        fonts = prepared_->fonts;
+    } else {
+        std::string diagnostic;
+        scene = document::parseVectorArtworkBlock(*block, diagnostic);
+        if (!scene)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue, "SVG break apart failed: " + diagnostic);
+    }
+    try {
+        document::SvgArtworkOptions options;
+        options.width = composition->format().width();
+        options.height = composition->format().height();
+        options.fit = document::vectorArtworkFits(source, composition->parameters());
+        options.name = document::svgArtworkName(layer->name, "SVG");
+        options.layoutOriginX = document::svgArtworkLayoutOrigin(*composition);
+        options.fonts = fonts;
+        const auto description = document::buildSvgArtwork(*scene, options);
+        DraftTarget target(draft, composition_);
+        document::SvgArtworkWriter writer(*composition, target, description);
+        auto& graph = composition->graph();
+        const auto root = writer.addRoot();
+        writer.writeSteps();
+        writer.writeFrames();
+        // Every reader of the node's image reads the artwork's root group instead.
+        std::vector<document::EdgeRecord> readers;
+        for (const auto& edge : graph.edges())
+            if (edge.source.nodeId == source.id)
+                readers.push_back(edge);
+        for (auto edge : readers) {
+            (void)graph.eraseEdge(edge.id);
+            edge.source = {root, std::string(document::kLayerStackOutputPort)};
+            if (!graph.addEdge(std::move(edge)))
+                throw Failure{"The artwork could not be connected where the layer reads it"};
+        }
+        for (const auto& binding : source.parameters)
+            (void)composition->parameters().erase(binding.parameterId);
+        (void)graph.eraseNode(source.id);
+        if (const auto layout = composition->nodeLayout().find(source.id); layout != composition->nodeLayout().end()) {
+            // A muted Vector Artwork node is a muted root.
+            if (layout->second.muted)
+                composition->nodeLayout()[root].muted = true;
+            composition->nodeLayout().erase(source.id);
+        }
+        if (const auto failure = detail::validateGraph(*composition, document::builtInNodeDefinitions()))
+            return *failure;
+        auto result = OperationResult::applied({{"layer", layer_}, {"merge", root}});
+        appendNotes(result, description.notes);
+        return result;
+    } catch (const Failure& failure) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, failure.message);
+    } catch (const document::SvgArtworkWriteError& failure) {
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, failure.what());
+    }
 }
 
 } // namespace bloom::commands

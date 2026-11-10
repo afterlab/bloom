@@ -383,17 +383,34 @@ constexpr std::array kNotes{
         "blendModeParameter",
         "query:layers bloom.parameter.set-source", ""},
     OperationNotes{"bloom.layer.add-svg",
-        "Imports an SVG file as native layers: every drawn element becomes a Shape layer driven by "
-        "its own Path node (keyable points, Trim Path, Offset Path, Boolean Paths and the other "
-        "path nodes can be wired to it), every group a nested Merge that keeps its name and order, "
-        "and text a Text layer. Gradients, clips, masks and dash patterns are built from Gradient "
-        "nodes, track mattes and Path Stroke. Transforms and the view box are baked into the points. "
-        "The file is read here (nothing is fetched, no script runs); what could not be imported is "
-        "listed by name in the operation's warnings. One undo step. `fit` (default true) scales the "
-        "artwork to fit the composition and centres it. `projectDirectory` (optional) is the project "
-        "folder the source file's recorded locator is made relative to; the file's path and "
-        "SHA-256 are kept in the project's assets.",
-        "layer, slot, merge", "query:layers bloom.node.set-parameter-value", ""},
+        "Imports an SVG file in one of two modes (`mode`, default \"layer\"). As one layer: a "
+        "single Vector Artwork layer that keeps the file's bytes in the project and draws its "
+        "geometry at the output resolution, so it stays crisp at any scale, rotation and render "
+        "size; the graph holds one layer and one node, and bloom.layer.break-apart-svg turns it "
+        "into editable shapes later. As editable shapes (\"shapes\"): every drawn element becomes "
+        "a Shape layer driven by its own Path node (keyable points, Trim Path, Offset Path, "
+        "Boolean Paths and the other path nodes can be wired to it), every group a nested Merge "
+        "that keeps its name and order, and text a Text layer. Gradients, clips, masks and dash "
+        "patterns are built from Gradient nodes, track mattes and Path Stroke. Both modes draw the "
+        "same picture; transforms and the view box are baked into the points. The file is read "
+        "and parsed before the operation is queued, on the calling client thread, never on the "
+        "application's interface thread (nothing is fetched, no script runs); what could not be "
+        "imported is listed by name in the operation's warnings. One undo step. `fit` (default "
+        "true) scales the artwork to fit the composition and centres it. `projectDirectory` "
+        "(optional) is the project folder the source file's recorded locator is made relative to; "
+        "the file's path and SHA-256 are kept in the project's assets.",
+        "layer, slot, merge, node, dataBlock, asset",
+        "query:layers bloom.layer.break-apart-svg bloom.node.set-parameter-value",
+        "[invalid-argument] mode is neither \"layer\" nor \"shapes\" => use one of them.\nThe file "
+        "cannot be read or is not an SVG => the rejection names the reason; nothing is added."},
+    OperationNotes{"bloom.layer.break-apart-svg",
+        "Turns a Vector Artwork layer (an SVG imported as one layer) into editable shapes in place, "
+        "as one undo step: the layer keeps its transform and keys, parent, timing and trim, masks, "
+        "track matte, opacity, blend mode and effects, and now draws the file's root group of Shape "
+        "layers and Path nodes (what mode \"shapes\" imports). The picture is unchanged. The SVG "
+        "comes from the copy the project holds, so the original file is not needed. A layer that "
+        "does not hold a Vector Artwork is refused by name.",
+        "layer, merge", "query:layers bloom.layer.add-svg", ""},
     OperationNotes{"bloom.layer.move-before",
         "Reorders the layer stack: moves a slot to sit above another slot, or to the bottom. "
         "query:layers reports each layer's slot; index 0 is the topmost layer.",
@@ -783,6 +800,10 @@ void refine(const std::string& op, ArgumentSchema& argument) {
         argument.defaultText = "4 (centre)";
     } else if ((name == "before" || name == "after") && op == "bloom.layer.set-time-modes") {
         chooseIntegers(argument, {"None", "Hold", "Loop", "Ping-pong"});
+    } else if (name == "mode" && op == "bloom.layer.add-svg") {
+        choose(argument, {{"layer", "As one layer: a Vector Artwork layer that stays crisp at any scale"},
+                          {"shapes", "As editable shapes: a Shape layer and a Path node per element"}});
+        argument.defaultText = "layer";
     } else if (name == "mode" && op.starts_with("bloom.layer.")) {
         chooseIntegers(argument, {"None", "Add", "Subtract", "Intersect", "Difference"});
         if (!argument.required)

@@ -578,6 +578,116 @@ void preparedSourcesReadNothingLater(TestContext& test) {
     std::filesystem::remove(text);
 }
 
+
+// ---- #642: Break Apart ----
+
+void breakApartTurnsTheLayerIntoShapes(TestContext& test) {
+    const auto path = writeFile("break-apart", kLayerArtwork);
+    Session layer;
+    Session shapes;
+    const auto imported = layer.import(path, SvgImportMode::Layer);
+    const auto editable = shapes.import(path, SvgImportMode::Shapes);
+    const auto holder = outputOf<LayerId>(imported, "layer");
+    test.expect(imported.succeeded() && editable.succeeded() && holder, "both imports succeed");
+    if (!holder)
+        return;
+    const auto* before = layer.main().graph().findLayer(*holder);
+    test.expect(before != nullptr && findLayerVectorArtwork(layer.main(), *holder) != nullptr,
+                "the layer holds a Vector Artwork the lookup finds");
+    if (before == nullptr)
+        return;
+    const auto boundary = *before;
+    const auto nodeSpan = layer.main().graph().nodes();
+    const std::vector<document::NodeRecord> nodesBefore(nodeSpan.begin(), nodeSpan.end());
+    const auto edgesBefore = layer.main().graph().edges().size();
+    const auto parametersBefore = layer.main().parameters().records().size();
+
+    Transaction transaction("Break Apart SVG", layer.document.snapshot().revision());
+    transaction.emplace<BreakApartSvgArtwork>(layer.composition, *holder);
+    const auto result = layer.stack.execute(std::move(transaction));
+    test.expect(result.succeeded(), "Break Apart succeeds");
+    const auto& broken = layer.main();
+    test.expect(countNodes(broken, document::kVectorArtworkNodeType) == 0,
+                "no Vector Artwork node is left");
+    // The same graph the editable import builds: the layer's picture is the root group of shapes.
+    test.expect(broken.graph().nodes().size() == shapes.main().graph().nodes().size() &&
+                    countNodes(broken, document::kPathValueNodeType) ==
+                        countNodes(shapes.main(), document::kPathValueNodeType) &&
+                    countNodes(broken, document::kShapeSourceNodeType) ==
+                        countNodes(shapes.main(), document::kShapeSourceNodeType) &&
+                    broken.graph().layerOutputs().size() == shapes.main().graph().layerOutputs().size(),
+                "the nodes and layers are those of the editable import");
+    const auto* after = broken.graph().findLayer(*holder);
+    test.expect(after != nullptr && *after == boundary, "the holding layer is untouched: same id, name, timing, masks and parameters");
+    const auto merge = outputOf<document::NodeId>(result, "merge");
+    test.expect(merge && broken.graph().findNode(*merge) != nullptr &&
+                    broken.graph().findNode(*merge)->typeId == document::kLayerStackNodeType,
+                "the result names the artwork's root group");
+    test.expect(warningsOf(result) == warningsOf(editable), "the same named warnings as the editable import");
+    test.expect(layer.project().typedDataBlocks().size() == 1 && layer.project().assets().size() == 1,
+                "the data block and the Assets record stay");
+    test.expect(layer.project().validate().ok(), "the project validates");
+    test.expect(findLayerVectorArtwork(broken, *holder) == nullptr, "the layer no longer holds a Vector Artwork");
+
+    // A second Break Apart has nothing to break.
+    Transaction again("Break Apart SVG", layer.document.snapshot().revision());
+    again.emplace<BreakApartSvgArtwork>(layer.composition, *holder);
+    const auto refused = layer.stack.execute(std::move(again));
+    test.expect(!refused.succeeded(), "a layer that holds no Vector Artwork is refused");
+
+    // One undo restores the layer exactly.
+    test.expect(layer.stack.undo().changed(), "one undo");
+    const auto& restored = layer.main();
+    test.expect(std::ranges::equal(restored.graph().nodes(), nodesBefore) && restored.graph().edges().size() == edgesBefore &&
+                    restored.parameters().records().size() == parametersBefore &&
+                    restored.graph().findLayer(*holder) != nullptr && *restored.graph().findLayer(*holder) == boundary,
+                "one undo gives back the Vector Artwork layer exactly");
+    test.expect(layer.stack.redo().changed() && countNodes(layer.main(), document::kVectorArtworkNodeType) == 0,
+                "redo breaks it apart again");
+    std::filesystem::remove(path);
+}
+
+void breakApartReadsOnlyThePreparedCopy(TestContext& test) {
+    const auto path = writeFile("break-apart-prepared", kLayerArtwork);
+    Session session;
+    const auto imported = session.import(path, SvgImportMode::Layer);
+    const auto holder = outputOf<LayerId>(imported, "layer");
+    test.expect(imported.succeeded() && holder, "the layer imports");
+    if (!holder)
+        return;
+    // The original file is gone: the project's own copy is what is prepared and broken apart.
+    std::filesystem::remove(path);
+    std::string diagnostic;
+    std::vector<SvgPreparePhase> phases;
+    const auto prepared = prepareVectorArtworkSource(session.project(), session.composition, *holder, diagnostic, {},
+                                                     [&](const SvgPreparePhase phase) { phases.push_back(phase); });
+    test.expect(prepared && prepared->scene && prepared->bytes && !prepared->fonts, "the held copy is prepared");
+    Transaction transaction("Break Apart SVG", session.document.snapshot().revision());
+    transaction.emplace<BreakApartSvgArtwork>(session.composition, *holder).withPrepared(prepared);
+    test.expect(session.stack.execute(std::move(transaction)).succeeded() &&
+                    countNodes(session.main(), document::kVectorArtworkNodeType) == 0 &&
+                    countNodes(session.main(), document::kShapeSourceNodeType) > 0,
+                "it breaks apart with the file gone");
+    // A layer without an artwork is named, not guessed at.
+    (void)prepareVectorArtworkSource(session.project(), session.composition, *holder, diagnostic);
+    test.expect(diagnostic.find("does not hold") != std::string::npos, "the lookup names why there is nothing to prepare");
+    // Cancelling the preparation of a file with text stops it.
+    const auto text = writeFile("break-apart-text", R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><text x="1" y="10">A</text></svg>)svg");
+    Session second;
+    const auto secondImport = second.import(text, SvgImportMode::Layer);
+    const auto secondLayer = outputOf<LayerId>(secondImport, "layer");
+    test.expect(secondLayer.has_value(), "a file with text imports as one layer");
+    if (secondLayer) {
+        std::string why;
+        bool fontsSought = false;
+        const auto cancelled = prepareVectorArtworkSource(
+            second.project(), second.composition, *secondLayer, why, [&] { return fontsSought; },
+            [&](const SvgPreparePhase phase) { fontsSought = fontsSought || phase == SvgPreparePhase::FindingFonts; });
+        test.expect(!cancelled, "a cancelled preparation yields nothing");
+    }
+    std::filesystem::remove(text);
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -593,5 +703,7 @@ int main() {
     bloom::commands::test::oneBlockPerFile(test);
     bloom::commands::test::oneLayerRefusesWhatItCannotHold(test);
     bloom::commands::test::preparedSourcesReadNothingLater(test);
+    bloom::commands::test::breakApartTurnsTheLayerIntoShapes(test);
+    bloom::commands::test::breakApartReadsOnlyThePreparedCopy(test);
     return test.failures() == 0 ? 0 : 1;
 }

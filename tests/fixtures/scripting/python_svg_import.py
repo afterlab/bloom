@@ -34,11 +34,12 @@ with tempfile.TemporaryDirectory(prefix="bloom-svg-import-") as directory:
     composition = bloom.context.composition
     before = len(bloom.data.nodes(composition))
     result = bloom.ops.layer.add_svg(path=str(file), name="art", fit=False,
-                                     projectDirectory=directory)
+                                     projectDirectory=directory, mode="shapes")
     assert result["succeeded"], result
     assert {o["name"] for o in result["outputs"]} >= {"layer", "slot", "merge", "asset"}, result
     nodes = bloom.data.nodes(composition)
-    print("imported", len(nodes) - before, "nodes")
+    shapes_nodes = len(nodes) - before
+    print("imported", shapes_nodes, "nodes")
 
     # The compound shape is the Path node whose value has two contours.
     parameters = bloom.data.parameters(composition)
@@ -93,4 +94,27 @@ with tempfile.TemporaryDirectory(prefix="bloom-svg-import-") as directory:
     bloom.transactions.undo()
     bloom.transactions.undo()
     assert len(bloom.data.nodes(composition)) == before, "undoing the import removes every node"
+
+    # #642: omitting `mode` imports one layer (a Vector Artwork node and the file held in the
+    # project); Break Apart turns it into the editable shapes above, in place, in one undo step.
+    one = bloom.ops.layer.add_svg(path=str(file), name="art", fit=False, projectDirectory=directory)
+    assert one["succeeded"], one
+    names = {o["name"] for o in one["outputs"]}
+    assert {"layer", "slot", "node", "dataBlock", "asset"} <= names and "merge" not in names, names
+    assert len(bloom.data.nodes(composition)) == before + 1, "one layer is one node"
+    layer = next(o["id"] for o in one["outputs"] if o["name"] == "layer")
+    try:
+        bloom.ops.layer.add_svg(path=str(file), mode="flat", projectDirectory=directory)
+    except bloom.OperationError as error:
+        assert "mode" in str(error) and "shapes" in str(error), str(error)
+    else:
+        raise AssertionError("an invalid mode is refused")
+    broken = bloom.ops.layer.break_apart_svg(layer=layer)
+    assert broken["succeeded"], broken
+    assert any(o["name"] == "merge" for o in broken["outputs"]), broken
+    assert len(bloom.data.nodes(composition)) == before + shapes_nodes, "the editable import's nodes"
+    bloom.transactions.undo()
+    assert len(bloom.data.nodes(composition)) == before + 1, "one undo gives the layer back"
+    bloom.transactions.undo()
+    assert len(bloom.data.nodes(composition)) == before, "and one more removes the import"
     print("python svg import: PASS")

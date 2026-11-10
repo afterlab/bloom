@@ -101,6 +101,14 @@ if(BUILD_TESTING)
         COMMAND bloom_scripting_mcp_fold_test
         LABELS unit scripting commands document
     )
+    add_executable(bloom_scripting_svg_import_modes_test tests/svg_import_modes_tests.cpp)
+    target_link_libraries(bloom_scripting_svg_import_modes_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_svg_import_modes_test)
+    bloom_add_test(
+        NAME bloom.scripting.svg-import-modes
+        COMMAND bloom_scripting_svg_import_modes_test
+        LABELS unit scripting commands document
+    )
     add_executable(bloom_scripting_operation_schema_test tests/operation_schema_tests.cpp)
     target_link_libraries(bloom_scripting_operation_schema_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_operation_schema_test)
