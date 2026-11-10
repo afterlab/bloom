@@ -748,6 +748,8 @@ void refine(const std::string& op, ArgumentSchema& argument) {
         range(argument, 0.0, 1.0);
         argument.unit = "fraction 0..1";
         argument.defaultText = "1";
+    } else if ((name == "lineStart" || name == "lineEnd") && op == "bloom.layer.add-shape") {
+        argument.unit = "pixels in the shape's own space (animatable and drivable)";
     } else if ((name == "position" || name == "lineStart" || name == "lineEnd") && layerOp) {
         argument.unit = kPixelUnit;
         if (name == "position")

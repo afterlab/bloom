@@ -2737,9 +2737,11 @@ OperationRegistry OperationRegistry::builtIn() {
                "Layer position. Defaults to the composition center."),
          maybe("size", ValueKind::Vec2, document::Vec2d{400.0, 300.0}, "Shape size."),
          maybe("lineStart", ValueKind::Vec2, document::Vec2d{0.0, 0.0},
-               "First point of a line shape."),
+               "First point of a line shape. It can be keyed afterwards (bloom.animation.set-keyframe-at-time-for-parameter "
+               "on the shape source's lineStart parameter) and driven by a Vector2 value node wired to its lineStart port."),
          maybe("lineEnd", ValueKind::Vec2, document::Vec2d{100.0, 0.0},
-               "Second point of a line shape."),
+               "Second point of a line shape. It can be keyed afterwards (bloom.animation.set-keyframe-at-time-for-parameter "
+               "on the shape source's lineEnd parameter) and driven by a Vector2 value node wired to its lineEnd port."),
          maybe("path", ValueKind::Path, examplePath(),
                "The outline of a \"path\" shape. " + kPathObject)},
         [](const std::string& op, const Arguments& args) {

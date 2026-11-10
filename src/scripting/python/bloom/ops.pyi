@@ -4742,11 +4742,15 @@ class LayerOps:
               Shape size.
               Unit: pixels as [width, height]
           lineStart  vec2  optional
-              First point of a line shape.
-              Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
+              First point of a line shape. It can be keyed afterwards
+              (bloom.animation.set-keyframe-at-time-for-parameter on the shape source's lineStart
+              parameter) and driven by a Vector2 value node wired to its lineStart port.
+              Unit: pixels in the shape's own space (animatable and drivable)
           lineEnd  vec2  optional
-              Second point of a line shape.
-              Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
+              Second point of a line shape. It can be keyed afterwards
+              (bloom.animation.set-keyframe-at-time-for-parameter on the shape source's lineEnd
+              parameter) and driven by a Vector2 value node wired to its lineEnd port.
+              Unit: pixels in the shape's own space (animatable and drivable)
           path  path  optional
               The outline of a "path" shape. A path object {"closed": bool, "anchors": [{"point": [x,
               y], "inHandle": [x, y] or null, "outHandle": [x, y] or null, "mode": "corner", "mirrored",
