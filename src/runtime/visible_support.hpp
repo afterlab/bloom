@@ -142,9 +142,9 @@ visibleSupportWindows(const CompiledCompositionPlan& plan, const ResolvedEvaluat
             static_cast<double>(plan.format().width()) / 2.0 + anchor->value.x,
             static_cast<double>(plan.format().height()) / 2.0 + anchor->value.y};
         auto matrix = LayerMatrix::authored(position->value, pivot, scale->value, rotation->value);
-        auto content = LayerMatrix::authored(
-            position->value, pivot, {scale->value.x * layer->sourcePixelAspect, scale->value.y},
-            rotation->value);
+        // #642: with a content scale its input is that many times larger.
+        auto content = LayerMatrix::content(position->value, pivot, scale->value, rotation->value,
+                                            layer->sourcePixelAspect, layer->contentScale);
         if (layer->parent) {
             matrix = layerMatrices[layer->parent->value()]->times(matrix);
             content = layerMatrices[layer->parent->value()]->times(content);

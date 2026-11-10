@@ -277,6 +277,14 @@ class CompilePass final {
             return found == parsed.end() ? nullptr : found->second.scene;
         };
         context.cancelled = stop;
+        // A preview's override of a layer's scale or rotation sets the band its artwork is drawn
+        // at (an invalid override is refused later, by validateParameterOverride).
+        context.override = [this](const document::ParameterId id) -> std::optional<document::ParameterValue> {
+            for (const auto& entry : request_.parameterOverrides)
+                if (entry.parameterId == id && entry.sourceRevision == request_.snapshot.revision())
+                    return std::visit([](const auto& value) -> document::ParameterValue { return value; }, entry.value);
+            return std::nullopt;
+        };
         artwork_ = document::expandVectorArtwork(project, *composition_, context);
         if (artwork_.cancelled || cancelled())
             return false;
@@ -969,6 +977,30 @@ class CompilePass final {
         }
     }
 
+    // #642: an override of a length an oversampled Vector Artwork layer's expansion multiplied (a
+    // mask dragged in the Viewer, a blur radius scrubbed) is multiplied the same way, so the preview
+    // draws what the stored value draws.
+    [[nodiscard]] document::ParameterRecord scaledOverride(document::ParameterRecord record) const {
+        const auto factor = artwork_.scaledParameters.find(record.id);
+        auto* constant = std::get_if<document::ConstantValueSource>(&record.source);
+        if (factor == artwork_.scaledParameters.end() || constant == nullptr)
+            return record;
+        if (auto* number = std::get_if<double>(&constant->value))
+            *number *= factor->second;
+        else if (auto* path = std::get_if<document::PathValue>(&constant->value))
+            for (auto& contour : path->contours)
+                for (auto& anchor : contour.anchors) {
+                    anchor.point = {anchor.point.x * factor->second, anchor.point.y * factor->second};
+                    if (anchor.inHandle)
+                        anchor.inHandle = document::Vec2d{anchor.inHandle->x * factor->second,
+                                                          anchor.inHandle->y * factor->second};
+                    if (anchor.outHandle)
+                        anchor.outHandle = document::Vec2d{anchor.outHandle->x * factor->second,
+                                                           anchor.outHandle->y * factor->second};
+                }
+        return record;
+    }
+
     void validateParameterOverride() {
         if (request_.parameterOverrides.size() > 8) {
             addFailure(runtime::CompileDiagnosticCode::InvalidParameterOverride,
@@ -1059,7 +1091,7 @@ class CompilePass final {
                                "Disconnect or explicitly transition the driver before editing.");
                 return;
             }
-            overrides_.emplace(parameter->id, std::move(replacement));
+            overrides_.emplace(parameter->id, scaledOverride(std::move(replacement)));
             return;
         }
 
@@ -1158,7 +1190,7 @@ class CompilePass final {
                            "Disconnect or explicitly transition the driver before editing.");
             return;
         }
-        overrides_.emplace(parameter->id, std::move(replacement));
+        overrides_.emplace(parameter->id, scaledOverride(std::move(replacement)));
     }
 
     void validateParameter(const document::NodeRecord& node,

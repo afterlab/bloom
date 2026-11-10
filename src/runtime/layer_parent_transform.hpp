@@ -75,6 +75,16 @@ struct LayerMatrix {
         result.y = position.y - moved.y;
         return result;
     }
+    // The matrix a layer resamples its own content through: authored(), with the footage pixel
+    // aspect on its x scale (#381) and, #642, the content drawn `contentScale` times larger about
+    // the origin mapped back (pivot times contentScale, scale divided by it). At a pixel aspect and
+    // a content scale of 1 it is authored() exactly.
+    [[nodiscard]] static LayerMatrix content(document::Vec2d position, document::Vec2d pivot,
+                                             document::Vec2d scale, double degrees,
+                                             const double pixelAspect, const double contentScale) {
+        return authored(position, {pivot.x * contentScale, pivot.y * contentScale},
+                        {scale.x * pixelAspect / contentScale, scale.y / contentScale}, degrees);
+    }
 };
 
 // The exact conversion from the runtime's AUTHOR-space LayerMatrix (pixel-centre + 0.5 convention)

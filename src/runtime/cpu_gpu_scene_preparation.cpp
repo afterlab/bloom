@@ -989,21 +989,27 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // and records it for every layer whether or not the layer is active. The layer's own
             // published bounds are only written inside its active range, exactly as on the CPU.
             // #502: a frame pivot is the composition frame's centre, as on the CPU.
+            // #642: a content scale's input is that many times larger; the layer's pivot, anchor
+            // and local bounds are the picture's at the frame's scale, as on the CPU.
+            const double contentScale = layer->contentScale;
+            const bool scaledContent = contentScale != 1.0;
+            const auto inputCentre = inputLocal.pivot();
             const auto centre =
                 layer->framePivot
                     ? decltype(inputLocal.pivot()){static_cast<double>(plan->format().width()) /
                                                        2.0,
                                                    static_cast<double>(plan->format().height()) /
                                                        2.0}
-                    : inputLocal.pivot();
+                    : decltype(inputLocal.pivot()){inputCentre.x / contentScale,
+                                                   inputCentre.y / contentScale};
             const auto authoredMatrix = detail::LayerMatrix::authored(
                 position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
                 scale->value, rotation->value);
             // #381: the layer's own content carries its footage pixel aspect; children compose
             // the matrix without it.
-            const auto contentAuthored = detail::LayerMatrix::authored(
+            const auto contentAuthored = detail::LayerMatrix::content(
                 position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
-                {scale->value.x * layer->sourcePixelAspect, scale->value.y}, rotation->value);
+                scale->value, rotation->value, layer->sourcePixelAspect, contentScale);
             detail::LayerMatrix contentComposed = contentAuthored;
             detail::LayerMatrix composed = authoredMatrix;
             if (layer->parent) {
@@ -1023,7 +1029,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             layerMatrices[index] = composed;
             std::optional<detail::GpuSceneVectorChain> chained;
             if (inputVec.has_value()) {
-                chained = GpuSceneVectorChain{inputVec->source, composed.times(inputVec->matrix),
+                chained = GpuSceneVectorChain{inputVec->source,
+                                              (scaledContent ? contentComposed : composed)
+                                                  .times(inputVec->matrix),
                                               inputVec->opacity * opacity->value};
                 vectors[index] = *chained;
             } else {
@@ -1075,7 +1083,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                             "Layer transform is not evaluable");
             }
             std::optional<detail::ParentedLayerTransform> parented;
-            if (layer->parent) {
+            if (layer->parent || scaledContent) {
                 parented.emplace(contentComposed, sourceWindow, hScale, vScale,
                                  static_cast<float>(opacity->value));
                 if (!parented->finite()) {
@@ -1118,7 +1126,13 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 geometry.output.right = std::max(geometry.output.right, point.x);
                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
             }
-            geometry.anchor = map({centre.x + anchor->value.x, centre.y + anchor->value.y});
+            geometry.anchor = map({(centre.x + anchor->value.x) * contentScale,
+                                   (centre.y + anchor->value.y) * contentScale});
+            if (scaledContent)
+                geometry.local = {geometry.local.left / contentScale, geometry.local.top / contentScale,
+                                  geometry.local.right / contentScale, geometry.local.bottom / contentScale,
+                                  geometry.local.pivotX ? std::optional(*geometry.local.pivotX / contentScale)
+                                                        : std::nullopt};
             // #642: a composed Vector Artwork layer reports its artwork's box through the carrier's
             // matrix, exactly as on the CPU.
             if (layer->composedArtwork) {
@@ -1248,7 +1262,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // retained when it applies; every other affine appears on the accepted GpuAffine
             // command so rotation, nonuniform/signed scale, anchor and any parent-composed shear
             // are exact.
-            if (!layer->parent) {
+            if (!layer->parent && !scaledContent) {
                 if (const auto delta = detail::translationOnlyDeviceDelta(
                         transformValue, sourceWindow, *layerWindow)) {
                     if (const auto error = detail::emitTranslationOpacityCommand(

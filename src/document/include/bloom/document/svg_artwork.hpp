@@ -245,9 +245,14 @@ struct VectorArtworkExpansionContext final {
     // Polled between nodes and while a block is parsed.
     std::function<bool()> cancelled;
     // Draw the holding layer's transform through the artwork's geometry (see
-    // VectorArtworkComposedLayer) so the artwork stays sharp at any scale and rotation. Off, the
-    // layer resamples the artwork's picture as it resamples an editable import's root group.
+    // VectorArtworkComposedLayer), or the artwork at the layer's output scale
+    // (VectorArtworkOversampledLayer), so the artwork stays sharp at any scale and rotation. Off,
+    // the layer resamples the artwork's picture as it resamples an editable import's root group.
     bool composeLayerTransform = true;
+    // A preview's constant in place of a parameter's stored source (a Viewer gesture's override),
+    // or nothing. The oversampled layer's scale bound reads it, so a drag that grows the layer
+    // draws the artwork at the scale it is dragged to.
+    std::function<std::optional<ParameterValue>(ParameterId)> override;
 };
 
 // #642: how the holding layer's transform reaches the artwork's geometry. A Merge ends vector
@@ -265,11 +270,47 @@ struct VectorArtworkExpansionContext final {
 //
 // Only a layer the composition cannot change is composed: the node feeds it directly and nothing
 // else, it pivots on the frame, and it has no masks (drawn in its content space) and identity
-// timing (its content would run on another clock than its transform). Any other layer keeps the
-// resampled picture; `resampled` names why.
+// timing (its content would run on another clock than its transform). Any other layer is drawn as
+// a scaled pre-composition instead (VectorArtworkOversampledLayer).
 struct VectorArtworkComposedLayer final {
     LayerId carrier;
     std::vector<LayerId> leaves;
+};
+
+// #642: the most a layer's artwork is oversampled, and the longest edge (in composition pixels at
+// full resolution) the oversampled composition frame may reach. A 3840 x 2160 composition is drawn
+// at up to 2x, a 1920 x 1080 one at up to 4x, anything up to 1024 pixels on its longer side at up
+// to 8x.
+inline constexpr double kVectorArtworkMaxOversample = 8.0;
+inline constexpr double kVectorArtworkMaxOversampledEdge = 8192.0;
+
+// #642: a layer that pivots on its content, has masks or its own timing, or reads the artwork
+// through effects (a blur, a glow, a drop shadow, colour nodes) is drawn as a scaled
+// pre-composition would be. The artwork is drawn at `scale` (a power of two) about the composition
+// origin, through the same covered shapes and text: a hidden `carrier` Layer node holding that
+// constant scale parents every drawn layer of the artwork (`leaves`, as for a composed layer). Every
+// length of the nodes between in composition pixels (a blur's radius, a glow's size, a shadow's
+// distance and softness) and the layer's masks (paths, feather, expansion) are multiplied by
+// `scale` too, so the nodes see the picture a pre-composition `scale` times larger would give them.
+// The layer keeps its own transform, pivot, masks, timing, parent, children, opacity, blend mode and
+// track matte; the compiler gives it a content scale (CompiledLayerOutput::contentScale) so its one
+// resample maps the larger picture back through its matrix, and its published bounds are the
+// picture's at the composition's scale. The result is the plain layer's picture, drawn from
+// `scale` times the pixels.
+//
+// `scale` is the band of the layer's largest output scale over its whole animation: the smallest
+// power of two at least the product, over the layer and its parents, of the largest |scale| any of
+// their keys (or their handles and easing) reaches, and at least 2 when any of them turns. It is
+// part of the plan, so an animated transform renders every frame from one plan and one oversampled
+// picture of the artwork; only an edit that moves the band compiles a different picture. It is at
+// most kVectorArtworkMaxOversample and kVectorArtworkMaxOversampledEdge over the composition's
+// longer side, and is halved while a scaled length would leave its parameter's domain; `limited`
+// says why when it is below the band.
+struct VectorArtworkOversampledLayer final {
+    LayerId carrier;
+    std::vector<LayerId> leaves;
+    double scale = 1.0;
+    std::string limited;
 };
 
 struct VectorArtworkExpansion final {
@@ -285,7 +326,13 @@ struct VectorArtworkExpansion final {
     std::unordered_map<NodeId, std::string> unresolved;
     // The layers whose transform is drawn through their artwork's geometry, by the holding layer.
     std::unordered_map<LayerId, VectorArtworkComposedLayer> composed;
-    // Why an expanded node's layer resamples its artwork's picture instead, by the node's id.
+    // The layers whose artwork is drawn at their output scale, by the holding layer.
+    std::unordered_map<LayerId, VectorArtworkOversampledLayer> oversampled;
+    // Every parameter an oversampled layer's expansion multiplied, and by what, so a preview
+    // override of one is multiplied the same way.
+    std::unordered_map<ParameterId, double> scaledParameters;
+    // Why an expanded node's layer resamples its artwork's picture at the composition's scale, by
+    // the node's id. A layer that neither scales up nor turns needs neither and is in none of them.
     std::unordered_map<NodeId, std::string> resampled;
     bool cancelled = false;
 };

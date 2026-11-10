@@ -1735,6 +1735,14 @@ struct CompiledLayerOutput {
         friend bool operator==(const ComposedArtwork&, const ComposedArtwork&) = default;
     };
     std::optional<ComposedArtwork> composedArtwork{};
+    // #642: the layer's input is its content drawn `contentScale` times larger about the
+    // composition's origin (document::VectorArtworkOversampledLayer: a Vector Artwork drawn at its
+    // layer's output scale). Its one resample maps that picture back through its matrix (authored
+    // about contentScale times its pivot, its scale divided by contentScale); its content pivot,
+    // published local bounds and anchor are those of the picture at the composition's scale; its
+    // children compose its plain matrix. A power of two, so every division is exact. Appended 1:
+    // no existing plan changes meaning.
+    double contentScale = 1.0;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

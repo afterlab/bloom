@@ -3401,18 +3401,22 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::failed(
                         diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                    "Layer transform could not be resolved", {}, operationSubject));
-                // #502: a frame pivot is the composition frame's centre.
+                // #502: a frame pivot is the composition frame's centre. #642: a content scale's
+                // input is that many times larger; its pivot is the picture's at the frame's scale.
+                const auto inputPivot = bounds[layer->input.value()].output.pivot();
                 const auto centre =
                     layer->framePivot
                         ? document::Vec2d{static_cast<double>(plan->format().width()) / 2.0,
                                           static_cast<double>(plan->format().height()) / 2.0}
-                        : bounds[layer->input.value()].output.pivot();
+                        : document::Vec2d{inputPivot.x / layer->contentScale,
+                                          inputPivot.y / layer->contentScale};
                 const document::Vec2d pivot{centre.x + anchor->value.x, centre.y + anchor->value.y};
                 auto matrix = detail::LayerMatrix::authored(position->value, pivot, scale->value,
                                                             rotation->value);
-                auto content = detail::LayerMatrix::authored(
-                    position->value, pivot,
-                    {scale->value.x * layer->sourcePixelAspect, scale->value.y}, rotation->value);
+                auto content = detail::LayerMatrix::content(position->value, pivot, scale->value,
+                                                            rotation->value,
+                                                            layer->sourcePixelAspect,
+                                                            layer->contentScale);
                 if (layer->parent) {
                     matrix = layerMatrices[layer->parent->value()].times(matrix);
                     content = layerMatrices[layer->parent->value()].times(content);
@@ -3434,9 +3438,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 if (inputVector) {
                     const auto& input = *inputVector;
                     const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
-                    vectors[index] =
-                        VectorChain{input.source, layerMatrices[index].times(input.matrix),
-                                    opacity ? input.opacity * opacity->value : 0};
+                    // #642: a content scale maps its larger input back (vector sources have no
+                    // pixel aspect of their own).
+                    const auto& own = layer->contentScale != 1.0 ? contentMatrices[index]
+                                                                 : layerMatrices[index];
+                    vectors[index] = VectorChain{input.source, own.times(input.matrix),
+                                                 opacity ? input.opacity * opacity->value : 0};
                 } else if (const auto opacity =
                                detail::resolveParameter(layer->opacity, *plan, resolved)) {
                     const auto inputIndex = layer->input.value();
@@ -3770,6 +3777,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // changed interpretation must not reuse the previous aspect's image.
                             key.add(step.sourcePixelAspect);
                             key.add(step.framePivot);
+                            // #642: its input is drawn this many times larger.
+                            if (step.contentScale != 1.0) {
+                                key.add(std::string("contentScale"));
+                                key.add(step.contentScale);
+                            }
                             // #343: the window it is drawn in follows what the frame shows of it.
                             for (const auto& window : {visible[index], matteWindowOf(index)}) {
                                 key.add(window.has_value());
@@ -4937,7 +4949,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (geometry.local.empty())
                                 return;
 
-                            const auto contentCentre = geometry.local.pivot();
+                            // #642: a content scale's input is that many times larger; the
+                            // layer's pivot, anchor and local bounds are the picture's at the
+                            // frame's scale, and it resamples through its content matrix.
+                            const double contentScale = layer.contentScale;
+                            const bool scaledContent = contentScale != 1.0;
+                            const auto inputCentre = geometry.local.pivot();
+                            const decltype(inputCentre) contentCentre{inputCentre.x / contentScale,
+                                                                      inputCentre.y / contentScale};
                             const auto centre =
                                 layer.framePivot
                                     ? decltype(contentCentre){static_cast<double>(
@@ -4991,7 +5010,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             std::optional<detail::ParentedLayerTransform> parented;
-                            if (layer.parent) {
+                            if (layer.parent || scaledContent) {
                                 parented.emplace(contentMatrices[index],
                                                  sourceDescriptor->dataWindow(),
                                                  resolved.horizontalScale, resolved.verticalScale,
@@ -5012,7 +5031,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // pure move keeps the exact translate-only row. Its bounds still follow
                             // the layer's own transform, as on the GPU.
                             std::optional<detail::ParentedLayerTransform> unparentedAffine;
-                            if (!layer.parent && !transform.value()->isTranslationOnly())
+                            if (!layer.parent && !scaledContent &&
+                                !transform.value()->isTranslationOnly())
                                 unparentedAffine.emplace(contentMatrices[index],
                                                          sourceDescriptor->dataWindow(),
                                                          resolved.horizontalScale,
@@ -5080,7 +5100,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
                             }
                             geometry.anchor =
-                                map({centre.x + anchor->value.x, centre.y + anchor->value.y});
+                                map({(centre.x + anchor->value.x) * contentScale,
+                                     (centre.y + anchor->value.y) * contentScale});
+                            if (scaledContent)
+                                geometry.local = {geometry.local.left / contentScale,
+                                                  geometry.local.top / contentScale,
+                                                  geometry.local.right / contentScale,
+                                                  geometry.local.bottom / contentScale,
+                                                  geometry.local.pivotX
+                                                      ? std::optional(*geometry.local.pivotX /
+                                                                      contentScale)
+                                                      : std::nullopt};
                             // #642: a composed Vector Artwork layer reports its artwork's box
                             // through the carrier's matrix (its own is the identity).
                             if (layer.composedArtwork &&
