@@ -11,12 +11,15 @@
 #include <QImage>
 #include <bloom/commands/node_layout_arrange.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/properties_editor.hpp>
 
 #include <array>
 #include <cstdint>
@@ -223,6 +226,44 @@ int capture(int argc, char** argv) {
         return gFailures == 0 ? 0 : 1;
     }
 
+    // F's review gap 1: an unselected radio option reads as enabled. The Inner Glow Source and the
+    // Dither Pattern and Domain radios, on their cards and in Properties.
+    if (argc > 3 && QString::fromLatin1(argv[3]) == QStringLiteral("radio-rows")) {
+        const auto addNode = [&](std::string_view type, document::Vec2d at) {
+            commands::Transaction add("Add Node", session.snapshot().revision());
+            add.emplace<commands::AddNode>(composition, std::string(type), at);
+            return session.executeNodeTransaction(std::move(add))
+                .outputId<document::NodeId>(commands::kAddNodeOutput);
+        };
+        const auto glow = addNode(document::kInnerGlowNodeType, {-6000.0, 0.0});
+        const auto dither = addNode(document::kDitherNodeType, {-5600.0, 0.0});
+        if (!glow || !dither)
+            return 1;
+        sizeArea(*fixture.window, *area, QSize(1100, 800));
+        settle();
+        const std::array<std::pair<document::NodeId, const char*>, 2> nodes{
+            std::pair{*glow, "inner-glow"}, std::pair{*dither, "dither"}};
+        for (const auto& [id, name] : nodes) {
+            if (auto* card = editor->graphScene()->findNodeItem(id)) {
+                editor->graphView()->frameRect(card->sceneBoundingRect().adjusted(-50, -50, 50, 50));
+                settle(120);
+                save(area->grab().toImage(), QStringLiteral("nodes-radio-card-%1").arg(name));
+            } else {
+                std::cerr << "no card for " << name << '\n';
+                ++gFailures;
+            }
+        }
+        PropertiesEditor properties(session);
+        properties.resize(520, 760);
+        properties.show();
+        for (const auto& [id, name] : nodes) {
+            session.selectNode(id);
+            settle(120);
+            save(properties.grab().toImage(), QStringLiteral("nodes-radio-properties-%1").arg(name));
+        }
+        return gFailures == 0 ? 0 : 1;
+    }
+
     // #589: the Path socket beside its neighbors: a Path node driving a Shape Source, with Scalar,
     // Color and String literals alongside it.
     if (argc > 3 && QString::fromLatin1(argv[3]) == QStringLiteral("path-socket")) {
@@ -406,7 +447,7 @@ int capture(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: bloom_node_canvas_capture <directory> <1|1.5> [path-socket]\n";
+        std::cerr << "Usage: bloom_node_canvas_capture <directory> <1|1.5> [path-socket|path-key|radio-rows]\n";
         return 2;
     }
     qputenv("QT_SCALE_FACTOR", argv[2]);
