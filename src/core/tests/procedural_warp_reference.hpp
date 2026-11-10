@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numbers>
 
 namespace bloom::procedural_warp_reference {
@@ -35,6 +36,112 @@ inline double sphereSource(const double t, const double n) {
     return t - std::sqrt(1.0 - t * t) * std::tan(std::asin(t) - std::asin(t / n));
 }
 
+// The first word of the 4D permuted congruential generator of Jarzynski and Olano, "Hash Functions
+// for GPU Rendering" (JCGT 9(3), 2020), written from the paper in integers, and its top 24 bits as a
+// unit value: the stream Drizzle places its drops with.
+inline std::uint32_t pcg4dFirst(std::uint32_t x, std::uint32_t y, std::uint32_t z, std::uint32_t w) {
+    x = x * 1664525u + 1013904223u;
+    y = y * 1664525u + 1013904223u;
+    z = z * 1664525u + 1013904223u;
+    w = w * 1664525u + 1013904223u;
+    x += y * w;
+    y += z * x;
+    z += x * y;
+    w += y * z;
+    x ^= x >> 16u;
+    y ^= y >> 16u;
+    z ^= z >> 16u;
+    w ^= w >> 16u;
+    x += y * w;
+    y += z * x;
+    z += x * y;
+    w += y * z;
+    return x;
+}
+
+inline double unitOf(const std::uint32_t h) { return static_cast<double>(h >> 8u) / 16777216.0; }
+
+// The pinned edges' product of eases at a position, as Wave and Turbulent pin: each pinned edge of
+// the frame multiplies by smooth01(distance to it / length).
+inline double pinWeight(const std::uint8_t pins, const double px, const double py, const double halfW,
+                        const double halfH, const double length) {
+    double w = 1.0;
+    if ((pins & core::field::kWarpPinLeft) != 0)
+        w *= smooth01((px + halfW) / length);
+    if ((pins & core::field::kWarpPinRight) != 0)
+        w *= smooth01((halfW - px) / length);
+    if ((pins & core::field::kWarpPinTop) != 0)
+        w *= smooth01((halfH - py) / length);
+    if ((pins & core::field::kWarpPinBottom) != 0)
+        w *= smooth01((py + halfH) / length);
+    return w;
+}
+
+// Warp's style on the perspective-corrected normalised position (u, v).
+inline void warpStyle(const int style, const double b, const double u, const double v,
+                      const double halfW, const double halfH, const double circle, double& u2,
+                      double& v2) {
+    const auto cu = std::clamp(u, -1.0, 1.0);
+    const auto cv = std::clamp(v, -1.0, 1.0);
+    const auto arch = 1.0 - cu * cu;
+    const auto side = 1.0 - cv * cv;
+    u2 = u;
+    v2 = v;
+    switch (style) {
+    case 0:
+        v2 = v - b * arch;
+        break;
+    case 1:
+        v2 = v - b * arch * (1.0 - cv) / 2.0;
+        break;
+    case 2:
+        v2 = v - b * arch * (1.0 + cv) / 2.0;
+        break;
+    case 3:
+        v2 = v / (1.0 + b * arch / 2.0);
+        break;
+    case 4: {
+        const auto s = 1.0 + b / 2.0 * std::max(0.0, 1.0 - (cu * cu + cv * cv) / 2.0);
+        u2 = u / s;
+        v2 = v / s;
+        break;
+    }
+    case 5:
+        v2 = v - b * std::sin(kPi * cu) / 2.0;
+        break;
+    case 6:
+        v2 = v - b * std::sin(kPi * cu) * cv / 2.0;
+        break;
+    case 7: {
+        const auto t = (cu + 0.5) / 1.5;
+        v2 = v / (1.0 + b / 2.0 * std::max(0.0, 1.0 - t * t));
+        break;
+    }
+    case 8:
+        u2 = u * (1.0 + b * cv / 2.0);
+        break;
+    case 9: {
+        const auto x = u * halfW / circle;
+        const auto y = v * halfH / circle;
+        const auto k = 1.0 - b / 2.0 * std::max(0.0, 1.0 - (x * x + y * y));
+        u2 = u * k;
+        v2 = v * k;
+        break;
+    }
+    case 10:
+        u2 = u / (1.0 + b * side / 2.0);
+        break;
+    case 11:
+        u2 = u * (1.0 + b * side / 2.0);
+        v2 = v * (1.0 + b * arch / 2.0);
+        break;
+    default:
+        u2 = u - b * cv / 2.0;
+        v2 = v + b * cu / 2.0;
+        break;
+    }
+}
+
 struct Reading final {
     double x = 0.0;
     double y = 0.0;
@@ -45,7 +152,9 @@ struct Reading final {
     bool step = false;
 };
 
-inline Reading reference(const ProceduralWarpParameters& p, const double px, const double py) {
+// `noiseX`, `noiseY`: Turbulent's noise vector at the position (its second input).
+inline Reading reference(const ProceduralWarpParameters& p, const double px, const double py,
+                         const double noiseX = 0.0, const double noiseY = 0.0) {
     Reading out{px, py, 1.0, false};
     const auto dx = px - p.centreX;
     const auto dy = py - p.centreY;
@@ -96,8 +205,12 @@ inline Reading reference(const ProceduralWarpParameters& p, const double px, con
             out.y = p.centreY + dy * k;
         } else {
             const auto phase = p.phaseDegrees / 360.0 + p.speed * p.seconds;
-            const auto move = p.amplitude * std::sin(2.0 * kPi * (r / p.wavelength - phase)) *
-                              fade(t, falloff) * smooth01(2.0 * r / p.wavelength);
+            auto move = p.amplitude * std::sin(2.0 * kPi * (r / p.wavelength - phase)) *
+                        fade(t, falloff) * smooth01(2.0 * r / p.wavelength);
+            if (p.pulseRadius != 0.0 || p.pulseSpeed != 0.0) {
+                const auto front = std::max(0.0, p.pulseRadius + p.pulseSpeed * p.seconds);
+                move *= smooth01((front - r) / p.wavelength);
+            }
             out.x = r > 0.0 ? px + dx / r * move : px;
             out.y = r > 0.0 ? py + dy / r * move : py;
         }
@@ -181,9 +294,109 @@ inline Reading reference(const ProceduralWarpParameters& p, const double px, con
         out.step = near(distance, p.radius) && !(p.feather > 0.0);
         if (!(p.radius > 0.0) || distance >= p.radius)
             return out;
-        out.x = p.centreX + dx / p.magnification;
-        out.y = p.centreY + dy / p.magnification;
+        const auto pull = std::clamp(p.pull, -1.0, 1.0) * smooth01((p.radius - distance) / p.radius);
+        out.x = p.centreX + dx / p.magnification - pull * (p.secondX - p.centreX);
+        out.y = p.centreY + dy / p.magnification - pull * (p.secondY - p.centreY);
         out.weight = p.feather > 0.0 ? smooth01((p.radius - distance) / p.feather) : 1.0;
+        return out;
+    }
+    case ProceduralWarpMode::Warp: {
+        const auto halfW = p.frameWidth / 2.0;
+        const auto halfH = p.frameHeight / 2.0;
+        const auto circle = std::min(p.frameWidth, p.frameHeight) / 2.0;
+        const auto b = std::clamp(p.bend, -1.0, 1.0);
+        const auto h = std::clamp(p.horizontalDistortion, -1.0, 1.0);
+        const auto vd = std::clamp(p.verticalDistortion, -1.0, 1.0);
+        const auto u = px / halfW;
+        const auto v = py / halfH;
+        const auto u1 = u / (1.0 + 0.5 * h * std::clamp(v, -1.0, 1.0));
+        const auto v1 = v / (1.0 + 0.5 * vd * std::clamp(u, -1.0, 1.0));
+        double u2 = 0.0;
+        double v2 = 0.0;
+        warpStyle(p.warpStyle, b, u1, v1, halfW, halfH, circle, u2, v2);
+        out.x = px + (u2 - u) * halfW;
+        out.y = py + (v2 - v) * halfH;
+        return out;
+    }
+    case ProceduralWarpMode::Bend: {
+        const auto alpha = p.directionDegrees * kPi / 180.0;
+        const double tx = std::sin(alpha);
+        const double ty = std::cos(alpha);
+        const auto length = std::max(p.height, 0.0);
+        if (!(length > 0.0))
+            return out;
+        const auto w = (dx * tx + dy * ty) / (length / 2.0);
+        if (std::abs(w) >= 1.0)
+            return out;
+        const auto move = std::clamp(p.bend, -1.0, 1.0) * length / 2.0 * (1.0 - w * w) * (1.0 - w * w);
+        // The picture moves along the normal (-ty, tx), so the pixel reads where it came from.
+        out.x = px - (-ty) * move;
+        out.y = py - tx * move;
+        return out;
+    }
+    case ProceduralWarpMode::Split: {
+        const auto lx = p.secondX - p.centreX;
+        const auto ly = p.secondY - p.centreY;
+        const auto length = std::hypot(lx, ly);
+        if (!(length > 0.0))
+            return out;
+        const auto nx = -ly / length;
+        const auto ny = lx / length;
+        const auto sd = dx * nx + dy * ny;
+        const auto distance = std::max(p.splitDistance, 0.0);
+        out.step = near(std::abs(sd), distance / 2.0) || near(sd, distance);
+        if (p.mirror) {
+            if (sd < distance) {
+                out.x = px - 2.0 * (sd - distance) * nx;
+                out.y = py - 2.0 * (sd - distance) * ny;
+            }
+            return out;
+        }
+        const auto gap = distance / 2.0;
+        if (gap > 0.0 && std::abs(sd) < gap) {
+            out.weight = 0.0;
+        } else if (sd > gap) {
+            out.x = px - gap * nx;
+            out.y = py - gap * ny;
+        } else if (sd < -gap) {
+            out.x = px + gap * nx;
+            out.y = py + gap * ny;
+        }
+        return out;
+    }
+    case ProceduralWarpMode::Turbulent: {
+        const auto length = std::max({std::abs(p.noiseSizeX), std::abs(p.noiseSizeY), 1.0e-6});
+        const auto w = pinWeight(p.pinnedEdges, px, py, p.frameWidth / 2.0, p.frameHeight / 2.0, length);
+        out.x = px + p.displacement * w * noiseX;
+        out.y = py + p.displacement * w * noiseY;
+        return out;
+    }
+    case ProceduralWarpMode::Drizzle: {
+        if (!(p.radius > 0.0))
+            return out;
+        const auto seed = static_cast<std::uint32_t>(p.seed);
+        const auto phase = p.phaseDegrees / 360.0 + p.speed * p.seconds;
+        double mx = 0.0;
+        double my = 0.0;
+        for (std::int64_t i = 0; i < p.drops; ++i) {
+            const auto n = static_cast<std::uint32_t>(i);
+            const auto cx = (2.0 * unitOf(pcg4dFirst(n, 0u, 0u, seed)) - 1.0) * p.frameWidth / 2.0;
+            const auto cy = (2.0 * unitOf(pcg4dFirst(n, 1u, 0u, seed)) - 1.0) * p.frameHeight / 2.0;
+            const auto offset = unitOf(pcg4dFirst(n, 2u, 0u, seed));
+            const auto age = std::fmod(std::fmod(phase, 1.0) + 1.0 + offset, 1.0);
+            const auto front = age * p.radius;
+            const auto ddx = px - cx;
+            const auto ddy = py - cy;
+            const auto ring = std::hypot(ddx, ddy);
+            if (!(ring < front) || !(ring > 0.0))
+                continue;
+            const auto behind = (front - ring) / p.wavelength;
+            const auto move = p.amplitude * (1.0 - age) * smooth01(behind) * std::sin(-2.0 * kPi * behind);
+            mx += ddx / ring * move;
+            my += ddy / ring * move;
+        }
+        out.x = px + mx;
+        out.y = py + my;
         return out;
     }
     }

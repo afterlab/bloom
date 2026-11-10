@@ -61,6 +61,43 @@ std::optional<std::vector<float>> warpTable(const ProceduralWarpParameters& p) {
     return builder.finish(1, field::FieldResultKind::Vector, field::FieldOutputMode::Raw);
 }
 
+// Turbulent: the warp's own table (the instruction carries the field Noise operation's two streams)
+// and, to read the noise the warp sees, a program of the same two Noise operations as a vector.
+struct TurbulentTables final {
+    std::vector<float> warp;
+    std::vector<float> noise;
+};
+
+std::optional<TurbulentTables> turbulentTables(const ProceduralWarpParameters& p) {
+    const auto block = field::encodeProceduralWarp(p);
+    const auto a = field::encodeNoise(field::turbulentNoise(p, 0));
+    const auto b = field::encodeNoise(field::turbulentNoise(p, 1));
+    if (!block || !a || !b)
+        return std::nullopt;
+    TurbulentTables out;
+    {
+        field::FieldProgramBuilder builder;
+        builder.emit(FieldOp::Coordinate, 0, field::kNoFieldInputs, {});
+        builder.emit(FieldOp::ProceduralWarp, 1, {0, -1, -1, -1}, *block);
+        auto table = builder.finish(1, field::FieldResultKind::Vector, field::FieldOutputMode::Raw);
+        if (!table)
+            return std::nullopt;
+        out.warp = std::move(*table);
+    }
+    {
+        field::FieldProgramBuilder builder;
+        builder.emit(FieldOp::Coordinate, 0, field::kNoFieldInputs, {});
+        builder.emit(FieldOp::Noise, 1, {0, -1, -1, -1}, *a);
+        builder.emit(FieldOp::Noise, 2, {0, -1, -1, -1}, *b);
+        builder.emit(FieldOp::Combine, 3, {1, 2, -1, -1}, field::encodeConstant({0.0, 0.0, 0.0, 0.0}));
+        auto table = builder.finish(3, field::FieldResultKind::Vector, field::FieldOutputMode::Raw);
+        if (!table)
+            return std::nullopt;
+        out.noise = std::move(*table);
+    }
+    return out;
+}
+
 std::array<double, 3> kernelAt(const std::vector<float>& table, const double x, const double y) {
     const auto v =
         field::evaluateField(table, kNoImages, static_cast<float>(x), static_cast<float>(y));
@@ -121,7 +158,7 @@ void expectMatches(Expectations& e, const ProceduralWarpParameters& p, const std
     e.expect(result.worst <= tolerance,
              what + ": the kernel reads the documented position (worst " +
                  std::to_string(result.worst) + " pixels)");
-    if (p.mode == ProceduralWarpMode::Magnify)
+    if (p.mode == ProceduralWarpMode::Magnify || p.mode == ProceduralWarpMode::Split)
         e.expect(result.worstWeight <= 1.0e-4,
                  what + ": the Magnify weight is the documented one (worst " +
                      std::to_string(result.worstWeight) + ")");
@@ -299,6 +336,229 @@ void testMagnify(Expectations& e) {
         }
 }
 
+
+void testMagnifyPull(Expectations& e) {
+    for (const bool square : {false, true})
+        for (const double pull : {0.6, -0.4}) {
+            auto p = base(ProceduralWarpMode::Magnify);
+            p.radius = 230.0;
+            p.magnification = 2.0;
+            p.squareShape = square;
+            p.feather = 40.0;
+            p.pull = pull;
+            p.secondX = 410.0;
+            p.secondY = 150.0;
+            expectMatches(e, p, std::string("Magnify pull ") + (square ? "square " : "circle ") +
+                                    std::to_string(pull));
+        }
+    // The pull is strongest at the centre: the centre reads the pulled position, an edge pixel not.
+    auto p = base(ProceduralWarpMode::Magnify);
+    p.radius = 200.0;
+    p.pull = 1.0;
+    p.secondX = p.centreX + 100.0;
+    p.secondY = p.centreY;
+    const auto table = warpTable(p);
+    if (table) {
+        const auto centre = kernelAt(*table, p.centreX, p.centreY);
+        e.expect(std::abs(centre[0] - (p.centreX - 100.0)) < 1.0e-3 &&
+                     std::abs(centre[1] - p.centreY) < 1.0e-3,
+                 "Magnify: a full pull reads the picture the whole distance back at the centre");
+    }
+}
+
+void testRipplePulse(Expectations& e) {
+    for (const double speed : {0.0, 80.0}) {
+        auto p = base(ProceduralWarpMode::Ripple);
+        p.wavelength = 31.0;
+        p.amplitude = 8.0;
+        p.pulseRadius = 150.0;
+        p.pulseSpeed = speed;
+        p.seconds = 1.25;
+        expectMatches(e, p, "Ripple pulse speed " + std::to_string(speed));
+        // Outside the wavefront the ripple does nothing.
+        const auto table = warpTable(p);
+        const auto front = 150.0 + speed * 1.25;
+        if (table && front < p.radius - 5.0) {
+            const auto q = kernelAt(*table, p.centreX + front + 3.0, p.centreY + 1.5);
+            e.expect(q[0] == p.centreX + front + 3.0 && q[1] == p.centreY + 1.5,
+                     "Ripple pulse: nothing moves beyond the wavefront");
+        }
+    }
+}
+
+void testWarpStyles(Expectations& e) {
+    for (int style = 0; style < field::kProceduralWarpStyleCount; ++style)
+        for (const double bend : {0.7, -0.5})
+            for (const std::array<double, 2> skew : {std::array{0.0, 0.0}, std::array{0.6, -0.4}}) {
+                auto p = base(ProceduralWarpMode::Warp);
+                p.warpStyle = static_cast<std::uint8_t>(style);
+                p.bend = bend;
+                p.horizontalDistortion = skew[0];
+                p.verticalDistortion = skew[1];
+                expectMatches(e, p, "Warp style " + std::to_string(style) + " bend " +
+                                        std::to_string(bend) + " skew " +
+                                        std::to_string(skew[0]));
+            }
+}
+
+void testBend(Expectations& e) {
+    for (const double direction : {90.0, 0.0, 215.0})
+        for (const double bend : {0.8, -0.35}) {
+            auto p = base(ProceduralWarpMode::Bend);
+            p.directionDegrees = direction;
+            p.bend = bend;
+            p.height = 520.0;
+            expectMatches(e, p, "Bend direction " + std::to_string(direction) + " bend " +
+                                    std::to_string(bend));
+        }
+    // The stretch ends smoothly: nothing moves at and beyond half the length from the centre.
+    auto p = base(ProceduralWarpMode::Bend);
+    p.bend = 1.0;
+    p.height = 400.0;
+    const auto table = warpTable(p);
+    if (table) {
+        const auto q = kernelAt(*table, p.centreX + 200.0, p.centreY + 30.0);
+        const auto r = kernelAt(*table, p.centreX + 340.0, p.centreY + 30.0);
+        e.expect(q[0] == p.centreX + 200.0 && q[1] == p.centreY + 30.0 && r[1] == p.centreY + 30.0,
+                 "Bend: nothing moves at the ends of the bent stretch");
+    }
+}
+
+void testSplit(Expectations& e) {
+    for (const bool mirror : {false, true})
+        for (const double distance : {0.0, 60.0, 140.0}) {
+            auto p = base(ProceduralWarpMode::Split);
+            p.secondX = p.centreX + 120.0;
+            p.secondY = p.centreY + 280.0;
+            p.splitDistance = distance;
+            p.mirror = mirror;
+            expectMatches(e, p, std::string("Split ") + (mirror ? "mirror " : "gap ") +
+                                    std::to_string(distance));
+        }
+    // The gap is empty, and two equal points are no line.
+    auto p = base(ProceduralWarpMode::Split);
+    p.secondX = p.centreX;
+    p.secondY = p.centreY + 100.0;
+    p.splitDistance = 50.0;
+    auto table = warpTable(p);
+    if (table) {
+        const auto in = kernelAt(*table, p.centreX + 10.0, p.centreY + 20.0);
+        const auto out = kernelAt(*table, p.centreX + 40.0, p.centreY + 20.0);
+        e.expect(in[2] == 0.0, "Split: the gap has the weight 0");
+        e.expect(out[2] == 1.0 && std::abs(out[0] - (p.centreX + 15.0)) < 1.0e-3,
+                 "Split: the picture beside the gap is drawn half the distance away");
+    }
+    p.secondY = p.centreY;
+    table = warpTable(p);
+    if (table) {
+        const auto q = kernelAt(*table, p.centreX + 3.0, p.centreY + 4.0);
+        e.expect(q[0] == p.centreX + 3.0 && q[1] == p.centreY + 4.0 && q[2] == 1.0,
+                 "Split: two equal points do nothing");
+    }
+}
+
+void testTurbulent(Expectations& e) {
+    for (const std::uint8_t pins : {std::uint8_t{0}, std::uint8_t{15}, std::uint8_t{5}}) {
+        auto p = base(ProceduralWarpMode::Turbulent);
+        p.displacement = 48.0;
+        p.noiseSizeX = 130.0;
+        p.noiseSizeY = 90.0;
+        p.noiseOffsetX = 21.0;
+        p.noiseOffsetY = -13.0;
+        p.seed = 7;
+        p.evolution = 0.35;
+        p.pinnedEdges = pins;
+        const auto tables = turbulentTables(p);
+        e.expect(tables.has_value() && field::validFieldTable(tables->warp), "Turbulent encodes");
+        if (!tables)
+            continue;
+        double worst = 0.0;
+        std::size_t compared = 0;
+        for (int j = 0; j <= 27; ++j)
+            for (int i = 0; i <= 48; ++i) {
+                const auto x = static_cast<double>(static_cast<float>(-960.0 + 40.0 * i + 0.37));
+                const auto y = static_cast<double>(static_cast<float>(-540.0 + 40.0 * j + 0.61));
+                const auto got = kernelAt(tables->warp, x, y);
+                const auto noise = kernelAt(tables->noise, x, y);
+                const auto want = reference(p, x, y, noise[0], noise[1]);
+                worst = std::max({worst, std::abs(got[0] - want.x), std::abs(got[1] - want.y)});
+                ++compared;
+            }
+        e.expect(compared > 1000 && worst <= 2.0e-3,
+                 "Turbulent pins " + std::to_string(pins) + ": the kernel adds the pinned noise "
+                 "(worst " + std::to_string(worst) + " pixels)");
+        // A pinned edge does not move.
+        if ((pins & field::kWarpPinLeft) != 0) {
+            const auto q = kernelAt(tables->warp, -960.0, 100.0);
+            e.expect(q[0] == -960.0 && q[1] == 100.0, "Turbulent: a pinned edge does not move");
+        }
+    }
+    // The same seed and evolution read the same; another seed or another evolution does not.
+    auto p = base(ProceduralWarpMode::Turbulent);
+    p.displacement = 40.0;
+    p.seed = 7;
+    p.evolution = 0.35;
+    const auto a = turbulentTables(p);
+    const auto same = turbulentTables(p);
+    auto otherSeed = p;
+    otherSeed.seed = 8;
+    const auto seed = turbulentTables(otherSeed);
+    auto otherEvolution = p;
+    otherEvolution.evolution = 0.60;
+    const auto evolved = turbulentTables(otherEvolution);
+    if (a && same && seed && evolved) {
+        double dSame = 0.0;
+        double dSeed = 0.0;
+        double dEvolution = 0.0;
+        for (int k = 0; k < 200; ++k) {
+            const auto x = -400.0 + 4.1 * k;
+            const auto y = 130.0 - 2.3 * k;
+            const auto q = kernelAt(a->warp, x, y);
+            dSame = std::max(dSame, std::abs(q[0] - kernelAt(same->warp, x, y)[0]));
+            dSeed = std::max(dSeed, std::abs(q[0] - kernelAt(seed->warp, x, y)[0]));
+            dEvolution = std::max(dEvolution, std::abs(q[0] - kernelAt(evolved->warp, x, y)[0]));
+        }
+        e.expect(dSame == 0.0, "Turbulent: the same seed and evolution read the same positions");
+        e.expect(dSeed > 0.5, "Turbulent: another seed moves the pixels differently");
+        e.expect(dEvolution > 0.5, "Turbulent: another evolution moves the pixels differently");
+    }
+}
+
+void testDrizzle(Expectations& e) {
+    for (const std::int64_t seed : {std::int64_t{1}, std::int64_t{99991}, std::int64_t{16777215}})
+        for (const std::int64_t drops : {std::int64_t{1}, std::int64_t{12}, std::int64_t{64}}) {
+            auto p = base(ProceduralWarpMode::Drizzle);
+            p.radius = 260.0;
+            p.wavelength = 28.0;
+            p.amplitude = 7.0;
+            p.phaseDegrees = 77.0;
+            p.speed = 0.4;
+            p.seconds = 0.9;
+            p.seed = seed;
+            p.drops = drops;
+            expectMatches(e, p, "Drizzle seed " + std::to_string(seed) + " drops " +
+                                    std::to_string(drops));
+        }
+    // Another seed puts the drops elsewhere.
+    auto a = base(ProceduralWarpMode::Drizzle);
+    a.amplitude = 9.0;
+    a.phaseDegrees = 140.0;
+    auto b = a;
+    b.seed = 2;
+    const auto ta = warpTable(a);
+    const auto tb = warpTable(b);
+    double different = 0.0;
+    if (ta && tb)
+        for (int j = -20; j <= 20; ++j)
+            for (int i = -30; i <= 30; ++i) {
+                const auto x = 30.0 * i + 0.3;
+                const auto y = 25.0 * j + 0.2;
+                different = std::max(different, std::abs(kernelAt(*ta, x, y)[0] -
+                                                         kernelAt(*tb, x, y)[0]));
+            }
+    e.expect(different > 0.1, "Drizzle: another seed places the drops differently");
+}
+
 // Zero strength is the identity exactly: the move is added to the pixel's own position.
 void testIdentity(Expectations& e) {
     std::vector<ProceduralWarpParameters> cases;
@@ -323,6 +583,24 @@ void testIdentity(Expectations& e) {
     auto magnify = base(ProceduralWarpMode::Magnify);
     magnify.magnification = 1.0;
     cases.push_back(magnify);
+    auto warp = base(ProceduralWarpMode::Warp);
+    warp.warpStyle = 9;
+    warp.bend = 0.0;
+    cases.push_back(warp);
+    auto bend = base(ProceduralWarpMode::Bend);
+    bend.bend = 0.0;
+    cases.push_back(bend);
+    auto split = base(ProceduralWarpMode::Split);
+    split.secondX = split.centreX + 50.0;
+    split.secondY = split.centreY + 30.0;
+    split.splitDistance = 0.0;
+    cases.push_back(split);
+    auto turbulent = base(ProceduralWarpMode::Turbulent);
+    turbulent.displacement = 0.0;
+    cases.push_back(turbulent);
+    auto drizzle = base(ProceduralWarpMode::Drizzle);
+    drizzle.amplitude = 0.0;
+    cases.push_back(drizzle);
     for (const auto& p : cases) {
         const auto table = warpTable(p);
         bool same = table.has_value();
@@ -369,7 +647,9 @@ void testGuards(Expectations& e) {
                                  std::to_string(radius) +
                                  ": the centre, the edge and far positions are finite");
             if (radius == 0.0 && p.mode != ProceduralWarpMode::Wave &&
-                p.mode != ProceduralWarpMode::Polar) {
+                p.mode != ProceduralWarpMode::Polar && p.mode != ProceduralWarpMode::Warp &&
+                p.mode != ProceduralWarpMode::Bend && p.mode != ProceduralWarpMode::Split &&
+                p.mode != ProceduralWarpMode::Turbulent) {
                 const auto q = kernelAt(*table, 12.5, -7.25);
                 e.expect(q[0] == 12.5 && q[1] == -7.25,
                          "mode " + std::to_string(mode) + ": a radius of 0 changes nothing");
@@ -402,6 +682,22 @@ void testEncoding(Expectations& e) {
     bad = p;
     bad.frameWidth = 0.0;
     refuse(bad, "a frame under a pixel is refused");
+    bad = p;
+    bad.warpStyle = field::kProceduralWarpStyleCount;
+    refuse(bad, "an unknown Warp style is refused");
+    bad = base(ProceduralWarpMode::Turbulent);
+    e.expect(field::encodeProceduralWarp(bad).has_value(), "a Turbulent encodes");
+    bad.noiseSizeX = 0.0;
+    refuse(bad, "a Turbulent noise size of 0 is refused");
+    bad = p;
+    bad.drops = 65;
+    refuse(bad, "more than 64 drops are refused");
+    bad = p;
+    bad.drops = 0;
+    refuse(bad, "no drops is refused");
+    bad = p;
+    bad.seed = 16777216;
+    refuse(bad, "a seed beyond 2^24 is refused");
     // A table whose block names an unknown mode does not validate.
     auto table = warpTable(p);
     e.expect(table && field::validFieldTable(*table), "a Procedural Warp table validates");
@@ -425,6 +721,13 @@ int main() {
     testWave(e);
     testPolar(e);
     testMagnify(e);
+    testMagnifyPull(e);
+    testRipplePulse(e);
+    testWarpStyles(e);
+    testBend(e);
+    testSplit(e);
+    testTurbulent(e);
+    testDrizzle(e);
     testIdentity(e);
     testGuards(e);
     testEncoding(e);

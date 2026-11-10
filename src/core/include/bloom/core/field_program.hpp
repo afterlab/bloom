@@ -462,8 +462,15 @@ enum class ProceduralWarpMode : std::uint8_t {
     Wave = 4,
     Polar = 5,
     Magnify = 6,
+    Warp = 7,
+    Bend = 8,
+    Split = 9,
+    Turbulent = 10,
+    Drizzle = 11,
 };
-inline constexpr std::uint8_t kProceduralWarpModeCount = 7;
+inline constexpr std::uint8_t kProceduralWarpModeCount = 12;
+// Warp's styles, as stored (the order of the choice).
+inline constexpr std::uint8_t kProceduralWarpStyleCount = 13;
 enum class ProceduralWarpWave : std::uint8_t { Sine, Triangle, Square, Saw };
 // The frame edges a Wave is pinned at (its move eases to nothing there).
 inline constexpr std::uint8_t kWarpPinLeft = 1;
@@ -506,6 +513,42 @@ struct ProceduralWarpParameters final {
     bool squareShape = false;
     double magnification = 2.0;
     double feather = 0.0;
+    // Magnify (Flo Motion's pull): the picture inside the shape is drawn towards the second point
+    // by this share of the way from the centre, in [-1, 1], strongest at the centre.
+    double pull = 0.0;
+    // The second point of Magnify's pull and Split's line (the centre is the first), field pixels.
+    double secondX = 0.0;
+    double secondY = 0.0;
+    // Ripple's pulse (Ripple Pulse): the ripple only exists inside a wavefront of this radius, which
+    // grows by pulseSpeed pixels a second. Both 0 is no pulse.
+    double pulseRadius = 0.0;
+    double pulseSpeed = 0.0;
+    // Warp: the style index (0 to 12), the bend and the two distortions, each in [-1, 1].
+    std::uint8_t warpStyle = 0;
+    double bend = 0.0;
+    double horizontalDistortion = 0.0;
+    double verticalDistortion = 0.0;
+    // Bend: the length of the bent stretch along its direction (the centre is its middle). The bend
+    // is the bend above; the direction is Wave's.
+    double height = 400.0;
+    // Split: the distance the two halves are drawn apart, or with the mirror on the offset of the
+    // mirror line from the split line.
+    double splitDistance = 0.0;
+    bool mirror = false;
+    // Turbulent: the displacement in pixels at a noise value of 1 and the field Noise operation
+    // that makes the value: Perlin fractal Brownian motion, bipolar and clipped to [-1, 1], two
+    // decorrelated streams (x and y), of this size and offset (field pixels), complexity (octaves,
+    // fractions allowed) and evolution. The pinned edges ease in over the larger side of the size.
+    double displacement = 0.0;
+    double noiseSizeX = 100.0;
+    double noiseSizeY = 100.0;
+    double noiseOffsetX = 0.0;
+    double noiseOffsetY = 0.0;
+    double complexity = 3.0;
+    double evolution = 0.0;
+    // Drizzle: the number of drops (1 to 64) and the seed that places them (0 to 16777215).
+    std::int64_t drops = 12;
+    std::int64_t seed = 1;
 };
 
 enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
@@ -575,6 +618,9 @@ class FieldProgramBuilder final {
 // Null when a value cannot be represented (non-finite, an unknown mode or wave, a wavelength or a
 // magnification not above 1e-6, an index below 1, a frame under one pixel).
 [[nodiscard]] std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParameters&);
+// The field Noise operation Turbulent runs for one of its two streams (0 x, 1 y): the instruction's
+// block carries both noise blocks after its own four vec4.
+[[nodiscard]] NoiseParameters turbulentNoise(const ProceduralWarpParameters&, std::uint32_t stream);
 [[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);

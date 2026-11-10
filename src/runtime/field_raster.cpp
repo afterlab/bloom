@@ -451,6 +451,31 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         p.interpolation = scalar(10, 100.0) / 100.0;
         p.magnification = scalar(11, 200.0) / 100.0;
         p.feather = scalar(12);
+        // The modes after Magnify (and Magnify's pull and Ripple's pulse): choices [style, mirror,
+        // drops, seed]; scalars [pull %, pulse radius, pulse speed, bend %, horizontal %,
+        // vertical %, height, split distance, displacement, complexity, evolution]; vectors [centre
+        // or line start, pull point or line end, noise size, noise offset].
+        p.warpStyle = static_cast<std::uint8_t>(std::clamp<std::int64_t>(choiceAt(in, 8), 0, 255));
+        p.mirror = choiceAt(in, 9) != 0;
+        p.drops = choiceAt(in, 10, 12);
+        p.seed = choiceAt(in, 11, 1);
+        p.pull = scalar(13) / 100.0;
+        p.pulseRadius = scalar(14);
+        p.pulseSpeed = scalar(15);
+        p.bend = scalar(16) / 100.0;
+        p.horizontalDistortion = scalar(17) / 100.0;
+        p.verticalDistortion = scalar(18) / 100.0;
+        p.height = scalar(19, 400.0);
+        p.splitDistance = scalar(20);
+        p.displacement = scalar(21);
+        p.secondX = vector(1).x;
+        p.secondY = -vector(1).y;
+        p.noiseSizeX = vector(2, {100.0, 100.0}).x;
+        p.noiseSizeY = vector(2, {100.0, 100.0}).y;
+        p.noiseOffsetX = vector(3).x;
+        p.noiseOffsetY = vector(3).y;
+        p.complexity = scalar(22, 3.0);
+        p.evolution = scalar(23);
         if (p.mode == field::ProceduralWarpMode::Magnify && link >= 1) {
             p.radius *= p.magnification;
             if (link >= 2)

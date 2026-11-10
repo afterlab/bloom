@@ -741,19 +741,42 @@ HomographyParameters similarityHomography(const double offsetX, const double off
     return out;
 }
 
+NoiseParameters turbulentNoise(const ProceduralWarpParameters& p, const std::uint32_t stream) {
+    NoiseParameters n;
+    n.type = NoiseType::Perlin;
+    n.fractal = NoiseFractal::Fbm;
+    n.seed = p.seed;
+    n.stream = stream;
+    n.sizeX = p.noiseSizeX;
+    n.sizeY = p.noiseSizeY;
+    n.offsetX = p.noiseOffsetX;
+    n.offsetY = p.noiseOffsetY;
+    n.octaves = p.complexity;
+    n.evolution = p.evolution;
+    n.overflow = NoiseOverflow::Clip;
+    n.bipolar = true;
+    return n;
+}
+
 std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParameters& p) {
     const std::array values{p.centreX,     p.centreY,      p.radius,       p.angleDegrees,
                             p.falloff,     p.amount,       p.refraction,   p.wavelength,
                             p.amplitude,   p.phaseDegrees, p.speed,        p.seconds,
                             p.directionDegrees, p.frameWidth, p.frameHeight, p.interpolation,
-                            p.magnification, p.feather};
+                            p.magnification, p.feather, p.pull,    p.secondX,
+                            p.secondY,     p.pulseRadius,  p.pulseSpeed,   p.bend,
+                            p.horizontalDistortion, p.verticalDistortion, p.height,
+                            p.splitDistance, p.displacement, p.noiseSizeX, p.noiseSizeY,
+                            p.noiseOffsetX, p.noiseOffsetY, p.complexity, p.evolution};
     for (const auto v : values)
         if (!finite(v))
             return std::nullopt;
     const auto mode = static_cast<std::uint8_t>(p.mode);
     if (mode >= kProceduralWarpModeCount || static_cast<std::uint8_t>(p.wave) > 3U ||
         p.pinnedEdges > 15U || !(p.wavelength > 1.0e-6) || !(p.refraction >= 1.0) ||
-        !(p.magnification > 1.0e-6) || !(p.frameWidth >= 1.0) || !(p.frameHeight >= 1.0))
+        !(p.magnification > 1.0e-6) || !(p.frameWidth >= 1.0) || !(p.frameHeight >= 1.0) ||
+        p.warpStyle >= kProceduralWarpStyleCount || p.drops < 1 || p.drops > 64 || p.seed < 0 ||
+        p.seed > 16777215)
         return std::nullopt;
     const auto radius = std::max(p.radius, 0.0);
     const auto inverseRadius = radius > 0.0 ? 1.0 / radius : 0.0;
@@ -781,6 +804,9 @@ std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParam
         a[2] = p.amplitude;
         a[3] = phase;
         a[4] = 2.0 / p.wavelength;
+        // The pulse's wavefront radius at this time, when there is a pulse.
+        a[5] = std::max(0.0, p.pulseRadius + p.pulseSpeed * p.seconds);
+        a[6] = (p.pulseRadius != 0.0 || p.pulseSpeed != 0.0) ? 1.0 : 0.0;
         break;
     case ProceduralWarpMode::Wave: {
         const auto direction = kTau * fractional(p.directionDegrees / 360.0);
@@ -808,10 +834,75 @@ std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParam
         a[7] = p.frameHeight / polarRadius;
         break;
     }
-    case ProceduralWarpMode::Magnify:
+    case ProceduralWarpMode::Magnify: {
         a[0] = p.squareShape ? 1.0 : 0.0;
         a[1] = 1.0 / p.magnification;
         a[2] = p.feather > 0.0 ? 1.0 / p.feather : 0.0;
+        // The pull: the whole shift of the pulled picture at the centre.
+        const auto pull = std::clamp(p.pull, -1.0, 1.0);
+        a[3] = pull * (p.secondX - p.centreX);
+        a[4] = pull * (p.secondY - p.centreY);
+        break;
+    }
+    case ProceduralWarpMode::Warp: {
+        const auto halfW = 0.5 * p.frameWidth;
+        const auto halfH = 0.5 * p.frameHeight;
+        const auto circle = 0.5 * std::min(p.frameWidth, p.frameHeight);
+        a[0] = static_cast<double>(p.warpStyle);
+        a[1] = std::clamp(p.bend, -1.0, 1.0);
+        a[2] = std::clamp(p.horizontalDistortion, -1.0, 1.0);
+        a[3] = std::clamp(p.verticalDistortion, -1.0, 1.0);
+        a[4] = halfW;
+        a[5] = halfH;
+        a[6] = 1.0 / halfW;
+        a[7] = 1.0 / halfH;
+        a[8] = circle;
+        a[9] = 1.0 / circle;
+        break;
+    }
+    case ProceduralWarpMode::Bend: {
+        const auto direction = kTau * fractional(p.directionDegrees / 360.0);
+        const auto length = std::max(p.height, 0.0);
+        a[0] = std::sin(direction);
+        a[1] = std::cos(direction);
+        // A length of 0 bends nothing: no deflection.
+        a[2] = length > 0.0 ? 2.0 / length : 0.0;
+        a[3] = length > 0.0 ? std::clamp(p.bend, -1.0, 1.0) * 0.5 * length : 0.0;
+        break;
+    }
+    case ProceduralWarpMode::Split: {
+        // The unit normal to the left of the line from the centre to the second point (+y up); two
+        // equal points have no line and so no split.
+        const auto lx = p.secondX - p.centreX;
+        const auto ly = p.secondY - p.centreY;
+        const auto length = std::hypot(lx, ly);
+        const auto distance = std::max(p.splitDistance, 0.0);
+        if (length > 0.0 && std::isfinite(length)) {
+            a[0] = -ly / length;
+            a[1] = lx / length;
+            a[2] = 0.5 * distance;
+            a[3] = p.mirror ? 1.0 : 0.0;
+            a[4] = distance;
+        }
+        break;
+    }
+    case ProceduralWarpMode::Turbulent: {
+        const auto ease = std::max(std::fabs(p.noiseSizeX), std::fabs(p.noiseSizeY));
+        a[0] = p.displacement;
+        a[1] = static_cast<double>(p.pinnedEdges);
+        a[2] = 0.5 * p.frameWidth;
+        a[3] = 0.5 * p.frameHeight;
+        a[4] = ease > 1.0e-6 ? 1.0 / ease : 0.0;
+        break;
+    }
+    case ProceduralWarpMode::Drizzle:
+        a[0] = static_cast<double>(p.seed);
+        a[1] = static_cast<double>(p.drops);
+        a[2] = 1.0 / p.wavelength;
+        a[3] = p.amplitude;
+        a[4] = phase;
+        a[5] = 0.5 * p.frameWidth;
+        a[6] = 0.5 * p.frameHeight;
         break;
     }
     std::vector<float> out;
@@ -819,6 +910,15 @@ std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParam
     push(out, inverseRadius, a[0], a[1], a[2]);
     push(out, a[3], a[4], a[5], a[6]);
     push(out, a[7], a[8], a[9], a[10]);
+    if (p.mode == ProceduralWarpMode::Turbulent) {
+        // The two noise streams' blocks follow (the kernel reads them at +4 and after the first).
+        for (const std::uint32_t stream : {0U, 1U}) {
+            const auto noise = encodeNoise(turbulentNoise(p, stream));
+            if (!noise)
+                return std::nullopt;
+            out.insert(out.end(), noise->begin(), noise->end());
+        }
+    }
     return checked(std::move(out));
 }
 
@@ -1205,8 +1305,18 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
         return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages) ? 2U : 0U;
     case FieldOp::Homography:
         return 6;
-    case FieldOp::ProceduralWarp:
-        return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kProceduralWarpModeCount) ? 4U : 0U;
+    case FieldOp::ProceduralWarp: {
+        const auto mode = at(0, 0);
+        if (!(mode >= 0.0F) || !(mode < static_cast<float>(kProceduralWarpModeCount)))
+            return 0;
+        if (mode != static_cast<float>(ProceduralWarpMode::Turbulent))
+            return 4;
+        // Turbulent: its own four vec4 and the two noise streams' blocks.
+        const auto octaves = at(4, 2);
+        if (!(octaves >= 1.0F) || octaves > static_cast<float>(kMaxNoiseOctaves))
+            return 0;
+        return 4U + 2U * (4U + 5U * static_cast<std::size_t>(octaves));
+    }
     case FieldOp::Ramp:
         return 1U + kFieldRampEntries;
     }

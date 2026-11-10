@@ -43,7 +43,10 @@
 //   Procedural Warp (#510) choices [mode, wave, pinned edges mask, polar direction, shape, link,
 //             frame width, frame height]; scalars [radius, angle, falloff %, amount %,
 //             refraction, wavelength, amplitude, phase, speed, direction, interpolation %,
-//             magnification %, feather]; vectors [centre, y down]
+//             magnification %, feather, pull %, pulse radius, pulse speed, bend %, horizontal %,
+//             vertical %, height, split distance, displacement, complexity, evolution]; vectors
+//             [centre or line start, pull point or line end, noise size, noise offset], y down;
+//             choices continue [style, mirror, drops, seed]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
 #include "color_grade_image_effect.hpp"
