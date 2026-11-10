@@ -2696,3 +2696,23 @@ target_link_libraries(bloom_runtime_resample_path_test PRIVATE bloom_runtime_com
 bloom_enable_warnings(bloom_runtime_resample_path_test)
 bloom_enable_strict_floating_point(bloom_runtime_resample_path_test)
 bloom_add_test(NAME bloom.runtime.resample-path COMMAND bloom_runtime_resample_path_test LABELS unit runtime persistence TIMEOUT 120)
+
+# #637: Resample Path on the production GPU route against the CPU reference, in every mode and both
+# outputs, with cache identity, invalidation, cancellation, budget and retirement. Skips (exit 77)
+# only the GPU half.
+add_executable(bloom_runtime_gpu_resample_path_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_resample_path_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_resample_path_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_resample_path_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_gpu_resample_path_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_resample_path_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_resample_path_native
+    COMMAND bloom_runtime_gpu_resample_path_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_resample_path_native
+    PROPERTIES SKIP_RETURN_CODE 77)
