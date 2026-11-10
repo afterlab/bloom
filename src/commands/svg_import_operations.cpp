@@ -513,10 +513,11 @@ OperationResult BreakApartSvgArtwork::apply(document::Draft& draft) const {
                                          "The SVG this layer holds is missing from the project");
     // The scene: the prepared one when it is this block's bytes, else the block parsed here.
     std::shared_ptr<const media::SvgScene> scene;
-    std::shared_ptr<const platform::FontCatalogue> fonts;
+    std::shared_ptr<const platform::FontCatalogue> fonts = fonts_;
     if (prepared_ && prepared_->scene && prepared_->digest == block->provenance.contentDigest) {
         scene = prepared_->scene;
-        fonts = prepared_->fonts;
+        if (!fonts)
+            fonts = prepared_->fonts;
     } else {
         std::string diagnostic;
         scene = document::parseVectorArtworkBlock(*block, diagnostic);

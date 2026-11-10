@@ -252,15 +252,18 @@ core::RationalTime frame(const std::int64_t index) { return *core::RationalTime:
 
 // The same layer edits on either import's root layer: everything a layer carries that a Merge
 // entry's root could compose differently.
-void dressLayer(Fixture& fixture, const document::NodeId source) {
+// `turned` false dresses it for Break Apart's pixel-equal check: nothing that scales or turns the
+// picture (those take the one layer's sharper route), a position keyed across the frames instead.
+void dressLayer(Fixture& fixture, const document::NodeId source, const bool turned = true) {
     using namespace commands;
     const auto main = fixture.main;
     // A parent that moves and turns the layer, itself drawn at zero opacity.
     const auto parent = fixture.run<AddSolidLayer>(main, "Parent", core::Color4d{1, 0, 0, 1},
                                                    document::Vec2d{150, 80}, 0.0);
     const auto parentLayer = *parent.outputId<document::LayerId>(kAddSolidLayerLayerOutput);
-    fixture.run<SetParameterSource>(main, fixture.layerParameter(parentLayer, document::kRotationParameterRole),
-                                    document::ConstantValueSource{document::ParameterValue{8.0}});
+    if (turned)
+        fixture.run<SetParameterSource>(main, fixture.layerParameter(parentLayer, document::kRotationParameterRole),
+                                        document::ConstantValueSource{document::ParameterValue{8.0}});
     // A smaller white solid below the layer, used as its alpha track matte.
     const auto matte = fixture.run<AddSolidLayer>(main, "Matte", core::Color4d{1, 1, 1, 1},
                                                   document::Vec2d{120, 70}, 1.0);
@@ -275,10 +278,16 @@ void dressLayer(Fixture& fixture, const document::NodeId source) {
     fixture.run<SetTrackMatte>(main, fixture.art,
                                document::TrackMatte{matteLayer, document::TrackMatteChannel::Alpha, false, std::nullopt});
     // Its own transform, blend mode and an opacity keyed across the frames.
-    fixture.run<SetParameterSource>(main, fixture.layerParameter(fixture.art, document::kScaleParameterRole),
-                                    document::ConstantValueSource{document::ParameterValue{document::Vec2d{1.2, 0.85}}});
-    fixture.run<SetParameterSource>(main, fixture.layerParameter(fixture.art, document::kRotationParameterRole),
-                                    document::ConstantValueSource{document::ParameterValue{-11.0}});
+    if (turned) {
+        fixture.run<SetParameterSource>(main, fixture.layerParameter(fixture.art, document::kScaleParameterRole),
+                                        document::ConstantValueSource{document::ParameterValue{document::Vec2d{1.2, 0.85}}});
+        fixture.run<SetParameterSource>(main, fixture.layerParameter(fixture.art, document::kRotationParameterRole),
+                                        document::ConstantValueSource{document::ParameterValue{-11.0}});
+    } else {
+        const auto position = fixture.layerParameter(fixture.art, document::kPositionParameterRole);
+        fixture.run<SetKeyframeAtTimeForParameter>(main, position, frame(2), document::Vec2d{152.0, 82.0});
+        fixture.run<SetKeyframeAtTimeForParameter>(main, position, frame(0), document::Vec2d{128.0, 72.0});
+    }
     fixture.run<SetParameterSource>(
         main, fixture.layerParameter(fixture.art, document::kBlendModeParameterRole),
         document::ConstantValueSource{document::ParameterValue{static_cast<std::int64_t>(core::BlendMode::Screen)}});
@@ -2263,10 +2272,119 @@ void contentPivotDrawsItsWindow() {
     std::filesystem::remove(plain);
 }
 
+
+// #642 Break Apart: the layer is replaced in place by the editable import's root group, so the
+// picture is the same and everything the layer carries stays. A layer that moves (a keyed position,
+// a moving parent), fades (a keyed opacity), blends (Screen), is matted, masked and blurred draws the
+// same frame before and after, at every keyed frame, and one undo gives the layer back exactly.
+void breakApartKeepsThePictureAndTheAnimation() {
+    const auto file = writeSvg("break-apart", kComposite);
+    Fixture layer(file, commands::SvgImportMode::Layer, 256, 144);
+    dressLayer(layer, *layer.artworkNode, false);
+    const auto holder = layer.composition().graph().findLayer(layer.art);
+    expect(holder != nullptr, "break apart: the dressed layer exists");
+    if (holder == nullptr)
+        return;
+    const auto boundaryBefore = *holder;
+    const auto recordSpan = layer.composition().parameters().records();
+    const std::vector<document::ParameterRecord> parametersBefore(recordSpan.begin(), recordSpan.end());
+    const auto curvesBefore = layer.composition().animationCurves().records().size();
+    std::vector<std::optional<Frame>> before;
+    for (const std::int64_t index : {0, 1, 2})
+        before.push_back(renderExpanded(layer.document, layer.main, frame(index), "break apart before " + std::to_string(index)));
+    expect(before[0] && before[2] && difference(*before[0], *before[2]) > 1e-3,
+           "break apart: the keyed position and opacity move the picture between the keyed frames");
+
+    commands::Transaction transaction("Break Apart SVG", layer.document.snapshot().revision());
+    transaction.emplace<commands::BreakApartSvgArtwork>(layer.main, layer.art).withFonts(noFonts());
+    const auto result = layer.stack.execute(std::move(transaction));
+    expect(result.succeeded() && result.changed(), "break apart: the dressed layer breaks apart");
+    expect(std::ranges::none_of(layer.composition().graph().nodes(),
+                                [](const auto& node) { return node.typeId == document::kVectorArtworkNodeType; }),
+           "break apart: no Vector Artwork node is left");
+    for (const std::int64_t index : {0, 1, 2}) {
+        const auto after = renderProject(layer.document, layer.main, frame(index), "break apart after " + std::to_string(index));
+        if (!before[static_cast<std::size_t>(index)] || !after)
+            continue;
+        const auto worst = difference(*before[static_cast<std::size_t>(index)], *after);
+        std::cout << "break apart: frame " << index << " before/after worst difference " << worst << "\n";
+        expect(worst <= kGate, "break apart: frame " + std::to_string(index) +
+                                   " is pixel-equal before and after (worst " + std::to_string(worst) + ")");
+    }
+    // The transform, the keys, the parent, the matte, the mask and the blend stay on the layer.
+    const auto kept = layer.composition().graph().findLayer(layer.art);
+    expect(kept != nullptr && *kept == boundaryBefore,
+           "break apart: the layer keeps its id, parent, matte, masks, timing and parameter bindings");
+    for (const auto& record : parametersBefore) {
+        const auto* now = layer.composition().parameters().find(record.id);
+        const bool isArtwork = record.schemaKey == std::string(document::kVectorArtworkBlockParameterSchemaKey) ||
+                               record.schemaKey == std::string(document::kVectorArtworkFitParameterSchemaKey);
+        if (isArtwork)
+            expect(now == nullptr, "break apart: the Vector Artwork node's own parameters are gone");
+        else if (now == nullptr || !(*now == record))
+            expect(false, "break apart: a parameter changed or disappeared: " + record.schemaKey);
+    }
+    expect(layer.composition().animationCurves().records().size() == curvesBefore,
+           "break apart: the keyed curves are all still there (" + std::to_string(curvesBefore) + ")");
+    const auto keyedPosition = layer.layerParameter(layer.art, document::kPositionParameterRole);
+    const auto* position = layer.composition().parameters().find(keyedPosition);
+    expect(position != nullptr && !std::holds_alternative<document::ConstantValueSource>(position->source),
+           "break apart: the position is still keyed");
+    expect(layer.document.snapshot().project().validate().ok(), "break apart: the project validates");
+
+    // One undo gives back the layer exactly, and its picture.
+    expect(layer.stack.undo().changed(), "break apart: one undo");
+    expect(std::ranges::count_if(layer.composition().graph().nodes(),
+                                 [](const auto& node) { return node.typeId == document::kVectorArtworkNodeType; }) == 1,
+           "break apart: undo gives back the Vector Artwork node");
+    const auto restored = renderExpanded(layer.document, layer.main, frame(2), "break apart undone");
+    expect(restored && before[2] && difference(*restored, *before[2]) == 0.0,
+           "break apart: after one undo frame 2 is exactly what it was");
+    std::filesystem::remove(file);
+}
+
+// A layer that scales up and turns draws sharp as one layer; broken apart, the editable import's
+// root group is resampled like any group, so its picture is the resampled one's, exactly. The
+// transform, keys, parent, matte, mask and blur are the layer's, so the frame is the dressed layer's
+// resampled frame to the gate.
+void breakApartOfAScaledLayerIsTheResampledPicture() {
+    const auto file = writeSvg("break-apart-scaled", kComposite);
+    Fixture layer(file, commands::SvgImportMode::Layer, 256, 144);
+    dressLayer(layer, *layer.artworkNode, true);
+    document::VectorArtworkExpansionContext resample;
+    resample.composeLayerTransform = false;
+    std::vector<std::optional<Frame>> resampled;
+    std::vector<std::optional<Frame>> sharp;
+    for (const std::int64_t index : {0, 1, 2}) {
+        resampled.push_back(renderExpandedWith(layer.document, layer.main, frame(index), "scaled resampled", resample));
+        sharp.push_back(renderExpanded(layer.document, layer.main, frame(index), "scaled sharp"));
+    }
+    commands::Transaction transaction("Break Apart SVG", layer.document.snapshot().revision());
+    transaction.emplace<commands::BreakApartSvgArtwork>(layer.main, layer.art).withFonts(noFonts());
+    expect(layer.stack.execute(std::move(transaction)).changed(), "break apart scaled: the layer breaks apart");
+    for (const std::int64_t index : {0, 1, 2}) {
+        const auto after = renderProject(layer.document, layer.main, frame(index), "scaled after");
+        const auto position = static_cast<std::size_t>(index);
+        if (!after || !resampled[position] || !sharp[position])
+            continue;
+        const auto toResampled = difference(*after, *resampled[position]);
+        const auto toSharp = difference(*after, *sharp[position]);
+        std::cout << "break apart scaled: frame " << index << " after vs the resampled expansion " << toResampled
+                  << ", vs the one layer's sharper route " << toSharp << "\n";
+        expect(toResampled <= kGate, "break apart scaled: frame " + std::to_string(index) +
+                                         " is the editable import's resampled picture (worst " + std::to_string(toResampled) + ")");
+        expect(std::abs(coverage(*after) - coverage(*sharp[position])) <= 0.01 * coverage(*sharp[position]),
+               "break apart scaled: frame " + std::to_string(index) + " covers what the one layer's sharper route does");
+    }
+    std::filesystem::remove(file);
+}
+
 } // namespace
 
 int main() {
     try {
+        breakApartKeepsThePictureAndTheAnimation();
+        breakApartOfAScaledLayerIsTheResampledPicture();
         layerComposesThroughTheExpansionRoot();
         oneLayerIsTheEditableImport();
         savedAndReopenedWithTheFileGone();

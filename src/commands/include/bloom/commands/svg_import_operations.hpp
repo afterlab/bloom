@@ -180,6 +180,11 @@ class BreakApartSvgArtwork final : public Operation {
         prepared_ = std::move(prepared);
         return *this;
     }
+    // The installed fonts the file's text is matched against, when no prepared source carries them.
+    BreakApartSvgArtwork& withFonts(std::shared_ptr<const platform::FontCatalogue> fonts) {
+        fonts_ = std::move(fonts);
+        return *this;
+    }
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.layer.break-apart-svg"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
@@ -190,6 +195,7 @@ class BreakApartSvgArtwork final : public Operation {
     document::CompositionId composition_;
     document::LayerId layer_;
     std::shared_ptr<const PreparedSvgSource> prepared_;
+    std::shared_ptr<const platform::FontCatalogue> fonts_;
 };
 
 // The Vector Artwork node that draws `layer`'s picture: the one its content input reads, through
