@@ -632,6 +632,32 @@ SCENARIOS["tile-mirror-2k"] = {
     ],
 }
 
+# #528: Inner Shadow and Inner Glow over a plate, each with a keyed value so every frame is new. A
+# plate has no transparency of its own, so the shape is the plate's data window: the cost is the
+# one blur, the hold-out and the two Levels. Written, not run: no recorded numbers and no budget.
+SCENARIOS["inner-shadow-2k"] = {
+    "description": "A PNG16 plate under Inner Shadow, a 12 pixel blur and 20% choke with a keyed distance.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.inner-shadow",
+                      {"softness": 12.0, "choke": 0.2, "opacity": 0.8},
+                      {"keys": {"distance": [[0, 2.0], [23, 40.0]]}}]]},
+    ],
+}
+SCENARIOS["inner-glow-2k"] = {
+    "description": "A PNG16 plate under Inner Glow from the Center with a keyed size.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.inner-glow",
+                      {"source": "Center", "intensity": 1.5},
+                      {"keys": {"size": [[0, 8.0], [23, 96.0]]}}]]},
+    ],
+}
+
 # #347: Audio Waveform and Audio Spectrum of ten seconds of generated sound, each frame reading a new
 # window (the time is the frame), so the cost is the audio window read, the reduction and the plot
 # pass. Written, not run: it has no recorded numbers and no budget.

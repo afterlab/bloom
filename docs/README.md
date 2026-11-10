@@ -121,6 +121,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   smearing: quality, block size, GOP length and P-frame persistence.
 - [Stabilize](user-guide/stabilize.md) — follow a feature through a shot and hold the picture still, or
   carry an element along with it.
+- [Inner Shadow and Inner Glow](user-guide/inner-shadow-and-glow.md) — shade or light the inside of a
+  shape along its edges: colour, direction, blur, choke, size and Edge or Center.
 - [Tile & Mirror](user-guide/tile-and-mirror.md) — repeat the picture in tiles, scroll it with wrap,
   reflect it about a line, or fold it into a kaleidoscope.
 - [Corner Pin, ST Map and Displace](user-guide/warp-nodes.md) — pin a picture to four corners with

@@ -673,7 +673,7 @@ meaningful (Luma Key, Map Range's from and to, Clamp, In Range, Random, Wrap, Sm
 position is a point on a `KPointPad` over its frame, the exact X/Y rows staying below it (a Linear or
 Radial Gradient's start and end, joined by a line, on the node's own width and height; Transform
 2D's pivot and offset on the composition frame; #507 Lens Flare's light, over a picture of where its
-elements land, with an Element picker that shows one part of its stack at a time). #511: Tile & Mirror's pad holds only the one point its mode moves (Tile Center, Offset, Line Point or Center; the others are inactive and not drawn) and its dial only the one angle its mode turns (Line Angle or Rotation); a mode change re-lays the card. A gradient value
+elements land, with an Element picker that shows one part of its stack at a time). #511: Tile & Mirror's pad holds only the one point its mode moves (Tile Center, Offset, Line Point or Center; the others are inactive and not drawn) and its dial only the one angle its mode turns (Line Angle or Rotation); a mode change re-lays the card. #528: a short closed choice that is better seen than picked from a list is a labelled `KRadioGroup` (`PropertiesRowControl::Radio`) in Properties and on the card -- Inner Glow's Source, Edge or Center; Inner Shadow's direction is the angle dial and both nodes' colour is the card's swatch. A gradient value
 is a `GradientParameterRow`
 (`bloom/ui/gradient_parameter_row.hpp`): its name, the `KGradientEditor` and the gradient's
 diamond, then a Stop row with the selected stop's colour chip and its position in percent -- a

@@ -813,6 +813,74 @@ control chains. The native image-effect harness runs each mode and the shared co
 device against the CPU oracle at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value
 runs.
 
+## Inner Shadow and Inner Glow
+
+`bloom.inner-shadow` and `bloom.inner-glow`, schema 1 (#528), are compositing recipes like Drop Shadow
+and Glow, listed under Light & Shadow in the Add menu. Each has a required Image input, `input`, and
+an Image output, `image`, takes no effect mask, and has no pixel kernel of its own: the compiler
+lowers each to a chain of existing primitives (`appendInnerShadow`, `appendInnerGlow`), so every
+operation keeps its CPU reference, resident GPU command, cache identity, ROI, budget, cancellation
+and retirement. They paint inside the input's alpha and never change it: the output alpha is the
+input's alpha, the paint is composited Atop the input, and no colour lies outside the input's alpha.
+Both are premultiplication-correct and HDR-safe (colour is scaled straight, re-associated by the
+primitive that owns it, and never clamped). The data window is the input's. The edge of the input's
+data window is an edge like any other (the blur has a transparent edge), as for Light Wrap.
+
+Inner Shadow parameters and defaults: `color` (black, opaque; its alpha scales the opacity),
+`opacity` 0.75 in `[0, 1]`, `direction` 135 degrees measured clockwise from up, `distance` 5 pixels
+in `[0, 16384]`, `softness` (shown as **Blur**) 5 pixels in `[0, 256]`, `choke` 0 in `[0, 1]`, and the
+constant switch `shadowOnly` (off). Inner Glow: `color` (white, opaque), `opacity` 0.75, `intensity`
+1 in `[0, 1000]` (a gain on the colour, so a glow can exceed white), `size` 10 pixels in `[0, 256]`,
+`choke` 0, the constant choice `source` (Edge, the default, or Center) and the constant switch
+`glowOnly` (off). Every pixel length is a full-resolution pixel count, so it scales with the render
+scale. Everything except `source` and the switches is animatable.
+
+The chain, with `a` the input's alpha:
+
+1. Matte Blur coverage of `a` by `softness` (Inner Glow: `size`), Gaussian with a transparent edge: `m`.
+2. Inner Shadow only: Transform 2D translating `m` by `(distance sin(direction),
+   -distance cos(direction))` (bilinear), exactly as Drop Shadow's offset.
+3. A white image with the input's window (Channel Select of ones), held out by `m`: Multiply Alpha
+   with the invert switch. Its alpha `h = 1 - m` is the outside's reach into the pixel, 1 beyond the
+   blur, and exactly 1/2 at a hard edge with no offset.
+4. Levels on the alpha: input white `w = max((1 - choke) / 2, 1/1024)`, so the shaped coverage is
+   `e = clamp(h / w, 0, 1)`. At choke 0 the edge itself is at full strength and fades inward over the
+   blur (about three times `softness`); raising the choke lowers `w`, which widens the solid band
+   before the fade, and at choke 1 anything the blur reaches is solid, a hard edge to within 1/1024.
+   A blur of 0 gives a hard edge whatever the choke.
+5. Levels colours it: the straight colour is `color` (Inner Glow: `color * intensity`), the alpha is
+   `opacity * color.alpha * e`. Inner Glow with source Center swaps the alpha's output black and white
+   so the alpha is `opacity * color.alpha * (1 - e)`: nothing at the edge, full deep inside. Edge and
+   Center add up to the input's alpha when `intensity`, `opacity` and the colour's alpha are 1.
+6. A Merge with the explicit Atop mode composites the paint onto the input (`co = cp af + ci (1 - ap)`,
+   `ao = af`). Shadow Only and Glow Only use the In mode (`co = cp af`, `ao = ap af`) and publish the
+   paint alone, clipped to the input's alpha.
+
+A changed opacity, colour or intensity re-runs the colouring Levels and the Merge; a changed choke
+also re-runs the shaping Levels; a changed distance, softness or size re-runs from the blur or the
+offset on. A muted node passes its input through. The only wide operation is the one blur (two
+separable passes whose support grows with the blur radius); every other operation is a single pass.
+
+**Widgets.** Colour is a swatch that opens the colour picker (on the card and in Properties), and
+Inner Shadow's direction is an angle dial beside its Distance, Blur, Choke and Opacity sliders.
+Inner Glow's Source is a labelled two-segment radio, Edge or Center (`PropertiesRowControl::Radio`,
+and the same `KRadioGroup` on the card), with Size, Choke, Intensity and Opacity sliders; every
+edit is a command, so it undoes and animates like any parameter.
+
+**Evidence.** The direct recipe test compares each chain and its variants (Edge and Center sources,
+Only switches, choke 0, 0.5 and 1, blur 0, a solid input) with an independent double-precision
+reference (a direct two-dimensional Gaussian, the hold-out, the divide and clamp, and the Porter-Duff
+composite) at 1e-4. It also checks, at full and half render scale and on an HDR colour, that the
+output alpha equals the input alpha, that no colour lies outside the alpha, that opacity 0 is the
+input, that choke 1 hardens the edge, that Center plus Edge is the input's alpha, the warm reuse
+and the operations a changed opacity, colour or choke re-runs, and the ROI. Compiler tests read the
+operations and the parameter identities they use; registry, command, Properties and card tests cover
+the definitions, refusals, undo/redo, the dial, the swatch and the radio. `node.bloom.inner-shadow`
+and `node.bloom.inner-glow` prepare through the production builder (full frame and ROI), and the
+native harness holds four variants to the CPU oracle at the 2e-6/exact-alpha gate with warm reuse
+and a changed-value run. [Benchmarks](../development/benchmarks.md) lists `inner-shadow-2k` and
+`inner-glow-2k`, written and not yet run.
+
 ## Alpha Association
 
 `bloom.alpha-association`, schema 1 (#503), converts between the ways an image's colour relates to
