@@ -26,6 +26,7 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/function_body.hpp>
@@ -65,6 +66,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -2175,6 +2177,12 @@ int main() {
         testNodeGroupExpansion(expectations);
         testNodeGroupValues(expectations);
         testNodeGroupRefusals(expectations);
+        testNodeGroupMask(expectations);
+        testNodeGroupChannelSet(expectations);
+        testNodeGroupWrongKinds(expectations);
+        testNodeGroupNesting(expectations);
+        testNodeGroupDepthRefusal(expectations);
+        testNodeGroupNodeCap(expectations);
         testFunctionGroups(expectations);
         testFunctionSharesGroupWithInstance(expectations);
         testFunctionPlot(expectations);

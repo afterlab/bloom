@@ -323,6 +323,14 @@ target_link_libraries(bloom_runtime_path_glow_preset_test PRIVATE bloom_runtime_
 bloom_enable_warnings(bloom_runtime_path_glow_preset_test)
 bloom_enable_strict_floating_point(bloom_runtime_path_glow_preset_test)
 bloom_add_test(NAME bloom.runtime.path-glow-presets COMMAND bloom_runtime_path_glow_preset_test LABELS runtime integration paths)
+
+# #342: a Node Group, its definition, Group Input and Group Output through the real archive writer
+# and reader, compiled and rendered on the CPU reference before and after.
+add_executable(bloom_runtime_node_group_reopen_test ${PROJECT_SOURCE_DIR}/tests/integration/node_group_reopen_tests.cpp)
+target_link_libraries(bloom_runtime_node_group_reopen_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_node_group_reopen_test)
+bloom_enable_strict_floating_point(bloom_runtime_node_group_reopen_test)
+bloom_add_test(NAME bloom.runtime.node-group-reopen COMMAND bloom_runtime_node_group_reopen_test LABELS runtime integration persistence)
 # #565: a Film Grain saved before Sensor Noise opens in Film mode and renders identically.
 add_executable(bloom_runtime_film_grain_sensor_noise_test ${PROJECT_SOURCE_DIR}/tests/integration/film_grain_sensor_noise_tests.cpp)
 target_link_libraries(bloom_runtime_film_grain_sensor_noise_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)

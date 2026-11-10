@@ -282,6 +282,567 @@ void testNodeGroupRefusals(Expectations& expectations) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// #342 pixel slots other than images: a Mask and a ChannelSet routed through a group, nested
+// groups and the depth and node caps.
+
+void wire(document::Composition& composition, std::uint64_t& edge, const document::NodeId from,
+          const std::string_view fromPort, const document::NodeId to, const std::string_view toPort) {
+    using namespace document;
+    require(composition.graph().addEdge({EdgeId::fromRaw(edge++),
+                                         {from, std::string(fromPort)},
+                                         NodeInputRef{to, std::string(toPort)}}),
+            "the link is accepted");
+}
+
+[[nodiscard]] document::Composition makeBoundedGroup(const document::CompositionId id,
+                                                     const std::string& name,
+                                                     const std::uint64_t base,
+                                                     const document::NodeId input,
+                                                     const document::NodeId output,
+                                                     std::uint64_t& parameters) {
+    auto group = makeStackedComposition(id, name, base);
+    addDefaultedNode(group, input, document::kGroupInputNodeType, parameters);
+    addDefaultedNode(group, output, document::kGroupOutputNodeType, parameters);
+    return group;
+}
+
+[[nodiscard]] bool samePixelBits(const std::vector<render::Rgba32f>& a,
+                                 const std::vector<render::Rgba32f>& b) {
+    return !a.empty() && a.size() == b.size() &&
+           std::memcmp(a.data(), b.data(), a.size() * sizeof(render::Rgba32f)) == 0;
+}
+
+// The contact sheet of the Mask case when BLOOM_NODE_GROUP_CAPTURE names a directory: the grouped
+// render, the flat render and their absolute difference (black when the group changes nothing).
+void captureMaskSheet(const std::vector<render::Rgba32f>& grouped,
+                      const std::vector<render::Rgba32f>& flat, const std::size_t width,
+                      const std::size_t height) {
+    const char* directory = std::getenv("BLOOM_NODE_GROUP_CAPTURE");
+    if (directory == nullptr || *directory == '\0' || grouped.size() != flat.size() ||
+        grouped.size() != width * height)
+        return;
+    const auto encode = [](float value) {
+        value = std::clamp(value, 0.0F, 1.0F);
+        const float srgb = value <= 0.0031308F ? 12.92F * value
+                                                : 1.055F * std::pow(value, 1.0F / 2.4F) - 0.055F;
+        return static_cast<char>(static_cast<unsigned char>(std::lround(srgb * 255.0F)));
+    };
+    const auto write = [&](const std::string& name, const auto& pixel) {
+        std::ofstream out(std::string(directory) + "/" + name, std::ios::binary);
+        out << "P6\n" << width << ' ' << height << "\n255\n";
+        for (std::size_t i = 0; i < grouped.size(); ++i) {
+            const auto value = pixel(i);
+            for (const float channel : value)
+                out.put(encode(channel));
+        }
+    };
+    write("mask-grouped.ppm", [&](const std::size_t i) {
+        return std::array<float, 3>{grouped[i].red(), grouped[i].green(), grouped[i].blue()};
+    });
+    write("mask-flat.ppm", [&](const std::size_t i) {
+        return std::array<float, 3>{flat[i].red(), flat[i].green(), flat[i].blue()};
+    });
+    write("mask-difference.ppm", [&](const std::size_t i) {
+        return std::array<float, 3>{std::abs(grouped[i].red() - flat[i].red()),
+                                    std::abs(grouped[i].green() - flat[i].green()),
+                                    std::abs(grouped[i].blue() - flat[i].blue())};
+    });
+}
+
+// ---- Mask ----------------------------------------------------------------------------------
+
+enum class MaskCase { Enter, Leave, EnterMuted, LeaveMuted, EnterUnconnected };
+
+constexpr auto kMaskKeyNode = document::NodeId::fromRaw(8001);
+constexpr auto kMaskMixNode = document::NodeId::fromRaw(8002);
+constexpr auto kMaskGroupKeyNode = document::NodeId::fromRaw(8101);
+constexpr auto kMaskGroupMixNode = document::NodeId::fromRaw(8102);
+
+// Solid two is both the second image of an Image Mix and the plate a Luma Key cuts a Mask from; the
+// mix of the first layer's plate takes that Mask. `flat` keeps the key and mix in the main
+// composition; otherwise the mix (the Mask enters the group at mask1) or the key (the Mask leaves it
+// at mask1) sits inside the group and the other outside.
+[[nodiscard]] document::Project makeMaskProject(const MaskCase which, const bool flat) {
+    using namespace document;
+    auto project = makeProject();
+    auto* main = project.findComposition(kCompositionId);
+    const bool leaves = which == MaskCase::Leave || which == MaskCase::LeaveMuted;
+    const bool muted = which == MaskCase::EnterMuted || which == MaskCase::LeaveMuted;
+    std::uint64_t parameters = 8200;
+    std::uint64_t edges = 8300;
+    std::uint64_t groupParameters = 8400;
+    std::uint64_t groupEdges = 8500;
+    const auto content = std::string(kLayerOutputContentInputPort);
+    require(main->graph().eraseEdge(kFirstSourceEdge), "the direct source edge is removed");
+    const auto key = [](Composition& composition, const NodeId id, std::uint64_t& next) {
+        addDefaultedNode(composition, id, "bloom.luma-key", next, {{"low", 0.0}, {"high", 1.0}});
+    };
+    const auto mix = [](Composition& composition, const NodeId id, std::uint64_t& next) {
+        addDefaultedNode(composition, id, "bloom.image-mix", next, {{"factor", 1.0}});
+    };
+    if (flat) {
+        key(*main, kMaskKeyNode, parameters);
+        mix(*main, kMaskMixNode, parameters);
+        wire(*main, edges, kSecondSolidNode, "image", kMaskKeyNode, "input");
+        wire(*main, edges, kFirstSolidNode, "image", kMaskMixNode, "input");
+        wire(*main, edges, kSecondSolidNode, "image", kMaskMixNode, "second");
+        if (which != MaskCase::EnterUnconnected)
+            wire(*main, edges, kMaskKeyNode, "mask", kMaskMixNode, "mask");
+        wire(*main, edges, kMaskMixNode, "image", kFirstLayerNode, content);
+        if (muted)
+            main->nodeLayout()[kMaskKeyNode].muted = true;
+        return project;
+    }
+    addDefaultedNode(*main, kInstanceA, kNodeGroupNodeType, parameters,
+                     {{"group", static_cast<std::int64_t>(kGroupComposition.value())}});
+    auto group = makeBoundedGroup(kGroupComposition, "Mask", 5300, kGroupInputNode,
+                                  kGroupOutputNode, groupParameters);
+    if (!leaves) {
+        key(*main, kMaskKeyNode, parameters);
+        mix(group, kMaskGroupMixNode, groupParameters);
+        wire(*main, edges, kSecondSolidNode, "image", kMaskKeyNode, "input");
+        wire(*main, edges, kFirstSolidNode, "image", kInstanceA, "image1");
+        wire(*main, edges, kSecondSolidNode, "image", kInstanceA, "image2");
+        if (which != MaskCase::EnterUnconnected)
+            wire(*main, edges, kMaskKeyNode, "mask", kInstanceA, "mask1");
+        wire(*main, edges, kInstanceA, "image1", kFirstLayerNode, content);
+        wire(group, groupEdges, kGroupInputNode, "image1", kMaskGroupMixNode, "input");
+        wire(group, groupEdges, kGroupInputNode, "image2", kMaskGroupMixNode, "second");
+        wire(group, groupEdges, kGroupInputNode, "mask1", kMaskGroupMixNode, "mask");
+        wire(group, groupEdges, kMaskGroupMixNode, "image", kGroupOutputNode, "image1");
+        if (muted)
+            main->nodeLayout()[kMaskKeyNode].muted = true;
+    } else {
+        mix(*main, kMaskMixNode, parameters);
+        key(group, kMaskGroupKeyNode, groupParameters);
+        wire(*main, edges, kSecondSolidNode, "image", kInstanceA, "image1");
+        wire(*main, edges, kFirstSolidNode, "image", kMaskMixNode, "input");
+        wire(*main, edges, kSecondSolidNode, "image", kMaskMixNode, "second");
+        wire(*main, edges, kInstanceA, "mask1", kMaskMixNode, "mask");
+        wire(*main, edges, kMaskMixNode, "image", kFirstLayerNode, content);
+        wire(group, groupEdges, kGroupInputNode, "image1", kMaskGroupKeyNode, "input");
+        wire(group, groupEdges, kMaskGroupKeyNode, "mask", kGroupOutputNode, "mask1");
+        if (muted)
+            group.nodeLayout()[kMaskGroupKeyNode].muted = true;
+    }
+    require(project.addComposition(std::move(group)), "the group definition is added");
+    return project;
+}
+
+void testNodeGroupMask(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    const auto flatUnmasked = compile(makeMaskProject(MaskCase::EnterUnconnected, true), registry);
+    const auto flatMasked = compile(makeMaskProject(MaskCase::Enter, true), registry);
+    const auto flatMuted = compile(makeMaskProject(MaskCase::EnterMuted, true), registry);
+    if (!flatUnmasked.plan || !flatMasked.plan || !flatMuted.plan) {
+        expectations.expect(false, "the flat Mask graphs compile");
+        return;
+    }
+    const auto maskedPixels = renderReference(flatMasked.plan);
+    expectations.expect(!samePixelBits(maskedPixels, renderReference(flatUnmasked.plan)) &&
+                            !samePixelBits(maskedPixels, renderReference(flatMuted.plan)),
+                        "the Mask changes the Image Mix: the flat graph with it differs from the "
+                        "one without and from the one with the key muted");
+
+    const struct {
+        MaskCase which;
+        const char* label;
+    } cases[] = {{MaskCase::Enter, "a Mask entering the group at mask1"},
+                 {MaskCase::Leave, "a Mask leaving the group at mask1"},
+                 {MaskCase::EnterMuted, "a muted Luma Key outside feeding mask1"},
+                 {MaskCase::LeaveMuted, "a muted Luma Key inside feeding the group's mask1"},
+                 {MaskCase::EnterUnconnected, "an unconnected mask1"}};
+    for (const auto& item : cases) {
+        const MaskCase flatCase = item.which == MaskCase::Leave ? MaskCase::Enter
+                                  : item.which == MaskCase::LeaveMuted ? MaskCase::EnterMuted
+                                                                       : item.which;
+        const auto grouped = compile(makeMaskProject(item.which, false), registry);
+        const auto flat = compile(makeMaskProject(flatCase, true), registry);
+        if (!grouped.plan || !flat.plan) {
+            expectations.expect(false, std::string(item.label) + " compiles");
+            continue;
+        }
+        expectations.expect(operationShape(*flat.plan) == operationShape(*grouped.plan),
+                            std::string(item.label) + " compiles to the flat plan's operations");
+        const auto groupedPixels = renderReference(grouped.plan);
+        const auto flatPixels = renderReference(flat.plan);
+        expectations.expect(samePixelBits(groupedPixels, flatPixels),
+                            std::string(item.label) + " renders the flat graph's pixels exactly");
+        if (item.which == MaskCase::Enter)
+            captureMaskSheet(groupedPixels, flatPixels, grouped.plan->format().width(),
+                             grouped.plan->format().height());
+    }
+}
+
+// ---- ChannelSet ----------------------------------------------------------------------------
+
+enum class ChannelCase { Enter, Leave, EnterUnconnected };
+
+constexpr auto kChannelPackNode = document::NodeId::fromRaw(8601);
+constexpr auto kChannelPassNode = document::NodeId::fromRaw(8602);
+constexpr auto kChannelGroupPackNode = document::NodeId::fromRaw(8611);
+constexpr auto kChannelGroupPassNode = document::NodeId::fromRaw(8612);
+
+// Image to Channel Set packs solid one as a layer of channels and Channel Pass reads the layer
+// back as an image. Entering: the pack is outside and the pass inside the group; leaving: the
+// pack inside, the pass outside.
+[[nodiscard]] document::Project makeChannelProject(const ChannelCase which, const bool flat) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto* main = project.findComposition(kCompositionId);
+    std::uint64_t parameters = 8700;
+    std::uint64_t edges = 8800;
+    std::uint64_t groupParameters = 8900;
+    std::uint64_t groupEdges = 9000;
+    const auto content = std::string(kLayerOutputContentInputPort);
+    require(main->graph().eraseEdge(kFirstSourceEdge), "the direct source edge is removed");
+    const auto pack = [](Composition& composition, const NodeId id, std::uint64_t& next) {
+        addDefaultedNode(composition, id, kImageToChannelSetNodeType, next, {{"layer", std::string("pass")}});
+    };
+    const auto pass = [](Composition& composition, const NodeId id, std::uint64_t& next) {
+        addDefaultedNode(composition, id, kChannelPassNodeType, next, {{"pass", std::string("pass")}});
+    };
+    if (flat) {
+        pack(*main, kChannelPackNode, parameters);
+        pass(*main, kChannelPassNode, parameters);
+        wire(*main, edges, kFirstSolidNode, "image", kChannelPackNode, "image");
+        if (which != ChannelCase::EnterUnconnected)
+            wire(*main, edges, kChannelPackNode, "channels", kChannelPassNode, "channels");
+        wire(*main, edges, kChannelPassNode, "image", kFirstLayerNode, content);
+        return project;
+    }
+    addDefaultedNode(*main, kInstanceA, kNodeGroupNodeType, parameters,
+                     {{"group", static_cast<std::int64_t>(kGroupComposition.value())}});
+    auto group = makeBoundedGroup(kGroupComposition, "Channels", 5300, kGroupInputNode,
+                                  kGroupOutputNode, groupParameters);
+    if (which != ChannelCase::Leave) {
+        pack(*main, kChannelPackNode, parameters);
+        pass(group, kChannelGroupPassNode, groupParameters);
+        wire(*main, edges, kFirstSolidNode, "image", kChannelPackNode, "image");
+        if (which != ChannelCase::EnterUnconnected)
+            wire(*main, edges, kChannelPackNode, "channels", kInstanceA, "channels1");
+        wire(*main, edges, kInstanceA, "image1", kFirstLayerNode, content);
+        wire(group, groupEdges, kGroupInputNode, "channels1", kChannelGroupPassNode, "channels");
+        wire(group, groupEdges, kChannelGroupPassNode, "image", kGroupOutputNode, "image1");
+    } else {
+        pass(*main, kChannelPassNode, parameters);
+        pack(group, kChannelGroupPackNode, groupParameters);
+        wire(*main, edges, kFirstSolidNode, "image", kInstanceA, "image1");
+        wire(*main, edges, kInstanceA, "channels1", kChannelPassNode, "channels");
+        wire(*main, edges, kChannelPassNode, "image", kFirstLayerNode, content);
+        wire(group, groupEdges, kGroupInputNode, "image1", kChannelGroupPackNode, "image");
+        wire(group, groupEdges, kChannelGroupPackNode, "channels", kGroupOutputNode, "channels1");
+    }
+    require(project.addComposition(std::move(group)), "the group definition is added");
+    return project;
+}
+
+void testNodeGroupChannelSet(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    const auto flat = compile(makeChannelProject(ChannelCase::Enter, true), registry);
+    if (!flat.plan) {
+        expectations.expect(false, "the flat ChannelSet graph compiles");
+        return;
+    }
+    const auto flatPixels = renderReference(flat.plan);
+    // The pass reads the packed colour back (data values unchanged): a lit frame.
+    expectations.expect(std::ranges::any_of(flatPixels,
+                                            [](const render::Rgba32f& pixel) {
+                                                return pixel.red() > 0.0F && pixel.alpha() > 0.0F;
+                                            }),
+                        "a Channel Pass over a packed layer reads the plate's colour back");
+    for (const auto which : {ChannelCase::Enter, ChannelCase::Leave}) {
+        const char* label = which == ChannelCase::Enter ? "a ChannelSet entering the group"
+                                                        : "a ChannelSet leaving the group";
+        const auto grouped = compile(makeChannelProject(which, false), registry);
+        expectations.expect(grouped.plan != nullptr, std::string(label) + " compiles");
+        if (!grouped.plan)
+            continue;
+        expectations.expect(operationShape(*flat.plan) == operationShape(*grouped.plan),
+                            std::string(label) + " compiles to the flat plan's operations");
+        expectations.expect(samePixelBits(renderReference(grouped.plan), flatPixels),
+                            std::string(label) + " renders the flat graph's pixels exactly");
+    }
+    // A channel set that never arrives is handled as the flat graph handles it.
+    const auto flatMissing = compile(makeChannelProject(ChannelCase::EnterUnconnected, true), registry);
+    const auto groupedMissing = compile(makeChannelProject(ChannelCase::EnterUnconnected, false), registry);
+    expectations.expect(
+        (flatMissing.plan == nullptr) == (groupedMissing.plan == nullptr) &&
+            (flatMissing.plan == nullptr ||
+             (operationShape(*flatMissing.plan) == operationShape(*groupedMissing.plan) &&
+              samePixelBits(renderReference(flatMissing.plan), renderReference(groupedMissing.plan)))),
+        "an unconnected channels1 compiles and renders as the flat graph's unconnected Pass does");
+}
+
+// ---- Wrong kinds ---------------------------------------------------------------------------
+
+void testNodeGroupWrongKinds(Expectations& expectations) {
+    using namespace document;
+    std::uint64_t edges = 9800;
+    const auto tries = [&](Project& project, const NodeId from, const std::string_view output,
+                           const std::string_view input) {
+        auto* main = project.findComposition(kCompositionId);
+        return main->graph().addEdge({EdgeId::fromRaw(edges++),
+                                      {from, std::string(output)},
+                                      NodeInputRef{kInstanceA, std::string(input)}});
+    };
+    // mask1 and channels1 are free here; the first layer's plate and the key are outside the group.
+    auto project = makeMaskProject(MaskCase::EnterUnconnected, false);
+    std::uint64_t parameters = 9700;
+    addDefaultedNode(*project.findComposition(kCompositionId), NodeId::fromRaw(9701),
+                     kImageToChannelSetNodeType, parameters);
+    expectations.expect(!tries(project, kSecondSolidNode, "image", "mask1"),
+                        "an Image cannot connect to mask1");
+    expectations.expect(!tries(project, kSecondSolidNode, "image", "channels1"),
+                        "an Image cannot connect to channels1");
+    expectations.expect(!tries(project, NodeId::fromRaw(9701), "channels", "mask1"),
+                        "a ChannelSet cannot connect to mask1");
+    expectations.expect(!tries(project, kMaskKeyNode, "mask", "channels1"),
+                        "a Mask cannot connect to channels1");
+    expectations.expect(project.validate().ok(),
+                        "the refused links leave the project valid document truth");
+    expectations.expect(tries(project, kMaskKeyNode, "mask", "mask1") && project.validate().ok(),
+                        "the right kind (a Mask to mask1) is accepted, so the refusals are about kind");
+    // image2 is free when the Mask leaves the group.
+    auto leaving = makeMaskProject(MaskCase::Leave, false);
+    std::uint64_t leavingParameters = 9750;
+    addDefaultedNode(*leaving.findComposition(kCompositionId), NodeId::fromRaw(9751),
+                     kImageToChannelSetNodeType, leavingParameters);
+    expectations.expect(!tries(leaving, NodeId::fromRaw(9751), "channels", "image2"),
+                        "a ChannelSet cannot connect to image2");
+}
+
+// ---- Nested groups -------------------------------------------------------------------------
+
+constexpr std::uint64_t kNestedGroupBase = 100;
+
+[[nodiscard]] document::CompositionId nestedGroupId(const std::size_t level) {
+    return document::CompositionId::fromRaw(kNestedGroupBase + level);
+}
+[[nodiscard]] document::NodeId nestedNode(const std::size_t level, const std::uint64_t part) {
+    return document::NodeId::fromRaw(20000 + level * 100 + part);
+}
+constexpr std::uint64_t kNestedInput = 1;
+constexpr std::uint64_t kNestedOutput = 2;
+constexpr std::uint64_t kNestedExposure = 3;
+constexpr std::uint64_t kNestedInstance = 4;
+
+[[nodiscard]] double nestedStops(const std::size_t level) { return 0.1 * static_cast<double>(level); }
+
+// Group k holds Group Input -> Exposure(0.1 k) -> [instance of group k+1] -> Group Output, group
+// `levels` holding no instance. The main composition's first layer reads group 1 (flat: the same
+// exposures in a row). `innermostStops` overrides the innermost group's exposure.
+[[nodiscard]] document::Project
+makeNestedProject(const std::size_t levels, const bool flat, const bool instanceUnreached = false,
+                  const std::optional<double> innermostStops = std::nullopt) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto* main = project.findComposition(kCompositionId);
+    std::uint64_t parameters = 6100;
+    std::uint64_t edges = 6500;
+    const auto content = std::string(kLayerOutputContentInputPort);
+    const auto stopsOf = [&](const std::size_t level) {
+        return level == levels && innermostStops ? *innermostStops : nestedStops(level);
+    };
+    require(main->graph().eraseEdge(kFirstSourceEdge), "the direct source edge is removed");
+    if (flat) {
+        NodeId previous = kFirstSolidNode;
+        for (std::size_t level = 1; level <= levels; ++level) {
+            const auto exposure = nestedNode(level, 60);
+            addDefaultedNode(*main, exposure, "bloom.exposure", parameters,
+                             {{"amount", stopsOf(level)}});
+            wire(*main, edges, previous, "image", exposure, "input");
+            previous = exposure;
+        }
+        wire(*main, edges, previous, "image", kFirstLayerNode, content);
+        return project;
+    }
+    addDefaultedNode(*main, kInstanceA, kNodeGroupNodeType, parameters,
+                     {{"group", static_cast<std::int64_t>(nestedGroupId(1).value())}});
+    wire(*main, edges, kFirstSolidNode, "image", kInstanceA, "image1");
+    // Unread: the instance takes the plate but nothing reads its answer; the layer keeps the plate.
+    wire(*main, edges, instanceUnreached ? kFirstSolidNode : kInstanceA,
+         instanceUnreached ? "image" : "image1", kFirstLayerNode, content);
+    for (std::size_t level = 1; level <= levels; ++level) {
+        std::uint64_t groupParameters = 30000 + level * 200;
+        std::uint64_t groupEdges = 31000 + level * 200;
+        auto group = makeStackedComposition(nestedGroupId(level), "Level " + std::to_string(level),
+                                            nestedNode(level, 50).value());
+        addDefaultedNode(group, nestedNode(level, kNestedInput), kGroupInputNodeType,
+                         groupParameters);
+        addDefaultedNode(group, nestedNode(level, kNestedOutput), kGroupOutputNodeType,
+                         groupParameters);
+        addDefaultedNode(group, nestedNode(level, kNestedExposure), "bloom.exposure",
+                         groupParameters, {{"amount", stopsOf(level)}});
+        wire(group, groupEdges, nestedNode(level, kNestedInput), "image1",
+             nestedNode(level, kNestedExposure), "input");
+        if (level < levels) {
+            addDefaultedNode(group, nestedNode(level, kNestedInstance), kNodeGroupNodeType,
+                             groupParameters,
+                             {{"group", static_cast<std::int64_t>(nestedGroupId(level + 1).value())}});
+            wire(group, groupEdges, nestedNode(level, kNestedExposure), "image",
+                 nestedNode(level, kNestedInstance), "image1");
+            wire(group, groupEdges, nestedNode(level, kNestedInstance), "image1",
+                 nestedNode(level, kNestedOutput), "image1");
+        } else {
+            wire(group, groupEdges, nestedNode(level, kNestedExposure), "image",
+                 nestedNode(level, kNestedOutput), "image1");
+        }
+        require(project.addComposition(std::move(group)), "the nested group is added");
+    }
+    return project;
+}
+
+// The node ids of every image effect in a plan, in order.
+[[nodiscard]] std::vector<document::NodeId> effectNodes(const runtime::CompiledCompositionPlan& plan) {
+    std::vector<document::NodeId> ids;
+    for (const auto& operation : plan.operations())
+        if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation))
+            ids.push_back(effect->sourceNodeId);
+    return ids;
+}
+
+void testNodeGroupNesting(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    for (const std::size_t levels : {std::size_t{2}, kMaximumNodeGroupDepth}) {
+        const std::string label = std::to_string(levels) + " nested groups";
+        auto project = makeNestedProject(levels, false);
+        expectations.expect(project.validate().ok(), label + " are valid document truth");
+        const auto grouped = compile(std::move(project), registry);
+        const auto flat = compile(makeNestedProject(levels, true), registry);
+        if (!grouped.plan || !flat.plan) {
+            for (const auto& diagnostic : grouped.diagnostics)
+                std::cerr << label << ": " << diagnostic.summary << ": " << diagnostic.detail << '\n';
+            expectations.expect(false, label + " compile" + (grouped.plan ? "" : " (grouped)"));
+            continue;
+        }
+        expectations.expect(operationShape(*grouped.plan) == operationShape(*flat.plan) &&
+                                effectNodes(*grouped.plan).size() == levels,
+                            label + " compile to one Exposure per level, the flat plan's shape");
+        const auto groupedPixels = renderReference(grouped.plan);
+        expectations.expect(samePixelBits(groupedPixels, renderReference(flat.plan)),
+                            label + " render the flat graph's pixels exactly");
+
+        // Derived ids are unique, none is an authored id, and a second compile derives the same.
+        const auto ids = effectNodes(*grouped.plan);
+        const std::set<document::NodeId> distinct(ids.begin(), ids.end());
+        expectations.expect(distinct.size() == ids.size() &&
+                                std::ranges::none_of(ids, [](const NodeId id) {
+                                    return id.value() < (std::uint64_t{1} << 63U);
+                                }),
+                            label + ": every instance's nodes get a unique derived id");
+        const auto again = compile(makeNestedProject(levels, false), registry);
+        expectations.expect(again.plan && std::ranges::equal(grouped.plan->operations(),
+                                                             again.plan->operations()),
+                            label + ": a second compile derives the same ids and the same plan");
+
+        // The innermost definition is edited: the outer instances all follow, as the flat edit does.
+        auto edited = makeNestedProject(levels, false);
+        auto* innermost = edited.findComposition(nestedGroupId(levels));
+        require(innermost->parameters().setSource(
+                    parameterOf(*innermost, nestedNode(levels, kNestedExposure), "amount"),
+                    ConstantValueSource{1.5}),
+                "the innermost exposure is edited");
+        const auto editedResult = compile(std::move(edited), registry);
+        const auto flatEdited = compile(makeNestedProject(levels, true, false, 1.5), registry);
+        expectations.expect(editedResult.plan && flatEdited.plan &&
+                                samePixelBits(renderReference(editedResult.plan),
+                                              renderReference(flatEdited.plan)) &&
+                                !samePixelBits(renderReference(editedResult.plan), groupedPixels),
+                            label + ": editing the innermost definition updates the outermost "
+                                    "instance and matches the flat edit");
+    }
+}
+
+void testNodeGroupDepthRefusal(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    const auto deep = kMaximumNodeGroupDepth + 1;
+    const auto refused = compile(makeNestedProject(deep, false), registry);
+    const bool named = std::ranges::any_of(refused.diagnostics, [](const auto& diagnostic) {
+        return diagnostic.detail.find("Node Groups are nested too deeply") != std::string::npos &&
+               diagnostic.code == runtime::CompileDiagnosticCode::TopologyInvariant &&
+               diagnostic.subject.nodeId.has_value();
+    });
+    expectations.expect(refused.plan == nullptr && named,
+                        "nine nested groups are refused with the nested-too-deeply diagnostic on "
+                        "the instance that goes past the depth");
+    // The expansion itself reports it and does not crash: the deepest instance stays unresolved.
+    const auto project = makeNestedProject(deep, false);
+    const auto expansion = expandNodeGroups(project, *project.findComposition(kCompositionId));
+    expectations.expect(expansion.unresolved.size() == 1 &&
+                            expansion.unresolved.begin()->second ==
+                                "Node Groups are nested too deeply",
+                        "the expansion leaves exactly the ninth level's instance unresolved");
+    // A too-deep instance nothing reads does not stop the rest of the composition compiling.
+    const auto unread = compile(makeNestedProject(deep, false, true), registry);
+    expectations.expect(unread.plan != nullptr,
+                        "a too-deep instance that nothing reads leaves the rest compiling");
+}
+
+// ---- Node cap ------------------------------------------------------------------------------
+
+[[nodiscard]] document::Project makeCappedProject(const std::size_t extraNodes) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto* main = project.findComposition(kCompositionId);
+    std::uint64_t parameters = 6100;
+    std::uint64_t edges = 6500;
+    require(main->graph().eraseEdge(kFirstSourceEdge), "the direct source edge is removed");
+    addDefaultedNode(*main, kInstanceA, kNodeGroupNodeType, parameters,
+                     {{"group", static_cast<std::int64_t>(kGroupComposition.value())}});
+    wire(*main, edges, kFirstSolidNode, "image", kInstanceA, "image1");
+    wire(*main, edges, kInstanceA, "image1", kFirstLayerNode,
+         std::string(kLayerOutputContentInputPort));
+    std::uint64_t groupParameters = 100000;
+    std::uint64_t groupEdges = 7000;
+    auto group = makeBoundedGroup(kGroupComposition, "Large", 5300, kGroupInputNode,
+                                  kGroupOutputNode, groupParameters);
+    wire(group, groupEdges, kGroupInputNode, "image1", kGroupOutputNode, "image1");
+    // The expansion refuses when the composition's nodes plus the definition's pass the cap.
+    const auto have = main->graph().nodes().size() + group.graph().nodes().size();
+    require(have <= kMaximumExpandedNodes, "the fixture starts under the cap");
+    const auto fillers = kMaximumExpandedNodes - have + extraNodes;
+    for (std::size_t index = 0; index < fillers; ++index)
+        addDefaultedNode(group, NodeId::fromRaw(200000 + index), kScalarValueNodeType,
+                         groupParameters);
+    require(project.addComposition(std::move(group)), "the large group is added");
+    return project;
+}
+
+void testNodeGroupNodeCap(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    // Exactly at the cap the group expands; one node over, the instance stays and says why.
+    const auto at = compile(makeCappedProject(0), registry);
+    expectations.expect(at.plan != nullptr, "a group that brings the composition to exactly the "
+                                            "node cap expands");
+    const auto over = compile(makeCappedProject(1), registry);
+    const bool named = std::ranges::any_of(over.diagnostics, [](const auto& diagnostic) {
+        return diagnostic.detail.find("The expanded groups hold too many nodes") !=
+                   std::string::npos &&
+               diagnostic.subject.nodeId == kInstanceA;
+    });
+    expectations.expect(over.plan == nullptr && named,
+                        "a group one node over the cap is refused with the too-many-nodes "
+                        "diagnostic on the instance");
+}
+
+// ---------------------------------------------------------------------------------------------
 // #590 shared function definitions: a Function node reads the same group a Node Group instance
 // does, as a function of one number.
 
