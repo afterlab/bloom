@@ -513,6 +513,14 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.stabilize")
         self.assertIn("tracked", effect[2]["keys"])
 
+    def test_tile_mirror_scenario_keys_its_phase_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["tile-mirror-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.tile-mirror")
+        self.assertIn("horizontalPhase", effect[2]["keys"], "every frame is new")
+
     def test_lens_distortion_scenario_keys_its_radial_coefficient(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["lens-distortion-2k"]

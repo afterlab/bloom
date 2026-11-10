@@ -2755,6 +2755,77 @@ and 2160p against a Grade and the closest existing nodes, and the `cryptomatte-m
 of the real-world suite plays, fills and exports a Cryptomatte matte mask, a masked Grade and a
 node track matte on the bench EXR.
 
+## Tile & Mirror
+
+One node, `bloom.tile-mirror`, under **Transform** (#511): the picture repeated, panned with wrap,
+reflected about a line, or folded into a kaleidoscope. It is the same inverse mapping as Corner Pin,
+ST Map and Displace (below): for every output pixel a position of the input is computed and read, so
+each mode lowers to one field raster (`fields.md`), the CPU reference and the GPU run the same program,
+and nothing in it is a GPU coverage exception. The instructions are existing ones (Coordinate,
+Constant, Swizzle, Math, Transform, Homography, Image); the node adds no kernel.
+
+A **Mode** (a constant) picks what is read. Only the values of the mode are read, shown and compiled; a
+keyed value of another mode neither varies the picture with time nor invalidates its cache
+(`isParameterInactive`). Field positions are pixels from the composition frame's centre with y up; the
+node's points are pixels from that centre with y down, and its angles turn clockwise.
+
+| Mode | Position read | Values |
+| --- | --- | --- |
+| Tile | The pixel, counted in tiles, is folded into one cell and read back at the tile centre. | Tile Center (point), Tile Width and Height (percent of the composition frame, 100 by default; Link Tile Size gives both the width), Horizontal and Vertical Phase (degrees), Mirror Edges, Clamp to Output with Output Width and Height (percent of the frame). |
+| Wrap Offset | The pixel less the shift, the edge rule Repeat about the input's data window. | Offset (point, pixels, y down). |
+| Mirror | The pixel reflected about a line, on one side only. | Line Point, Line Angle (degrees clockwise from screen right, 90 is vertical), Reflect. |
+| Kaleidoscope | The pixel turned, divided by the size and folded into a wedge. | Center, Segments (1 to 64), Rotation (degrees clockwise), Size (percent). |
+
+**Filter** (Bilinear, Nearest, Bicubic) is shared by every mode. **Edges** (Transparent, Extend, Repeat,
+Mirror) is read by every mode but Wrap Offset, whose rule is Repeat: it names what shows where a read
+leaves the input.
+
+**Tile cell rule.** With tile size `(tw, th)` pixels (`tw = Tile Width x frame width / 100`), phase
+`(hp, vp)` and centre `C` (y up), the pixel at `p` has `u = (p.x / tw - hp / 360, p.y / th + vp / 360)`
+and reads `C + (f(u.x) tw, f(u.y) th)`, where `f(t) = t + 1/2 - floor(t + 1/2) - 1/2` is the position in
+the cell, in [-1/2, 1/2). The cell that holds the frame's centre is the tile at `C`, whole; the pattern
+repeats from there. A phase of 360 degrees is one whole tile, so an animated phase loops. A positive
+horizontal phase moves the tiles right and a positive vertical phase moves them down. With **Mirror
+Edges** the position in the cell is the triangle wave `g(m)` of `m = t + 1/2` (`m - 2 floor(m / 2)`,
+reflected above 1) less 1/2, so each neighbouring tile is flipped. With **Clamp to Output** a pixel
+farther from the centre than half the output size (percent of the frame) is transparent; with it off the
+tiles fill the whole canvas and the output size is not read. The canvas is the composition frame, so the
+tiles can fill the composition whatever the size of the input. Tile sizes are in full-resolution
+composition pixels: a reduced render scale draws the same pattern at fewer pixels, and the cell edges
+lie on pixel edges at any scale only where the tile size in pixels is a whole number there.
+
+**Wrap Offset.** The shift is in full-resolution composition pixels. The output keeps the input's data
+window, and the picture wraps about that window (the sampler's Repeat edge wraps the filter's taps too),
+so a whole-pixel shift is the exact rotation of the pixels with no seam, for every filter. At a reduced
+render scale an odd shift is a fraction of a pixel and the filter blends across it.
+
+**Mirror.** The line goes through the point at the angle. **Reflect** is **Left or Below** (the default)
+or **Right or Above**: the pixels on that side are kept as the input has them and the pixels on the other
+side show their reflection. At 90 degrees the line is vertical and the sides are left and right; at 0
+it is horizontal and they are below and above. (The kept side is the one the line's direction turned a
+quarter turn clockwise points to; 180 degrees swaps the sides.) The data window is the input's.
+
+**Kaleidoscope.** The pixel less the centre is turned counter-clockwise by the rotation (so the pattern
+turns clockwise), divided by the size (a larger size shows less of the picture, larger), folded into the
+wedge of `1 / segments` turn that starts at screen right (the second half of each wedge is the mirror
+image of the first), and read about the centre. The result has the symmetry of a dihedral group of the
+segment count. The data window is the input's.
+
+The picture's colour is not changed: values above one, negatives and alpha keep their range (the read
+is the filtered premultiplied texel as stored). A position beyond a billion pixels reads transparent.
+Because a position can be anywhere, a region of interest reads the whole input. A muted node passes its
+input through.
+
+Cost, from the code: one raster pass; Tile and Kaleidoscope compute about a dozen register operations
+per pixel before the read, Bicubic reads sixteen texels per pixel, Bilinear four, Nearest one. No timing
+is recorded; see [Benchmarks](../development/benchmarks.md).
+
+Tests: `snapshot_compiler_tile_mirror_tests` (lowering per mode, the coverage fixture's program is the
+lowering's, activity and time dependence, and the pixels against independent binary64 readings of the
+cell rule, the wrap, the reflection and the fold, plus symmetry, region of interest, render scale,
+budget and cancellation), the Required `node.bloom.tile-mirror` GPU coverage fixture and the native
+CPU/GPU parity cases.
+
 ## Corner Pin, ST Map and Displace
 
 Stabilize (#513) is a fourth user of the same inverse mapping and is specified in

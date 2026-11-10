@@ -617,6 +617,21 @@ SCENARIOS["stabilize-2k"] = {
     ],
 }
 
+# #511: Tile & Mirror over a plate: tiles of a quarter of the frame with Mirror Edges filling the frame,
+# the horizontal phase keyed so every frame is new. Written, not run: no recorded numbers and no budget.
+SCENARIOS["tile-mirror-2k"] = {
+    "description": "A PNG16 plate under Tile & Mirror, mirrored tiles with a keyed horizontal phase.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.tile-mirror",
+                      {"tileWidth": 25.0, "tileHeight": 25.0, "mirrorEdges": True,
+                       "clampToOutput": False},
+                      {"keys": {"horizontalPhase": [[0, 0.0], [23, 360.0]]}}]]},
+    ],
+}
+
 # #347: Audio Waveform and Audio Spectrum of ten seconds of generated sound, each frame reading a new
 # window (the time is the frame), so the cost is the audio window read, the reduction and the plot
 # pass. Written, not run: it has no recorded numbers and no budget.
