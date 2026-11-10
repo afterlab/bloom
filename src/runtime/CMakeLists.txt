@@ -195,6 +195,7 @@ target_sources(
         cpu_composition_evaluator.cpp
         cpu_composition_resolution.hpp
         layer_bounds_query.cpp
+        viewer_pick.cpp
         cpu_gpu_scene_preparation.cpp
         gpu_processing_phase_policy.cpp
         gpu_scene_nested.cpp
