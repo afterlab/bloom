@@ -484,8 +484,8 @@ class Importer final {
     // Position is where that pivot lands, so Anchor = centre - frame centre and Position = centre
     // leaves the picture exactly where it was. The centre is a multiple of 1/16 of a pixel, so the
     // sums are exact and the layer's matrix stays the identity until the artist turns it. The pivot
-    // is a fixed point, as in an After Effects anchor: moving the element's points later does not
-    // move it, and the Viewer's point editing needs no compensation (a frame-pivot layer is never
+    // is a fixed point that stays put when the element's points are edited later: moving them does
+    // not move it, and the Viewer's point editing needs no compensation (a frame-pivot layer is never
     // compensated).
     void pivotAtBounds(const Slot entry, const SvgElement& element) {
         std::array<double, 4> box{1e300, 1e300, -1e300, -1e300};
