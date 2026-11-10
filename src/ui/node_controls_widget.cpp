@@ -1,6 +1,7 @@
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/shape_morph_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/ui/motion_blur_widget.hpp>
 
@@ -556,6 +557,10 @@ struct Controls final {
                                     0.0, 200.0, 100.0, 50.0});
         controls.sliders.push_back({"startOffset", std::string(document::kResampleStartOffsetSchemaKey),
                                     0.0, 100.0, 0.0, 25.0});
+    } else if (typeId == document::kShapeMorphNodeType) {
+        // #597: how far from the first shape to the second, on a track, in percent.
+        controls.sliders.push_back({"amount", std::string(document::kMorphAmountSchemaKey), 0.0,
+                                    100.0, 0.0, 25.0});
     } else if (typeId == document::kTransformPathNodeType ||
                typeId == document::kWarpPathNodeType ||
                typeId == document::kWarpPathFunctionNodeType) {

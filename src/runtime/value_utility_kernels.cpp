@@ -108,6 +108,7 @@ enum class Family : std::uint8_t {
     case Kernel::TextOutline:
     case Kernel::ResamplePath:
     case Kernel::WarpPath:
+    case Kernel::ShapeMorph:
         return Family::Path;
     case Kernel::DataSample:
     case Kernel::RampSample:

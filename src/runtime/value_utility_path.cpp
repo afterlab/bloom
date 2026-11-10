@@ -818,6 +818,8 @@ ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation) 
         return evaluateValuePathResample(invocation);
     case Kernel::WarpPath:
         return evaluateValuePathWarp(invocation);
+    case Kernel::ShapeMorph:
+        return evaluateValuePathMorph(invocation);
     default:
         break;
     }

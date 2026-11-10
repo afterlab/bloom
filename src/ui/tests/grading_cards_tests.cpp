@@ -1531,6 +1531,8 @@ void pixelAndMotionCards() {
         {"bloom.resample-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}},
         // #598
         {"bloom.warp-path", {"bloom.text-source", "bloom.shape-source", "bloom.transform-path"}},
+        // #597
+        {"bloom.shape-morph", {"bloom.shape-source", "bloom.shape-source", "bloom.warp-path"}},
         {"bloom.warp-path-function", {"bloom.function-plot", "bloom.shape-source", "bloom.warp-path"}},
         {"bloom.transform-path", {"bloom.text-source", "bloom.shape-source", "bloom.trim-path"}}};
     for (const auto& spec : specs) {
@@ -2943,6 +2945,19 @@ void warpPathRefusal() {
            "warp refusal: the session holds the node's refusal");
     expect(readout().contains(reason),
            "warp refusal: Properties shows the refusal on the Path readout");
+    // The stored size of 0 reads 0 on the card and in Properties (not a floor the document never
+    // wrote), with the refusal badge above explaining it.
+    int sizeFields = 0;
+    for (auto* widget : QApplication::allWidgets()) {
+        auto* field = qobject_cast<ui::kit::KValueField*>(widget);
+        if (field == nullptr || !field->accessibleName().startsWith(QStringLiteral("Size")) ||
+            !field->isVisible())
+            continue;
+        ++sizeFields;
+        expect(field->value() == 0.0,
+               "warp refusal: a size of 0 reads 0 on the card and in Properties");
+    }
+    expect(sizeFields >= 2, "warp refusal: both the card and Properties show the Size field");
     capture(fixture, QStringLiteral("warp-path-size-zero"));
     if (const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
         !directory.isEmpty())

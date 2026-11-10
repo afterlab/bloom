@@ -17,6 +17,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/shape_morph_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
@@ -265,6 +266,9 @@ void PropertiesEditor::configureRegistryRows() {
                     return RowLayout{{"path", "position", "anchor", "size", "scale", "tolerance",
                                       "amount", "rotation", "skew", "skewAxis"},
                                      "position"};
+                // The two shapes, how they pair, then the amount's track.
+                if (node->typeId == document::kShapeMorphNodeType)
+                    return RowLayout{{"from", "to", "pairing", "amount"}, "amount"};
                 if (node->typeId == document::kWarpPathNodeType)
                     return RowLayout{{"path", "function", "position", "anchor", "size", "phase",
                                       "scale", "tolerance", "amount", "rotation", "skew",

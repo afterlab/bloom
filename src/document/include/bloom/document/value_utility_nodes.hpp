@@ -137,6 +137,8 @@ enum class ValueUtilityKernel : std::uint8_t {
     ResamplePath,
     // #598: a path moved by a non-linear function, subdivided so straight segments bend.
     WarpPath,
+    // #597: one path morphed into another.
+    ShapeMorph,
 };
 
 // ---------------------------------------------------------------------------------------------

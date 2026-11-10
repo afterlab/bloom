@@ -5,6 +5,7 @@
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/shape_morph_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
@@ -407,6 +408,7 @@ constexpr std::array kChoiceSchemas{
     std::string_view("bloom.path.resample-mode"),
     std::string_view("bloom.path.resample-output"),
     std::string_view("bloom.path.warp-function"),
+    std::string_view("bloom.path.morph-pairing"),
     std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),
@@ -825,10 +827,15 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
     // #598 Warp Path and the skew Transform Path shares with it: the amount's unit is the
     // function's (pixels, degrees or percent), the size is a distance, the phase and the skew
     // are angles, and the tolerance is pixels.
+    // #597 Shape Morph: the amount runs from the first shape (0) to the second (100) in percent.
+    if (schemaKey == kMorphAmountSchemaKey)
+        return number(kLowest, kHighest, 0.0, 100.0, 1.0, 1, kPercent);
     if (schemaKey == kWarpAmountSchemaKey)
         return number(kLowest, kHighest, -360.0, 360.0, 1.0, 2);
+    // A size of 0 is storable and the node refuses it with a diagnostic on its card and in
+    // Properties, so the field shows the stored 0 rather than a floor the document never wrote.
     if (schemaKey == kWarpSizeSchemaKey)
-        return number(0.001, 1.0e9, 10.0, 1000.0, 1.0, 2, kPixels);
+        return number(0.0, 1.0e9, 10.0, 1000.0, 1.0, 2, kPixels);
     if (schemaKey == kWarpPhaseSchemaKey || schemaKey == kPathSkewAxisSchemaKey)
         return number(kLowest, kHighest, -360.0, 360.0, 1.0, 1, kDegrees);
     if (schemaKey == kWarpToleranceSchemaKey)

@@ -240,6 +240,7 @@ evaluateScalarPrimitive(const core::primitives::ScalarPrimitive operation,
 evaluateValueTextOutline(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValuePathResample(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValuePathWarp(const ValueUtilityInvocation& invocation);
+[[nodiscard]] ValueUtilityOutcome evaluateValuePathMorph(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueDataBlock(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

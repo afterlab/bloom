@@ -5,6 +5,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/shape_morph_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
 
@@ -195,6 +196,17 @@ constexpr std::array<ValueUtilityOperand, 11> kWarpPathOperands{
 constexpr std::array<ValueUtilitySelector, 1> kWarpPathSelectors{ValueUtilitySelector{
     "function", bloom::document::kWarpFunctionParameterSchemaKey,
     bloom::document::selectorStoredValue(bloom::document::WarpFunction::Wave)}};
+// #597 Shape Morph. Two paths and how far from the first to the second, in percent.
+constexpr std::array<ValueUtilityOperand, 3> kShapeMorphOperands{
+    ValueUtilityOperand{.role = "from", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "to", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "amount",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kMorphAmountSchemaKey,
+                        .number = 0.0}};
+constexpr std::array<ValueUtilitySelector, 1> kShapeMorphSelectors{ValueUtilitySelector{
+    "pairing", bloom::document::kMorphPairingParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::MorphPairing::ByGroupThenGeometry)}};
 constexpr std::array<ValueUtilityOutput, 1> kPathResult{
     ValueUtilityOutput{"path", SocketValueKind::Path}};
 constexpr std::array<ValueUtilityOperand, 4> kTrimPathOperands{
@@ -614,7 +626,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 83> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 84> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -867,6 +879,9 @@ constexpr std::array<ValueUtilityDescriptor, 83> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kWarpPathNodeType, "Warp Path",
                            ValueUtilityKernel::WarpPath, NodeCategory::Values, kWarpPathOperands,
                            kWarpPathSelectors, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kShapeMorphNodeType, "Shape Morph",
+                           ValueUtilityKernel::ShapeMorph, NodeCategory::Values,
+                           kShapeMorphOperands, kShapeMorphSelectors, kPathResult},
 };
 
 } // namespace

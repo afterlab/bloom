@@ -320,6 +320,7 @@ target_sources(
         path_resample.cpp
         path_morph.cpp
         value_utility_path_warp.cpp
+        value_utility_path_morph.cpp
         path_warp.cpp
     PUBLIC
         FILE_SET HEADERS

@@ -34,6 +34,7 @@
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/shape_morph_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
@@ -115,7 +116,8 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         schemaKey == kResampleDensitySchemaKey || schemaKey == kResamplePercentageSchemaKey ||
         schemaKey == kResampleStartOffsetSchemaKey || schemaKey == kWarpAmountSchemaKey ||
         schemaKey == kWarpSizeSchemaKey || schemaKey == kWarpPhaseSchemaKey ||
-        schemaKey == kWarpToleranceSchemaKey || schemaKey == kPathSkewAxisSchemaKey) {
+        schemaKey == kWarpToleranceSchemaKey || schemaKey == kPathSkewAxisSchemaKey ||
+        schemaKey == kMorphAmountSchemaKey) {
         return finiteScalar();
     }
     // #598: a slant of a quarter turn or more is no slant (its tangent is unbounded).
@@ -123,6 +125,10 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value) &&
                std::abs(*value) <= kMaximumPathSkewDegrees;
+    }
+    if (schemaKey == kMorphPairingParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kMorphPairings, *stored).has_value();
     }
     if (schemaKey == kWarpFunctionParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
@@ -833,6 +839,8 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kWarpAmountSchemaKey || schemaKey == kWarpSizeSchemaKey ||
            schemaKey == kWarpPhaseSchemaKey || schemaKey == kWarpToleranceSchemaKey ||
            schemaKey == kPathSkewSchemaKey || schemaKey == kPathSkewAxisSchemaKey ||
+           // #597: the morph's amount is keyed.
+           schemaKey == kMorphAmountSchemaKey ||
            schemaKey == "bloom.transform-2d.opacity" || schemaKey == "bloom.blur.radius-y" ||
            isFourColorGradientScalarSchemaKey(schemaKey) ||
            schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
