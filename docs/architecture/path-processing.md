@@ -1,11 +1,11 @@
 # Path Processing
 
-Status: built (#344, #530, #509, #637, #598). This document owns the nodes that take a Path and answer
-a Path (Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners, Path Stroke,
-Resample Path and Warp Path) and the two that read a Path from what an artist already drew (Mask Path
-and Text Outline). The value they work on is [path-value.md](path-value.md). They live in Text & Paths
-and are value nodes, so they appear in a value graph and feed Shape Source's `path` socket like any
-other Path producer.
+Status: built (#344, #530, #509, #637, #598, #597). This document owns the nodes that take a Path and
+answer a Path (Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners, Path
+Stroke, Resample Path, Warp Path and Shape Morph) and the two that read a Path from what an artist
+already drew (Mask Path and Text Outline). The value they work on is [path-value.md](path-value.md).
+They live in Text & Paths and are value nodes, so they appear in a value graph and feed Shape Source's
+`path` socket like any other Path producer.
 
 ## What kind of node
 
@@ -421,6 +421,63 @@ path. The refusal is the evaluation diagnostic MCP and scripts receive, and the 
 a warning badge on the node's card header with the summary and reason on hover, and the summary on the
 node's Path readout in Properties (`bloom.ui.grading-cards`, `warpPathRefusal`).
 
+## Shape Morph
+
+Shape Morph (`bloom.shape-morph`, Text & Paths) answers a path part of the way from one shape to another
+(#597). It takes two Path operands, **From** and **To**, and **Amount**, in percent: 0 answers From and 100
+answers To, each *structurally* (the value itself, not the subdivided form the in-between frames share), so
+the ends of a morph are exactly the two shapes an artist drew. An amount outside 0 to 100 overshoots, as an
+eased key does. Amount is animatable, keyable on the node like Warp Path's scalars, and can be driven by a
+Scalar value node.
+
+The two shapes can differ in every way a path can: anchor counts, contour counts, open and closed
+contours, groups or none, one of them empty. The node does not own the correspondence. It calls the one
+pure step every morph shares, `runtime::pathmorph::alignPaths` (`src/runtime/path_morph.hpp`), the same
+that morphs path keys of different shapes in `samplePathCurve`: nothing about the alignment is stored in
+the document or on the path, and the answer is a deterministic function of the two values and the pairing.
+How contours pair, how anchor counts equalise and how a closed contour picks its start and direction are
+in [path-value.md](path-value.md#morphing-between-different-shapes). The node answers the earlier shape's
+fill rule, groups and group attributes during the morph (the later shape's at exactly 100).
+
+**Pairing** is a selector: *By group, then geometry* (the default: contours of groups with the same key
+pair first, the rest by centroid and size) or *By order* (contour i with contour i, the rest growing or
+shrinking). Its stored values (0 and 1) are durable.
+
+**Limits.** An aligned form with a contour over 4096 anchors, a value over 262,144 anchors or over 65,536
+contours fails the node with a diagnostic that names Shape Morph, the pairing, the count the alignment
+would need and the cap, and answers the empty path (a key morph holds the earlier key instead; an amount
+of 0 or 100 never aligns, so it still answers its own shape). Resample Path with Fixed count before a
+morph gives both shapes the same count when an artist wants even spacing; the morph itself subdivides the
+longest segments and keeps every original anchor. The answer is charged to the retained-path anchor
+budget like any Path output, and over the budget the node answers the empty path with the budget
+diagnostic.
+
+**Cancellation.** The evaluation observes the cancellation token between operations, and the alignment
+observes it inside: while contours pair and around each paired contour's start-and-direction search. A
+cancelled morph keeps nothing.
+
+**Cache identity.** A path-valued operation is keyed by what it reads, so a changed amount, pairing or
+either shape changes the answer and the frames downstream of it; a held amount reuses the answer.
+
+**Draws** through Shape Source's fill on every route (the interactive viewer, still, sequence, video and
+scripted renders): the node is host value computation and adds no image lowering, so it adds nothing to
+the GPU coverage contract and needs no exception. The picture is the CPU reference's on the GPU too.
+
+**Controls.** The card and Properties show From, To and Pairing rows and a track for Amount (0 to 100
+percent) with its keyframe diamond. Properties list From, To, Pairing, then the card.
+
+Tests: `bloom.runtime.shape-morph` (a keyed amount morphing a circle into a star over frames, exact ends,
+overshoot, a driven amount, one contour to three and back, open to closed and back, nothing to a shape
+and back, each pairing, cache identity and invalidation, cold and warm replay, half render scale,
+cancellation, the retained-path budget, the cap diagnostic and save and reopen);
+`bloom.runtime.path_morph` (the step, including a cancellation fired during an alignment);
+`bloom.runtime.gpu_shape_morph_native` (seven kinds of morph at 512 px against the CPU reference on the
+device, cold and warm, identity, invalidation, cancellation, budget and retirement, and a 1080p frame on
+the production route); `bloom.ui.viewer_export_shape_morph` (the Viewer, a cold and warm RAM preview at
+Half, still, range and movie export on the CPU and the device, for a morph alone and for the whole Shape
+animation group in one composition: a keyed Line end, then a square through Resample Path and Warp Path
+into Shape Morph). Benchmark scenario: `shape-morph-2k` in `tools/bench` (written, not run).
+
 ## Reference library
 
 Offset, union, difference, intersection and exclusive-or use a vendored polygon clipping library, the
@@ -430,6 +487,6 @@ types. Flattening is the render library's `flattenPathContour`, the one flatteni
 
 ## Groups
 
-Resample Path, Warp Path, Transform Path and Round Corners keep every contour and so every group. Trim Path keeps the groups of
+Resample Path, Warp Path, Transform Path and Round Corners keep every contour and so every group. Shape Morph answers the first shape's groups. Trim Path keeps the groups of
 the contours it keeps. Offset, Boolean and Merge answer geometry that does not descend one to one from
 contours, so they answer no groups; a consumer tracking a key finds it gone, as path-value.md allows.

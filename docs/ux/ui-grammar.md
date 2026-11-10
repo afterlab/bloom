@@ -1154,7 +1154,7 @@ group is waiting for:
 | Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, Auto Exposure, Tone Map, Color Matrix |
 | Color Management | OCIO Color Space Transform, OCIO File Transform |
 | Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
-| Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Resample Path, + Warp Path, + Warp Path (Function), + Path Stroke |
+| Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Resample Path, + Warp Path, + Warp Path (Function), + Shape Morph, + Path Stroke |
 | Instances & Particles | + Point, + Grid, + Scatter, + Points Along Path, + Shape To Points, + Text To Points, + Clone To Points, + Draw Instances, + Particle System |
 | Tracking & Analysis | Histogram, Image Compare, Audio Amplitude, Audio Waveform, Audio Spectrum, Image Statistics, + Tracker, + Stabilize |
 | Fields | the 16 Field nodes |

@@ -272,6 +272,9 @@ def _layer_keys(layer, found):
                      for role in (layer.get(field) or {}).get("keys") or {})
     for step in (layer.get("pathChain") or {}).get("steps") or ():
         found.extend((name, step["type"], role) for role in step.get("keys") or {})
+    # #597: the morph's amount is keyed on the Shape Morph node the chain ends with.
+    morph = (layer.get("pathChain") or {}).get("morph") or {}
+    found.extend((name, "bloom.shape-morph", role) for role in morph.get("amountKeys") or {})
 
 
 def keyed_roles(scenario):
@@ -851,6 +854,45 @@ SCENARIOS["warp-path-2k"] = {
                   "keys": {"phase": [[0, 0.0], [23, 360.0]]}},
                  {"type": "bloom.transform-path", "values": {"skew": 0.0, "skewAxis": 0.0},
                   "keys": {"skew": [[0, 0.0], [23, 25.0]]}}]}},
+    ],
+}
+
+# #597: Shape Morph from a keyed compound path of 64 contours (resampled to equal counts first, as an
+# artist would) into a second keyed compound path of 48 contours, its amount keyed so every frame
+# aligns and mixes new anchors: 64 pairs by geometry, 16 growing from points, then the fill. No media
+# is read. Written, not run.
+def _round_ring(index, shift):
+    """One closed four-anchor curve (a circle) of the second path, on the same grid."""
+    left, top = 40 + (index % 8) * 220 + shift, 40 + (index // 8) * 120
+    cx, cy, rx, ry = left + 80, top + 40, 70, 35
+    kx, ky = 0.5522847498307936 * rx, 0.5522847498307936 * ry
+    anchors = [
+        ([cx + rx, cy], [cx + rx, cy - ky], [cx + rx, cy + ky]),
+        ([cx, cy + ry], [cx + kx, cy + ry], [cx - kx, cy + ry]),
+        ([cx - rx, cy], [cx - rx, cy + ky], [cx - rx, cy - ky]),
+        ([cx, cy - ry], [cx - kx, cy - ry], [cx + kx, cy - ry])]
+    return {"closed": True, "anchors": [
+        {"point": point, "inHandle": into, "outHandle": out, "mode": "smooth"}
+        for point, into, out in anchors]}
+
+
+SCENARIOS["shape-morph-2k"] = {
+    "description": "A Shape Source reading 64 resampled squares morphed into 48 circles.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Shape",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "pathChain": {
+             "keys": [[0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}]],
+             "steps": [
+                 {"type": "bloom.resample-path",
+                  "values": {"mode": 0, "count": 64, "output": 0}}],
+             "morph": {
+                 "keys": [[0, {"contours": [_round_ring(i, 0) for i in range(48)],
+                               "fillRule": "evenOdd"}]],
+                 "values": {"pairing": 0},
+                 "amountKeys": {"amount": [[0, 0.0], [23, 100.0]]}}}},
     ],
 }
 

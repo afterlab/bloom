@@ -677,6 +677,24 @@ class Builder:
                               parameter=self.parameter_id(step_node, "path"), driverNode=driver,
                               driverPort=port)
                 driver, port = step_node, "path"
+            if "morph" in chain:
+                # #597: Shape Morph takes the chain's answer as `from` and a second keyed Path
+                # node as `to`; its amount is keyed.
+                morph = chain["morph"]
+                target = self.transact("bloom.node.add", composition=self.composition,
+                                       nodeType="bloom.value-path")["node"]
+                self.set_keys(target, {"value": morph["keys"]})
+                node = self.transact("bloom.node.add", composition=self.composition,
+                                     nodeType="bloom.shape-morph")["node"]
+                self.set_values(node, "bloom.shape-morph", morph.get("values") or {})
+                self.set_keys(node, morph.get("amountKeys") or {})
+                self.transact("bloom.parameter.set-source", composition=self.composition,
+                              parameter=self.parameter_id(node, "from"), driverNode=driver,
+                              driverPort=port)
+                self.transact("bloom.parameter.set-source", composition=self.composition,
+                              parameter=self.parameter_id(node, "to"), driverNode=target,
+                              driverPort="value")
+                driver, port = node, "path"
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort=port)

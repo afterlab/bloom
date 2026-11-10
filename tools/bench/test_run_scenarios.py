@@ -639,6 +639,22 @@ class DepthScenario(unittest.TestCase):
         self.assertIn("skew", chain["steps"][1]["keys"])
         self.assertLessEqual(abs(chain["steps"][1]["keys"]["skew"][-1][1]), 89.9)
 
+    def test_shape_morph_scenario_morphs_a_resampled_path_into_another(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["shape-morph-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        chain = scenario["layers"][0]["pathChain"]
+        self.assertEqual([step["type"] for step in chain["steps"]], ["bloom.resample-path"])
+        morph = chain["morph"]
+        # The amount is keyed (every frame aligns anew) and is an animatable parameter, and no
+        # contour or anchor count passes the Path caps.
+        self.assertIn("amount", morph["amountKeys"])
+        self.assertLessEqual(morph["amountKeys"]["amount"][-1][1], 100.0)
+        contours = len(chain["keys"][0][1]["contours"]) + len(morph["keys"][0][1]["contours"])
+        self.assertLessEqual(contours, 65536)
+        self.assertLessEqual(len(chain["keys"][0][1]["contours"]) * chain["steps"][0]["values"]["count"]
+                             + len(morph["keys"][0][1]["contours"]) * 4, 262144)
+
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["auto-exposure-2k"]
