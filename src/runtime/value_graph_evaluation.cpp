@@ -325,6 +325,25 @@ class Evaluator final {
                             for (const auto selector : kernel.selectors)
                                 key.add(selector);
                         }
+                        // #589/#637: a literal Path node's keys are inline in the kernel, so
+                        // an edit to a key must change the memoized value's identity.
+                        if constexpr (std::is_same_v<std::decay_t<decltype(kernel)>,
+                                                     runtime::CompiledValuePathCurve>) {
+                            key.add(kernel.curve.keyframes.size());
+                            for (const auto& keyframe : kernel.curve.keyframes) {
+                                key.add(keyframe.time);
+                                key.add(keyframe.value);
+                                key.add(keyframe.outgoingInterpolation);
+                                key.add(keyframe.outgoingHandle.time);
+                                key.add(keyframe.outgoingHandle.value);
+                                key.add(keyframe.incomingHandle.time);
+                                key.add(keyframe.incomingHandle.value);
+                                key.add(keyframe.easing.easing);
+                                key.add(keyframe.easing.back);
+                                key.add(keyframe.easing.amplitude);
+                                key.add(keyframe.easing.period);
+                            }
+                        }
                         if constexpr (requires { kernel.components; }) {
                             if constexpr (std::is_integral_v<decltype(kernel.components)>)
                                 key.add(kernel.components);
