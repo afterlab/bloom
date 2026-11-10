@@ -521,6 +521,15 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.tile-mirror")
         self.assertIn("horizontalPhase", effect[2]["keys"], "every frame is new")
 
+    def test_procedural_warp_scenario_keys_its_angle_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["procedural-warp-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.procedural-warp")
+        self.assertEqual(effect[1]["mode"], "Twirl")
+        self.assertIn("angle", effect[2]["keys"], "every frame is new")
+
     def test_inner_shadow_and_glow_scenarios_key_a_value_on_a_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         for name, node, key in (("inner-shadow-2k", "bloom.inner-shadow", "distance"),

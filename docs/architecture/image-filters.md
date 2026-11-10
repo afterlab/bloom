@@ -3038,6 +3038,80 @@ cell rule, the wrap, the reflection and the fold, plus symmetry, region of inter
 budget and cancellation), the Required `node.bloom.tile-mirror` GPU coverage fixture and the native
 CPU/GPU parity cases.
 
+## Procedural Warp
+
+One node, `bloom.procedural-warp`, under **Distort** (#510): the procedural distortions a compositor
+coming from a layer-based compositor reaches for, one **Mode** (a constant) at a time. It is the same inverse
+mapping as Corner Pin, ST Map, Displace and Tile & Mirror: for every output pixel a position of the
+input is computed and read, so every mode lowers to one field raster of one instruction,
+`ProceduralWarp` (`fields.md`, "Procedural warp", has the arithmetic of each mode). The CPU reference
+and the GPU run the same program, and nothing in it is a GPU coverage exception.
+
+Only the values of the mode are read, shown and compiled; a keyed value of another mode neither varies
+the picture with time nor invalidates its cache (`isParameterInactive`, and the lowering puts the
+default of every other value into the program as a constant). **Center** is in pixels from the
+composition frame's centre with y down; lengths are full-resolution composition pixels; angles are
+degrees.
+
+| Mode | What it does | Values |
+| --- | --- | --- |
+| Twirl | Turns the picture about the centre, most at the centre and none at the radius. A positive angle turns it clockwise. | Center, Radius (300 px), Falloff (100%), Angle (90 degrees, a dial). |
+| Bulge / Pinch | Swells (positive) or pinches (negative) the picture inside the radius. | Center, Radius, Falloff, Amount (-100 to 100%, 50%). |
+| Spherize / Lens | Looks through a glass sphere cap: the picture is magnified at the centre and compressed towards the rim, as refraction gives it. A negative amount is the inverse (the picture drawn onto the cap). | Center, Radius, Amount, Refraction Index (1 to 4, 1.5). |
+| Ripple | Concentric rings travelling outward from the centre. | Center, Radius, Falloff, Wavelength (40 px), Amplitude (10 px), Phase (degrees), Speed (cycles a second). |
+| Wave | Parallel waves across the whole frame, sideways to their travel. | Wave (Sine, Triangle, Square, Saw), Wavelength, Amplitude, Direction (90 degrees, clockwise from up, a dial), Phase, Speed, Pin Edges (None, All Edges, Left, Right, Top, Bottom, Left and Right, Top and Bottom). |
+| Polar Coordinates | Wraps the frame into a disc about its centre (Rectangular to Polar), or unwraps a disc into the frame (Polar to Rectangular). | Conversion, Interpolation (100%: 0 is the picture, 100 the full conversion). |
+| Magnify | A loupe: a circle or square in which the picture is enlarged about the centre. | Center, Shape, Radius, Magnification (200%), Grow with Magnification (Nothing, Size, Size and Feather), Feather (px, inside the edge). |
+
+**Filter** (Bilinear, Nearest, Bicubic) and **Edges** (Transparent, Extend, Repeat, Mirror) are shared by
+every mode: the filter is how a read between texels is made, the edge rule what shows where a read
+leaves the input.
+
+**Falloff.** Twirl, Bulge / Pinch and Ripple fade their strength towards the radius by the same weight,
+`smooth01((1 - r / radius) / falloff)`: at 100% the strength fades over the whole radius, at 0% it is
+full right up to the radius (a hard edge). Spherize and Magnify have their own edge (the cap's rim, the
+feather); outside the radius every radial mode leaves the picture as it is.
+
+**Motion.** Ripple and Wave move with **Phase** (degrees, one cycle is 360) and **Speed** (cycles a
+second, 0 by default): the phase of a frame is `phase / 360 + speed x seconds`, resolved on the host from
+the composition time. With a speed of 0 and nothing keyed, the node does not depend on time and keeps
+one cache entry across frames.
+
+**Wave and Polar Coordinates use the composition frame.** A Wave's position along its travel is measured
+from the frame's centre and Pin Edges holds the chosen frame edges still, easing the waves in over one
+wavelength from each pinned edge. Polar Coordinates converts about the frame's centre with a polar
+radius of half the shorter side, angle 0 up and increasing clockwise, the frame's left edge at angle 0
+and its top row at the centre: Rectangular to Polar maps the frame's columns to angles and its rows to
+radii, so a horizontal line becomes a circle.
+
+**Magnify** divides the offset from the centre by the magnification inside the shape. **Grow with
+Magnification** scales the radius (Size) or the radius and feather (Size and Feather) by the
+magnification, so the loupe covers the same share of the picture it enlarges; Nothing keeps the radius
+as set. The feather softens the edge inside the shape by blending the magnified read over the plain
+picture (two reads of the input), never by smearing it.
+
+The picture's colour is not changed: values above one, negatives and alpha keep their range (the read is
+the filtered premultiplied texel as stored). The output keeps the input's data window; because a read
+can be anywhere, a region of interest reads the whole input. A muted node, a radial mode with a
+constant radius of 0 and a mode whose strength (angle, amount, amplitude, interpolation, or a
+magnification of 100%) is a constant zero pass the input through. A position too far to represent reads
+transparent.
+
+Cost, from the code: one raster pass of one instruction (two image reads for Magnify); Spherize's inverse
+(a negative amount) evaluates the cap map twenty times per pixel inside the radius; Bicubic reads sixteen
+texels per read, Bilinear four, Nearest one. No timing is recorded; see
+[Benchmarks](../development/benchmarks.md).
+
+Tests: `procedural_warp_field_tests` (each mode's instruction against the independent binary64 reference
+in `src/core/tests/procedural_warp_reference.hpp`: identity at zero strength, falloff, signs and
+directions, the wave shapes and pinning, both polar conversions, the magnify shapes and feather, far
+positions), `snapshot_compiler_procedural_warp_tests` (lowering per mode, the coverage fixture's program,
+activity and time dependence, pass-through cases, the pixels of every mode against the reference, region
+of interest, render scale, edge rule, budget, cancellation and cache identity), the Required
+`node.bloom.procedural-warp` and `feature.field.op.procedural-warp` GPU coverage fixtures and the native
+CPU/GPU parity cases (every mode through every filter). The user guide is
+[Procedural Warp](../user-guide/procedural-warp.md).
+
 ## Corner Pin, ST Map and Displace
 
 Stabilize (#513) is a fourth user of the same inverse mapping and is specified in

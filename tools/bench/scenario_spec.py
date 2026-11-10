@@ -632,6 +632,20 @@ SCENARIOS["tile-mirror-2k"] = {
     ],
 }
 
+# #510: Procedural Warp over a plate: a Twirl of a 500 pixel radius, its angle keyed from 0 to 720
+# degrees so every frame is new. Written, not run: no recorded numbers and no budget.
+SCENARIOS["procedural-warp-2k"] = {
+    "description": "A PNG16 plate under Procedural Warp, a Twirl with a keyed angle.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.procedural-warp",
+                      {"mode": "Twirl", "radius": 500.0, "falloff": 100.0},
+                      {"keys": {"angle": [[0, 0.0], [23, 720.0]]}}]]},
+    ],
+}
+
 # #528: Inner Shadow and Inner Glow over a plate, each with a keyed value so every frame is new. A
 # plate has no transparency of its own, so the shape is the plate's data window: the cost is the
 # one blur, the hold-out and the two Levels. Written, not run: no recorded numbers and no budget.

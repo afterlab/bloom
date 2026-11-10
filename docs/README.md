@@ -129,6 +129,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   channel, hard or soft) or a posterize of a few levels per channel.
 - [Tile & Mirror](user-guide/tile-and-mirror.md) — repeat the picture in tiles, scroll it with wrap,
   reflect it about a line, or fold it into a kaleidoscope.
+- [Procedural Warp](user-guide/procedural-warp.md) — twirl, bulge or pinch, spherize, ripple, wave,
+  polar coordinates or magnify the picture, one mode at a time.
 - [Corner Pin, ST Map and Displace](user-guide/warp-nodes.md) — pin a picture to four corners with
   perspective, or move it by a map: absolute positions (ST Map) or offsets (Displace).
 - [Lens Distortion](user-guide/lens-distortion.md) — undistort or redistort a picture with the standard

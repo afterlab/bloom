@@ -171,6 +171,42 @@ layer's own small box) is read as if its centre sat at the field origin; for a w
 frame `c` is zero. It is the same table block, with the flag in the window block's third lane, and the
 kernel is unchanged.
 
+### Procedural warp
+
+Procedural Warp (`image-filters.md`) lowers to a field raster and adds one instruction to the
+vocabulary (`core::field::FieldOp::ProceduralWarp`, op 25, a Required GPU coverage feature as every
+operation is). **Procedural Warp** takes a coordinate `p` (field pixels, y up) and returns
+`[qx, qy, weight, 0]`: the position `q` to read and a weight that is 1 for every mode but Magnify.
+Every mode writes `q` as `p` plus a move, so a mode whose strength is zero returns `p` exactly. The
+block is four vec4, `[mode, centre x, centre y, radius] [1 / radius, a0, a1, a2] [a3 .. a6]
+[a7 .. a10]`; the host (`encodeProceduralWarp`) resolves every angle to turns, every reciprocal, and
+the per-frame phase `frac(phase / 360 + speed x seconds)` in binary64, so the kernel holds no clock
+and divides by no operand that can be zero. The stored mode values are 0 Twirl, 1 Bulge / Pinch,
+2 Spherize, 3 Ripple, 4 Wave, 5 Polar Coordinates, 6 Magnify; a new mode is appended after Magnify
+(`kProceduralWarpModeCount`).
+
+The radial modes (Twirl, Bulge / Pinch, Spherize, Ripple, Magnify) work on `d = p - centre`,
+`r = |d|` and `t = r / radius`. They leave `p` alone at and beyond the radius (tested on the larger
+axis first, so a far position is never squared) and when the radius is not positive. The falloff
+weight Twirl, Bulge / Pinch and Ripple share is `g = smooth01((1 - t) / falloff)`, `smooth01` the
+cubic smoothstep on [0, 1] (1 with a falloff of 0).
+
+| Mode | Move |
+| --- | --- |
+| Twirl | `d` turned counter-clockwise (y up) by `angle x g`, so a positive angle turns the picture clockwise on screen. |
+| Bulge / Pinch | `d` scaled by `sin(t x 90 degrees)^(amount x g)`: a positive amount reads nearer the centre (a bulge), a negative one further out (a pinch). |
+| Spherize | A refracting sphere cap of index `n`: with `h = sqrt(1 - t^2)` (taken as `(1 - t)(1 + t)`), `theta = asin t` and `theta' = asin(t / n)`, `m(t) = t - h tan(theta - theta')` is the radius light through the cap comes from. A positive amount reads at `t - amount (t - m(t))`; a negative one at the inverse of that map at `|amount|`, found by 20 halvings of [0, 1]. |
+| Ripple | `d` moved along itself by `amplitude x sin(r / wavelength - phase)` (the argument in turns) `x g`, eased in by `smooth01(2 r / wavelength)` so the centre does not tear. |
+| Wave | `p` read back along the normal of the travel direction (clockwise from up) by `amplitude x w(p . travel / wavelength - phase)`, `w` the Sine, Triangle, Square or Saw wave in [-1, 1], 0 at 0 and rising; each pinned frame edge (a mask: 1 left, 2 right, 4 top, 8 bottom) multiplies the move by `smooth01(distance to the edge / wavelength)`. |
+| Polar Coordinates | About the frame's centre, angles clockwise from up, the frame's left edge at angle 0 and its top row at the pole, the polar radius half the shorter side: Rectangular to Polar reads the frame position whose column is the pixel's angle and whose row is its radius; Polar to Rectangular the inverse. The move to the converted position is scaled by the interpolation. |
+| Magnify | Inside the circle or square of the radius (the larger axis for a square), `d` divided by the magnification, with the weight `smooth01((radius - distance) / feather)` (1 with no feather); 0 outside. |
+
+Magnify's raster reads the image twice, at `p` and at `q`, and blends from the plain read to the
+magnified one by the weight (Math Lerp), so the feather is a soft edge, not a smear. A position
+beyond 1e15 on an axis reads 1e20 in Polar Coordinates, which no image reaches. The independent
+binary64 reference is `src/core/tests/procedural_warp_reference.hpp`. The op changes no existing
+operation, so `kFieldProgramSemanticsVersion` stays.
+
 ### Rays
 
 Light Rays (`image-filters.md`) lowers to a field raster and adds one instruction to the vocabulary
