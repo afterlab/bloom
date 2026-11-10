@@ -767,6 +767,27 @@ SCENARIOS["alpha-contour-2k"] = {
     ],
 }
 
+# #637: Resample Path over a keyed compound path of 64 contours: every contour is resampled to 256
+# points with curve output (the curve fit is the cost, with its start offset keyed so every frame is
+# new), then the shape fills the 16384 points. No media is read. Written, not run.
+SCENARIOS["resample-path-2k"] = {
+    "description": "A Shape Source reading 64 keyed contours resampled to 256 curved points each.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Shape",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "pathChain": {
+             "keys": [
+                 [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}],
+                 [24, {"contours": [_ring(i, 40) for i in range(64)], "fillRule": "evenOdd"}]],
+             "steps": [
+                 {"type": "bloom.resample-path",
+                  "values": {"mode": 0, "count": 256, "output": 1, "startOffset": 0.0},
+                  "keys": {"startOffset": [[0, 0.0], [23, 100.0]]}}]}},
+    ],
+}
+
 # #590, #595: group definitions a Function Plot can read, as Math nodes over Group Input's scalar1:
 # [[step, operation, {operand: "x" or an earlier step}], ...]; the last step is Group Output's scalar1.
 FUNCTION_GROUPS = {

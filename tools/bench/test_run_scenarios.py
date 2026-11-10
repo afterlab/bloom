@@ -575,6 +575,17 @@ class DepthScenario(unittest.TestCase):
             "bloom.offset-path", "bloom.round-corners", "bloom.merge-paths", "bloom.trim-path",
             "bloom.path-stroke", "bloom.transform-path"])
 
+    def test_resample_path_scenario_resamples_every_contour(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["resample-path-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        chain = scenario["layers"][0]["pathChain"]
+        self.assertEqual([step["type"] for step in chain["steps"]], ["bloom.resample-path"])
+        step = chain["steps"][0]
+        self.assertLessEqual(step["values"]["count"], 4096)
+        self.assertLessEqual(len(chain["keys"][0][1]["contours"]) * step["values"]["count"], 262144)
+        self.assertIn("startOffset", step["keys"], "every frame is new")
+
     def test_auto_exposure_scenario_measures_a_flickering_plate(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["auto-exposure-2k"]
