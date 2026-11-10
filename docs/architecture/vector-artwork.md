@@ -2,9 +2,10 @@
 
 Status: canonical
 
-Updated: 2026-11-09
+Updated: 2026-11-10
 
-Issue: [#343](https://github.com/kinetik-gg/bloom/issues/343).
+Issues: [#343](https://github.com/kinetik-gg/bloom/issues/343),
+[#642](https://github.com/kinetik-gg/bloom/issues/642).
 
 An SVG file imports as native Bloom layers, not as a picture. An artist can select any element,
 move its points, key them, fill it with another colour, run Trim Path or Offset Path over it, and
@@ -12,10 +13,83 @@ the render is the production evaluation path: preview, still export, sequence ex
 render all read the same document. This document records the design, the supported profile, the
 limits and what is reported rather than imported.
 
-## Structure
+## Two modes (#642)
 
 `bloom.layer.add-svg` (`AddSvgArtwork`, `src/commands/svg_import_operations.cpp`) is one operation
-and so one undo step. It builds, inside the target composition:
+and so one undo step, in one of two modes (`SvgImportMode`, spelled `layer` and `shapes`):
+
+- **As one layer** (`layer`, the operation's default): one entry layer whose source is one
+  **Vector Artwork** node (`bloom.vector-artwork`, `src/document/vector_artwork_nodes.hpp`). The
+  graph holds that layer and that node, nothing else. The file's bytes are held in the project, so
+  the layer renders, saves and reopens with the file gone.
+- **As editable shapes** (`shapes`): the breakdown described under [Structure](#structure), every
+  element its own layer and Path node.
+
+Both modes build from one description. `buildSvgArtwork()` (`src/document/svg_artwork.cpp`,
+library `bloom_svg_artwork`) reads a parsed scene and describes the nodes, Merge slots, entry
+layers, layer values, track mattes and node frames in the order they are made, as plain data;
+`SvgArtworkWriter` writes a description into a composition through an `SvgArtworkTarget` that
+supplies the ids and makes entry layers. The editable import writes it with ids from the project in
+a Draft; the Vector Artwork layer's expansion writes the same description with derived ids. Both
+modes report the same named warnings at import.
+
+### The Vector Artwork node
+
+| | |
+| --- | --- |
+| Type | `bloom.vector-artwork`, schema 1, category Sources, output `image` |
+| `artwork` | the data block holding the SVG (`bloom.vector-artwork.artwork`, integer id, 0 = none). Shown read-only on the card and in Properties as the file's name and size held, or "The SVG is missing from the project" |
+| `fit` | contain-and-centre into the composition (`bloom.vector-artwork.fit`, default on); off keeps the file's own pixels, centred |
+| Lowering | `NodeLoweringKind::VectorArtwork`: an expansion, not a pixel operation. The GPU coverage contract classifies it as non-pixel with the `scope.expansion` reason, like a node group: it renders through the lowerings its expansion builds |
+
+The node is not offered in the Add menu or node search; a generic `bloom.node.add` of it makes an
+empty node, which draws nothing.
+
+### The SVG data block
+
+The file's bytes are an opaque data block ([Data blocks](data-blocks.md)): type
+`bloom.vector-artwork.svg`, schema 1.0, media type `image/svg+xml`, provenance the file's locator
+(relative to the project folder when it is inside it; the `bloom.svg-import` producer when no
+locator can be made) and its SHA-256. One block is held per digest: importing the same bytes again
+reuses it. A block a Vector Artwork node names cannot be removed (project validation refuses the
+missing reference), and a block no node names is kept until removed. A file that does not fit the
+128 MiB the project holds for data blocks is refused by name, suggesting editable shapes. The
+Assets record of the source file is recorded as for editable shapes; with the file gone it shows
+missing and nothing else changes.
+
+### Expansion
+
+`document::expandVectorArtwork(project, composition, context)` replaces every Vector Artwork node
+of a composition with what the editable import builds from the block's bytes for that
+composition's current format: the block is parsed (`parseVectorArtworkBlock`, bounded and
+cancellable like a file import), described with `buildSvgArtwork` and written with ids derived from
+the node's id (top bit set, never an id the project allocator hands out). Every edge that read the
+node now reads the artwork's root Merge; a muted node is a muted root. The layer that held the node
+is untouched, so its transform, opacity, blend mode, track matte, masks, parent, timing and any node
+between the source and its slot apply to the artwork's root exactly as they apply to the root group
+of an editable import. A node whose block is missing or does not parse stays unexpanded and is
+named in `unresolved`. The context carries the installed fonts, an optional parsed-scene cache and
+a cancellation callback; the import's warnings are recomputed by the expansion, not stored.
+
+`bloom.runtime.svg-artwork-layer` proves the contract on the CPU reference: the same parent,
+transform, keyed opacity, Screen blend, alpha track matte, mask and Gaussian Blur between source
+and slot on the root layer of either mode give the same whole frame (2e-6, frames 0 to 2); the
+plain layer equals the editable import (gradients, clip, mask, opacity, blur, dashes, text; fitted
+and not); and a saved project reopened with the file deleted keeps the mode, the block's bytes and
+the frame.
+
+The snapshot compiler does not expand the node yet: a composition holding one is refused with "The
+SVG this layer holds was not expanded into its shapes." until the compiler runs the expansion.
+The desktop import still makes editable shapes, since it offers no choice of mode yet.
+
+Reading a file for import (`prepareSvgSource`) is one shared, cancellable step: it reads at most
+32 MiB, hashes and parses the file and enumerates installed fonts only when it has text, reporting
+its phase (reading, finding fonts). A `PreparedSvgSource` holds the path, scene, bytes, digest,
+fonts and named warnings, so applying the operation reads nothing.
+
+## Structure
+
+As editable shapes, the operation builds, inside the target composition:
 
 | SVG | Bloom |
 | --- | --- |

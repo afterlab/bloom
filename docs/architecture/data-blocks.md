@@ -16,6 +16,11 @@ document paths (any valid path value, `path-value.md`), and mask coverage refere
 per-block payload bound is 64 MiB and the project aggregate bound is 128 MiB. Provenance is
 persisted so a reader can explain where a value came from without performing media I/O.
 
+An SVG imported as one layer (#642) is held as an opaque block of type `bloom.vector-artwork.svg`
+(schema 1.0, media type `image/svg+xml`) whose provenance is the source file's locator and SHA-256;
+one block is held per digest, and a Vector Artwork node names it. A block a node names cannot be
+removed. See [Vector Artwork](vector-artwork.md#the-svg-data-block).
+
 AI-task nodes are intentionally one-way. A later AI capability is an asynchronous task node that
 produces a data block, reports progress/cancellation/diagnostics through the task system, and never
 mutates an existing block or writes directly into the value graph. Readers are ordinary value nodes
