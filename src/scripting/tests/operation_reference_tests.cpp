@@ -5,6 +5,7 @@
 // surface asks.
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/scripting/node_reference.hpp>
 #include <bloom/scripting/operation_reference.hpp>
 
@@ -185,9 +186,11 @@ void everyChoiceParameterHasValues() {
             if (presentation.kind != bloom::document::ParameterPresentationKind::Choice)
                 continue;
             // References (a composition, a data block, a part or layer name) are chosen from
-            // the project, not from a closed list.
+            // the project, not from a closed list. Mask Path and Text Outline name the node they
+            // read (#509).
             const auto& key = parameter.schemaKey;
             if (key == "bloom.composition-source.composition" || key == "bloom.node-group.group" || key == "bloom.data.block" ||
+                bloom::document::isPathSourceParameterSchemaKey(key) ||
                 key == "bloom.ocio-file.lut" || contains(key, ".part") || contains(key, ".layer") ||
                 contains(key, "matte-id"))
                 continue;
