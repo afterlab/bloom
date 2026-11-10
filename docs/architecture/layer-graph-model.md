@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-04
+Updated: 2026-11-10
 
 ## Geometry and transform levels
 
@@ -1604,9 +1604,19 @@ edge; Line never fills. An empty path produces no image.
 `fillEnabled`, `fillColor`, `strokeEnabled`, `strokeColor`, and `strokeWidth` apply to every kind.
 New lines start with fill off and a white stroke on. Stroke alignment maps Center/Inside/Outside
 to 0/1/2, joins map Miter/Round/Bevel to 0/1/2, caps map Butt/Round/Square to 0/1/2, and fill rules
-map NonZero/EvenOdd to 0/1. Open strokes always use center alignment. Size, fill/stroke colors and
-stroke width are animatable and expose optional typed driver sockets; all other v1 controls are
-inline constants. A Path has neither a socket nor an animation curve.
+map NonZero/EvenOdd to 0/1. Open strokes always use center alignment. Size, `lineStart`, `lineEnd`,
+fill/stroke colors and stroke width are animatable and expose optional typed driver sockets (a
+Vector2 value drives a line end, as it drives `size`); all other v1 controls are inline constants.
+A Path is keyed or driven as a whole value (`path-value.md`).
+
+A Line resolves both ends per frame: the authored constant, the keyed value at the frame's time, or
+the driving Vector2. The resolved ends, not the stored parameters, are in the shape's geometry
+identity on the CPU reference and the GPU route, so a keyed or driven end invalidates exactly the
+frames it changes and a held end reuses the cached image. A plan whose Line reads a keyed or driven
+end is time dependent; another kind never reads the ends, so animating them there changes nothing.
+The viewer's Line handles edit the ends at the playhead and key a keyed end, like any other native
+geometry. Projects saved with constant ends open unchanged: the stored spelling is the same
+constant, and animating an end only adds a curve.
 
 The immutable plan owns `CompiledShape` and derives content bounds, including stroke, at evaluation
 time. Its data window contains that content even outside the composition display window. Fill
