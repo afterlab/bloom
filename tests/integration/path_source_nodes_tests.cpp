@@ -11,12 +11,16 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/path_outline_stroke.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/path_value.hpp>
@@ -459,6 +463,161 @@ void textOutlineOnTheLetters() {
            "each order puts a different entry on top, over the whole of the letters");
 }
 
+// Pixels where one frame is clearly covered and the other clearly not (alpha above 0.6 against
+// below 0.4). Edge pixels, partly covered in both, never count: two rasterizations of the same
+// outline agree there only to within their antialiasing.
+int disagreements(const Frame& a, const Frame& b) {
+    int count = 0;
+    for (std::size_t index = 0; index < std::min(a.pixels.size(), b.pixels.size()); ++index) {
+        const float x = a.pixels[index].alpha();
+        const float y = b.pixels[index].alpha();
+        if ((x > 0.6F && y < 0.4F) || (y > 0.6F && x < 0.4F))
+            ++count;
+    }
+    return count;
+}
+int covered(const Frame& frame) {
+    return static_cast<int>(std::ranges::count_if(
+        frame.pixels, [](const render::Rgba32f& pixel) { return pixel.alpha() > 0.6F; }));
+}
+// Edge pixels of `shape` (partly covered) that `stroke` leaves uncovered.
+int edgesMissed(const Frame& shape, const Frame& stroke) {
+    int missed = 0;
+    for (std::size_t index = 0; index < std::min(shape.pixels.size(), stroke.pixels.size());
+         ++index) {
+        const float edge = shape.pixels[index].alpha();
+        if (edge > 0.1F && edge < 0.9F && stroke.pixels[index].alpha() <= 0.0F)
+            ++missed;
+    }
+    return missed;
+}
+
+// #509: Stroke a layer's outline in place. The source layer is moved, scaled and turned; the
+// operation's stroke lands on the letters or the masks with no setup: the outline filled on the
+// stroke's own layer covers exactly what the source layer shows, and the stroke covers every edge
+// pixel of it. Without the parent the same fill lands elsewhere (the check can fail).
+template <typename Transform>
+void strokeInPlace(Fixture& f, const document::LayerId source, Transform transform,
+                   const commands::OutlineStrokeSource what, const std::string& label) {
+    transform(f);
+    const auto shown = render(f, at(0));
+    expect(covered(shown) > 100, label + ": the source layer shows something to outline");
+    const bool entryOwned = f.current().graph().findLayer(source)->entryOwned();
+
+    const auto nodes = f.current().graph().nodes().size();
+    const auto layers = f.current().graph().layerOutputs().size();
+    const auto made = f.run<commands::StrokeLayerOutline>(f.composition, source, what);
+    const auto reader = *made.outputId<document::NodeId>(commands::kOutlineStrokeReaderOutput);
+    const auto shape = *made.outputId<document::NodeId>(commands::kOutlineStrokeShapeOutput);
+    const auto layer = *made.outputId<document::LayerId>(commands::kOutlineStrokeLayerOutput);
+    const auto* boundary = f.current().graph().findLayer(layer);
+    const auto parent = boundary != nullptr ? boundary->parent : std::nullopt;
+    const auto* parentLayer = parent ? f.current().graph().findLayer(*parent) : nullptr;
+    // A Merge entry's own layer with masks is given a Layer node, which takes its masks and its
+    // place as the stroke's parent.
+    expect(boundary != nullptr && boundary->pivot == document::LayerPivot::Frame &&
+               parentLayer != nullptr &&
+               (entryOwned ? !parentLayer->entryOwned() && !parentLayer->masks.empty()
+                           : *parent == source),
+           label + ": the stroke's layer is the identity, parented to the source layer");
+    if (parentLayer == nullptr)
+        return;
+    const auto sourceNow = *parent;
+    expect(f.commands.undo().succeeded() && f.current().graph().nodes().size() == nodes &&
+               f.current().graph().layerOutputs().size() == layers &&
+               f.commands.redo().succeeded(),
+           label + ": the setup is one undo step");
+
+    f.run<commands::SetLayerEnabled>(f.composition, sourceNow, false);
+    const auto stroke = render(f, at(0));
+    expect(lit(stroke) && edgesMissed(shown, stroke) == 0,
+           label + ": the stroke covers every edge pixel of the source (missed " +
+               std::to_string(edgesMissed(shown, stroke)) + ")");
+    f.connect(reader, "path", shape, "path");
+    const auto fill = render(f, at(0));
+    expect(covered(fill) > 100 && disagreements(shown, fill) == 0,
+           label + ": the outline filled on the stroke's layer covers exactly the source (" +
+               std::to_string(disagreements(shown, fill)) + " pixels differ)");
+    f.run<commands::SetLayerParent>(f.composition, layer, std::nullopt);
+    expect(disagreements(shown, render(f, at(0))) > 50,
+           label + ": without the parent the same fill does not land on the source");
+}
+
+void moveScaleTurn(Fixture& f, const document::ParameterId position,
+                   const document::ParameterId scale, const document::ParameterId rotation) {
+    f.run<commands::SetParameterSource>(f.composition, position,
+                                        document::ConstantValueSource{Vec2d{72.0, 58.0}});
+    f.run<commands::SetParameterSource>(f.composition, scale,
+                                        document::ConstantValueSource{Vec2d{1.3, 0.8}});
+    f.run<commands::SetParameterSource>(f.composition, rotation,
+                                        document::ConstantValueSource{12.0});
+}
+
+void outlineStrokeInPlace() {
+    const auto onNode = [](const document::NodeId node) {
+        return [node](Fixture& f) {
+            moveScaleTurn(f, f.parameter(node, document::kPositionParameterRole),
+                          f.parameter(node, document::kScaleParameterRole),
+                          f.parameter(node, document::kRotationParameterRole));
+        };
+    };
+    {
+        Fixture f;
+        const auto added =
+            f.run<commands::AddTextLayer>(f.composition, "Title", "Ag", Vec2d{80, 60}, 1.0, 40.0,
+                                          core::Color4d{1.0, 0.0, 0.0, 1.0});
+        strokeInPlace(
+            f, *added.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput),
+            onNode(*added.outputId<document::NodeId>(commands::kAddTextLayerLayerOutputNodeOutput)),
+            commands::OutlineStrokeSource::Text, "text on its own layer");
+    }
+    {
+        // A frame-sized solid on a Layer node, cut by one mask.
+        Fixture f;
+        const auto solid = f.run<commands::AddSolidLayer>(f.composition, "Plate",
+                                                          core::Color4d{0.2, 0.3, 0.9, 1.0});
+        const auto layer = *solid.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
+        f.run<commands::AddLayerMask>(f.composition, layer,
+                                      PathValue::fromContour(quad(40, 30, 50, 14)));
+        strokeInPlace(
+            f, layer,
+            onNode(*solid.outputId<document::NodeId>(commands::kAddSolidLayerLayerOutputNodeOutput)),
+            commands::OutlineStrokeSource::Masks, "masks of a Layer node");
+    }
+    {
+        // A Merge entry's own layer (no Layer node) with a mask.
+        Fixture f;
+        document::NodeId merge;
+        for (const auto& node : f.current().graph().nodes())
+            if (node.typeId == document::kLayerStackNodeType)
+                merge = node.id;
+        const auto solid = f.add(document::kSolidSourceNodeType);
+        f.set(solid, "color", core::Color4d{0.9, 0.6, 0.1, 1.0});
+        const auto entered = f.run<commands::ConnectPorts>(
+            f.composition, document::OutputPortRef{solid, "image"},
+            document::InputPortRef{document::LayerStackInputRef{merge, {}, "content"}});
+        const auto slot =
+            *entered.outputId<document::LayerSlotId>(commands::kConnectPortsSlotOutput);
+        const auto ensured = f.run<commands::EnsureEntryLayer>(f.composition, merge, slot);
+        const auto layer = *ensured.outputId<document::LayerId>(commands::kEntryLayerOutput);
+        f.run<commands::AddLayerMask>(f.composition, layer,
+                                      PathValue::fromContour(quad(50, 40, 40, -10)));
+        const auto role = [&](const std::string_view name) {
+            return document::layerParameterBinding(f.current().graph(),
+                                                   *f.current().graph().findLayer(layer), name)
+                ->parameterId;
+        };
+        strokeInPlace(
+            f, layer,
+            [&](Fixture& fixture) {
+                moveScaleTurn(fixture, role(document::kPositionParameterRole),
+                              role(document::kScaleParameterRole),
+                              role(document::kRotationParameterRole));
+            },
+            commands::OutlineStrokeSource::Masks, "masks of a Merge entry's own layer");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -467,6 +626,7 @@ int main() {
         maskNode();
         textOutline();
         textOutlineOnTheLetters();
+        outlineStrokeInPlace();
     } catch (const std::exception& error) {
         std::cerr << "Unexpected exception: " << error.what() << '\n';
         return 1;

@@ -188,10 +188,9 @@ mask's fill rule. A keyed mask path is read at the frame, so the node is time de
 the mask is. A source with no mask, or none chosen in a composition without one, answers the empty
 path; a `mask` below 0 fails with a diagnostic.
 
-The path is in the masked layer's own space, the space its masks are drawn in. For a frame-sized layer
-at its default place that is the frame's, so a Shape drawing the stroke as an entry of the same Merge at
-the entry's defaults (the identity) lies on the masks. A Shape on a Layer of its own pivots about its own
-content's centre and does not.
+The path is in the masked layer's own space, the space its masks are drawn in. A Shape lies on the
+masks when its layer maps that space as the masked layer does; see "Stroking in place" below, which
+sets that up in one step.
 
 ## Text Outline
 
@@ -199,14 +198,39 @@ content's centre and does not.
 Outputs `path` and `count`. The text's glyph outlines, laid out as the text draws them (its content,
 size, line height, letter spacing, alignment, box, wrap, vertical alignment, anchor and overflow, read
 at the frame, so keyed or driven content and size follow), in the text's own space, filled by the
-non-zero rule as glyphs are. A Shape drawing it lies on the letters when it is merged with the text
-before the text's layer (both entries of one Merge at their defaults, the Merge the layer's content),
-so the layer moves both; a Shape on a Layer of its own pivots about its own content's centre and does
-not. `bloom.runtime.path-source-nodes` proves it: a Shape filling the outline hides the text exactly,
-and the text hides the fill exactly, in either stacking order. The outlines come
+non-zero rule as glyphs are. A Shape drawing it lies on the letters when its layer maps that space as
+the text's layer does: merged with the text before the text's layer (both entries of one Merge at their
+defaults), or on a layer of its own set up as "Stroking in place" below describes.
+`bloom.runtime.path-source-nodes` proves the Merge case: a Shape filling the outline hides the text
+exactly, and the text hides the fill exactly, in either stacking order. The outlines come
 from the same glyph source the text rasterizer reads: font shaping is the host preparation the GPU
 contract already names, so the node adds no pixel operation. A text beyond the Path value's contour or
 anchor caps fails with a diagnostic ("shorten it"); nothing to read is the empty path.
+
+## Stroking in place
+
+A Shape on a Layer of its own, at that layer's defaults, does not lie on the letters or masks: a
+Layer node pivots about its own content's centre, which is the stroke's centre, not the text's, and
+its position is the frame's centre, not the text layer's. Text & Paths > **Stroke the Selected Text**
+and **Stroke the Selected Layer's Masks** (`commands::StrokeLayerOutline`, one undo step) set up the
+stroke so it lands without manual steps: a Text Outline (or Mask Path) reading the selected layer's
+text (or masks), a Path Stroke, and a Shape Source in a new Merge entry directly above the selected
+layer's entry. That entry's own layer is at the identity (pivot Frame at its defaults) and is
+**parented to the selected layer**. A child layer places its content in its parent's own space through
+the parent's whole transform (layer-graph-model.md, "Transform Parenting"), and the parent's own space
+is the space the text and masks are drawn in, so the stroke stays on them whatever the layer's
+position, anchor, scale, rotation and parents are, keyed or not. The new layer keeps the selected
+layer's in and out points. A Merge entry's own layer with masks is first given a Layer node (in the
+same step, the picture unchanged), because Mask Path reads a Layer node's masks. The text is found on
+the layer's image chain (its content, or an image effect's first Image input above it).
+
+`bloom.runtime.path-source-nodes` proves it for a text on a Layer node, a masked solid on a Layer node
+and a masked Merge entry's own layer, each moved, scaled and turned: the setup is one undo step, the
+stroke covers every partly covered edge pixel of the text or the masked layer, the outline filled on
+the stroke's layer covers exactly what the source layer shows (no pixel clearly covered by one and
+clearly uncovered by the other), and with the parent removed the same fill lands elsewhere.
+`bloom.ui.node-canvas-polish` drives the menu: disabled with its reason until a layer that shows text
+is selected, then the stroke on its own parented layer, undone in one step.
 
 ## Where a path comes from: the boundary
 

@@ -38,11 +38,13 @@ every stamp further, with the dial or by typing degrees. Tapers scale the stamps
 - **Text Outline** reads the outlines of a text's letters, exactly where the text draws them. Choose
   the text in **Text to outline**. Change the text, its size or its spacing and the outline follows.
 
-Put either into Path Stroke to outline masks or letters, write them on, or dash them. To draw the
-stroke where the letters are, connect the Text and the stroke's Shape into one **Merge** and the Merge
-into the text's layer: the layer then moves both together. A layer's masks are in that layer's own
-space; for footage or a solid the size of the frame, left in place, connecting the stroke's Shape
-straight into the same Merge as the layer puts the stroke on the masks.
+Put either into Path Stroke to outline masks or letters, write them on, or dash them. The quickest
+way: select a text layer (or a layer with masks) and choose **Text & Paths > Stroke the Selected
+Text** (or **Stroke the Selected Layer's Masks**). Bloom adds the Text Outline or Mask Path, a Path
+Stroke and a Shape on a layer of its own just above, and parents that layer to the one you selected,
+so the stroke sits on the letters or masks however the layer is moved, scaled or turned, and follows
+it when it is animated. Undo removes it in one step. Select the Path Stroke to set its width, trims,
+dashes and the rest; the Shape sets its colour.
 
 ## Outlining an image: Alpha Contour
 

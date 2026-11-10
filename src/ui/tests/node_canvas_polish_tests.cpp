@@ -6,6 +6,8 @@
 
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -570,6 +572,56 @@ void testGlowingPathPresets() {
            ("undone, the card names the target again (" + colorLabel().toStdString() + ")").c_str());
 }
 
+// #509: Text & Paths offers "Stroke the Selected Text" and "Stroke the Selected Layer's Masks". They
+// are disabled, saying why, until a layer that shows text (or has a path mask) is selected; then one
+// adds the stroke on its own layer, parented to the text's layer at the identity, in one undo step.
+void testOutlineStrokeMenu() {
+    Fixture f;
+    const auto added = f.edit<commands::AddTextLayer>("Title", "Ag");
+    QCoreApplication::processEvents();
+    const auto textNode = added.outputId<document::NodeId>(commands::kAddTextLayerTextNodeOutput);
+    const auto textLayer = added.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
+    expect(textNode && textLayer, "a text layer is added");
+    if (!textNode || !textLayer)
+        return;
+    const auto find = [&](QMenu* menu, const char* name) {
+        return menu != nullptr ? menu->findChild<QAction*>(QString::fromUtf8(name)) : nullptr;
+    };
+    f.session.clearSelection();
+    std::unique_ptr<QMenu> before(f.editor.contextMenuForTest());
+    auto* text = find(before.get(), "nodeAddOutlineStroke.text");
+    auto* masks = find(before.get(), "nodeAddOutlineStroke.masks");
+    expect(text != nullptr && masks != nullptr && !text->isEnabled() && !masks->isEnabled() &&
+               text->toolTip() == QStringLiteral("Select a layer first"),
+           "with nothing selected both strokes are offered disabled, saying why");
+    f.session.selectNode(*textNode);
+    std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest());
+    text = find(menu.get(), "nodeAddOutlineStroke.text");
+    masks = find(menu.get(), "nodeAddOutlineStroke.masks");
+    expect(text != nullptr && text->isEnabled(), "the selected text can be stroked");
+    expect(masks != nullptr && !masks->isEnabled() &&
+               masks->toolTip() == QStringLiteral("The selected layer has no path mask"),
+           "a text layer without masks has no masks to stroke");
+    if (text == nullptr)
+        return;
+    const auto layers = f.session.composition()->graph().layerOutputs().size();
+    text->trigger();
+    QCoreApplication::processEvents();
+    const auto& graph = f.session.composition()->graph();
+    const document::LayerOutputBoundary* stroke = nullptr;
+    for (const auto& layer : graph.layerOutputs())
+        if (layer.parent == textLayer)
+            stroke = &layer;
+    expect(graph.layerOutputs().size() == layers + 1 && stroke != nullptr &&
+               stroke->pivot == document::LayerPivot::Frame,
+           "the stroke gets a layer of its own, parented to the text's layer at the identity");
+    const auto* selected = f.session.selectedNode();
+    expect(selected != nullptr && selected->typeId == document::kPathStrokeNodeType,
+           "the new Path Stroke is selected for its controls");
+    expect(f.session.undo() && f.session.composition()->graph().layerOutputs().size() == layers,
+           "the stroke undoes in one step");
+}
+
 // Bug #401: with 25 animated layers, playback touches only the visible time-varying cards, once
 // per display frame, rebuilds no selector, and does nothing at all while the panel is hidden.
 void testPlaybackRefreshIsBounded() {
@@ -664,6 +716,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testSourceCardsHaveNoPreview();
         bloom::ui::test::testNodesIcon();
         bloom::ui::test::testGlowingPathPresets();
+        bloom::ui::test::testOutlineStrokeMenu();
         bloom::ui::test::testPlaybackRefreshIsBounded();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
