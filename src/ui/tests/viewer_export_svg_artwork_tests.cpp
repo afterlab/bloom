@@ -13,6 +13,12 @@
 // --require-device turns that into a failure. A movie needs the media worker: where it is absent
 // the test says NotRun for that route.
 //
+// #642: the same routes again with the file imported as one layer (a Vector Artwork layer the
+// compiler expands), whose position, scale, rotation and opacity are keyed instead of a Path node:
+// Viewer frames from the expected route matching the CPU route's, a cold and a warm RAM preview,
+// a still, a range and a movie with their provenance, and on the GPU route a 1920 x 1080 and a
+// 3840 x 2160 still exported from the device with no CPU reference frame.
+//
 // `--svg <file> --size <W>x<H>` (with --loader) instead shows a real file's first frame in the
 // Viewer at that size, through the GPU-prepared packed product wired as the application wires it,
 // and requires the frame from the device with no CPU fallback. Not part of the ctest run (it needs
@@ -24,6 +30,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/media_output.hpp>
@@ -247,12 +254,14 @@ struct Lcg final {
 
 // The CPU route's Viewer frames, kept so the GPU route's can be held against them: the same
 // document through the CPU reference and the device must show the same picture.
-std::array<std::vector<std::uint8_t>, 3> gCpuViewer;
-std::array<std::uint32_t, 3> gCpuViewerWidth{};
+std::array<std::array<std::vector<std::uint8_t>, 3>, 2> gCpuViewer;
+std::array<std::array<std::uint32_t, 3>, 2> gCpuViewerWidth{};
 
 struct Route final {
     const char* name;
     bool gpu;
+    // #642: the file imported as one layer rather than as editable shapes.
+    bool layer = false;
 };
 
 // The service counters this test reads (zero on the CPU route, which has no service).
@@ -274,11 +283,48 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     return authored.scripting->commandStack()->execute(std::move(transaction));
 }
 
+// The layer's own keys (#642): it moves, grows, turns and fades over the range.
+[[nodiscard]] bool keyLayer(Authored& authored, const document::LayerId layer) {
+    const auto* main = authored.scripting->snapshot().project().findComposition(authored.composition);
+    const auto& graph = main->graph();
+    const auto* boundary = graph.findLayer(layer);
+    if (boundary == nullptr)
+        return false;
+    const auto id = [&](const std::string_view role) {
+        return document::layerParameterBinding(graph, *boundary, role)->parameterId;
+    };
+    const auto last = *core::RationalTime::create(static_cast<std::int64_t>(kFrames - 1),
+                                                  static_cast<std::int64_t>(kFps));
+    const auto position = id(document::kPositionParameterRole);
+    const auto scale = id(document::kScaleParameterRole);
+    const auto rotation = id(document::kRotationParameterRole);
+    const auto opacity = id(document::kOpacityParameterRole);
+    bool ok = true;
+    const auto key = [&](const document::ParameterId parameter, const auto first, const auto end) {
+        // The first key holds the value the constant already has, so the last key goes in first.
+        ok = ok && edit<commands::SetKeyframeAtTimeForParameter>(authored, authored.composition, parameter,
+                                                                 last, end)
+                       .succeeded();
+        ok = ok && edit<commands::SetKeyframeAtTimeForParameter>(authored, authored.composition, parameter,
+                                                                 core::RationalTime{}, first)
+                       .succeeded();
+    };
+    key(position, document::Vec2d{kWidth / 2.0, kHeight / 2.0}, document::Vec2d{kWidth / 2.0 + 40.0, kHeight / 2.0 - 10.0});
+    key(scale, document::Vec2d{1.0, 1.0}, document::Vec2d{1.8, 1.6});
+    key(rotation, 0.0, 20.0);
+    key(opacity, 1.0, 0.7);
+    return ok;
+}
+
 [[nodiscard]] std::optional<Authored> author(Expectations& checks,
-                                             const std::filesystem::path& workDir) {
+                                             const std::filesystem::path& workDir,
+                                             const commands::SvgImportMode mode =
+                                                 commands::SvgImportMode::Shapes,
+                                             const std::uint32_t width = kWidth,
+                                             const std::uint32_t height = kHeight) {
     const auto rate = document::FrameRate::create(static_cast<std::int64_t>(kFps), 1);
     const auto format = document::CompositionFormat::create(
-        kWidth, kHeight, core::PixelAspectRatio::square(), *rate);
+        width, height, core::PixelAspectRatio::square(), *rate);
     checks.expect(format.has_value(), "the composition format is valid");
     if (!format.has_value()) {
         return std::nullopt;
@@ -304,12 +350,24 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
         out << artworkSvg();
     }
     const auto imported = edit<commands::AddSvgArtwork>(authored, authored.composition, nullptr,
-                                                        file, "artwork", true,
-                                                        commands::SvgImportMode::Shapes);
+                                                        file, "artwork", true, mode);
     checks.expect(imported.succeeded(), "the generated artwork imports");
     std::filesystem::remove(file);
     if (!imported.succeeded()) {
         return std::nullopt;
+    }
+    if (mode == commands::SvgImportMode::Layer) {
+        const auto layer = imported.outputId<document::LayerId>("layer");
+        const auto* main =
+            authored.scripting->snapshot().project().findComposition(authored.composition);
+        checks.expect(std::ranges::none_of(main->graph().nodes(),
+                                           [](const auto& node) {
+                                               return node.typeId == document::kPathValueNodeType;
+                                           }),
+                      "the artwork imports as one layer (no Path node in the graph)");
+        checks.expect(layer.has_value() && keyLayer(authored, *layer),
+                      "the layer takes its position, scale, rotation and opacity keys");
+        return authored;
     }
 
     // Key the mover's Path node: at the last frame its square has moved 200 px right and grown,
@@ -411,11 +469,14 @@ struct PreviewRig final {
 void exerciseRoute(Expectations& checks, const Route& route, const std::filesystem::path& workDir,
                    [[maybe_unused]] const std::filesystem::path& loader) {
     const std::string prefix = std::string(route.name) + ": ";
-    auto authored = author(checks, workDir);
+    auto authored = author(checks, workDir,
+                           route.layer ? commands::SvgImportMode::Layer
+                                       : commands::SvgImportMode::Shapes);
     if (!authored.has_value()) {
         return;
     }
     auto& session = *authored->session;
+    const std::size_t mode = route.layer ? 1 : 0;
 
     PreviewRig rig;
     checks.expect(runtime::registerBuiltInNodeDefinitions(rig.definitions),
@@ -518,7 +579,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     checks.expect(counters().cpuFallbacks == fallbacksBefore,
                   prefix + "every Viewer frame came from the expected route, none from a fallback");
     checks.expect(shown[0].rgba != shown[2].rgba && shown[1].rgba != shown[0].rgba,
-                  prefix + "the keyed path moves the picture in the Viewer");
+                  prefix + (route.layer ? "the keyed layer moves the picture in the Viewer"
+                                        : "the keyed path moves the picture in the Viewer"));
     // The compound ring (gradient, clip matte, nested opacity, keyed corner and counter point)
     // differs between the first and last frame inside its window, where nothing else is keyed.
     {
@@ -531,23 +593,25 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
             return region;
         };
         checks.expect(inWindow(shown[0]) != inWindow(shown[2]),
-                      prefix + "dragging the ring's corner and counter point changes the matted compound shape");
+                      prefix + (route.layer ? "the keyed layer moves the matted compound shape"
+                                            : "dragging the ring's corner and counter point changes the matted compound shape"));
     }
     // CPU against GPU: the CPU route runs first and keeps its frames.
     for (std::size_t index = 0; index < kShownFrames.size(); ++index) {
         if (!route.gpu) {
-            gCpuViewer.at(index) = shown.at(index).rgba;
-            gCpuViewerWidth.at(index) = shown.at(index).width;
-        } else if (!gCpuViewer.at(index).empty()) {
+            gCpuViewer.at(mode).at(index) = shown.at(index).rgba;
+            gCpuViewerWidth.at(mode).at(index) = shown.at(index).width;
+        } else if (!gCpuViewer.at(mode).at(index).empty()) {
             Pixels cpu;
             cpu.ok = true;
-            cpu.width = gCpuViewerWidth.at(index);
+            cpu.width = gCpuViewerWidth.at(mode).at(index);
             cpu.height = shown.at(index).height;
-            cpu.rgba = gCpuViewer.at(index);
+            cpu.rgba = gCpuViewer.at(mode).at(index);
             checks.expect(framesMatch(cpu, shown.at(index)),
                           prefix + "Viewer frame " + std::to_string(kShownFrames.at(index)) +
-                              " matches the CPU route (paths, gradient, matte, opacity, nesting; "
-                              "RGB within one code, exact alpha)");
+                              " matches the CPU route (paths, gradient, matte, opacity, nesting" +
+                              (route.layer ? ", the layer's keyed transform" : "") +
+                              "; RGB within one code, exact alpha)");
         }
     }
 
@@ -668,6 +732,31 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                       prefix + "the movie is written");
     } else {
         std::cout << "NotRun: " << route.name << " movie: no media worker here\n";
+    }
+    // #642: the one layer at 1080p and 4K, exported from the device with no CPU reference frame.
+    if (route.gpu && route.layer) {
+        for (const auto& [width, height] : {std::pair{1920U, 1080U}, std::pair{3840U, 2160U}}) {
+            const auto size = std::to_string(width) + "x" + std::to_string(height);
+            auto large = author(checks, workDir, commands::SvgImportMode::Layer, width, height);
+            if (!large.has_value())
+                continue;
+            const auto still = workDir / (std::string(route.name) + "-still-" + size + ".png");
+            const auto result =
+                scripting::Render::run(*large->scripting, exportScheduler, exportCompiler,
+                                       {.composition = large->composition,
+                                        .frame = kFrames - 1,
+                                        .range = std::nullopt,
+                                        .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+                                        .destination = still},
+                                       {}, provider);
+            expectProvenance(result, 1, 1, prefix + size + " still");
+            const auto decoded = decodePng(still);
+            checks.expect(decoded.ok && decoded.width == width && decoded.height == height,
+                          prefix + size + " still is written at its size");
+            std::cout << route.name << " " << size << " still: " << result.gpuEvaluatedFrames
+                      << " device frame(s), " << result.cpuReferenceFrames << " CPU reference frame(s)\n";
+            std::filesystem::remove(still);
+        }
     }
     checks.expect(provider->shutdownAndWait(10s), prefix + "the export provider retires");
 
@@ -914,6 +1003,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     Expectations checks;
     const std::filesystem::path workDir = temporary.path().toStdString();
     exerciseRoute(checks, {"cpu", false}, workDir, loader);
+    exerciseRoute(checks, {"cpu-layer", false, true}, workDir, loader);
 
 #if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
     if (loader.empty()) {
@@ -921,6 +1011,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(!gRequireDevice, "--require-device needs --loader");
     } else {
         exerciseRoute(checks, {"gpu", true}, workDir, loader);
+        exerciseRoute(checks, {"gpu-layer", true, true}, workDir, loader);
     }
 #else
     std::cout << "NotRun: gpu route: this build has no Vulkan support\n";

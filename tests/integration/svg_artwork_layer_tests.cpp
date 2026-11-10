@@ -1,5 +1,5 @@
 // #642: an SVG imported as one layer (a Vector Artwork layer) against the same file imported as
-// editable shapes, on the CPU reference.
+// editable shapes, on the CPU reference, through the snapshot compiler's expansion.
 //
 // - The layer's own opacity (keyed), blend mode, transform, parent, track matte, mask and an effect
 //   between its source and its slot compose through the expansion's root exactly as they compose
@@ -8,14 +8,18 @@
 //   masks, opacity, blur, dashes and text.
 // - Saved and reopened with the file deleted, the layer keeps its mode and its SVG and renders the
 //   same frame.
-//
-// The compiler does not expand the layer here: the test expands it with
-// document::expandVectorArtwork() and compiles the expanded composition, which is the expansion the
-// compiler runs.
+// - Scaled up and turned, the layer stays sharp: its transform is drawn through the artwork's
+//   geometry (VectorArtworkComposedLayer), so it matches the editable import of the same file with
+//   the transform baked into its points, not a resampled picture; its published bounds are the
+//   layer's own box through its transform.
+// - The compiler keeps one plan per revision (an animated transform renders every frame from it),
+//   parses a block once per digest (VectorArtworkSceneCache: hit, miss, admission, retirement),
+//   cancels, refuses an unreadable SVG by name, and says which layers keep the resampled picture.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -29,12 +33,20 @@
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <bloom/media/svg_scene.hpp>
+#include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/vector_artwork_scene_cache.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <typeinfo>
+#include <mutex>
+#include <thread>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -131,7 +143,7 @@ struct Fixture final {
             std::string why;
             for (const auto& failure : result.operationFailures)
                 why += " " + failure.issue.message;
-            throw std::runtime_error("a fixture edit was refused:" + why);
+            throw std::runtime_error("a fixture edit (" + std::string(typeid(Operation).name()) + ") was refused:" + why);
         }
         return result;
     }
@@ -182,13 +194,21 @@ std::optional<Frame> renderProject(const document::Document& document, const doc
     return Frame{{pixels.begin(), pixels.end()}, static_cast<std::int64_t>(image.descriptor()->dataWindow().extent().width())};
 }
 
-// The one-layer composition as the compiler reads it: every Vector Artwork node expanded.
+// The one-layer composition through the snapshot compiler, which expands every Vector Artwork node.
 std::optional<Frame> renderExpanded(const document::Document& document, const document::CompositionId id,
                                     const core::RationalTime time, const std::string& label) {
+    return renderProject(document, id, time, label);
+}
+
+// The one-layer composition expanded by hand with the given context and compiled: with
+// composeLayerTransform off it is the resampled picture an editable import's root group gives.
+std::optional<Frame> renderExpandedWith(const document::Document& document, const document::CompositionId id,
+                                        const core::RationalTime time, const std::string& label,
+                                        document::VectorArtworkExpansionContext context) {
     const auto snapshot = document.snapshot();
     const auto* composition = snapshot.project().findComposition(id);
-    document::VectorArtworkExpansionContext context;
-    context.fonts = noFonts();
+    if (!context.fonts)
+        context.fonts = noFonts();
     const auto expansion = document::expandVectorArtwork(snapshot.project(), *composition, context);
     expect(expansion.composition.has_value() && expansion.unresolved.empty(), label + ": the layer expands");
     if (!expansion.composition)
@@ -398,6 +418,602 @@ void savedAndReopenedWithTheFileGone() {
            "the reopened layer renders the same frame with its source file deleted");
 }
 
+// ---- #642 package B: the compiler's expansion ----
+
+// A plan and the CPU reference frame of one composition at a time (the operation cache bypassed).
+struct Evaluated final {
+    std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
+    std::shared_ptr<const runtime::ProcessFrame> frame;
+};
+
+runtime::EvaluationRequest referenceRequest(const runtime::CompiledCompositionPlan& plan, const core::RationalTime time) {
+    runtime::EvaluationRequest request{.time = time,
+                                       .output = plan.output(),
+                                       .resolution = runtime::CompositionFormatResolution{},
+                                       .quality = runtime::EvaluationQuality::Reference,
+                                       .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+                                       .pixelStorageByteLimit = std::size_t{1} << 30};
+    request.bypassOperationCache = true;
+    return request;
+}
+
+std::optional<Evaluated> evaluate(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
+                                  const core::RationalTime time, const std::string& label) {
+    const auto result = runtime::CpuCompositionEvaluator{}.evaluate(plan, referenceRequest(*plan, time), {});
+    expect(result.frame() != nullptr, label + ": the CPU reference evaluates");
+    if (result.frame() == nullptr)
+        return std::nullopt;
+    return Evaluated{plan, result.frame()};
+}
+
+Frame pixelsOf(const runtime::ProcessFrame& frame) {
+    const auto& image = frame.processImage();
+    const auto pixels = image.pixels();
+    return Frame{{pixels.begin(), pixels.end()}, static_cast<std::int64_t>(image.descriptor()->dataWindow().extent().width())};
+}
+
+std::shared_ptr<const runtime::CompiledCompositionPlan> compilePlan(const document::Document& document,
+                                                                    const document::CompositionId id,
+                                                                    const std::string& label) {
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({document.snapshot(), id}, {});
+    expect(compiled.plan != nullptr,
+           label + ": compiles: " + runtime::describeCompileFailure(compiled, document.snapshot().project(), id));
+    return compiled.plan;
+}
+
+const runtime::EvaluatedOperationBounds* boundsOf(const runtime::ProcessFrame& frame, const document::LayerId layer) {
+    for (const auto& bounds : frame.evaluatedBounds())
+        if (bounds.layerId == layer)
+            return &bounds;
+    return nullptr;
+}
+
+// Pixels any channel of which differs by more than `tolerance`.
+std::size_t differingPixels(const Frame& a, const Frame& b, const double tolerance) {
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < std::min(a.pixels.size(), b.pixels.size()); ++i)
+        for (std::size_t c = 0; c < 4; ++c)
+            if (std::abs(static_cast<double>(a.pixels[i].components()[c]) - static_cast<double>(b.pixels[i].components()[c])) >
+                tolerance) {
+                ++count;
+                break;
+            }
+    return count;
+}
+
+// Pixels whose alpha is neither empty nor full: the width of the artwork's edges.
+std::size_t partialPixels(const Frame& frame) {
+    std::size_t count = 0;
+    for (const auto& pixel : frame.pixels)
+        if (pixel.alpha() > 0.02F && pixel.alpha() < 0.98F)
+            ++count;
+    return count;
+}
+
+// The editable import's own transform: its root layer's scale and rotation about the frame centre.
+void setTransform(Fixture& fixture, const document::LayerId layer, const document::Vec2d scale, const double degrees) {
+    fixture.run<commands::SetParameterSource>(fixture.main, fixture.layerParameter(layer, document::kScaleParameterRole),
+                                              document::ConstantValueSource{document::ParameterValue{scale}});
+    // An edit that changes nothing is no transaction.
+    if (degrees != 0.0)
+        fixture.run<commands::SetParameterSource>(fixture.main, fixture.layerParameter(layer, document::kRotationParameterRole),
+                                                  document::ConstantValueSource{document::ParameterValue{degrees}});
+}
+
+// Flat shapes, a compound path and a stroke: no gradient (a gradient's own image is resampled by
+// design, so it is not an edge) and no text (fonts are the machine's).
+std::string sharpSvg(const std::string& transform, const bool stroke = true) {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><g transform=")svg" +
+           transform + R"svg(">
+<rect x="8" y="8" width="40" height="28" fill="#e33"/>
+<circle cx="84" cy="24" r="16" fill="#3a6"/>
+<path d="M14 46 H58 V74 H14 Z M26 54 H46 V66 H26 Z" fill="#36c" fill-rule="evenodd"/>
+</g>)svg" + std::string(stroke ? R"svg(<g transform=")svg" + transform + R"svg("><path d="M66 70 L90 46 L112 70" fill="none" stroke="#fd0" stroke-width="3" stroke-linejoin="round"/></g>)svg" : "") + "</svg>";
+}
+
+// Scaled up and turned, the layer is the editable import of the same file with that transform baked
+// into its points (not a resampled picture), whole frame, on the CPU reference.
+void sharpWhenScaledAndTurned() {
+    struct Case final {
+        std::string name;
+        document::Vec2d scale;
+        double degrees;
+        std::string baked;
+        // A stroke under a stretch is drawn as transformed geometry by the layer, while the editable
+        // import gives a baked stroke one width (its anisotropic widths are an approximation it
+        // names), so the stretched case compares filled outlines only.
+        bool stroke = true;
+    };
+    // Unfitted, the file's viewport is centred on the frame, so the layer's frame-pivot transform
+    // turns about the file's centre (60, 40), which is where the baked transform turns.
+    const std::vector<Case> cases{
+        {"scaled 3x", {3.0, 3.0}, 0.0, "translate(60 40) scale(3) translate(-60 -40)"},
+        {"scaled 2.2x and turned 27 degrees", {2.2, 2.2}, 27.0, "translate(60 40) rotate(27) scale(2.2) translate(-60 -40)"},
+        {"stretched and turned -40 degrees", {2.5, 1.6}, -40.0, "translate(60 40) rotate(-40) scale(2.5 1.6) translate(-60 -40)", false}};
+    for (const auto& item : cases) {
+        const auto plain = writeSvg("sharp", sharpSvg("", item.stroke));
+        const auto bakedFile = writeSvg("sharp-baked", sharpSvg(item.baked, item.stroke));
+        Fixture layer(plain, commands::SvgImportMode::Layer, 512, 288);
+        layer.run<commands::SetParameterSource>(
+            layer.main, layer.nodeParameter(*layer.artworkNode, document::kVectorArtworkFitParameterRole),
+            document::ConstantValueSource{document::ParameterValue{false}});
+        setTransform(layer, layer.art, item.scale, item.degrees);
+        Fixture baked(bakedFile, commands::SvgImportMode::Shapes, 512, 288, false);
+        const auto composed = renderExpanded(layer.document, layer.main, frame(0), item.name + " one layer");
+        const auto reference = renderProject(baked.document, baked.main, frame(0), item.name + " baked shapes");
+        document::VectorArtworkExpansionContext resample;
+        resample.composeLayerTransform = false;
+        const auto resampled = renderExpandedWith(layer.document, layer.main, frame(0), item.name + " resampled", resample);
+        std::filesystem::remove(bakedFile);
+        std::filesystem::remove(plain);
+        if (!composed || !reference || !resampled)
+            continue;
+        const auto worst = difference(*composed, *reference);
+        const auto moved = differingPixels(*composed, *reference, 1e-3);
+        const auto edges = partialPixels(*composed);
+        const auto bakedEdges = partialPixels(*reference);
+        const auto softEdges = partialPixels(*resampled);
+        std::cout << item.name << ": worst difference to the baked import " << worst << " on " << moved
+                  << " pixels, edge pixels " << edges << " (baked " << bakedEdges << ", resampled " << softEdges << ")\n";
+        // The same outlines covered through the same matrix. Fills match exactly; a stroke's round
+        // join is built in the shape's own units and then transformed, while the baked import
+        // builds it at the scaled width, so a pixel or two on a join may differ by a few coverage
+        // codes. Never the spread of a resample.
+        expect(worst <= 0.1 && moved * 100 <= edges,
+               item.name + ": the layer is the baked editable import (worst " + std::to_string(worst) + " on " +
+                   std::to_string(moved) + " pixels)");
+        expect(edges <= bakedEdges + bakedEdges / 50 + 4,
+               item.name + ": its edges are as narrow as the baked import's (" + std::to_string(edges) + " against " +
+                   std::to_string(bakedEdges) + ")");
+        expect(softEdges > edges + edges / 2,
+               item.name + ": a resampled picture would be visibly softer (" + std::to_string(softEdges) + " edge pixels)");
+        expect(coverage(*composed) > 1000.0, item.name + ": the artwork draws");
+    }
+}
+
+// The layer reports its own box: the artwork's content bounds through its transform, as the
+// resampled layer does, so the Viewer's box, handles and gestures see the same layer.
+void boundsFollowTheLayer() {
+    const auto file = writeSvg("bounds", sharpSvg(""));
+    for (const auto& [scale, degrees] : {std::pair{document::Vec2d{1.8, 1.8}, 0.0}, std::pair{document::Vec2d{1.5, 0.75}, 33.0}}) {
+        Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+        setTransform(layer, layer.art, scale, degrees);
+        layer.run<commands::SetParameterSource>(layer.main, layer.layerParameter(layer.art, document::kPositionParameterRole),
+                                                document::ConstantValueSource{document::ParameterValue{document::Vec2d{270.0, 150.0}}});
+        const auto plan = compilePlan(layer.document, layer.main, "bounds");
+        const auto evaluated = plan ? evaluate(plan, frame(0), "bounds") : std::nullopt;
+        if (!evaluated)
+            continue;
+        const auto* bounds = boundsOf(*evaluated->frame, layer.art);
+        expect(bounds != nullptr && !bounds->local.empty(), "bounds: the layer publishes its bounds");
+        if (bounds == nullptr || bounds->local.empty())
+            continue;
+        // The polygon's edges are the layer's linear map applied to its local box.
+        const double width = bounds->local.right - bounds->local.left;
+        const double height = bounds->local.bottom - bounds->local.top;
+        const document::Vec2d x{(bounds->polygon[1].x - bounds->polygon[0].x) / width,
+                                (bounds->polygon[1].y - bounds->polygon[0].y) / width};
+        const document::Vec2d y{(bounds->polygon[3].x - bounds->polygon[0].x) / height,
+                                (bounds->polygon[3].y - bounds->polygon[0].y) / height};
+        const double radians = degrees * 3.14159265358979323846 / 180.0;
+        const bool linear = std::abs(x.x - std::cos(radians) * scale.x) < 1e-9 &&
+                            std::abs(x.y - std::sin(radians) * scale.x) < 1e-9 &&
+                            std::abs(y.x + std::sin(radians) * scale.y) < 1e-9 &&
+                            std::abs(y.y - std::cos(radians) * scale.y) < 1e-9;
+        expect(linear, "bounds: the polygon carries the layer's scale and rotation");
+        expect(std::abs(bounds->anchor.x - 270.0) < 1e-9 && std::abs(bounds->anchor.y - 150.0) < 1e-9,
+               "bounds: the anchor is where the layer's position puts it");
+        // The local box is the artwork's own (untransformed) box: the box the same layer reports at
+        // the identity, to within the pixel its data window rounds to.
+        {
+            Fixture identity(file, commands::SvgImportMode::Layer, 512, 288);
+            const auto identityPlan = compilePlan(identity.document, identity.main, "bounds identity");
+            const auto identityFrame = identityPlan ? evaluate(identityPlan, frame(0), "bounds identity") : std::nullopt;
+            const auto* own = identityFrame ? boundsOf(*identityFrame->frame, identity.art) : nullptr;
+            expect(own != nullptr && std::abs(own->local.left - bounds->local.left) <= 1.0 &&
+                       std::abs(own->local.top - bounds->local.top) <= 1.0 &&
+                       std::abs(own->local.right - bounds->local.right) <= 1.0 &&
+                       std::abs(own->local.bottom - bounds->local.bottom) <= 1.0 && width > 100 && height > 100,
+                   "bounds: the local box is the artwork's own box");
+        }
+        // The resampled layer reports the same box through the same matrix (its content is the
+        // artwork's picture, so its box is that picture's data window).
+        document::VectorArtworkExpansionContext resample;
+        resample.composeLayerTransform = false;
+        const auto snapshot = layer.document.snapshot();
+        resample.fonts = noFonts();
+        auto expansion = document::expandVectorArtwork(snapshot.project(), *snapshot.project().findComposition(layer.main), resample);
+        document::Project project = snapshot.project();
+        *project.findComposition(layer.main) = *expansion.composition;
+        const document::Document expanded(std::move(project));
+        const auto resampledPlan = compilePlan(expanded, layer.main, "bounds resampled");
+        const auto resampled = resampledPlan ? evaluate(resampledPlan, frame(0), "bounds resampled") : std::nullopt;
+        const auto* other = resampled ? boundsOf(*resampled->frame, layer.art) : nullptr;
+        if (other == nullptr)
+            continue;
+        double worst = 0.0;
+        for (std::size_t i = 0; i < 4; ++i)
+            worst = std::max({worst, std::abs(other->polygon[i].x - bounds->polygon[i].x),
+                              std::abs(other->polygon[i].y - bounds->polygon[i].y)});
+        expect(worst <= 1.5 * std::max(scale.x, scale.y),
+               "bounds: the polygon is the resampled layer's within a pixel of the picture's edge (" +
+                   std::to_string(worst) + ")");
+        expect(std::abs(other->anchor.x - bounds->anchor.x) < 1e-9 && std::abs(other->anchor.y - bounds->anchor.y) < 1e-9,
+               "bounds: the anchor is the resampled layer's");
+    }
+    std::filesystem::remove(file);
+}
+
+// A token whose task was cancelled (the scheduler's own cancellation, as a preview or an export
+// sees it).
+runtime::CancellationToken cancelledToken() {
+    using namespace runtime;
+    TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    TaskScheduler scheduler(config);
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    CancellationToken token;
+    auto submission = scheduler.submit<void>(
+        TaskRequest("svg layer cancel token", {.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(642)}),
+        [&](TaskContext& context) {
+            {
+                std::lock_guard lock(mutex);
+                token = context.cancellation();
+                entered = true;
+            }
+            condition.notify_all();
+            std::unique_lock lock(mutex);
+            condition.wait(lock, [&] { return release; });
+            return TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted())
+        throw std::logic_error("cancel token task was refused");
+    {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [&] { return entered; });
+    }
+    submission.handle.cancel();
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    condition.notify_all();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!submission.handle.tryTakeResult().has_value() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return token;
+}
+
+const document::DataBlockRecord& blockOf(const Fixture& fixture) {
+    const auto& composition = fixture.composition();
+    const auto* node = composition.graph().findNode(*fixture.artworkNode);
+    const auto* block = node ? document::vectorArtworkBlock(fixture.document.snapshot().project(), *node, composition.parameters())
+                             : nullptr;
+    if (block == nullptr)
+        throw std::runtime_error("the layer holds no SVG block");
+    return *block;
+}
+
+// One plan per revision; an animated transform renders every frame from it. A block is parsed once
+// per digest: a new revision, another layer of the same file and an edited parameter read the kept
+// scene; a different file is parsed.
+void oneCompilePerRevisionAndOneParsePerFile() {
+    const auto file = writeSvg("identity", kComposite);
+    const auto other = writeSvg("identity-other", kIcon);
+    Fixture layer(file, commands::SvgImportMode::Layer, 256, 144);
+    auto& scenes = runtime::processVectorArtworkSceneCache();
+    scenes.retire();
+    const auto before = scenes.statistics();
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::CompiledPlanCache plans;
+    const auto compile = [&](const Fixture& fixture) {
+        return plans.compile(compiler, {fixture.document.snapshot(), fixture.main}, {});
+    };
+    // An animated transform and opacity.
+    const auto key = [&](const std::string_view role, const auto first, const auto last) {
+        // The first key holds the value the constant already has, so the moved key goes in first.
+        const auto parameter = layer.layerParameter(layer.art, role);
+        layer.run<commands::SetKeyframeAtTimeForParameter>(layer.main, parameter, frame(2), last);
+        layer.run<commands::SetKeyframeAtTimeForParameter>(layer.main, parameter, frame(0), first);
+    };
+    key(document::kScaleParameterRole, document::Vec2d{1, 1}, document::Vec2d{1.6, 1.3});
+    key(document::kRotationParameterRole, 0.0, 24.0);
+    key(document::kOpacityParameterRole, 1.0, 0.4);
+    const auto keyed = compile(layer);
+    expect(keyed.plan != nullptr, "identity: the keyed layer compiles");
+    const auto afterFirst = scenes.statistics();
+    expect(afterFirst.parses == before.parses + 1 && afterFirst.entries == 1,
+           "identity: the first compile parses the block once and keeps it");
+    std::vector<Frame> frames;
+    for (const std::int64_t index : {0, 1, 2})
+        if (const auto evaluated = keyed.plan ? evaluate(keyed.plan, frame(index), "identity") : std::nullopt)
+            frames.push_back(pixelsOf(*evaluated->frame));
+    expect(frames.size() == 3 && difference(frames[0], frames[1]) > 1e-3 && difference(frames[1], frames[2]) > 1e-3,
+           "identity: the animated transform changes every frame");
+    const auto again = compile(layer);
+    expect(again.plan == keyed.plan && plans.statistics().compiles == 1 && plans.statistics().hits == 1,
+           "identity: the same revision is one plan; animating the transform never compiles again");
+    // The keyed transform lives on the carrier, by the layer's own parameter ids: one plan holds
+    // the curves, and a Viewer gesture's override of the layer's scale moves the artwork.
+    {
+        runtime::SnapshotCompileRequest request{layer.document.snapshot(), layer.main};
+        request.parameterOverrides.push_back({layer.document.snapshot().revision(),
+                                              layer.layerParameter(layer.art, document::kPositionParameterRole),
+                                              document::Vec2d{40.0, 30.0}});
+        const auto overridden = compiler.compile(request, {});
+        const auto moved = overridden.plan ? evaluate(overridden.plan, frame(0), "identity override") : std::nullopt;
+        expect(moved && !frames.empty() && difference(pixelsOf(*moved->frame), frames[0]) > 1e-3,
+               "identity: an override of the layer's position (a Viewer drag) moves the artwork");
+    }
+
+    // A new revision of the same file: compiled again, never parsed again.
+    layer.run<commands::SetParameterSource>(layer.main, layer.layerParameter(layer.art, document::kBlendModeParameterRole),
+                                            document::ConstantValueSource{document::ParameterValue{
+                                                static_cast<std::int64_t>(core::BlendMode::Screen)}});
+    const auto edited = compile(layer);
+    expect(edited.plan != nullptr && edited.plan != keyed.plan && plans.statistics().compiles == 2,
+           "identity: an edited layer is a new plan");
+    expect(scenes.statistics().parses == afterFirst.parses && scenes.statistics().hits > afterFirst.hits,
+           "identity: a new revision reads the kept scene");
+    // The node's own parameter (fit) is a miss of the plan and a different frame, but not a parse.
+    const auto fitted = edited.plan ? evaluate(edited.plan, frame(0), "fitted") : std::nullopt;
+    layer.run<commands::SetParameterSource>(
+        layer.main, layer.nodeParameter(*layer.artworkNode, document::kVectorArtworkFitParameterRole),
+        document::ConstantValueSource{document::ParameterValue{false}});
+    const auto unfitted = compile(layer);
+    const auto unfittedFrame = unfitted.plan ? evaluate(unfitted.plan, frame(0), "unfitted") : std::nullopt;
+    expect(unfitted.plan != nullptr && unfitted.plan != edited.plan && fitted && unfittedFrame &&
+               difference(pixelsOf(*fitted->frame), pixelsOf(*unfittedFrame->frame)) > 1e-3,
+           "identity: the fit switch is a new plan and a new picture");
+    expect(scenes.statistics().parses == afterFirst.parses, "identity: switching fit parses nothing");
+    // A second layer of the same file shares the block and the scene; another file is parsed.
+    layer.run<commands::AddSvgArtwork>(layer.main, nullptr, file, "again", true, commands::SvgImportMode::Layer);
+    const auto twice = compile(layer);
+    expect(twice.plan != nullptr && scenes.statistics().parses == afterFirst.parses,
+           "identity: a second layer of the same file reads the same scene");
+    layer.run<commands::AddSvgArtwork>(layer.main, nullptr, other, "icon", true, commands::SvgImportMode::Layer);
+    const auto otherFile = compile(layer);
+    expect(otherFile.plan != nullptr && scenes.statistics().parses == afterFirst.parses + 1 &&
+               scenes.statistics().entries == 2,
+           "identity: a different file is parsed once and kept beside the first");
+    std::filesystem::remove(file);
+    std::filesystem::remove(other);
+}
+
+// Cancellation reaches the expansion: a cancelled compile publishes nothing, a cancelled parse
+// keeps nothing, and a cancelled evaluation of the expanded plan publishes no frame.
+void cancellation() {
+    const auto file = writeSvg("cancel", kComposite);
+    Fixture layer(file, commands::SvgImportMode::Layer, 256, 144);
+    const auto token = cancelledToken();
+    expect(token.isCancellationRequested(), "cancel: the token is cancelled");
+    runtime::processVectorArtworkSceneCache().retire();
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({layer.document.snapshot(), layer.main}, token);
+    expect(compiled.status == runtime::SnapshotCompileStatus::Cancelled && compiled.plan == nullptr,
+           "cancel: a cancelled compile of a Vector Artwork layer reports Cancelled and no plan");
+    expect(runtime::processVectorArtworkSceneCache().statistics().entries == 0,
+           "cancel: a cancelled compile keeps no scene");
+    // A cancelled parse keeps nothing.
+    runtime::VectorArtworkSceneCache scenes;
+    const auto lookup = scenes.scene(blockOf(layer), [] { return true; });
+    expect(lookup.cancelled && lookup.scene == nullptr && scenes.statistics().entries == 0 &&
+               scenes.statistics().parses == 0,
+           "cancel: a cancelled parse keeps nothing");
+    const auto plan = compilePlan(layer.document, layer.main, "cancel");
+    if (plan) {
+        const auto result = runtime::CpuCompositionEvaluator{}.evaluate(plan, referenceRequest(*plan, frame(0)), token);
+        expect(result.status() == runtime::EvaluationStatus::Cancelled && result.frame() == nullptr,
+               "cancel: a cancelled evaluation of the expanded layer publishes no frame");
+    }
+    std::filesystem::remove(file);
+}
+
+// The scene cache is bounded: scenes count against a byte budget, one larger than a quarter of it
+// is parsed but never kept, the least recently used is retired to make room, and retire() empties
+// it. The render itself keeps the request's pixel budget.
+void budgetAdmissionAndRetirement() {
+    const auto composite = writeSvg("budget-composite", kComposite);
+    const auto icon = writeSvg("budget-icon", kIcon);
+    const auto sharp = writeSvg("budget-sharp", sharpSvg(""));
+    Fixture a(composite, commands::SvgImportMode::Layer, 256, 144);
+    Fixture b(icon, commands::SvgImportMode::Layer, 256, 144);
+    Fixture c(sharp, commands::SvgImportMode::Layer, 256, 144);
+    runtime::VectorArtworkSceneCache probe;
+    const auto sizeOf = [&](const Fixture& fixture) {
+        const auto lookup = probe.scene(blockOf(fixture));
+        return lookup.scene ? runtime::VectorArtworkSceneCache::estimatedBytes(*lookup.scene) : std::size_t{0};
+    };
+    const auto sa = sizeOf(a), sb = sizeOf(b), sc = sizeOf(c);
+    expect(sa > 0 && sb > 0 && sc > 0, "budget: every scene has a size");
+    // Room for two of the three; each well under a quarter of it.
+    const auto largest = std::max({sa, sb, sc});
+    runtime::VectorArtworkSceneCache scenes(std::max(4 * largest, sa + sb + sc - std::min({sa, sb, sc}) / 2));
+    const auto budget = scenes.statistics().byteBudget;
+    const bool allFit = sa + sb + sc <= budget;
+    static_cast<void>(scenes.scene(blockOf(a)));
+    static_cast<void>(scenes.scene(blockOf(b)));
+    static_cast<void>(scenes.scene(blockOf(a))); // a is now the most recently used
+    static_cast<void>(scenes.scene(blockOf(c)));
+    auto stats = scenes.statistics();
+    expect(stats.retainedBytes <= stats.byteBudget, "budget: the kept scenes stay within the budget");
+    expect(allFit ? stats.entries == 3 : stats.entries == 2 && stats.retirements == 1,
+           "budget: the least recently used scene is retired to make room");
+    const auto hits = stats.hits;
+    static_cast<void>(scenes.scene(blockOf(a)));
+    expect(scenes.statistics().hits == hits + 1, "budget: the most recently used scene was kept");
+    // A budget below four times a scene refuses to keep it, and still answers.
+    runtime::VectorArtworkSceneCache tiny(sa * 2);
+    const auto refused = tiny.scene(blockOf(a));
+    expect(refused.scene != nullptr && tiny.statistics().refusedAdmissions == 1 && tiny.statistics().entries == 0,
+           "admission: a scene too large to keep is parsed for the compile and not kept");
+    // Retirement: everything goes, and a later compile parses again.
+    scenes.retire();
+    stats = scenes.statistics();
+    expect(stats.entries == 0 && stats.retainedBytes == 0, "retirement: retire() drops every scene");
+    static_cast<void>(scenes.scene(blockOf(b)));
+    expect(scenes.statistics().misses == stats.misses + 1, "retirement: a retired scene is parsed again");
+    // Shrinking the budget retires down to it.
+    scenes.setByteBudget(0);
+    expect(scenes.statistics().entries == 0, "retirement: a smaller budget retires what no longer fits");
+
+    // The render keeps the request's pixel budget: too small a request is refused by name.
+    const auto plan = compilePlan(a.document, a.main, "budget");
+    if (plan) {
+        auto request = referenceRequest(*plan, frame(0));
+        request.pixelStorageByteLimit = 4096;
+        const auto result = runtime::CpuCompositionEvaluator{}.evaluate(plan, request, {});
+        std::string why;
+        for (const auto& diagnostic : result.diagnostics())
+            why += diagnostic.summary + " " + diagnostic.detail + " ";
+        expect(result.frame() == nullptr && result.status() == runtime::EvaluationStatus::Failed && !why.empty(),
+               "budget: a request too small for the expanded artwork is refused, with a reason: " + why);
+    }
+    for (const auto& path : {composite, icon, sharp})
+        std::filesystem::remove(path);
+}
+
+// An SVG that cannot be read is refused by the compiler by name, never drawn empty.
+void unreadableArtworkIsRefusedByName() {
+    const auto file = writeSvg("unreadable", kIcon);
+    Fixture layer(file, commands::SvgImportMode::Layer, 256, 144);
+    document::Project project = layer.document.snapshot().project();
+    const auto& block = blockOf(layer);
+    auto broken = block;
+    std::string garbage = "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect";
+    std::vector<std::byte> bytes;
+    for (const char c : garbage)
+        bytes.push_back(static_cast<std::byte>(c));
+    broken.payload = document::OpaqueExtensionPayload(bytes);
+    broken.provenance.contentDigest = *core::Sha256Hasher::hash(bytes);
+    auto* stored = project.findDataBlock(std::get<document::DataBlockRecordId>(block.id));
+    expect(stored != nullptr, "unreadable: the block is found");
+    if (stored == nullptr)
+        return;
+    *stored = broken;
+    const document::Document document(std::move(project));
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({document.snapshot(), layer.main}, {});
+    const auto described = runtime::describeCompileFailure(compiled, document.snapshot().project(), layer.main);
+    expect(compiled.plan == nullptr && described.find("Vector Artwork cannot be drawn") != std::string::npos,
+           "unreadable: the compile is refused, naming the Vector Artwork: " + described);
+    bool named = false;
+    for (const auto& diagnostic : compiled.diagnostics)
+        named = named || (diagnostic.subject.nodeId == layer.artworkNode && !diagnostic.detail.empty() &&
+                          diagnostic.detail.find("not expanded") == std::string::npos);
+    expect(named, "unreadable: the refusal names the node and why the SVG does not read");
+    std::filesystem::remove(file);
+}
+
+// Which layers keep the resampled picture, and why; what is parented to a composed layer follows
+// it exactly.
+void whatResamplesAndWhatFollows() {
+    const auto file = writeSvg("follows", sharpSvg(""));
+    const auto expansionOf = [](const Fixture& fixture) {
+        document::VectorArtworkExpansionContext context;
+        context.fonts = noFonts();
+        const auto snapshot = fixture.document.snapshot();
+        return document::expandVectorArtwork(snapshot.project(), *snapshot.project().findComposition(fixture.main), context);
+    };
+    {
+        Fixture plain(file, commands::SvgImportMode::Layer, 256, 144);
+        const auto expansion = expansionOf(plain);
+        const auto composed = expansion.composed.find(plain.art);
+        expect(composed != expansion.composed.end() && composed->second.leaves.size() == 4 && expansion.resampled.empty(),
+               "composed: a plain layer draws its transform through its four shapes");
+        if (composed != expansion.composed.end() && expansion.composition) {
+            const auto* carrier = expansion.composition->graph().findLayer(composed->second.carrier);
+            const auto* art = expansion.composition->graph().findLayer(plain.art);
+            const auto* carrierNode = carrier ? expansion.composition->graph().findNode(carrier->nodeId) : nullptr;
+            const auto bound = [&](const document::LayerOutputBoundary& layer) {
+                return document::layerParameterBinding(expansion.composition->graph(), layer, document::kScaleParameterRole)->parameterId;
+            };
+            expect(carrierNode != nullptr && carrierNode->typeId == document::kLayerOutputNodeType && art != nullptr &&
+                       bound(*carrier) == plain.layerParameter(plain.art, document::kScaleParameterRole) &&
+                       bound(*art) != bound(*carrier),
+                   "composed: the carrier holds the layer's own transform parameters; the layer draws at the identity");
+        }
+    }
+    {
+        Fixture masked(file, commands::SvgImportMode::Layer, 256, 144);
+        document::PathValue mask;
+        document::PathContour contour;
+        contour.closed = true;
+        for (const auto& point : {document::Vec2d{60, 40}, document::Vec2d{200, 40}, document::Vec2d{200, 110}})
+            contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+        mask.contours.push_back(contour);
+        masked.run<commands::AddLayerMask>(masked.main, masked.art, mask);
+        const auto expansion = expansionOf(masked);
+        const auto why = expansion.resampled.find(*masked.artworkNode);
+        expect(expansion.composed.empty() && why != expansion.resampled.end() && why->second.find("masks") != std::string::npos,
+               "resampled: a masked layer keeps the resampled picture, saying it has masks");
+    }
+    {
+        Fixture retimed(file, commands::SvgImportMode::Layer, 256, 144);
+        retimed.run<commands::SetLayerTiming>(retimed.main, retimed.art, frame(1), core::RationalTime{},
+                                              core::RationalTime::fromInteger(4));
+        const auto expansion = expansionOf(retimed);
+        const auto why = expansion.resampled.find(*retimed.artworkNode);
+        expect(expansion.composed.empty() && why != expansion.resampled.end() && why->second.find("timing") != std::string::npos,
+               "resampled: a retimed layer keeps the resampled picture, saying it has its own timing");
+        expect(static_cast<bool>(renderExpanded(retimed.document, retimed.main, frame(2), "retimed")),
+               "resampled: the retimed layer renders");
+    }
+    {
+        // A Layer node between the artwork and its slot (it adopts the entry's values, pivot
+        // included) is composed too, and a solid parented to it -- scaled, turned, moving -- lands
+        // exactly where it would on the resampled layer (the artwork itself is drawn at zero
+        // opacity, so only the child is seen). An entry layer cannot have a child in its own
+        // Merge (the parent link would be a cycle), so the Layer node is where an artist parents.
+        Fixture parent(file, commands::SvgImportMode::Layer, 256, 144);
+        const auto* entry = parent.composition().graph().findLayer(parent.art);
+        const auto merge = entry->nodeId;
+        const auto slot = *entry->entrySlot;
+        const auto layerNode = *parent.run<commands::AddNode>(parent.main, std::string(document::kLayerOutputNodeType),
+                                                              document::Vec2d{0, -200})
+                                    .outputId<document::NodeId>(commands::kAddNodeOutput);
+        parent.run<commands::ConnectPorts>(parent.main,
+                                           document::OutputPortRef{*parent.artworkNode, std::string(document::kVectorArtworkOutputPort)},
+                                           document::NodeInputRef{layerNode, std::string(document::kLayerOutputContentInputPort)});
+        parent.run<commands::ConnectPorts>(parent.main,
+                                           document::OutputPortRef{layerNode, std::string(document::kLayerOutputOutputPort)},
+                                           document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
+        std::optional<document::LayerId> held;
+        for (const auto& boundary : parent.composition().graph().layerOutputs())
+            if (!boundary.entryOwned() && boundary.nodeId == layerNode)
+                held = boundary.layerId;
+        expect(held.has_value(), "follows: the Layer node holds the artwork's layer");
+        if (!held)
+            return;
+        setTransform(parent, *held, {1.4, 0.8}, 21.0);
+        const auto position = parent.layerParameter(*held, document::kPositionParameterRole);
+        parent.run<commands::SetKeyframeAtTimeForParameter>(parent.main, position, frame(2), document::Vec2d{150, 60});
+        parent.run<commands::SetKeyframeAtTimeForParameter>(parent.main, position, frame(0), document::Vec2d{128, 72});
+        parent.run<commands::SetParameterSource>(parent.main, parent.layerParameter(*held, document::kOpacityParameterRole),
+                                                 document::ConstantValueSource{document::ParameterValue{0.0}});
+        const auto child = parent.run<commands::AddSolidLayer>(parent.main, "Child", core::Color4d{1, 0.5, 0, 1},
+                                                               document::Vec2d{180, 60}, 1.0);
+        const auto childLayer = *child.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
+        parent.run<commands::SetLayerParent>(parent.main, childLayer, *held);
+        const auto expansion = expansionOf(parent);
+        expect(expansion.composed.contains(*held), "follows: the Layer node's layer is composed");
+        for (const std::int64_t index : {0, 2}) {
+            document::VectorArtworkExpansionContext resample;
+            resample.composeLayerTransform = false;
+            const auto composed = renderExpanded(parent.document, parent.main, frame(index), "child composed");
+            const auto resampled = renderExpandedWith(parent.document, parent.main, frame(index), "child resampled", resample);
+            expect(composed && resampled && difference(*composed, *resampled) == 0.0 && coverage(*composed) > 100.0,
+                   "follows: a layer parented to the artwork's layer moves exactly as before, frame " + std::to_string(index));
+        }
+    }
+    std::filesystem::remove(file);
+}
+
 } // namespace
 
 int main() {
@@ -405,6 +1021,13 @@ int main() {
         layerComposesThroughTheExpansionRoot();
         oneLayerIsTheEditableImport();
         savedAndReopenedWithTheFileGone();
+        sharpWhenScaledAndTurned();
+        boundsFollowTheLayer();
+        oneCompilePerRevisionAndOneParsePerFile();
+        cancellation();
+        budgetAdmissionAndRetirement();
+        unreadableArtworkIsRefusedByName();
+        whatResamplesAndWhatFollows();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return EXIT_FAILURE;
@@ -413,6 +1036,6 @@ int main() {
         std::cerr << failures << " failure(s)\n";
         return EXIT_FAILURE;
     }
-    std::cout << "PASS: a Vector Artwork layer composes, renders and reopens as the editable import does\n";
+    std::cout << "PASS: a Vector Artwork layer compiles, composes, renders sharp and reopens as the editable import does\n";
     return EXIT_SUCCESS;
 }

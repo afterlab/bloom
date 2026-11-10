@@ -298,7 +298,7 @@ bloom_add_test(NAME bloom.runtime.glow-legacy-controls COMMAND bloom_runtime_glo
 # #642: an SVG imported as one layer composes, renders and reopens (its file deleted) as the same
 # file imported as editable shapes, on the CPU reference.
 add_executable(bloom_runtime_svg_artwork_layer_test ${PROJECT_SOURCE_DIR}/tests/integration/svg_artwork_layer_tests.cpp)
-target_link_libraries(bloom_runtime_svg_artwork_layer_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project bloom_svg_artwork bloom_platform)
+target_link_libraries(bloom_runtime_svg_artwork_layer_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project bloom_svg_artwork bloom_media_vector bloom_platform)
 bloom_enable_warnings(bloom_runtime_svg_artwork_layer_test)
 bloom_enable_strict_floating_point(bloom_runtime_svg_artwork_layer_test)
 bloom_add_test(NAME bloom.runtime.svg-artwork-layer COMMAND bloom_runtime_svg_artwork_layer_test LABELS runtime integration persistence TIMEOUT 120)
@@ -1038,6 +1038,55 @@ bloom_add_test(
 )
 set_tests_properties(bloom.runtime.gpu_svg_artwork_native
     PROPERTIES SKIP_RETURN_CODE 77)
+
+# #642: an SVG imported as one layer (a Vector Artwork layer) on the production GPU route against
+# the CPU reference and the editable import: keyed, scaled and turned at 512 x 288 over a few frames,
+# at half resolution, at 1080p and 4K, admitted, retired and cancelled. Skips (exit 77) only the
+# GPU half.
+add_executable(bloom_runtime_gpu_svg_artwork_layer_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_svg_artwork_layer_tests.cpp)
+target_include_directories(bloom_runtime_gpu_svg_artwork_layer_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime"
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(bloom_runtime_gpu_svg_artwork_layer_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+# The artwork's Gaussian blur is an image effect, which the production builder prepares through the
+# packaged shader tools.
+target_compile_definitions(bloom_runtime_gpu_svg_artwork_layer_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_svg_artwork_layer_test>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_svg_artwork_layer_test)
+bloom_enable_warnings(bloom_runtime_gpu_svg_artwork_layer_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_svg_artwork_layer_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_svg_artwork_layer
+    COMMAND bloom_runtime_gpu_svg_artwork_layer_test
+    LABELS runtime native gpu render memory
+    TIMEOUT 600
+)
+set_tests_properties(bloom.runtime.gpu_svg_artwork_layer
+    PROPERTIES SKIP_RETURN_CODE 77)
+
+# #642: the Vector Artwork layer's GPU cost against a Grade and the editable import of the same file
+# (tools/bench/run_bench.py `nodes`, benchmarks.md "Vector Artwork layer"). The smoke run keeps it
+# building and running at 64x64.
+add_executable(bloom_runtime_gpu_svg_artwork_node_bench
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_svg_artwork_node_bench.cpp)
+target_link_libraries(bloom_runtime_gpu_svg_artwork_node_bench
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+target_include_directories(bloom_runtime_gpu_svg_artwork_node_bench
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_svg_artwork_node_bench PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_svg_artwork_node_bench>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_svg_artwork_node_bench)
+bloom_enable_warnings(bloom_runtime_gpu_svg_artwork_node_bench)
+bloom_add_test(
+    NAME bloom.runtime.gpu_svg_artwork_node_bench_smoke
+    COMMAND bloom_runtime_gpu_svg_artwork_node_bench --smoke
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_svg_artwork_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #344 #530 #509: the path processing nodes on the production GPU route against the CPU reference,
 # with cache identity, invalidation, animation, HDR and alpha, data window, region of interest, the

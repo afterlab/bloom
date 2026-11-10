@@ -128,7 +128,8 @@ NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
                 "film-grain": "src/runtime/tests/bloom_runtime_gpu_film_grain_node_bench",
                 "motion": "src/runtime/tests/bloom_runtime_gpu_motion_node_bench",
                 "sharpen": "src/runtime/tests/bloom_runtime_gpu_sharpen_node_bench",
-                "denoise": "src/runtime/tests/bloom_runtime_gpu_denoise_node_bench"}
+                "denoise": "src/runtime/tests/bloom_runtime_gpu_denoise_node_bench",
+                "svg-artwork": "src/runtime/tests/bloom_runtime_gpu_svg_artwork_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
