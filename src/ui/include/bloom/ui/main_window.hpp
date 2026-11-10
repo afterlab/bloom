@@ -288,6 +288,7 @@ class MainWindow final : public QMainWindow {
     QAction* cancelRamPreviewAction_ = nullptr;
     QAction* newCompositionAction_ = nullptr;
     QAction* duplicateCompositionAction_ = nullptr;
+    QAction* breakApartSvgAction_ = nullptr;
     QAction* renameCompositionAction_ = nullptr;
     QAction* compositionSettingsAction_ = nullptr;
     QAction* deleteCompositionAction_ = nullptr;

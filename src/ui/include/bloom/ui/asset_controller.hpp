@@ -7,6 +7,7 @@
 #include <atomic>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
@@ -116,6 +117,29 @@ class AssetController final : public QObject {
     // import reads the Import preferences (sequence frame rate, still duration) into `options`.
     void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder,
                      ImportFollowUp followUp = {}, commands::ImportOptions options = {});
+    // #642: how the SVG files of one import or drop batch import. Asks once for the batch: the
+    // remembered answer (Preferences > Import) is used without a prompt; otherwise the chooser opens
+    // over the active window with As one layer selected and a "Remember my choice" check. `done`
+    // runs once, with the mode, or nullopt when the artist cancelled; it runs at once when no
+    // prompt is needed or no window can show one (the default, As one layer, then applies). The
+    // drop routes and Add to Composition share this one call.
+    void chooseSvgImportMode(std::size_t count,
+                             std::function<void(std::optional<commands::SvgImportMode>)> done);
+    // Test seam: answers the chooser without opening it, with the number of SVG files it is asked
+    // about. Unset, the chooser opens as it does for the artist.
+    void setSvgImportChooserForTesting(
+        std::function<std::optional<commands::SvgImportMode>(std::size_t)> chooser) {
+        svgChooser_ = std::move(chooser);
+    }
+    // #642 Break Apart: turns the Vector Artwork `layer` holds into editable shapes in place, as one
+    // undo step. The held SVG is parsed (and fonts matched) on the blocking-I/O worker; the edit
+    // commits when it is ready. Refused, with a diagnostic, while another import runs.
+    void breakApartSvg(document::CompositionId composition, document::LayerId layer);
+    // The selected layer when it holds an SVG as one Vector Artwork layer (the Composition menu's
+    // Break Apart SVG acts on it); nullopt otherwise.
+    [[nodiscard]] std::optional<document::LayerId> selectedVectorArtworkLayer() const;
+    // Whether `layer` of the current composition holds an SVG as one Vector Artwork layer.
+    [[nodiscard]] bool holdsVectorArtwork(document::LayerId layer) const;
     // New Composition from Selection for the assets an import resolved to, opened once made.
     [[nodiscard]] ImportFollowUp compositionFollowUp();
     // Session state (#378): the Assets folder an import lands in when no drop target names one.
@@ -283,7 +307,8 @@ class AssetController final : public QObject {
     };
     void prepare(const QStringList& paths, document::AssetId relinkId = {},
                  std::optional<document::AssetFolderId> folder = {},
-                 commands::ImportOptions options = {});
+                 commands::ImportOptions options = {},
+                 commands::SvgImportMode svgMode = commands::kDefaultSvgImportMode);
     void refresh();
     void startThumbnails();
     void poll();
@@ -300,8 +325,20 @@ class AssetController final : public QObject {
     std::shared_ptr<ImportShared> importShared_;
     ImportFollowUp importFollowUp_;
     // #343: SVG files of a batch wait their turn; each imports as its own native-layer artwork.
-    std::vector<std::filesystem::path> pendingSvg_;
+    struct PendingSvg final {
+        std::filesystem::path path;
+        commands::SvgImportMode mode = commands::kDefaultSvgImportMode;
+    };
+    std::vector<PendingSvg> pendingSvg_;
     void startNextSvg();
+    std::function<std::optional<commands::SvgImportMode>(std::size_t)> svgChooser_;
+    // A Break Apart job running on the import worker, committed by finishBreakApart.
+    struct BreakApartJob final {
+        document::CompositionId composition;
+        document::LayerId layer;
+    };
+    std::optional<BreakApartJob> breakApart_;
+    void finishBreakApart(runtime::TaskResult<OperationHandle>& result);
     std::function<void(const commands::ImportProgress&)> importProgressHook_;
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;

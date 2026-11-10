@@ -1604,6 +1604,19 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
                                           compositionId, layer, time);
                                   });
             });
+    // #642: an SVG imported as one layer becomes editable shapes in place (one undo step).
+    if (auto* assets = session_.assetController();
+        assets != nullptr && entry.layerId.isValid() && assets->holdsVectorArtwork(entry.layerId)) {
+        menu->addSeparator();
+        auto* breakApart = menu->addAction(tr("Break Apart SVG"));
+        breakApart->setObjectName(QStringLiteral("timelineBreakApartSvgAction"));
+        breakApart->setToolTip(tr("Turn this SVG into editable shapes: a shape layer and a path node "
+                                  "for every element. The layer keeps its transform and keys."));
+        connect(breakApart, &QAction::triggered, this, [this, compositionId, layer = entry.layerId] {
+            if (auto* controller = session_.assetController())
+                controller->breakApartSvg(compositionId, layer);
+        });
+    }
     // #502: the entry's Layer node. Inserting one adopts the entry's values and removing it returns
     // them to the entry, so neither changes the picture.
     if (entry.mergeNodeId.isValid()) {

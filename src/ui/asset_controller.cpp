@@ -5,6 +5,8 @@
 #include "footage_verification.hpp"
 #include "import_options_pane.hpp"
 #include "network_share_paths.hpp"
+#include "svg_import_mode_dialog.hpp"
+#include <QApplication>
 #include <QDir>
 #include <QSettings>
 #include <QTimer>
@@ -905,29 +907,182 @@ void AssetController::importFiles(const QStringList& paths,
     options.stillDuration = preferences.importStillDuration;
     const auto running = importShared_;
     QStringList media;
+    std::vector<std::filesystem::path> svg;
     for (const auto& path : paths) {
         if (path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive))
-            pendingSvg_.push_back(nativePath(path));
+            svg.push_back(nativePath(path));
         else
             media.push_back(path);
     }
-    if (media.isEmpty()) {
-        startNextSvg();
+    if (!media.isEmpty()) {
+        prepare(media, {}, folder, std::move(options));
+        // Kept only for the batch import this call started, never one already running.
         if (importShared_ != nullptr && importShared_ != running)
             importFollowUp_ = std::move(followUp);
-        return;
     }
-    prepare(media, {}, folder, std::move(options));
-    // Kept only for the batch import this call started, never one already running.
-    if (importShared_ != nullptr && importShared_ != running)
+    // #642: the batch's SVG files import after its media, in the mode the artist chooses once.
+    if (!svg.empty())
+        chooseSvgImportMode(svg.size(), [this, svg](const std::optional<commands::SvgImportMode> mode) {
+            if (!mode)
+                return;
+            for (const auto& path : svg)
+                pendingSvg_.push_back({path, *mode});
+            startNextSvg();
+        });
+    if (media.isEmpty() && importShared_ != nullptr && importShared_ != running)
         importFollowUp_ = std::move(followUp);
 }
 void AssetController::startNextSvg() {
     if (pendingSvg_.empty() || busy_)
         return;
-    const auto path = pendingSvg_.front();
+    const auto next = pendingSvg_.front();
     pendingSvg_.erase(pendingSvg_.begin());
-    prepare({QString::fromStdU16String(path.u16string())}, {}, {}, {});
+    prepare({QString::fromStdU16String(next.path.u16string())}, {}, {}, {}, next.mode);
+}
+void AssetController::chooseSvgImportMode(
+    const std::size_t count, std::function<void(std::optional<commands::SvgImportMode>)> done) {
+    const auto preferences = loadApplicationPreferences(QSettings{});
+    if (preferences.importSvgMode != SvgImportChoice::Ask) {
+        done(preferences.importSvgMode == SvgImportChoice::Shapes ? commands::SvgImportMode::Shapes
+                                                                  : commands::SvgImportMode::Layer);
+        return;
+    }
+    if (svgChooser_) {
+        done(svgChooser_(count));
+        return;
+    }
+    // The chooser needs a window to belong to; with none (a headless run) there is nobody to ask,
+    // and the default applies.
+    auto* owner = QApplication::activeWindow();
+    if (owner == nullptr) {
+        done(commands::kDefaultSvgImportMode);
+        return;
+    }
+    auto* dialog = new SvgImportModeDialog(count, commands::kDefaultSvgImportMode, *owner);
+    // The dialog deletes itself after `finished`, so its answer is read while it is still alive.
+    dialog->open([dialog, done = std::move(done)](const kit::KDialog::Role role) {
+        if (role != kit::KDialog::Role::Accept) {
+            done(std::nullopt);
+            return;
+        }
+        const auto mode = dialog->mode();
+        if (dialog->remember()) {
+            QSettings settings;
+            auto preferences = loadApplicationPreferences(settings);
+            preferences.importSvgMode = mode == commands::SvgImportMode::Shapes ? SvgImportChoice::Shapes
+                                                                                 : SvgImportChoice::Layer;
+            saveApplicationPreferences(settings, preferences);
+        }
+        done(mode);
+    });
+}
+void AssetController::breakApartSvg(const document::CompositionId composition, const document::LayerId layer) {
+    if (!host_.canSave()) {
+        emit diagnostic(tr("Break Apart requires an idle, editable project"));
+        return;
+    }
+    if (busy_) {
+        emit diagnostic(tr("Another import is still running; break the SVG apart when it finishes"));
+        return;
+    }
+    const auto* held = session_.snapshot().project().findComposition(composition);
+    if (held == nullptr || commands::findLayerVectorArtwork(*held, layer) == nullptr) {
+        emit diagnostic(tr("This layer does not hold an SVG as one layer, so there is nothing to break apart"));
+        return;
+    }
+    base_ = session_.snapshot();
+    auto submission = scheduler_.submit<OperationHandle>(
+        runtime::TaskRequest(
+            "Break apart SVG",
+            {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
+        [snapshot = *base_, composition, layer](runtime::TaskContext& context) {
+            context.reportProgress({.phase = "Reading SVG",
+                                    .subphase = {},
+                                    .completed = 0,
+                                    .total = std::nullopt});
+            std::string diagnostic;
+            auto prepared = commands::prepareVectorArtworkSource(
+                snapshot.project(), composition, layer, diagnostic,
+                [&context] { return context.isCancellationRequested(); },
+                [&context](const commands::SvgPreparePhase phase) {
+                    if (phase == commands::SvgPreparePhase::FindingFonts)
+                        context.reportProgress({.phase = "Finding fonts",
+                                                .subphase = {},
+                                                .completed = 0,
+                                                .total = std::nullopt});
+                });
+            if (context.isCancellationRequested())
+                return runtime::TaskResult<OperationHandle>::cancelled();
+            if (!prepared)
+                return runtime::TaskResult<OperationHandle>::failed(
+                    {{.code = "bloom.svg.break-apart-failed",
+                      .severity = runtime::DiagnosticSeverity::Error,
+                      .summary = "The SVG could not be broken apart: " + diagnostic,
+                      .detail = diagnostic,
+                      .suggestedAction = "Nothing was changed."}});
+            auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
+            auto operation = std::make_unique<commands::BreakApartSvgArtwork>(composition, layer);
+            operation->withPrepared(std::move(prepared));
+            *result = std::move(operation);
+            return runtime::TaskResult<OperationHandle>::succeeded(std::move(result), {});
+        });
+    if (!submission.accepted()) {
+        base_.reset();
+        emit diagnostic(tr("Break Apart could not be scheduled"));
+        return;
+    }
+    import_ = std::move(submission.handle);
+    breakApart_ = BreakApartJob{composition, layer};
+    busy_ = true;
+    bridge_.wake();
+    emit activityChanged();
+}
+bool AssetController::holdsVectorArtwork(const document::LayerId layer) const {
+    const auto* composition = session_.composition();
+    return composition != nullptr && layer.isValid() &&
+           commands::findLayerVectorArtwork(*composition, layer) != nullptr;
+}
+std::optional<document::LayerId> AssetController::selectedVectorArtworkLayer() const {
+    for (const auto& entry : session_.selectedEntries())
+        if (const auto layer = session_.entryLayer(entry); layer && holdsVectorArtwork(*layer))
+            return layer;
+    return std::nullopt;
+}
+void AssetController::finishBreakApart(runtime::TaskResult<OperationHandle>& result) {
+    const auto job = std::exchange(breakApart_, std::nullopt);
+    if (!job)
+        return;
+    if (result.state() == runtime::TaskState::Failed) {
+        emitImportFailures(result.diagnostics());
+        return;
+    }
+    if (result.state() != runtime::TaskState::Succeeded || !result.value().has_value() || !*result.value())
+        return;
+    if (!host_.liveDocumentAndStack().first || !base_ ||
+        base_->project().id() != session_.snapshot().project().id() ||
+        base_->revision() != session_.snapshot().revision()) {
+        emit diagnostic(tr("The project changed while the SVG was being read, so nothing was changed. "
+                           "Break it apart again."));
+        return;
+    }
+    commands::Transaction transaction("Break Apart SVG", base_->revision());
+    if (!transaction.add(std::move(**result.value())))
+        return;
+    const auto executed = session_.executeTransaction(std::move(transaction));
+    if (!executed.succeeded()) {
+        emit diagnostic(tr("Break Apart failed: %1")
+                            .arg(executed.operationFailures.empty()
+                                     ? QString{}
+                                     : QString::fromStdString(executed.operationFailures.front().issue.message)));
+        return;
+    }
+    constexpr std::size_t kListed = 12;
+    for (std::size_t index = 0; index < executed.warnings.size() && index < kListed; ++index)
+        emit diagnostic(QString::fromStdString(executed.warnings[index].issue.message));
+    if (executed.warnings.size() > kListed)
+        emit diagnostic(tr("%1 more notes about this SVG are in the operation's warnings")
+                            .arg(executed.warnings.size() - kListed));
 }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())
@@ -978,7 +1133,7 @@ void AssetController::remove(document::AssetId id) {
 }
 void AssetController::prepare(const QStringList& paths, document::AssetId relinkId,
                               const std::optional<document::AssetFolderId> folder,
-                              commands::ImportOptions options) {
+                              commands::ImportOptions options, const commands::SvgImportMode svgMode) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Media import requires an idle, editable project"));
         return;
@@ -1007,7 +1162,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, folder, shared, options,
+        [files = std::move(files), directory, relinkId, folder, shared, options, svgMode,
          compositionId = session_.compositionId(), hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
@@ -1079,10 +1234,9 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                                         .detail = warning.detail,
                                         .suggestedAction = {}});
                 const auto stem = files.front().stem().u8string();
-                // #642: the desktop offers no choice of mode yet, so it keeps the editable import.
+                // #642: the mode the artist chose for this batch (or the remembered one).
                 auto artwork = std::make_unique<commands::AddSvgArtwork>(
-                    compositionId, read.source, std::string(stem.begin(), stem.end()),
-                    commands::SvgImportMode::Shapes, true);
+                    compositionId, read.source, std::string(stem.begin(), stem.end()), svgMode, true);
                 artwork->withProjectDirectory(directory);
                 *result = std::move(artwork);
             } else {
@@ -2177,7 +2331,10 @@ void AssetController::poll() {
         if (result) {
             busy_ = false;
             emit activityChanged();
-            finishImport(*result);
+            if (breakApart_)
+                finishBreakApart(*result);
+            else
+                finishImport(*result);
             base_.reset();
             // The next SVG of a batch starts once this one has committed or failed.
             startNextSvg();

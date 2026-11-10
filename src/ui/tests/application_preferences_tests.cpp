@@ -225,6 +225,17 @@ void testImportPreferences(Expectations& check) {
     const auto composition = ui::loadApplicationPreferences(settings);
     check.expect(!composition.importSequenceFrameRate && !composition.importStillDuration,
                  "Match composition and Composition length round-trip");
+    // #642: SVG files ask by default; the remembered answers round-trip; anything else asks.
+    check.expect(defaults.importSvgMode == ui::SvgImportChoice::Ask, "SVG files ask by default");
+    for (const auto choice : {ui::SvgImportChoice::Layer, ui::SvgImportChoice::Shapes, ui::SvgImportChoice::Ask}) {
+        prefs.importSvgMode = choice;
+        ui::saveApplicationPreferences(settings, prefs);
+        check.expect(ui::loadApplicationPreferences(settings).importSvgMode == choice,
+                     std::string("the SVG import choice round-trips: ") + ui::svgImportChoiceValue(choice));
+    }
+    settings.setValue(QStringLiteral("import/svg-mode"), QStringLiteral("nonsense"));
+    check.expect(ui::loadApplicationPreferences(settings).importSvgMode == ui::SvgImportChoice::Ask,
+                 "an unreadable SVG choice asks");
     settings.setValue(QStringLiteral("import/sequence-frame-rate"), QStringLiteral("5000/1"));
     settings.setValue(QStringLiteral("import/still-duration"), QStringLiteral("nonsense"));
     const auto invalid = ui::loadApplicationPreferences(settings);

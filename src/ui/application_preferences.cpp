@@ -50,6 +50,7 @@ constexpr auto kAgentAnswerDialogsKey = "agents/answer-dialogs";
 constexpr auto kAgentRunScriptsKey = "agents/run-scripts";
 constexpr auto kImportSequenceFrameRateKey = "import/sequence-frame-rate";
 constexpr auto kImportStillDurationKey = "import/still-duration";
+constexpr auto kImportSvgModeKey = "import/svg-mode";
 // "composition", or an exact "n/d" (a rate in frames per second, a duration in seconds).
 constexpr auto kCompositionSpelling = "composition";
 
@@ -270,6 +271,12 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
         if (rate && document::isValidFootageFrameRate(*rate))
             preferences.importSequenceFrameRate = rate;
     }
+    {
+        const auto stored = settings.value(QLatin1String(kImportSvgModeKey)).toString();
+        preferences.importSvgMode = stored == QLatin1StringView("layer")    ? SvgImportChoice::Layer
+                                    : stored == QLatin1StringView("shapes") ? SvgImportChoice::Shapes
+                                                                            : SvgImportChoice::Ask;
+    }
     if (const auto ratio = ratioFromSettings(settings, kImportStillDurationKey)) {
         const auto duration = core::RationalTime::create(ratio->first, ratio->second);
         if (duration &&
@@ -352,6 +359,8 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kImportSequenceFrameRateKey),
                       rate ? QStringLiteral("%1/%2").arg(rate->numerator()).arg(rate->denominator())
                            : QString::fromLatin1(kCompositionSpelling));
+    settings.setValue(QLatin1String(kImportSvgModeKey),
+                      QLatin1String(svgImportChoiceValue(preferences.importSvgMode)));
     const auto& still = preferences.importStillDuration;
     settings.setValue(
         QLatin1String(kImportStillDurationKey),
@@ -373,6 +382,18 @@ const char* nodeLinkStyleValue(const NodeLinkStyle style) noexcept {
         break;
     }
     return "spline";
+}
+
+const char* svgImportChoiceValue(const SvgImportChoice choice) noexcept {
+    switch (choice) {
+    case SvgImportChoice::Layer:
+        return "layer";
+    case SvgImportChoice::Shapes:
+        return "shapes";
+    case SvgImportChoice::Ask:
+        break;
+    }
+    return "ask";
 }
 
 const char* viewerResolutionValue(const ViewerResolutionPreference policy) noexcept {

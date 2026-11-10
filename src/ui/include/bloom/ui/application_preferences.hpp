@@ -49,6 +49,10 @@ enum class NodeLinkStyle : std::uint8_t {
     Angled,
 };
 
+// #642: what an SVG import does about its mode. Ask offers the choice (As one layer or As editable
+// shapes) for each import and drop; the other two are the remembered answer, used without asking.
+enum class SvgImportChoice : std::uint8_t { Ask, Layer, Shapes };
+
 enum class ViewerResolutionPreference : std::uint8_t {
     Auto,
     Full,
@@ -122,6 +126,9 @@ struct ApplicationPreferences final {
     std::optional<document::FrameRate> importSequenceFrameRate =
         document::FrameRate::framesPerSecond24();
     std::optional<core::RationalTime> importStillDuration;
+    // #642: how SVG files import. Ask until the artist ticks "Remember my choice" in the import
+    // chooser or picks a mode in Preferences > Import. The chooser's default answer is As one layer.
+    SvgImportChoice importSvgMode = SvgImportChoice::Ask;
 
     // Sounds and notifications (docs/ux/sound.md). Event sounds (render and import results,
     // warnings, refusals) are on by default; interaction sounds are opt-in.
@@ -163,6 +170,8 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
 [[nodiscard]] const char* timelineTimeFormatValue(TimelineTimeFormat format) noexcept;
 [[nodiscard]] const char* nodeLinkStyleValue(NodeLinkStyle style) noexcept;
 [[nodiscard]] const char* viewerResolutionValue(ViewerResolutionPreference policy) noexcept;
+// The stored spelling of the SVG import choice: "ask", "layer" or "shapes".
+[[nodiscard]] const char* svgImportChoiceValue(SvgImportChoice choice) noexcept;
 [[nodiscard]] const char* viewerBackgroundValue(ViewerBackgroundPreference background) noexcept;
 
 // The stored Viewer surround and Transparency Grid, read with the one migration rule both the

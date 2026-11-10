@@ -172,6 +172,19 @@ void preferencesPage() {
     still->setValue(2.5);
     expect(window.preferences().importStillDuration == core::RationalTime::create(5, 2),
            "a fixed still duration is exact to the hundredth");
+    // #642: what an SVG file imports as.
+    auto* svg = window.findChild<ui::kit::KDropdown*>(QStringLiteral("preferencesImportSvgModeDropdown"));
+    expect(svg != nullptr && svg->count() == 3 && svg->currentIndex() == 0 &&
+               window.preferences().importSvgMode == ui::SvgImportChoice::Ask,
+           "the Import page asks about SVG files by default");
+    if (svg != nullptr) {
+        svg->setCurrentIndex(1);
+        expect(window.preferences().importSvgMode == ui::SvgImportChoice::Layer,
+               "SVG files import as one layer when so chosen");
+        svg->setCurrentIndex(2);
+        expect(window.preferences().importSvgMode == ui::SvgImportChoice::Shapes,
+               "SVG files import as editable shapes when so chosen");
+    }
     auto* rail = window.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail"));
     for (int row = 0; rail != nullptr && row < rail->count(); ++row)
         if (rail->item(row)->text() == QStringLiteral("Import"))

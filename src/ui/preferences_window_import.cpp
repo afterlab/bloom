@@ -3,6 +3,7 @@
 #include "properties_sections.hpp"
 
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -61,6 +62,7 @@ QWidget* PreferencesWindow::buildImportPage() {
     resetSection(*section, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
         draft.importSequenceFrameRate = base.importSequenceFrameRate;
         draft.importStillDuration = base.importStillDuration;
+        draft.importSvgMode = base.importSvgMode;
     });
     auto* rows = section->bodyLayout();
 
@@ -95,6 +97,29 @@ QWidget* PreferencesWindow::buildImportPage() {
     refreshCallbacks_.push_back([this, still] {
         const QSignalBlocker blocker(still);
         still->setValue(durationField(draft_.importStillDuration));
+    });
+
+    // #642: what an SVG file imports as. Ask offers the chooser; the others are the remembered
+    // answer the chooser's "Remember my choice" stores.
+    auto* svg = addDropdownRow(rows, content, QStringLiteral("preferencesImportSvgModeDropdown"),
+                               tr("SVG files"));
+    svg->addItem(tr("Ask each time"), QStringLiteral("ask"));
+    svg->addItem(tr("As one layer"), QStringLiteral("layer"));
+    svg->addItem(tr("As editable shapes"), QStringLiteral("shapes"));
+    svg->setToolTip(tr("As one layer imports an SVG as a single vector layer that stays crisp at any "
+                       "scale. As editable shapes breaks it into a shape layer and a path node per "
+                       "element. Ask each time offers the choice when you import or drop an SVG."));
+    svg->setCurrentIndex(svg->findData(QLatin1String(svgImportChoiceValue(draft_.importSvgMode))));
+    connect(svg, &kit::KDropdown::currentIndexChanged, this, [this, svg](int) {
+        const auto data = svg->currentData().toString();
+        draft_.importSvgMode = data == QLatin1StringView("layer")    ? SvgImportChoice::Layer
+                               : data == QLatin1StringView("shapes") ? SvgImportChoice::Shapes
+                                                                     : SvgImportChoice::Ask;
+        updateApplyEnabled();
+    });
+    refreshCallbacks_.push_back([this, svg] {
+        const QSignalBlocker blocker(svg);
+        svg->setCurrentIndex(svg->findData(QLatin1String(svgImportChoiceValue(draft_.importSvgMode))));
     });
 
     // Muted helper text in the value column, as the other pages' helper rows.

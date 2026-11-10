@@ -760,6 +760,17 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
         requestDeleteComposition(compositionSession_, compositionSession_.compositionId(), *this);
     });
     compositionMenu.addSeparator();
+    // #642: the layer imported as one SVG layer becomes editable shapes in place, in one undo step.
+    breakApartSvgAction_ = compositionMenu.addAction(tr("Break Apart SVG"));
+    breakApartSvgAction_->setObjectName(QStringLiteral("compositionBreakApartSvgAction"));
+    connect(breakApartSvgAction_, &QAction::triggered, this, [this] {
+        auto* assets = compositionSession_.assetController();
+        if (assets == nullptr)
+            return;
+        if (const auto layer = assets->selectedVectorArtworkLayer())
+            assets->breakApartSvg(compositionSession_.compositionId(), *layer);
+    });
+    compositionMenu.addSeparator();
     // ADR 0031: the same Align and Distribute actions as the context bar.
     compositionMenu.addMenu(contextBar_->alignment().createMenu(&compositionMenu));
     compositionMenu.addSeparator();
@@ -767,6 +778,8 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     connect(&compositionSession_, &CompositionSession::snapshotChanged, this,
             &MainWindow::updateCompositionActions);
     connect(&compositionSession_, &CompositionSession::compositionChanged, this,
+            &MainWindow::updateCompositionActions);
+    connect(&compositionSession_, &CompositionSession::selectionChanged, this,
             &MainWindow::updateCompositionActions);
     updateCompositionActions();
 
@@ -816,6 +829,11 @@ void MainWindow::updateCompositionActions() {
     compositionSettingsAction_->setEnabled(hasComposition);
     // Deleting the final composition is allowed and returns to the blank, usable empty project.
     deleteCompositionAction_->setEnabled(hasComposition);
+    if (breakApartSvgAction_ != nullptr) {
+        const auto* assets = compositionSession_.assetController();
+        breakApartSvgAction_->setEnabled(hasComposition && assets != nullptr &&
+                                         assets->selectedVectorArtworkLayer().has_value());
+    }
 }
 
 bool MainWindow::purgePreviewCache() {

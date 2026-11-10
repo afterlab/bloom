@@ -14,6 +14,7 @@
 #include <QTest>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -122,6 +123,18 @@ int main(int argc, char** argv) {
             harness.controller.importFiles({path});
             require(waitUntil([&] { return !harness.controller.busy(); }), "the import ends");
             require(harness.layerCount() > before, "the SVG adds its layers");
+            // #642: with nobody to ask (no window), the default is one layer: one Vector Artwork node.
+            {
+                const auto* composition =
+                    harness.session.snapshot().project().findComposition(harness.session.compositionId());
+                require(composition != nullptr &&
+                            std::ranges::count_if(composition->graph().nodes(),
+                                                  [](const auto& node) {
+                                                      return node.typeId == document::kVectorArtworkNodeType;
+                                                  }) == 1 &&
+                            harness.layerCount() == before + 1,
+                        "the desktop imports an SVG as one layer by default");
+            }
             require(harness.session.undoLabel() == QStringLiteral("Import SVG"),
                     "the import is one undo step named Import SVG");
             require(harness.session.snapshot().project().assets().size() == assetsBefore + 1,
