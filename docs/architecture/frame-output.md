@@ -720,7 +720,8 @@ The same typed report powers the render dialog, Jobs surface, logs, scripting, a
   `srgb_rec709_display`;
 - origin `(0, 0)`, identical data and display windows, and square pixel aspect;
 - deterministic clamp and byte packing after the qualified transform;
-- no dithering in version 1;
+- no dithering by the writer in version 1 (a [Dither](image-filters.md#dither) node in the
+  composition adds it before the export, #527);
 - DEFLATE level `6`, default zlib strategy, and PNG row-filter type `0` (`None`) for every row; and
 - no timestamps, host paths, usernames, application-session data, or other volatile metadata.
 

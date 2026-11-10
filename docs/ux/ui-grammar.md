@@ -626,7 +626,7 @@ from the GPU route. The node editor background draws the same image in viewport 
 card and over the dot grid.
 
 A graphically edited node (#494: Grade and Levels; #498: Curves; #501: Hue/Saturation, Exposure,
-Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain and Sharpen; #563: Codec Degrade; #486: Lens Distortion and Chromatic Aberration; #587: Test Card; #508: Light Rays; #348: Corner Pin; #513: Stabilize) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
+Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain and Sharpen; #563: Codec Degrade; #486: Lens Distortion and Chromatic Aberration; #587: Test Card; #508: Light Rays; #348: Corner Pin; #513: Stabilize; #527: Dither) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
 its transport rows and its parameter rows, inset by the card padding at the card's width. The same
 widget is the first thing in its Properties section, so every edit works on the card without
 Properties. Its controls follow the grading rules under "Live Value Editing": each gesture is one
@@ -673,7 +673,7 @@ meaningful (Luma Key, Map Range's from and to, Clamp, In Range, Random, Wrap, Sm
 position is a point on a `KPointPad` over its frame, the exact X/Y rows staying below it (a Linear or
 Radial Gradient's start and end, joined by a line, on the node's own width and height; Transform
 2D's pivot and offset on the composition frame; #507 Lens Flare's light, over a picture of where its
-elements land, with an Element picker that shows one part of its stack at a time). #511: Tile & Mirror's pad holds only the one point its mode moves (Tile Center, Offset, Line Point or Center; the others are inactive and not drawn) and its dial only the one angle its mode turns (Line Angle or Rotation); a mode change re-lays the card. #528: a short closed choice that is better seen than picked from a list is a labelled `KRadioGroup` (`PropertiesRowControl::Radio`) in Properties and on the card -- Inner Glow's Source, Edge or Center; Inner Shadow's direction is the angle dial and both nodes' colour is the card's swatch. #519: a threshold is a span on a luma strip -- a `KRangeSelector` with `setLumaStrip(true)`, black to white across the track -- whose centre and width are two operands (Quantize's Level and Softness, `RangeRow::Spec::centreWidth`): one handle drag writes both as one command, and a range row is shown only while the mode that reads it is active. A gradient value
+elements land, with an Element picker that shows one part of its stack at a time). #511: Tile & Mirror's pad holds only the one point its mode moves (Tile Center, Offset, Line Point or Center; the others are inactive and not drawn) and its dial only the one angle its mode turns (Line Angle or Rotation); a mode change re-lays the card. #528: a short closed choice that is better seen than picked from a list is a labelled `KRadioGroup` (`PropertiesRowControl::Radio`) in Properties and on the card -- Inner Glow's Source, Edge or Center, and (#527) Dither's Pattern and Measured in; Inner Shadow's direction is the angle dial and both nodes' colour is the card's swatch. #519: a threshold is a span on a luma strip -- a `KRangeSelector` with `setLumaStrip(true)`, black to white across the track -- whose centre and width are two operands (Quantize's Level and Softness, `RangeRow::Spec::centreWidth`): one handle drag writes both as one command, and a range row is shown only while the mode that reads it is active. #527: Dither's card draws a preview strip (a ramp cut to 4 bits, plain above and dithered with the node's own pattern, seed and amplitude below) over its Amplitude grading row in LSB and a muted readout of what that is in the target bit depth and domain; its Seed row carries Randomize seed (`RowInline::RandomiseSeed`), and Matrix size is shown only for the Ordered pattern. A gradient value
 is a `GradientParameterRow`
 (`bloom/ui/gradient_parameter_row.hpp`): its name, the `KGradientEditor` and the gradient's
 diamond, then a Stop row with the selected stop's colour chip and its position in percent -- a
@@ -1146,11 +1146,11 @@ group is waiting for:
 | Compositing | Merge (Layer Stack), Adjustment, Layer (Layer Output), Image Mix, Set Alpha, Multiply Alpha, Alpha Association, Edge Extend, + Image Switch |
 | Channels | Channel Copy, Pass, Select Channels, Shuffle, Separate Channels, Combine Channels, Image to Channel Set, + Image Math, + Image Map Range, + Image Clamp |
 | Keying & Mattes | Luma Key, Cryptomatte, Mask, Mask Combine, Image to Mask, Matte Blur, Matte Dilate, Matte Erode, + Channel Key, + Chroma Key, + Despill, + Matte Refine, + HSL Qualifier, + Transition/Wipe Matte |
-| Transform | Transform 2D, Crop, Pad, Fit, Resize, Flip, Rotate 90, Stabilize, + Camera Shake, + Tile & Mirror |
+| Transform | Transform 2D, Crop, Pad, Fit, Resize, Flip, Rotate 90, Stabilize, + Camera Shake, Tile & Mirror |
 | Distort | Lens Distortion, Chromatic Aberration, Corner Pin, ST Map, Displace, + Procedural Warp |
 | Blur & Sharpen | Gaussian Blur, Box Blur, Z Defocus, Motion Blur, Vector Motion Blur, Optical Flow, Optical Flow Motion Blur, Directional Blur, Spin Blur, Zoom Blur, Sharpen, + Denoise |
 | Light & Shadow | Glow, Light Wrap, Drop Shadow, Depth Fog, Lens Flare, Light Rays, + Inner Shadow, + Inner Glow |
-| Stylize | Vignette, Film Grain, Codec Degrade, + Dither, + Quantize |
+| Stylize | Vignette, Film Grain, Codec Degrade, Quantize, Dither |
 | Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, Auto Exposure, Tone Map, Color Matrix |
 | Color Management | OCIO Color Space Transform, OCIO File Transform |
 | Time | Echo, Frame Rate Hold, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |

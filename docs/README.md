@@ -123,6 +123,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   carry an element along with it.
 - [Inner Shadow and Inner Glow](user-guide/inner-shadow-and-glow.md) — shade or light the inside of a
   shape along its edges: colour, direction, blur, choke, size and Edge or Center.
+- [Dither](user-guide/dither.md) — break up the banding of an 8- or 10-bit export with a blue-noise or
+  Bayer pattern measured in steps of the target bit depth.
 - [Quantize](user-guide/quantize.md) — cut the picture into a black-and-white threshold (luma or per
   channel, hard or soft) or a posterize of a few levels per channel.
 - [Tile & Mirror](user-guide/tile-and-mirror.md) — repeat the picture in tiles, scroll it with wrap,

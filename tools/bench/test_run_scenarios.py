@@ -539,6 +539,15 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.quantize")
         self.assertIn("levels", effect[2]["keys"], "every frame is new")
 
+    def test_dither_scenario_keys_its_amplitude_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["dither-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.dither")
+        self.assertEqual(effect[1]["pattern"], "Blue noise")
+        self.assertIn("amplitude", effect[2]["keys"], "every frame is new")
+
     def test_lens_distortion_scenario_keys_its_radial_coefficient(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["lens-distortion-2k"]

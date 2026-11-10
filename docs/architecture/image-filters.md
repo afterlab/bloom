@@ -2115,6 +2115,88 @@ domain refusal, cache identity of the table, the pixel budget and cancellation),
 warm zero-dispatch, a changed value), the node-viewer evidence scenarios `quantize-*` (viewer, cold
 then warm RAM preview), `properties_registry_tests` and `grading_cards_tests`.
 
+## Dither
+
+One node, `bloom.dither`, under **Stylize** (#527): it adds a small, tiled threshold pattern to the
+color so that a later quantization to a lower bit depth (an 8-bit export, a 10-bit display) breaks
+smooth gradients into fine noise instead of visible bands. The node quantizes nothing itself; it is
+the noise that a quantizer after it needs. It is a color grade kernel (`DitherKernel`, semantics
+`bloom.render.dither.v1`): one pointwise pass whose CPU reference (`ditherPixel`) and GPU program
+(`bloom_dither`) compile the same kernel text, `src/runtime/dither_kernel.glsl`, over one table, with
+no GPU coverage exception.
+
+**Patterns.** Both are tables of ranks `0 .. n² - 1` over an `n × n` tile, read as a centred
+threshold `t = (rank + 0.5) / n² - 0.5` in `(-1/2, 1/2)`:
+
+| Pattern | Table |
+| --- | --- |
+| Ordered (Bayer) | Bayer's recursive matrix of side 2, 4, 8 or 16 (**Matrix size**): the rank of `(x, y)` sums `(2 (x_b xor y_b) + y_b) · 4^(k-1-b)` over the bits `b` of `x` and `y`. A regular cross-hatch, cheap and stable, that shows as a texture at large amplitudes. |
+| Blue noise | A 64 × 64 void-and-cluster table (Ulichney 1993), generated in `core::dither::voidAndCluster` and never stored as an image: integer Gaussian energies (σ = 1.5, weights `round(2^30 e^(-d²/2σ²))` on the torus, the exponential from a fixed series so every platform builds the same integers), an initial 10% of cells placed by SplitMix64 from seed 1, the tightest cluster and largest void swapped until stable, then ranks given by removing clusters and filling voids, ties to the lowest index. The table is pinned by its SHA-256 (`dither_pattern_tests`); its power below 8 cycles is about 1.6e-5 of the total, against about 5% for white noise. |
+
+**Seed, frame and channel.** Each channel reads the table shifted by `(sx, sy)` and with its ranks
+rotated by `r` (all mod the tile), where `(sx, sy, r)` comes from a SplitMix64 mix of the **Seed**,
+the composition frame and the channel. With **Pattern changes Every Frame** a new frame is a new
+placement (temporal dither, which averages out over time); **Held** keeps frame 0's on every frame.
+**Monochrome** gives the three channels red's placement, so the dither has no colour. A shift and a
+rotation keep the table's spectrum, so every placement is equally blue (or equally Bayer).
+
+**Amplitude.** **Amplitude** is the peak-to-peak size of the threshold in least significant bits
+(LSB) of the **Target bit depth** (8, 10, 12 or 16 bits): the added value is
+`t · amplitude / (2^bits - 1)`, so the default of 1 LSB moves a value by at most half a code value
+either way, the classic dither for rounding to that depth. It is in `[0, 16]` (soft range 0 to 4),
+animatable, and 0 is the identity, bit for bit.
+
+**Domain.** The amplitude is measured either way:
+
+| Measured in | Rule |
+| --- | --- |
+| Display (sRGB), the default | The straight value `s = v / a` is encoded with the sRGB transfer (IEC 61966-2-1, odd about zero so negatives keep their sign), the amount is added, the sum is decoded and premultiplied again. An LSB is then a code value of an sRGB-encoded file, which is how 8-bit deliverables are quantized. A straight value beyond ±65504 passes unchanged. |
+| Stored value | The amount times alpha is added to the stored (working-space, premultiplied) value: for a quantization of the working values themselves (a linear or log file). |
+
+The transfer's power and logarithm are the field kernel's polynomials (`bdk_exp2`, `bdk_log2`), every
+intermediate a `precise` binary32 operation, so the CPU and each device give the same bits
+(`docs/architecture/fields.md`).
+
+**Alpha and HDR.** Alpha is never changed; a pixel of alpha 0 is left as it is. Values above 1 and
+below 0 are dithered like any other (the node does not clamp); in the Display domain the decode of a
+value near zero keeps its sign.
+
+**Geometry.** The pattern is anchored to the full-resolution pixel grid: a pixel at data-window index
+`(c, r)` reads the threshold of the full-resolution pixel `floor((c + origin + 0.5) / scale)`. A
+region of interest reads the same thresholds as the full frame over its pixels, and a half- or
+quarter-resolution proxy reads every second or fourth full-resolution threshold (so its pattern is
+the full frame's, subsampled, not a new one).
+
+**Interface.** The card and Properties draw a preview: a ramp cut to 4 bits without the dither (top)
+and with the node's pattern, matrix, seed, monochrome and amplitude (bottom); the amplitude as a
+grading slider row in LSB with a readout of what it is ("1.00 LSB of 8-bit = 0.00392 of full scale,
+display encoded"). Pattern and Measured in are labelled radios, Matrix size shows for Ordered only
+(`isParameterInactive`), Target bit depth and Pattern
+changes are choices, and the seed's row has **Randomize seed**. Choices, seed and Monochrome are
+constants with no socket; the amplitude has one.
+
+**Evaluation.** One resident pass on the GPU route for the preview, the RAM preview, every export and
+the headless render. The table (its header and ranks, at most 20 + 4096 floats) is built per frame
+from the seed, frame and amplitude and cached by value; a held, unanimated Dither is time-invariant,
+an Every Frame one depends on the frame. A muted node passes its input through.
+
+Cost, from the code: one read and one write per pixel; per channel a table lookup and, in the
+Display domain, a divide, two polynomial transfers and a multiply (about a hundred arithmetic
+operations); nothing is read around the pixel. No timing is recorded; see
+[Benchmarks](../development/benchmarks.md).
+
+Tests: `dither_pattern_tests` (Bayer against the bit formula, the weights against the library
+exponential, void-and-cluster against an independent brute-force implementation at 4, 8 and 16,
+the pinned 64 × 64 digest, the spectrum, the placements), `dither_tests` (the reference against
+binary64 rules, the identity, domain refusal, seeds and frames, region of interest and proxy rule,
+cache identity, budget and cancellation, and the banding proof: a quantized gradient's mean run
+length and low-frequency error with and without each pattern), `snapshot_compiler_effect_tests`
+(lowering, cache identity), the Required `effect.DitherKernel` and `node.bloom.dither` GPU coverage
+fixtures and the native CPU/GPU parity cases (every pattern and size, bit depth, domain, Monochrome,
+Held, proxy, region of interest, warm zero-dispatch, a changed amplitude, the lifecycle), the
+node-viewer evidence scenarios `dither-*` (viewer, cold then warm RAM preview),
+`properties_registry_tests` and `grading_cards_tests`.
+
 ## HSL Qualifier
 
 `bloom.hsl-qualifier`, schema 1, under Keying & Mattes (issue #523), selects the pixels of an image

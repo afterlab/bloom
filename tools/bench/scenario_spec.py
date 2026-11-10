@@ -673,6 +673,21 @@ SCENARIOS["quantize-2k"] = {
     ],
 }
 
+# #527: Dither in blue noise over a plate, the pattern moving every frame and the amplitude keyed. A
+# pointwise pass with two transfer polynomials per channel: the cost is the plate's read and write.
+# Written, not run: no recorded numbers and no budget.
+SCENARIOS["dither-2k"] = {
+    "description": "A PNG16 plate under Dither in blue noise with a keyed amplitude.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.dither",
+                      {"pattern": "Blue noise", "bitDepth": "8-bit"},
+                      {"keys": {"amplitude": [[0, 1.0], [23, 4.0]]}}]]},
+    ],
+}
+
 # #347: Audio Waveform and Audio Spectrum of ten seconds of generated sound, each frame reading a new
 # window (the time is the frame), so the cost is the audio window read, the reduction and the plot
 # pass. Written, not run: it has no recorded numbers and no budget.
