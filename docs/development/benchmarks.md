@@ -949,6 +949,18 @@ and builds; it has not been run, and its `NODE_COST_BUDGETS` entries are from th
 `architecture/image-filters.md`, "Denoise & Smooth", marked unmeasured in `bench_spec.py`. The first
 measured run replaces them and adds its table here.
 
+### Vector Artwork layer (#642)
+
+`bloom_runtime_gpu_svg_artwork_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_svg_artwork_node_bench_smoke`) imports a generated file of 100 and of 1,000
+filled and stroked shapes (in groups of 100) as editable shapes, its comparable, and as one layer,
+at the identity and scaled 1.5x and turned 20 degrees (the composed route, every shape covered
+through the layer's matrix), against a Grade. Besides the frame it records `compileMs`, the compile
+of the case's revision, which for a layer includes the expansion
+([Vector Artwork](../architecture/vector-artwork.md), "Compiling a Vector Artwork layer"). The case
+is written and builds; it has not been run, and it carries no `NODE_COST_BUDGETS` entry of its own,
+so the default budgets apply until a measured run here sets them.
+
 ### Sharpen (#486)
 
 `bloom_runtime_gpu_sharpen_node_bench` (a 64x64 smoke run is the CTest

@@ -65,22 +65,111 @@ composition's current format: the block is parsed (`parseVectorArtworkBlock`, bo
 cancellable like a file import), described with `buildSvgArtwork` and written with ids derived from
 the node's id (top bit set, never an id the project allocator hands out). Every edge that read the
 node now reads the artwork's root Merge; a muted node is a muted root. The layer that held the node
-is untouched, so its transform, opacity, blend mode, track matte, masks, parent, timing and any node
-between the source and its slot apply to the artwork's root exactly as they apply to the root group
-of an editable import. A node whose block is missing or does not parse stays unexpanded and is
-named in `unresolved`. The context carries the installed fonts, an optional parsed-scene cache and
-a cancellation callback; the import's warnings are recomputed by the expansion, not stored.
+keeps its opacity, blend mode, track matte, masks, parent, timing and any node between the source
+and its slot, which apply to the artwork's root exactly as they apply to the root group of an
+editable import. A node whose block is missing or does not parse stays unexpanded and is named in
+`unresolved`. The context carries the installed fonts, an optional parsed-scene cache and a
+cancellation callback; the import's warnings are recomputed by the expansion, not stored.
 
-`bloom.runtime.svg-artwork-layer` proves the contract on the CPU reference: the same parent,
-transform, keyed opacity, Screen blend, alpha track matte, mask and Gaussian Blur between source
-and slot on the root layer of either mode give the same whole frame (2e-6, frames 0 to 2); the
-plain layer equals the editable import (gradients, clip, mask, opacity, blur, dashes, text; fitted
-and not); and a saved project reopened with the file deleted keeps the mode, the block's bytes and
-the frame.
+#### The layer's transform is drawn through the geometry
 
-The snapshot compiler does not expand the node yet: a composition holding one is refused with "The
-SVG this layer holds was not expanded into its shapes." until the compiler runs the expansion.
-The desktop import still makes editable shapes, since it offers no choice of mode yet.
+A Merge ends vector provenance ([Layer graph model](layer-graph-model.md)), so a layer that
+transformed the artwork's root Merge would resample a picture drawn at the composition's scale:
+soft when scaled up, turned or rendered past the composition's size. The expansion therefore moves
+the holding layer's transform onto the geometry (`VectorArtworkComposedLayer`, on by default,
+`composeLayerTransform`):
+
+- a hidden **carrier** (a Layer node that draws nothing) takes the layer's position, anchor, scale
+  and rotation parameters by their ids (so keys, drivers and a Viewer gesture's overrides move it),
+  its parent and its frame pivot;
+- every drawn layer of the artwork (each shape, text, gradient and matte source, and any group whose
+  picture is filtered, such as a blurred group) is parented to the carrier, through the groups
+  whose own matrix is the identity (the import pivots each group on its own centre that way);
+- the holding layer draws at the identity; layers parented to it are parented to the carrier.
+
+Each shape and text is then covered through the composed matrix at the output resolution, as any
+parented shape layer is, on the CPU reference and the GPU alike; a gradient is still drawn in its
+own window and resampled (it is a smooth ramp, and its matte's edge is the shape's). The layer
+reports its own box: `CompiledLayerOutput::composedArtwork` names the carrier and the drawn layers,
+and both routes publish the union of their content bounds through the carrier's matrix as the
+layer's local box, polygon and anchor (`detail::publishComposedArtworkBounds`), so the Viewer's box,
+handles and gestures see the layer as before.
+
+Only a layer the composition cannot change is composed: the node feeds it directly and nothing else
+(an entry layer, or a Layer node between the node and its slot), it pivots on the frame, it has no
+masks (they are drawn in its content space) and identity timing (its content would run on another
+clock than its transform). Any other layer keeps the resampled picture, which is exactly the
+editable import's under the same edits; `resampled` names why. Limits: a stroke's round join is
+built in the shape's own units before the transform, so at a large scale its arc is the same
+polygon scaled (a pixel or two of the join differ by a few coverage codes from a file with the
+scale baked in); an anisotropic scale strokes with the transformed outline, where the editable
+import of a stretched file gives the stroke one width and names the approximation.
+
+#### Compiling a Vector Artwork layer
+
+The snapshot compiler runs the expansion on every compile, after Node Groups and before anything is
+resolved or lowered, so every route that reads a plan (the Viewer, RAM preview, still, sequence and
+video export, headless and scripted render, nested compositions) sees ordinary nodes. Nothing here
+is a pixel operation: the GPU coverage contract classifies `NodeLoweringKind::VectorArtwork` as
+non-pixel (`scope.expansion`, like a Node Group), and every operation the expansion makes is an
+ordinary, covered lowering. No exception or opt-out exists for it.
+
+- **Parsed scenes** are kept between compiles by the block's SHA-256 and size
+  (`runtime::VectorArtworkSceneCache`, `processVectorArtworkSceneCache()`): a new revision, another
+  composition or a second layer of the same file reads the kept scene; a block whose recorded digest
+  does not match its bytes is parsed every time and never kept. The cache is bounded: scenes count
+  by an estimate of their elements and anchors against a 64 MiB budget, a scene larger than a quarter
+  of it is parsed for the compile that asked and not kept, admitting one past the budget retires the
+  least recently used first, and `retire()` drops them all. Parsing polls the compile's
+  cancellation; a cancelled parse keeps nothing.
+- **Fonts** are read from the process font resolver's installed-font index
+  (`SystemFontIndex::snapshotBlocking`, on the compiling worker, never the UI thread) only when an
+  artwork has text.
+- **Plans** are cached per revision as for any composition (`CompiledPlanCache`). A keyed transform
+  or opacity is a curve on the carrier or the layer, so every frame of an animated layer renders
+  from one plan; editing the layer or the node is a new revision, compiled again from the kept scene.
+- **Refusal.** A node whose block is missing, is not an SVG, is past 32 MiB or does not parse is
+  refused by name: "Vector Artwork cannot be drawn", with the reason ("The SVG this layer holds is
+  missing from the project", or the reader's diagnostic). A cancelled compile reports Cancelled.
+- **Budget, admission and retirement** of the render are those of the operations the expansion
+  makes: the CPU reference keeps the request's pixel budget, and the GPU phase admits, waits for or
+  refuses the scene and returns every claimed byte when it is released.
+
+Cost (a suspicion from the code, not measured): each compile rebuilds the artwork's description and
+writes it into a copy of the composition, proportional to the file's elements, so a Viewer gesture
+on a layer of a very large file (which compiles each override) repeats that work per update.
+`bloom_runtime_gpu_svg_artwork_node_bench` measures the frame and the compile
+([Benchmarks](../development/benchmarks.md)); it is written and has not been run.
+
+#### Evidence
+
+- `bloom.runtime.svg-artwork-layer` (CPU reference, through the compiler): the same parent,
+  transform, keyed opacity, Screen blend, alpha track matte, mask and Gaussian Blur between source
+  and slot on the root layer of either mode give the same whole frame (2e-6, frames 0 to 2); the
+  plain layer equals the editable import (gradients, clip, mask, opacity, blur, dashes, text; fitted
+  and not); a saved project reopened with the file deleted keeps the mode, the block's bytes and the
+  frame; scaled 3x, scaled 2.2x and turned, and stretched and turned, the layer equals the editable
+  import of the file with that transform baked into its points (fills exact; one join pixel of a
+  stroke within a few codes) with as many edge pixels, where the resampled picture has three to
+  seven times as many; its bounds carry its scale and rotation; one plan per revision, one parse per
+  file, an override of the layer's position moves the artwork; cancellation, the scene cache's
+  budget, admission and retirement, the refusal of an unreadable SVG, which layers resample and why,
+  and a layer parented to the artwork's layer landing exactly where it did.
+- `bloom.runtime.gpu_svg_artwork_layer` (production GPU route): 512 x 288 over frames 0 to 2 with
+  the layer's position, scale, rotation and opacity keyed, cold and warm, with the CPU's bounds
+  (box, polygon and anchor) and at half resolution; the one layer on the device equals the editable
+  import's CPU frame on the in-repo files; 1920 x 1080 and 3840 x 2160 prepare and run on the device;
+  phase admission, refusal and retirement, a cancelled preparation and run, and the executor's
+  request budget. `--require-device` fails without a device.
+- `bloom.ui.viewer_export_svg_artwork` runs every route for the one layer too (Viewer frames from the
+  expected route, CPU route equal to GPU route, RAM preview cold and warm, still, range and movie
+  with their provenance), and on the GPU route exports 1920 x 1080 and 3840 x 2160 stills from the
+  device with no CPU reference frame. It found that the Viewer's and the export's scene caches
+  together filled the process's image slots once every frame of the keyed layer drew new images;
+  the caches now share one bound ([GPU backend](gpu-backend.md), "The scene cache keeps stacks").
+
+The desktop import and the scripting `bloom.layer.add-svg` still pass `shapes`: they do not offer
+the mode yet.
 
 Reading a file for import (`prepareSvgSource`) is one shared, cancellable step: it reads at most
 32 MiB, hashes and parses the file and enumerates installed fonts only when it has text, reporting
