@@ -1615,7 +1615,10 @@ identity on the CPU reference and the GPU route, so a keyed or driven end invali
 frames it changes and a held end reuses the cached image. A plan whose Line reads a keyed or driven
 end is time dependent; another kind never reads the ends, so animating them there changes nothing.
 The viewer's Line handles edit the ends at the playhead and key a keyed end, like any other native
-geometry. Projects saved with constant ends open unchanged: the stored spelling is the same
+geometry. A layer that pivots on its content turns about the midpoint of the ends, so a drag that
+moves an end also moves the layer's anchor by half the move to keep the other end still. For a keyed
+end the anchor is keyed with it: pinned to its present value at each of the end's other key times and
+moved only at the playhead, in the same undo step, so a drag changes only that frame. Projects saved with constant ends open unchanged: the stored spelling is the same
 constant, and animating an end only adds a curve.
 
 The immutable plan owns `CompiledShape` and derives content bounds, including stroke, at evaluation
