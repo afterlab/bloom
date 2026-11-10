@@ -1776,6 +1776,143 @@ void tileMirrorRows() {
     }
 }
 
+// #510 Procedural Warp in Properties: each mode shows its own rows in plain words, every label and
+// value whole and nothing wider than the panel, and none of the other modes' rows. Twirl's angle and
+// a Wave's direction are dials (in place of a number row); the centre of a radial mode is a pad, and Wave and Polar Coordinates,
+// which have no centre, show none. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written for each
+// mode at each width (suffixed with the device pixel ratio).
+void proceduralWarpRows() {
+    struct Mode final {
+        std::int64_t value;
+        const char* name;
+        std::vector<std::pair<std::string, std::string>> rows;
+        std::vector<std::string> absent;
+        std::size_t dials;
+        bool pad;
+    };
+    const std::vector<std::pair<std::string, std::string>> common{
+        {"mode", "Mode"}, {"filter", "Filter"}, {"edges", "Edges"}};
+    const auto with = [&common](std::vector<std::pair<std::string, std::string>> rows) {
+        rows.insert(rows.begin(), common.begin(), common.end());
+        return rows;
+    };
+    const std::vector<Mode> modes{
+        {0, "twirl",
+         with({{"center", "Center"}, {"radius", "Radius"}, {"falloff", "Falloff"}}),
+         {"amount", "refraction", "wavelength", "amplitude", "phase", "speed", "direction",
+          "waveShape", "pinning", "polarDirection", "interpolation", "magnifyShape",
+          "magnification", "magnifyLink", "feather"},
+         1, true},
+        {1, "bulge-pinch",
+         with({{"center", "Center"}, {"radius", "Radius"}, {"falloff", "Falloff"},
+               {"amount", "Amount"}}),
+         {"angle", "refraction", "wavelength", "phase", "direction", "pinning", "polarDirection",
+          "magnification", "feather"},
+         0, true},
+        {2, "spherize",
+         with({{"center", "Center"}, {"radius", "Radius"}, {"amount", "Amount"},
+               {"refraction", "Refraction Index"}}),
+         {"falloff", "angle", "wavelength", "amplitude", "direction", "waveShape",
+          "interpolation", "magnification"},
+         0, true},
+        {3, "ripple",
+         with({{"center", "Center"}, {"radius", "Radius"}, {"falloff", "Falloff"},
+               {"wavelength", "Wavelength"}, {"amplitude", "Amplitude"}, {"phase", "Phase"},
+               {"speed", "Speed"}}),
+         {"angle", "amount", "refraction", "direction", "waveShape", "pinning", "polarDirection",
+          "magnifyShape", "feather"},
+         0, true},
+        {4, "wave",
+         with({{"waveShape", "Wave"}, {"wavelength", "Wavelength"}, {"amplitude", "Amplitude"},
+               {"phase", "Phase"}, {"speed", "Speed"},
+               {"pinning", "Pin Edges"}}),
+         {"center", "radius", "falloff", "angle", "amount", "refraction", "polarDirection",
+          "interpolation", "magnifyShape", "magnification", "magnifyLink", "feather"},
+         1, false},
+        {5, "polar",
+         with({{"polarDirection", "Conversion"}, {"interpolation", "Interpolation"}}),
+         {"center", "radius", "falloff", "angle", "amount", "refraction", "wavelength",
+          "amplitude", "phase", "speed", "direction", "waveShape", "pinning", "magnifyShape",
+          "magnification", "magnifyLink", "feather"},
+         0, false},
+        {6, "magnify",
+         with({{"center", "Center"}, {"magnifyShape", "Shape"}, {"radius", "Radius"},
+               {"magnification", "Magnification"}, {"magnifyLink", "Grow with Magnification"},
+               {"feather", "Feather"}}),
+         {"falloff", "angle", "amount", "refraction", "wavelength", "amplitude", "phase", "speed",
+          "direction", "waveShape", "pinning", "polarDirection", "interpolation"},
+         0, true}};
+    for (const auto& mode : modes) {
+        auto project = document::makeNewProject("Warp", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, document::kProceduralWarpNodeType);
+        session.selectNode(node);
+        expect(session.setNodeParameterValue(node, "mode", mode.value, QStringLiteral("Set")),
+               "the mode is set through a command");
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1100);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& [role, name] : mode.rows) {
+                auto* found = row(properties, role.c_str());
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "a Procedural Warp mode presents every value it reads");
+                if (found == nullptr)
+                    continue;
+                expect(found->property("rowLabel").toString() == QString::fromStdString(name),
+                       "a Procedural Warp row is named in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == QString::fromStdString(name) &&
+                        candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "a Procedural Warp row label is shown whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) &&
+                                   !field->isDisplayRounded(),
+                               "a Procedural Warp value is shown whole");
+            }
+            for (const auto& role : mode.absent) {
+                auto* found = row(properties, role.c_str());
+                expect(found == nullptr || !found->isVisibleTo(&properties),
+                       "a Procedural Warp mode shows no row for a value it does not read");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "Procedural Warp's rows never exceed the panel's width");
+            auto* controls = properties.findChild<ui::NodeControlsCardWidget*>();
+            expect(controls != nullptr, "Procedural Warp draws its controls");
+            if (controls != nullptr) {
+                std::size_t dials = 0;
+                for (auto* angle : controls->angleRows())
+                    dials += angle->isVisibleTo(&properties) ? 1U : 0U;
+                expect(dials == mode.dials, "the dial of the mode's angle is shown, and no other");
+                expect(controls->padRow() != nullptr &&
+                           controls->padRow()->isVisibleTo(&properties) == mode.pad,
+                       "the pad of the mode's centre is shown only for a mode with a centre");
+            }
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/procedural-warp-") +
+                                            QString::fromLatin1(mode.name) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the Procedural Warp Properties capture\n";
+            }
+        }
+    }
+}
+
 // #519 Quantize in Properties: each mode shows the values it reads, in plain words with every label and
 // value shown whole and nothing wider than the panel, at the widths of a wide, a normal and a narrow
 // panel; the threshold is the card's range row on a luma strip and only the mode that reads it shows it.
@@ -3241,6 +3378,7 @@ int main(int argc, char** argv) try {
     extensionPropertiesRows();
     warpRows();
     tileMirrorRows();
+    proceduralWarpRows();
     quantizeRows();
     ditherRows();
     innerRows();

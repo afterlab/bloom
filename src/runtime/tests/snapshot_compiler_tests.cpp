@@ -57,6 +57,7 @@
 #include "audio_plot_test_support.hpp"
 #include <bloom/runtime/audio_analysis.hpp>
 #include "field_test_programs.hpp"
+#include "procedural_warp_reference.hpp"
 #include <bloom/runtime/point_tracker_job.hpp>
 #include "snapshot_compiler_support.hpp"
 
@@ -2128,6 +2129,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_rolling_shutter_tests.ipp"
 #include "snapshot_compiler_warp_tests.ipp"
 #include "snapshot_compiler_tile_mirror_tests.ipp"
+#include "snapshot_compiler_procedural_warp_tests.ipp"
 #include "snapshot_compiler_dither_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
@@ -2225,6 +2227,9 @@ int main() {
         testTileMirrorPixels(expectations);
         testTileMirrorSmallInput(expectations);
         testTileMirrorCacheIdentity(expectations);
+        testProceduralWarpLowering(expectations);
+        testProceduralWarpPixels(expectations);
+        testProceduralWarpCacheIdentity(expectations);
         testDitherCacheIdentity(expectations);
         testTrackJob(expectations);
         testLightRaysLowering(expectations);

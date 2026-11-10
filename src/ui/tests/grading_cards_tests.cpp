@@ -1849,6 +1849,106 @@ void tileMirrorCards() {
     }
 }
 
+// #510: the Procedural Warp card, one per mode: it paints inside its card with no label cut short; a
+// radial mode draws its centre on a pad (Wave and Polar Coordinates, which have none, draw no pad);
+// Twirl turns its angle and a Wave its direction on a dial, clockwise from up, and no other mode
+// draws one; every widget edits the document through one command that changes its own value alone.
+void proceduralWarpCards() {
+    struct Mode final {
+        std::int64_t value;
+        const char* name;
+        bool centre;
+        const char* angle;
+    };
+    const std::vector<Mode> modes{{0, "procedural-warp-twirl", true, "angle"},
+                                  {1, "procedural-warp-bulge-pinch", true, nullptr},
+                                  {2, "procedural-warp-spherize", true, nullptr},
+                                  {3, "procedural-warp-ripple", true, nullptr},
+                                  {4, "procedural-warp-wave", false, "direction"},
+                                  {5, "procedural-warp-polar", false, nullptr},
+                                  {6, "procedural-warp-magnify", true, nullptr}};
+    for (const auto& mode : modes) {
+        CardFixture fixture(document::kProceduralWarpNodeType);
+        auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(
+                                        fixture.item->cardWidget())
+                                  : nullptr;
+        expect(card != nullptr, "Procedural Warp draws its card widget");
+        if (card == nullptr)
+            continue;
+        expect(fixture.session.setNodeParameterValue(fixture.node, "mode", mode.value,
+                                                     QStringLiteral("Set")),
+               "the mode is set through a command");
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << mode.name << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, mode.name))
+            ++failures;
+        capture(fixture, QString::fromLatin1(mode.name));
+        const auto centre = [&] {
+            const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "center");
+            const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+            const auto* value = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
+            return value ? *value : document::Vec2d{1.0e9, 1.0e9};
+        };
+        if (!mode.centre) {
+            expect(card->padRow() == nullptr || !card->padRow()->isVisibleTo(&fixture.window),
+                   "a mode with no centre draws no pad");
+        } else {
+            expect(card->padRow() != nullptr && card->padRow()->pad() != nullptr &&
+                       card->padRow()->isVisibleTo(&fixture.window) &&
+                       card->padRow()->visibleCount() == 1,
+                   "the pad holds the centre of the mode");
+            if (card->padRow() != nullptr && card->padRow()->pad() != nullptr) {
+                auto& pad = *card->padRow()->pad();
+                const auto commands = fixture.stack.size();
+                const QPointF from = pad.screenPoint(pad.value(0));
+                const QPointF to =
+                    from + QPointF(pad.frameRect().width() * 0.2, pad.frameRect().height() * 0.15);
+                mouse(pad, QEvent::MouseButtonPress, from);
+                mouse(pad, QEvent::MouseMove, to);
+                mouse(pad, QEvent::MouseButtonRelease, to);
+                QApplication::processEvents();
+                const auto moved = centre();
+                expect(fixture.stack.size() == commands + 1 && moved.x > 50.0 && moved.y > 20.0 &&
+                           storedInteger(fixture.session, fixture.node, "mode") == mode.value,
+                       "dragging the centre moves it, as one command, and leaves the mode");
+                expect(fixture.session.undo() && centre() == document::Vec2d{},
+                       "undo puts the centre back");
+                expect(fixture.session.redo() && centre() == moved, "redo moves it again");
+            }
+        }
+        ui::AngleDialRow* row = nullptr;
+        for (auto* candidate : card->angleRows()) {
+            if (mode.angle != nullptr && candidate->role() == mode.angle)
+                row = candidate;
+            else
+                expect(!candidate->isVisibleTo(&fixture.window),
+                       "the dial of another mode's angle is not drawn");
+        }
+        if (mode.angle == nullptr)
+            continue;
+        expect(row != nullptr && row->isVisibleTo(&fixture.window),
+               "the mode draws the dial of its angle");
+        if (row == nullptr)
+            continue;
+        auto& dial = *row->dial();
+        const auto before = stored(fixture.session, fixture.node, mode.angle);
+        const auto commands = fixture.stack.size();
+        const auto middle = dial.discRect().center();
+        const double reach = dial.discRect().width() * 0.4;
+        // A quarter turn clockwise, from up to screen right.
+        mouse(dial, QEvent::MouseButtonPress, middle + QPointF(0.0, -reach));
+        mouse(dial, QEvent::MouseMove, middle + QPointF(reach, 0.0));
+        mouse(dial, QEvent::MouseButtonRelease, middle + QPointF(reach, 0.0));
+        const auto after = stored(fixture.session, fixture.node, mode.angle);
+        expect(before && after && std::abs(*after - (*before + 90.0)) < 1e-6 &&
+                   fixture.stack.size() == commands + 1,
+               "turning the dial a quarter turn adds 90 degrees as one command");
+    }
+}
+
 // #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
 // and shows its node's rows; the graph follows the values, each handle's drag is one command that
 // moves its own value alone and its row follows; a slider drag is one command too.
@@ -3441,6 +3541,7 @@ int main(int argc, char** argv) {
     chromaticAberrationCard();
     cornerPinCard();
     tileMirrorCards();
+    proceduralWarpCards();
     quantizeCards();
     ditherCard();
     testCardCard();

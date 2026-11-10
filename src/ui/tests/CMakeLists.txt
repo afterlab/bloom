@@ -2382,7 +2382,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               inner-glow-edge inner-glow-center quantize-threshold
                               quantize-threshold-soft quantize-posterize
                               quantize-posterize-channels dither-blue-noise
-                              dither-ordered dither-stored-mono dither-held)
+                              dither-ordered dither-stored-mono dither-held procedural-warp-twirl
+                              procedural-warp-bulge-pinch procedural-warp-spherize
+                              procedural-warp-ripple procedural-warp-wave procedural-warp-polar
+                              procedural-warp-magnify)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2391,13 +2394,16 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             TIMEOUT 300
         )
     endforeach()
-    # #511, #528, #519 and #527: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS tile-mirror-tile tile-mirror-wrap-offset tile-mirror-mirror
                               tile-mirror-kaleidoscope inner-shadow inner-glow-edge inner-glow-center
                               quantize-threshold quantize-threshold-soft quantize-posterize
                               quantize-posterize-channels dither-blue-noise dither-ordered
-                              dither-stored-mono dither-held)
+                              dither-stored-mono dither-held procedural-warp-twirl
+                              procedural-warp-bulge-pinch procedural-warp-spherize
+                              procedural-warp-ripple procedural-warp-wave procedural-warp-polar
+                              procedural-warp-magnify)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4
@@ -2409,7 +2415,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     # #524: the node's frame as the process's first, through the application's lazily resolving
     # viewer stage (no baseline, no tools resolved beforehand) and an empty driver shader cache: a
     # cold pipeline compile is host work and must not run out the native dispatch deadline.
-    foreach(scenario IN ITEMS four-color-gradient denoise-temporal node-group dither-blue-noise)
+    foreach(scenario IN ITEMS four-color-gradient denoise-temporal node-group dither-blue-noise
+                              procedural-warp-twirl)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.cold-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --cold

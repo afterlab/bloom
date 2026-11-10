@@ -82,7 +82,8 @@ void movingAGroupLeavesTheEffectMaskAlone() {
           "bloom.inner-glow",
           "bloom.channel-shuffle", "bloom.alpha-association", "bloom.lens-distortion",
           "bloom.chromatic-aberration", "bloom.rolling-shutter", "bloom.test-card",
-          "bloom.corner-pin", "bloom.st-map", "bloom.displace", "bloom.tile-mirror"})
+          "bloom.corner-pin", "bloom.st-map", "bloom.displace", "bloom.tile-mirror",
+          "bloom.procedural-warp"})
         expect(!masked(typeId), std::string(typeId) + " still takes no effect mask");
 }
 

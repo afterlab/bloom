@@ -2723,6 +2723,19 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                      id, 3, filter, filter + 1, 3 + 2 * filter),
                                  1U});
         id += 100;
+        // #510 Procedural Warp: every mode through each filter on the 12 x 10 frame, the edge rule
+        // and the mode's variant (wave shape and pinning, polar direction, magnify shape and link)
+        // turning with the filter.
+        for (const std::int64_t mode : {0, 1, 2, 3, 4, 5, 6}) {
+            kernels.emplace_back("procedural warp mode " + std::to_string(mode) + " filter " +
+                                     std::to_string(filter),
+                                 bloom::runtime::FieldRasterKernel{
+                                     bloom::field_test_programs::proceduralWarpProgram(
+                                         id, mode, filter, (filter + mode) % 4, filter + mode % 2,
+                                         12, 10),
+                                     1U});
+            id += 100;
+        }
         kernels.emplace_back("st map filter " + std::to_string(filter),
                              bloom::runtime::FieldRasterKernel{
                                  bloom::field_test_programs::stMapProgram(id, filter, filter + 1), 1U});
@@ -2825,6 +2838,8 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                     coldCounters.ocioEffectDispatches + 1,
             "field native " + name + ": a changed operand re-dispatches with parity: " + detail);
     }
+    std::cout << "field native: " << kernels.size()
+              << " programs checked for CPU parity, residency, warm reuse and a changed operand\n";
 }
 
 // #386: a whole effect chain (blurs and other OCIO effect programs, image combines and blends,

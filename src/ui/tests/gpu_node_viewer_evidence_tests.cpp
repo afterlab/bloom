@@ -176,6 +176,33 @@ struct Scenario final {
     out["tile-mirror-kaleidoscope"] = {"bloom.four-color-gradient", {}, "bloom.tile-mirror",
                                        {{"mode", std::int64_t{3}}, {"kaleidoscopeSegments", std::int64_t{6}}},
                                        "kaleidoscopeAngle", 0.0, 60.0};
+    // #510 Procedural Warp: each mode over a checker, its strength, phase, direction or size keyed so a
+    // RAM preview shows a new picture every frame.
+    out["procedural-warp-twirl"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                    {{"mode", std::int64_t{0}}, {"radius", 400.0}},
+                                    "angle", 0.0, 360.0};
+    out["procedural-warp-bulge-pinch"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                          {{"mode", std::int64_t{1}}, {"radius", 400.0}},
+                                          "amount", -80.0, 80.0};
+    out["procedural-warp-spherize"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                       {{"mode", std::int64_t{2}}, {"radius", 400.0},
+                                        {"amount", 100.0}},
+                                       "refraction", 1.3, 2.5};
+    out["procedural-warp-ripple"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                     {{"mode", std::int64_t{3}}, {"radius", 600.0},
+                                      {"wavelength", 30.0}, {"amplitude", 8.0}},
+                                     "phase", 0.0, 360.0};
+    out["procedural-warp-wave"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                   {{"mode", std::int64_t{4}}, {"waveShape", std::int64_t{1}},
+                                    {"pinning", std::int64_t{1}}, {"amplitude", 12.0}},
+                                   "direction", 90.0, 135.0};
+    out["procedural-warp-polar"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                    {{"mode", std::int64_t{5}}},
+                                    "interpolation", 0.0, 100.0};
+    out["procedural-warp-magnify"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                      {{"mode", std::int64_t{6}}, {"radius", 200.0},
+                                       {"feather", 20.0}, {"magnifyLink", std::int64_t{1}}},
+                                      "magnification", 150.0, 400.0};
     // #528 Inner Shadow and Inner Glow over a checker (its frame edge is the shape's edge).
     out["inner-shadow"] = {"bloom.checker-source", {}, "bloom.inner-shadow",
                            {{"softness", 12.0}, {"distance", 8.0}, {"choke", 0.2}, {"opacity", 0.9}},

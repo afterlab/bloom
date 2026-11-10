@@ -1973,6 +1973,69 @@ displayProofRunner(const bool customView) {
                  "production Tile & Mirror lowering: tiles, wrap offset, mirror line and "
                  "kaleidoscope, every filter and edge rule, full frame and ROI");
         base += 1000;
+        // #510 Procedural Warp: the programs its seven modes lower to (Twirl, Bulge/Pinch, Spherize,
+        // Ripple, Wave in every shape and pinning, Polar Coordinates both ways, Magnify in both shapes
+        // and every link, with its plain and magnified reads blended), every filter and edge rule, full
+        // frame and ROI.
+        addField("node.bloom.procedural-warp",
+                 {bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 0, 0, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 100, 0, 1, 3, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 200, 1, 2, 0, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 300, 1, 0, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 400, 2, 1, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 500, 2, 2, 3, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 600, 3, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 700, 3, 2, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 800, 4, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 900, 4, 1, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1000, 4, 2, 3, 2),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1100, 4, 0, 0, 3),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1200, 5, 1, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1300, 5, 2, 2, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1400, 6, 0, 1, 0),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1500, 6, 1, 3, 1),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1600, 6, 2, 2, 2),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 1700, 6, 0, 0, 3),
+                      1}},
+                 base + 1800,
+                 "production Procedural Warp lowering: every mode, wave shape, pinning, polar "
+                 "direction and magnify shape and link, every filter and edge rule, full frame and ROI");
+        base += 2000;
         addField("node.bloom.st-map",
                  {bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::stMapProgram(base, 0, 1, 0, 1), 1},

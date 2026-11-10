@@ -250,7 +250,7 @@ void everyNodeGroupIsNamed() {
             "bloom.quantize", "bloom.dither"},
            "stylize");
     pinned({"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
-            "bloom.corner-pin", "bloom.st-map", "bloom.displace"},
+            "bloom.corner-pin", "bloom.st-map", "bloom.displace", "bloom.procedural-warp"},
            "distort");
     pinned({"bloom.tile-mirror"}, "transform");
     pinned({"bloom.test-card"}, "sources");

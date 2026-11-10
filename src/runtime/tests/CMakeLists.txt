@@ -86,7 +86,9 @@ target_link_libraries(bloom_runtime_data_block_reader_test PRIVATE bloom_runtime
 target_link_libraries(bloom_runtime_input_color_context_test PRIVATE bloom_runtime_evaluator)
 target_include_directories(bloom_runtime_regression_test PRIVATE ..)
 target_include_directories(bloom_runtime_gpu_task_test PRIVATE ..)
-target_include_directories(bloom_runtime_snapshot_compiler_test PRIVATE ..)
+# #510: the Procedural Warp pixels are read against the core test's independent binary64 reference.
+target_include_directories(bloom_runtime_snapshot_compiler_test PRIVATE ..
+                           "${PROJECT_SOURCE_DIR}/src/core/tests")
 target_compile_definitions(
     bloom_runtime_snapshot_compiler_test
     PRIVATE BLOOM_FONT_FIXTURE_DIRECTORY="${PROJECT_SOURCE_DIR}/src/ui/kit/third_party/inter"

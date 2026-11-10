@@ -1315,6 +1315,55 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *tileCentre,
                                ConstantValueSource{Vec2d{2.0e6, 0.0}});
 
+    // #510 Procedural Warp: its mode, lengths, percentages, angles, choices and centre edit within
+    // their domains and refuse outside them (a mode past Magnify, a negative radius, an amount past
+    // 100%, a refraction index below 1, a wavelength below 1 pixel, a magnification below 1%, a far
+    // centre); each edit is undoable.
+    const auto warp = addRecipe("bloom.procedural-warp");
+    const auto warpMode = warp.outputId<ParameterId>("parameter.mode");
+    const auto warpRadius = warp.outputId<ParameterId>("parameter.radius");
+    const auto warpAmount = warp.outputId<ParameterId>("parameter.amount");
+    const auto warpRefraction = warp.outputId<ParameterId>("parameter.refraction");
+    const auto warpWavelength = warp.outputId<ParameterId>("parameter.wavelength");
+    const auto warpAngle = warp.outputId<ParameterId>("parameter.angle");
+    const auto warpPinning = warp.outputId<ParameterId>("parameter.pinning");
+    const auto warpMagnification = warp.outputId<ParameterId>("parameter.magnification");
+    const auto warpLink = warp.outputId<ParameterId>("parameter.magnifyLink");
+    const auto warpCentre = warp.outputId<ParameterId>("parameter.center");
+    if (!warpMode || !warpRadius || !warpAmount || !warpRefraction || !warpWavelength ||
+        !warpAngle || !warpPinning || !warpMagnification || !warpLink || !warpCentre)
+        throw std::logic_error("Procedural Warp exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *warpMode, ConstantValueSource{std::int64_t{6}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpRadius, ConstantValueSource{125.5});
+    (void)exercise<SetParameterSource>(test, fixture, *warpAmount, ConstantValueSource{-100.0});
+    (void)exercise<SetParameterSource>(test, fixture, *warpRefraction, ConstantValueSource{2.25});
+    (void)exercise<SetParameterSource>(test, fixture, *warpWavelength, ConstantValueSource{12.0});
+    (void)exercise<SetParameterSource>(test, fixture, *warpAngle, ConstantValueSource{-1080.0});
+    (void)exercise<SetParameterSource>(test, fixture, *warpPinning,
+                                       ConstantValueSource{std::int64_t{7}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpMagnification, ConstantValueSource{450.0});
+    (void)exercise<SetParameterSource>(test, fixture, *warpLink, ConstantValueSource{std::int64_t{2}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpCentre,
+                                       ConstantValueSource{Vec2d{-240.0, 80.5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpMode,
+                               ConstantValueSource{std::int64_t{7}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpRadius,
+                               ConstantValueSource{-1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpAmount,
+                               ConstantValueSource{100.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpRefraction,
+                               ConstantValueSource{0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpWavelength,
+                               ConstantValueSource{0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpPinning,
+                               ConstantValueSource{std::int64_t{8}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpMagnification,
+                               ConstantValueSource{0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpLink,
+                               ConstantValueSource{std::int64_t{3}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpCentre,
+                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+
     // #513 Stabilize: its choices and points edit within their domains and refuse outside them, and
     // a finished track is stored as one undo step: a Table block of the positions and the keys.
     const auto stabilize = addRecipe("bloom.stabilize");

@@ -303,6 +303,7 @@ int main() {
                              "bloom.hsl-qualifier",
                              "bloom.quantize",
                              "bloom.dither",
+                             "bloom.procedural-warp",
                              "bloom.edge-extend",
                              "bloom.alpha-contour",
                              "bloom.inner-shadow",

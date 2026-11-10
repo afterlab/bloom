@@ -334,6 +334,36 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
         b.last().slot = 0;
         return b.finish(rays, FieldResultKind::Premultiplied);
     }
+    case FieldOp::ProceduralWarp: {
+        // The source position of a chain of procedural warps, as a vector raster: variant 0 Twirl,
+        // Bulge and Spherize; 1 Ripple, a pinned triangle Wave and Rectangular to Polar; 2 a
+        // feathered square Magnify, a square Wave, Polar to Rectangular and a negative (inverse)
+        // Spherize.
+        const auto warp = [&](const int at, const std::int64_t mode, const std::int64_t shape,
+                              const std::int64_t pins, const std::int64_t back,
+                              const double amount) {
+            return b.add(FieldOp::ProceduralWarp, {at}, {mode, shape, pins, back, back, back, 16, 12},
+                         {6.0, 140.0, 100.0, amount, 1.6, 3.5, 1.2, 30.0, 0.5, 60.0, 80.0, 180.0,
+                          1.5},
+                         {Vec2d{1.5, -1.0}});
+        };
+        int where = c;
+        if (variant % 3 == 0) {
+            where = warp(where, 0, 0, 0, 0, 60.0);
+            where = warp(where, 1, 0, 0, 0, -45.0);
+            where = warp(where, 2, 0, 0, 0, 70.0);
+        } else if (variant % 3 == 1) {
+            where = warp(where, 3, 0, 0, 0, 0.0);
+            where = warp(where, 4, 1, 15, 0, 0.0);
+            where = warp(where, 5, 0, 0, 0, 0.0);
+        } else {
+            where = warp(where, 6, 0, 0, 1, 0.0);
+            where = warp(where, 4, 2, 0, 0, 0.0);
+            where = warp(where, 5, 0, 0, 1, 0.0);
+            where = warp(where, 2, 0, 0, 0, -70.0);
+        }
+        return b.finish(where, FieldResultKind::Vector);
+    }
     case FieldOp::Ramp: {
         const auto n = noise(c, 3, 1);
         const auto ramp = b.add(FieldOp::Ramp, {n}, {}, {0.1, 0.9});
@@ -411,6 +441,53 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     b.last().slot = 0;
     const auto joined = b.add(FieldOp::Math, {texel, tinted}, {0}, {0.1, 0.0});
     return b.finish(joined, FieldResultKind::Premultiplied);
+}
+
+// #510 Procedural Warp: the program its lowering builds for `mode`, mirroring
+// snapshot_compiler_warp.ipp's lowerProceduralWarp (the snapshot compiler test holds the two to the
+// same instruction sequence): the instruction's choices [mode, wave, pinned edges, polar direction,
+// shape, link, frame width, frame height], its scalars in operand order, the centre, the input read
+// at the moved position through `filter` and `edge`; Magnify also reads the plain picture and blends
+// the magnified one over it by the instruction's weight. `variant` picks the mode's own choices (a
+// wave shape, pinned edges, the polar direction, a square, the link), at values scaled to a
+// `width` x `height` frame (the 16 x 12 test composition by default).
+[[nodiscard]] inline FieldProgram proceduralWarpProgram(const std::uint64_t idBase,
+                                                        const std::int64_t mode,
+                                                        const std::int64_t filter = 0,
+                                                        const std::int64_t edge = 1,
+                                                        const std::int64_t variant = 0,
+                                                        const std::int64_t width = 16,
+                                                        const std::int64_t height = 12) {
+    Builder b(idBase);
+    const auto c = b.add(FieldOp::Coordinate);
+    const double k = static_cast<double>(width) / 16.0;
+    std::vector<std::int64_t> choices{mode, 0, 0, 0, 0, 0, width, height};
+    if (mode == 4) {
+        choices[1] = variant % 4;
+        constexpr std::array<std::int64_t, 4> pins{0, 15, 3, 12};
+        choices[2] = pins[static_cast<std::size_t>(variant % 4)];
+    } else if (mode == 5) {
+        choices[3] = variant % 2;
+    } else if (mode == 6) {
+        choices[4] = variant % 2;
+        choices[5] = variant % 3;
+    }
+    const double amount = variant % 2 == 0 ? 65.0 : -55.0;
+    const auto where = b.add(FieldOp::ProceduralWarp, {c}, choices,
+                             {6.0 * k, 160.0, variant % 2 == 0 ? 100.0 : 45.0, amount,
+                              1.4 + 0.3 * static_cast<double>(variant), 3.5 * k, 1.1 * k, 25.0, 0.0,
+                              70.0, variant % 2 == 0 ? 100.0 : 40.0, 220.0,
+                              variant % 2 == 0 ? 0.0 : 1.5 * k},
+                             {Vec2d{1.5 * k, -1.0 * k}});
+    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
+    b.last().slot = 0;
+    if (mode != 6)
+        return b.finish(read, FieldResultKind::Premultiplied);
+    const auto plain = b.add(FieldOp::Image, {c}, {filter, edge, 3, 4, 0, 1});
+    b.last().slot = 0;
+    const auto weight = b.add(FieldOp::Swizzle, {where}, {2, 4, 4, 4}, {1.0, 1.0, 1.0, 1.0});
+    const auto blended = b.add(FieldOp::Math, {plain, read, weight}, {9}, {0.1, 0.0});
+    return b.finish(blended, FieldResultKind::Premultiplied);
 }
 
 // Packs the virtual registers into the sixteen physical ones by last use, as the lowering does.

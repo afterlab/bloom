@@ -208,6 +208,7 @@ void blurNodeReopen() {
                              "bloom.hsl-qualifier",
                              "bloom.quantize",
                              "bloom.dither",
+                             "bloom.procedural-warp",
                              "bloom.edge-extend",
                              "bloom.alpha-contour",
                              "bloom.inner-shadow",
@@ -400,6 +401,9 @@ void blurNodeReopen() {
                         document::warpParameterSpec(parameter.schemaKey)->kind ==
                             document::WarpParameterKind::Choice
                     ? document::ParameterValue{std::int64_t{1}}
+                // #510 Procedural Warp: the refraction index's domain is [1, 4].
+                : parameter.schemaKey == "bloom.procedural-warp.refraction"
+                    ? document::ParameterValue{1.875}
                 : document::warpParameterSpec(parameter.schemaKey) != nullptr
                     ? document::ParameterValue{7.125}
                 // #587 Test Card: moved choices, whole numbers, scalars and switches.

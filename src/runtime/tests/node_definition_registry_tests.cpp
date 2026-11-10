@@ -167,8 +167,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds
     // Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #509 adds Mask Path, Text
     // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth; #637
-    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow; #519 adds Quantize; #527 adds Dither.
-    expectations.expect(registry.definitions().size() == 251,
+    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow; #519 adds Quantize; #527 adds Dither; #510 adds Procedural Warp.
+    expectations.expect(registry.definitions().size() == 252,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -523,6 +523,36 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             tileMirror->outputs[0].name == "image" && !document::hasEffectMask(*tileMirror),
         "#511: Tile & Mirror has constant choices and switches and animatable sizes, phases, "
         "angles and points");
+    // #510 Procedural Warp: a constant mode and choices, animatable lengths, amounts, angles and
+    // centre, every Scalar with a socket of its own.
+    const auto* proceduralWarp = registry.find("bloom.procedural-warp", 1);
+    const auto warpParameter = [&](const std::string_view role) -> const document::ParameterDefinition* {
+        if (proceduralWarp == nullptr)
+            return nullptr;
+        for (const auto& parameter : proceduralWarp->parameters)
+            if (parameter.role == role)
+                return &parameter;
+        return nullptr;
+    };
+    const auto warpSocket = [&](const std::string_view role) {
+        return proceduralWarp != nullptr &&
+               std::ranges::any_of(proceduralWarp->inputs,
+                                   [role](const auto& port) { return port.name == role; });
+    };
+    expectations.expect(
+        proceduralWarp != nullptr && proceduralWarp->inputs[0].name == "input" &&
+            proceduralWarp->parameters[0].role == "mode" &&
+            !proceduralWarp->parameters[0].supportsAnimation && warpParameter("radius") != nullptr &&
+            warpParameter("radius")->supportsAnimation && warpSocket("radius") &&
+            warpParameter("angle") != nullptr && warpParameter("angle")->supportsAnimation &&
+            warpParameter("phase") != nullptr && warpParameter("phase")->supportsAnimation &&
+            warpParameter("waveShape") != nullptr && !warpParameter("waveShape")->supportsAnimation &&
+            !warpSocket("waveShape") && warpParameter("center") != nullptr &&
+            warpParameter("center")->valueKind == document::ParameterValueKind::Vec2d &&
+            warpParameter("center")->supportsAnimation && warpSocket("center") &&
+            proceduralWarp->outputs.size() == 1 && proceduralWarp->outputs[0].name == "image" &&
+            !document::hasEffectMask(*proceduralWarp),
+        "#510: Procedural Warp has a constant mode and choices and animatable values and centre");
     const auto* stMap = registry.find("bloom.st-map", 1);
     expectations.expect(
         stMap != nullptr && !document::hasEffectMask(*stMap) && stMap->inputs.size() == 2 &&

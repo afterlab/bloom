@@ -675,7 +675,7 @@ void testSearchKeyboardAndMenus() {
         hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
         hasGroup("Distort",
                  {"Chromatic Aberration", "Corner Pin", "Displace", "Lens Distortion",
-                  "Rolling Shutter", "ST Map"},
+                  "Procedural Warp", "Rolling Shutter", "ST Map"},
                  "Distort holds the lens warp, the colour fringe, the shutter skew and the pins "
                  "and maps");
         hasGroup("Tracking & Analysis", {"Histogram", "Image Compare", "Image Statistics", "Audio Amplitude", "Audio Waveform", "Audio Spectrum"},
