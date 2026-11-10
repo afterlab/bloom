@@ -806,6 +806,21 @@ class ViewerEditor final : public QWidget,
     bool lineHandleRelease(QMouseEvent* event);
     void finishLineHandle();
     void paintLineHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
+    // #510 Procedural Warp: the selected node's points (centre, pull point, split line) and its
+    // radius ring as handles over the frame, each drag one edit of one parameter
+    // (viewer_editor_warp.cpp).
+    struct WarpHandleDrag final {
+        document::NodeId node;
+        // 0 a point, 1 the radius ring.
+        int kind = 0;
+        std::string role;
+    };
+    std::optional<WarpHandleDrag> warpDrag_;
+    bool warpHandlePress(QMouseEvent* event);
+    bool warpHandleMove(QMouseEvent* event);
+    bool warpHandleRelease(QMouseEvent* event);
+    void finishWarpHandle();
+    void paintWarpHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);

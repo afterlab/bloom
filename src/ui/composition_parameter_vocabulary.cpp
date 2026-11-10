@@ -9,6 +9,8 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/warp_definition.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_cleanup_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -633,6 +635,11 @@ PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
     if (schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "pattern") ||
         schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "domain"))
         return PropertiesRowControl::Radio;
+    // #510 Procedural Warp: the wave's shape, Magnify's shape and Polar Coordinates' direction, each
+    // a short closed set better seen than picked from a list.
+    for (const auto role : {"waveShape", "magnifyShape", "polarDirection"})
+        if (schemaKey == document::warpSchemaKey(document::kProceduralWarpNodeType, role))
+            return PropertiesRowControl::Radio;
     if (schemaKey == document::kTextSizeParameterSchemaKey ||
         schemaKey == document::kTextLineHeightParameterSchemaKey ||
         schemaKey == document::kTextLetterSpacingParameterSchemaKey)

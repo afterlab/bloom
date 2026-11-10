@@ -1857,16 +1857,26 @@ void proceduralWarpCards() {
     struct Mode final {
         std::int64_t value;
         const char* name;
-        bool centre;
+        // The first point of the mode on the pad (empty: no pad), how many it holds.
+        const char* point;
+        std::size_t points;
         const char* angle;
+        // The falloff range (Twirl, Bulge / Pinch, Ripple).
+        bool range;
     };
-    const std::vector<Mode> modes{{0, "procedural-warp-twirl", true, "angle"},
-                                  {1, "procedural-warp-bulge-pinch", true, nullptr},
-                                  {2, "procedural-warp-spherize", true, nullptr},
-                                  {3, "procedural-warp-ripple", true, nullptr},
-                                  {4, "procedural-warp-wave", false, "direction"},
-                                  {5, "procedural-warp-polar", false, nullptr},
-                                  {6, "procedural-warp-magnify", true, nullptr}};
+    const std::vector<Mode> modes{{0, "procedural-warp-twirl", "center", 1, "angle", true},
+                                  {1, "procedural-warp-bulge-pinch", "center", 1, nullptr, true},
+                                  {2, "procedural-warp-spherize", "center", 1, nullptr, false},
+                                  {3, "procedural-warp-ripple", "center", 1, nullptr, true},
+                                  {4, "procedural-warp-wave", nullptr, 0, "direction", false},
+                                  {5, "procedural-warp-polar", nullptr, 0, nullptr, false},
+                                  {6, "procedural-warp-magnify", "center", 2, nullptr, false},
+                                  {7, "procedural-warp-warp", nullptr, 0, nullptr, false},
+                                  {8, "procedural-warp-bend", "center", 1, "direction", false},
+                                  {9, "procedural-warp-split", "lineStart", 2, nullptr, false},
+                                  {10, "procedural-warp-turbulent", "noiseOffset", 1, nullptr,
+                                   false},
+                                  {11, "procedural-warp-drizzle", nullptr, 0, nullptr, false}};
     for (const auto& mode : modes) {
         CardFixture fixture(document::kProceduralWarpNodeType);
         auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(
@@ -1886,22 +1896,23 @@ void proceduralWarpCards() {
         if (!cardContentFits(*fixture.item, mode.name))
             ++failures;
         capture(fixture, QString::fromLatin1(mode.name));
-        const auto centre = [&] {
-            const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "center");
+        const auto point = [&](const char* role) {
+            const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
             const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
             const auto* value = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
             return value ? *value : document::Vec2d{1.0e9, 1.0e9};
         };
-        if (!mode.centre) {
+        if (mode.point == nullptr) {
             expect(card->padRow() == nullptr || !card->padRow()->isVisibleTo(&fixture.window),
-                   "a mode with no centre draws no pad");
+                   "a mode with no point draws no pad");
         } else {
             expect(card->padRow() != nullptr && card->padRow()->pad() != nullptr &&
                        card->padRow()->isVisibleTo(&fixture.window) &&
-                       card->padRow()->visibleCount() == 1,
-                   "the pad holds the centre of the mode");
+                       card->padRow()->visibleCount() == mode.points,
+                   "the pad holds the points of the mode");
             if (card->padRow() != nullptr && card->padRow()->pad() != nullptr) {
                 auto& pad = *card->padRow()->pad();
+                const auto start = point(mode.point);
                 const auto commands = fixture.stack.size();
                 const QPointF from = pad.screenPoint(pad.value(0));
                 const QPointF to =
@@ -1910,13 +1921,67 @@ void proceduralWarpCards() {
                 mouse(pad, QEvent::MouseMove, to);
                 mouse(pad, QEvent::MouseButtonRelease, to);
                 QApplication::processEvents();
-                const auto moved = centre();
-                expect(fixture.stack.size() == commands + 1 && moved.x > 50.0 && moved.y > 20.0 &&
+                const auto moved = point(mode.point);
+                expect(fixture.stack.size() == commands + 1 && moved.x > start.x + 50.0 &&
+                           moved.y > start.y + 20.0 &&
                            storedInteger(fixture.session, fixture.node, "mode") == mode.value,
-                       "dragging the centre moves it, as one command, and leaves the mode");
-                expect(fixture.session.undo() && centre() == document::Vec2d{},
-                       "undo puts the centre back");
-                expect(fixture.session.redo() && centre() == moved, "redo moves it again");
+                       "dragging the point moves it, as one command, and leaves the mode");
+                expect(fixture.session.undo() && point(mode.point) == start,
+                       "undo puts the point back");
+                expect(fixture.session.redo() && point(mode.point) == moved,
+                       "redo moves it again");
+            }
+        }
+        // The falloff range: the lower end is where the fade starts, the upper end the radius; a
+        // drag of either is one command that changes its own value alone.
+        {
+            ui::RangeRow* fade = nullptr;
+            for (auto* candidate : card->rangeRows())
+                if (candidate->lowRole() == "falloff")
+                    fade = candidate;
+            expect(fade != nullptr && fade->isVisibleTo(&fixture.window) == mode.range,
+                   "the falloff range is drawn by the modes that fade, and only by them");
+            if (fade != nullptr && mode.range) {
+                auto& selector = *fade->selector();
+                const auto radius = stored(fixture.session, fixture.node, "radius");
+                const auto falloff = stored(fixture.session, fixture.node, "falloff");
+                expect(radius && falloff &&
+                           std::abs(selector.upperValue() - *radius) < 1e-6 &&
+                           std::abs(selector.lowerValue() -
+                                    *radius * (1.0 - *falloff / 100.0)) < 1e-6,
+                       "the range shows the radius and where the fade starts");
+                const auto commands = fixture.stack.size();
+                const auto lower = selector.handleRect(ui::kit::KRangeSelector::Handle::Lower).center();
+                // A tenth along the 1500 px track (150 px) is half way to the default radius of 300:
+                // a falloff of 50%.
+                const QPointF to(selector.trackRect().left() + 0.1 * selector.trackRect().width(),
+                                 lower.y());
+                mouse(selector, QEvent::MouseButtonPress, lower);
+                mouse(selector, QEvent::MouseMove, to);
+                mouse(selector, QEvent::MouseButtonRelease, to);
+                QApplication::processEvents();
+                const auto after = stored(fixture.session, fixture.node, "falloff");
+                const auto radiusAfter = stored(fixture.session, fixture.node, "radius");
+                expect(fixture.stack.size() == commands + 1 && after && radiusAfter &&
+                           *after > 0.0 && *after < 100.0 && *after != *falloff &&
+                           std::abs(*radiusAfter - *radius) < 1e-6,
+                       "dragging the fade's start sets the falloff alone, as one command");
+                expect(fixture.session.undo() &&
+                           std::abs(*stored(fixture.session, fixture.node, "falloff") - *falloff) <
+                               1e-6,
+                       "undo puts the falloff back");
+                const auto upper = selector.handleRect(ui::kit::KRangeSelector::Handle::Upper).center();
+                const QPointF narrower(selector.trackRect().left() + 0.1 * selector.trackRect().width(),
+                                       upper.y());
+                mouse(selector, QEvent::MouseButtonPress, upper);
+                mouse(selector, QEvent::MouseMove, narrower);
+                mouse(selector, QEvent::MouseButtonRelease, narrower);
+                QApplication::processEvents();
+                const auto smaller = stored(fixture.session, fixture.node, "radius");
+                expect(smaller && *smaller < *radius * 0.6 && *smaller > 10.0 &&
+                           std::abs(*stored(fixture.session, fixture.node, "falloff") - *falloff) <
+                               1e-6,
+                       "dragging the radius end sets the radius alone and keeps the fade's share");
             }
         }
         ui::AngleDialRow* row = nullptr;
@@ -3507,12 +3572,19 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
     warpPathRefusal();
-    // BLOOM_GRADING_CARDS_ONLY=quantize (or dither) runs only the Quantize (or Dither) card (the whole run writes every card).
+    // BLOOM_GRADING_CARDS_ONLY=quantize (dither or warp) runs only the Quantize (Dither, Procedural Warp) card(s) (the whole run writes every card).
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("dither")) {
         ditherCard();
         if (failures != 0)
             return 1;
         std::cout << "PASS: Dither card\n";
+        return 0;
+    }
+    if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("warp")) {
+        proceduralWarpCards();
+        if (failures != 0)
+            return 1;
+        std::cout << "PASS: Procedural Warp cards\n";
         return 0;
     }
     if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("quantize")) {

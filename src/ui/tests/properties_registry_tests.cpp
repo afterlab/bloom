@@ -21,6 +21,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <array>
+#include <algorithm>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -1785,10 +1786,12 @@ void proceduralWarpRows() {
     struct Mode final {
         std::int64_t value;
         const char* name;
+        // The rows of the registry; the dial roles (Twirl's angle, the direction of a Wave and a
+        // Bend) and the radius and falloff of a mode with a range are drawn by the controls.
         std::vector<std::pair<std::string, std::string>> rows;
-        std::vector<std::string> absent;
         std::size_t dials;
         bool pad;
+        bool range;
     };
     const std::vector<std::pair<std::string, std::string>> common{
         {"mode", "Mode"}, {"filter", "Filter"}, {"edges", "Edges"}};
@@ -1797,51 +1800,54 @@ void proceduralWarpRows() {
         return rows;
     };
     const std::vector<Mode> modes{
-        {0, "twirl",
-         with({{"center", "Center"}, {"radius", "Radius"}, {"falloff", "Falloff"}}),
-         {"amount", "refraction", "wavelength", "amplitude", "phase", "speed", "direction",
-          "waveShape", "pinning", "polarDirection", "interpolation", "magnifyShape",
-          "magnification", "magnifyLink", "feather"},
-         1, true},
-        {1, "bulge-pinch",
-         with({{"center", "Center"}, {"radius", "Radius"}, {"falloff", "Falloff"},
-               {"amount", "Amount"}}),
-         {"angle", "refraction", "wavelength", "phase", "direction", "pinning", "polarDirection",
-          "magnification", "feather"},
-         0, true},
+        {0, "twirl", with({{"center", "Center"}}), 1, true, true},
+        {1, "bulge-pinch", with({{"center", "Center"}, {"amount", "Amount"}}), 0, true, true},
         {2, "spherize",
          with({{"center", "Center"}, {"radius", "Radius"}, {"amount", "Amount"},
                {"refraction", "Refraction Index"}}),
-         {"falloff", "angle", "wavelength", "amplitude", "direction", "waveShape",
-          "interpolation", "magnification"},
-         0, true},
+         0, true, false},
         {3, "ripple",
-         with({{"center", "Center"}, {"radius", "Radius"}, {"falloff", "Falloff"},
-               {"wavelength", "Wavelength"}, {"amplitude", "Amplitude"}, {"phase", "Phase"},
-               {"speed", "Speed"}}),
-         {"angle", "amount", "refraction", "direction", "waveShape", "pinning", "polarDirection",
-          "magnifyShape", "feather"},
-         0, true},
+         with({{"center", "Center"}, {"wavelength", "Wavelength"}, {"amplitude", "Amplitude"},
+               {"phase", "Phase"}, {"speed", "Speed"}, {"pulseRadius", "Pulse Radius"},
+               {"pulseSpeed", "Pulse Speed"}}),
+         0, true, true},
         {4, "wave",
          with({{"waveShape", "Wave"}, {"wavelength", "Wavelength"}, {"amplitude", "Amplitude"},
-               {"phase", "Phase"}, {"speed", "Speed"},
-               {"pinning", "Pin Edges"}}),
-         {"center", "radius", "falloff", "angle", "amount", "refraction", "polarDirection",
-          "interpolation", "magnifyShape", "magnification", "magnifyLink", "feather"},
-         1, false},
-        {5, "polar",
-         with({{"polarDirection", "Conversion"}, {"interpolation", "Interpolation"}}),
-         {"center", "radius", "falloff", "angle", "amount", "refraction", "wavelength",
-          "amplitude", "phase", "speed", "direction", "waveShape", "pinning", "magnifyShape",
-          "magnification", "magnifyLink", "feather"},
-         0, false},
+               {"phase", "Phase"}, {"speed", "Speed"}, {"pinning", "Pin Edges"}}),
+         1, false, false},
+        {5, "polar", with({{"polarDirection", "Conversion"}, {"interpolation", "Interpolation"}}),
+         0, false, false},
         {6, "magnify",
-         with({{"center", "Center"}, {"magnifyShape", "Shape"}, {"radius", "Radius"},
-               {"magnification", "Magnification"}, {"magnifyLink", "Grow with Magnification"},
-               {"feather", "Feather"}}),
-         {"falloff", "angle", "amount", "refraction", "wavelength", "amplitude", "phase", "speed",
-          "direction", "waveShape", "pinning", "polarDirection", "interpolation"},
-         0, true}};
+         with({{"center", "Center"}, {"pullPoint", "Pull Point"}, {"pull", "Pull"},
+               {"magnifyShape", "Shape"}, {"radius", "Radius"}, {"magnification", "Magnification"},
+               {"magnifyLink", "Grow with Magnification"}, {"feather", "Feather"}}),
+         0, true, false},
+        {7, "warp",
+         with({{"warpStyle", "Style"}, {"bend", "Bend"},
+               {"horizontalDistortion", "Horizontal Distortion"},
+               {"verticalDistortion", "Vertical Distortion"}}),
+         0, false, false},
+        {8, "bend", with({{"center", "Center"}, {"bend", "Bend"}, {"height", "Height"}}), 1, true,
+         false},
+        {9, "split",
+         with({{"lineStart", "Line Start"}, {"lineEnd", "Line End"},
+               {"splitDistance", "Split Distance"}, {"mirror", "Mirror"}}),
+         0, true, false},
+        {10, "turbulent",
+         with({{"displacement", "Displacement"}, {"noiseSize", "Noise Size"},
+               {"noiseOffset", "Noise Offset"}, {"complexity", "Complexity"},
+               {"evolution", "Evolution"}, {"seed", "Seed"}, {"pinning", "Pin Edges"}}),
+         0, true, false},
+        {11, "drizzle",
+         with({{"radius", "Radius"}, {"wavelength", "Wavelength"}, {"amplitude", "Amplitude"},
+               {"phase", "Phase"}, {"speed", "Speed"}, {"seed", "Seed"}, {"drops", "Drops"}}),
+         0, false, false}};
+    // Every value the node has; a mode shows none of those it does not read.
+    std::vector<std::string> everyRole;
+    for (const auto& spec : document::proceduralWarpParameters())
+        everyRole.emplace_back(spec.role);
+    for (const auto role : document::proceduralWarpPointRoles())
+        everyRole.emplace_back(role);
     for (const auto& mode : modes) {
         auto project = document::makeNewProject("Warp", "Main", core::RationalTime::fromInteger(10));
         document::Document document(std::move(project.project));
@@ -1882,11 +1888,20 @@ void proceduralWarpRows() {
                                    !field->isDisplayRounded(),
                                "a Procedural Warp value is shown whole");
             }
-            for (const auto& role : mode.absent) {
+            for (const auto& role : everyRole) {
+                const bool read = std::ranges::any_of(
+                    mode.rows, [&role](const auto& item) { return item.first == role; });
+                const bool drawn = role == "angle" || role == "direction" ||
+                                   (mode.range && (role == "radius" || role == "falloff"));
+                if (read || drawn)
+                    continue;
                 auto* found = row(properties, role.c_str());
                 expect(found == nullptr || !found->isVisibleTo(&properties),
                        "a Procedural Warp mode shows no row for a value it does not read");
             }
+            auto* range = properties.findChild<QWidget*>("rangeRow.falloff");
+            expect((range != nullptr && range->isVisibleTo(&properties)) == mode.range,
+                   "the falloff range is shown by the modes that fade, and only by them");
             if (auto* scroll = properties.findChild<QScrollArea*>())
                 expect(scroll->widget()->width() <= scroll->viewport()->width(),
                        "Procedural Warp's rows never exceed the panel's width");

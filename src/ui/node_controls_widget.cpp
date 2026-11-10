@@ -217,6 +217,21 @@ RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spe
     // A centre and a width: the two handles are the span's ends, the document keeps its middle and
     // its extent.
     const auto place = [this](const bool lower, const double v) {
+        if (spec_.falloffBand) {
+            // The lower end is where the fade starts: the falloff is the share of the radius from
+            // there to the radius. The upper end is the radius itself, and the fade keeps its share.
+            if (lower) {
+                editLow_ = editHigh_ > 0.0 ? std::clamp(100.0 * (1.0 - v / editHigh_), 0.0, 100.0)
+                                           : editLow_;
+            } else {
+                editHigh_ = std::clamp(v, 0.0, spec_.maximum);
+            }
+            // Both ends follow the pair of values, so the drag never shows a span that is not the
+            // document's.
+            const QSignalBlocker blocker(selector_);
+            selector_->setValues(editHigh_ * (1.0 - editLow_ / 100.0), editHigh_);
+            return;
+        }
         if (spec_.centreWidth) {
             (lower ? trackLow_ : trackHigh_) = v;
             editLow_ = 0.5 * (trackLow_ + trackHigh_);
@@ -318,7 +333,9 @@ void RangeRow::refresh(const bool locked) {
     const auto highValue = high ? liveScalar(session_, *high) : std::nullopt;
     if (lowValue && highValue) {
         const QSignalBlocker blocker(selector_);
-        if (spec_.centreWidth)
+        if (spec_.falloffBand)
+            selector_->setValues(*highValue * (1.0 - *lowValue / 100.0), *highValue);
+        else if (spec_.centreWidth)
             selector_->setValues(*lowValue - 0.5 * *highValue, *lowValue + 0.5 * *highValue);
         else
             selector_->setValues(*lowValue, *highValue);
@@ -596,11 +613,23 @@ struct Controls final {
         const auto tr = [](const char* text) {
             return QCoreApplication::translate("NodeControls", text);
         };
-        controls.points = {{"center", tr("Center"), true}};
-        controls.padLabel = tr("Move Center");
+        // The points each mode moves (the others are inactive and not drawn) on one pad, joined by a
+        // line: Magnify's centre and the point it draws the picture towards, Split's line.
+        controls.points = {{"center", tr("Center"), true},
+                           {"pullPoint", tr("Pull Point"), true},
+                           {"lineStart", tr("Line Start"), true},
+                           {"lineEnd", tr("Line End"), true},
+                           {"noiseOffset", tr("Noise Offset"), true}};
+        controls.connected = true;
+        controls.padLabel = tr("Move Point");
         controls.angles.push_back(angle("angle", "bloom.procedural-warp.angle", false, false));
         controls.angles.push_back(
             angle("direction", "bloom.procedural-warp.direction", false, false));
+        // The falloff as the span of the radius the fade covers.
+        RangeRow::Spec fade{"falloff", "radius", "bloom.procedural-warp.falloff",
+                            "bloom.procedural-warp.radius", tr("Falloff range"), 0.0, 1500.0, true};
+        fade.falloffBand = true;
+        controls.ranges.push_back(std::move(fade));
     } else if (typeId == document::kFourColorGradientNodeType) {
         // The four points, in field units (pixels from the centre, +y up), moved on one pad.
         const auto point = [](std::string role, QString label) {
@@ -908,8 +937,10 @@ bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
     for (const auto* gradient : gradients_)
         if (gradient->role() == role)
             return false;
+    // A range is drawn only while the mode reads its first value: a Spherize has a radius row of its
+    // own, a Twirl's radius is the range's.
     for (const auto* range : ranges_)
-        if (range->draws(role))
+        if (range->draws(role) && roleActive(range->lowRole()))
             return false;
     for (const auto* angle : angles_)
         if (angle->role() == role)
@@ -928,8 +959,9 @@ std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) 
         if (const auto at = gradient->socketY(role))
             return gradient->y() + *at;
     for (const auto* range : ranges_)
-        if (const auto at = range->socketY(role))
-            return range->y() + *at;
+        if (roleActive(range->lowRole()))
+            if (const auto at = range->socketY(role))
+                return range->y() + *at;
     for (const auto* angle : angles_)
         if (angle->role() == role && readsRole(role) && roleActive(role))
             return angle->y() + angle->socketY();

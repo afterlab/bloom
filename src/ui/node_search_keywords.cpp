@@ -254,7 +254,9 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kProceduralWarpNodeType)
         return QStringLiteral("procedural warp twirl swirl spiral whirl bulge pinch spherize sphere "
                               "lens fisheye magnify zoom loupe ripple pond water wave waves "
-                              "sine polar coordinates rectangular distort");
+                              "sine polar coordinates rectangular distort bend arc arch flag fish rise inflate "
+                              "squeeze split mirror turbulent turbulence noise heat haze drizzle rain "
+                              "raindrops flo motion pull ripple pulse");
     if (typeId == document::kTileMirrorNodeType)
         return QStringLiteral("tile mirror repeat tiling pattern seamless wrap offset pan scroll "
                               "kaleidoscope reflect reflection symmetry fold flip duplicate grid");

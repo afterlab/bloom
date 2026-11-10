@@ -6,6 +6,8 @@
 #include <bloom/document/image_math_nodes.hpp>
 #include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/warp_definition.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -33,8 +35,9 @@ RowInline rowInlineFor(const std::string_view schemaKey) {
         return RowInline::AngleDial;
     if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, "seed") ||
         schemaKey == document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed") ||
-        // #527 Dither's pattern placement.
-        schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "seed"))
+        // #527 Dither's pattern placement, #510 Turbulent's noise and Drizzle's drops.
+        schemaKey == document::colorCleanupSchemaKey(document::kDitherNodeType, "seed") ||
+        schemaKey == document::warpSchemaKey(document::kProceduralWarpNodeType, "seed"))
         return RowInline::RandomiseSeed;
     return RowInline::None;
 }

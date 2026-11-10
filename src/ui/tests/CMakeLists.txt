@@ -1634,6 +1634,18 @@ set_tests_properties(bloom.ui.line-end-viewer PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;integration" TIMEOUT 180)
 
+# #510: the on-Viewer handles of Procedural Warp: its points and its radius ring, each drag one
+# command, Escape confirms it.
+add_executable(bloom_warp_viewer_ui_test warp_viewer_ui_tests.cpp)
+target_include_directories(bloom_warp_viewer_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_warp_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands Qt6::Test)
+bloom_enable_warnings(bloom_warp_viewer_ui_test)
+add_test(NAME bloom.ui.warp-viewer COMMAND bloom_warp_viewer_ui_test)
+set_tests_properties(bloom.ui.warp-viewer PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;integration" TIMEOUT 180)
+
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
 add_executable(bloom_channel_pickers_ui_test channel_pickers_ui_tests.cpp)
@@ -2385,7 +2397,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               dither-ordered dither-stored-mono dither-held procedural-warp-twirl
                               procedural-warp-bulge-pinch procedural-warp-spherize
                               procedural-warp-ripple procedural-warp-wave procedural-warp-polar
-                              procedural-warp-magnify)
+                              procedural-warp-magnify
+                              procedural-warp-warp procedural-warp-bend procedural-warp-split
+                              procedural-warp-turbulent procedural-warp-drizzle
+                              procedural-warp-magnify-pull procedural-warp-ripple-pulse)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2403,7 +2418,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               dither-stored-mono dither-held procedural-warp-twirl
                               procedural-warp-bulge-pinch procedural-warp-spherize
                               procedural-warp-ripple procedural-warp-wave procedural-warp-polar
-                              procedural-warp-magnify)
+                              procedural-warp-magnify
+                              procedural-warp-warp procedural-warp-bend procedural-warp-split
+                              procedural-warp-turbulent procedural-warp-drizzle
+                              procedural-warp-magnify-pull procedural-warp-ripple-pulse)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4
@@ -2416,7 +2434,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     # viewer stage (no baseline, no tools resolved beforehand) and an empty driver shader cache: a
     # cold pipeline compile is host work and must not run out the native dispatch deadline.
     foreach(scenario IN ITEMS four-color-gradient denoise-temporal node-group dither-blue-noise
-                              procedural-warp-twirl)
+                              procedural-warp-twirl procedural-warp-turbulent
+                              procedural-warp-warp)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.cold-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --cold

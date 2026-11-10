@@ -203,6 +203,32 @@ struct Scenario final {
                                       {{"mode", std::int64_t{6}}, {"radius", 200.0},
                                        {"feather", 20.0}, {"magnifyLink", std::int64_t{1}}},
                                       "magnification", 150.0, 400.0};
+    // #510 Procedural Warp, the later modes: Warp (Flag style), Bend, Split with Mirror, Turbulent,
+    // Drizzle, and Magnify's pull and Ripple's pulse, each keyed on a parameter that changes the picture.
+    out["procedural-warp-warp"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                   {{"mode", std::int64_t{7}}, {"warpStyle", std::int64_t{5}}},
+                                   "bend", 10.0, 90.0};
+    out["procedural-warp-bend"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                   {{"mode", std::int64_t{8}}, {"height", 300.0}},
+                                   "bend", 10.0, 90.0};
+    out["procedural-warp-split"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                    {{"mode", std::int64_t{9}}, {"mirror", true}},
+                                    "splitDistance", 10.0, 120.0};
+    out["procedural-warp-turbulent"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                        {{"mode", std::int64_t{10}}, {"displacement", 40.0}},
+                                        "evolution", 0.0, 360.0};
+    out["procedural-warp-drizzle"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                      {{"mode", std::int64_t{11}}, {"radius", 150.0},
+                                       {"amplitude", 8.0}},
+                                      "phase", 0.0, 360.0};
+    out["procedural-warp-magnify-pull"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                           {{"mode", std::int64_t{6}}, {"radius", 200.0},
+                                            {"pullPoint", Vec2d{150.0, 0.0}}},
+                                           "pull", 0.0, 100.0};
+    out["procedural-warp-ripple-pulse"] = {"bloom.checker-source", {}, "bloom.procedural-warp",
+                                           {{"mode", std::int64_t{3}}, {"radius", 600.0},
+                                            {"wavelength", 30.0}, {"amplitude", 8.0}},
+                                           "pulseRadius", 50.0, 400.0};
     // #528 Inner Shadow and Inner Glow over a checker (its frame edge is the shape's edge).
     out["inner-shadow"] = {"bloom.checker-source", {}, "bloom.inner-shadow",
                            {{"softness", 12.0}, {"distance", 8.0}, {"choke", 0.2}, {"opacity", 0.9}},

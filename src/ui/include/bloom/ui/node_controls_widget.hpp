@@ -109,6 +109,12 @@ class RangeRow final : public QWidget {
         bool centreWidth = false;
         // The track is a black-to-white luma strip.
         bool lumaStrip = false;
+        // #510: lowRole is a falloff in percent and highRole the radius it fades out over: the
+        // track shows the radius as its upper end and the start of the fade (the radius times one
+        // minus the falloff) as its lower one, so the fade is the span between them. A handle
+        // drag writes the falloff (the lower end) or the radius (the upper end, the fade's share
+        // kept).
+        bool falloffBand = false;
     };
 
     RangeRow(CompositionSession& session, document::NodeId node, Spec spec,
