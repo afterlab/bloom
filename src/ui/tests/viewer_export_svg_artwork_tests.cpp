@@ -28,6 +28,7 @@
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -506,7 +507,8 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
                                              const commands::SvgImportMode mode =
                                                  commands::SvgImportMode::Shapes,
                                              const std::uint32_t width = kWidth,
-                                             const std::uint32_t height = kHeight) {
+                                             const std::uint32_t height = kHeight,
+                                             const bool keyed = true) {
     const auto rate = document::FrameRate::create(static_cast<std::int64_t>(kFps), 1);
     const auto format = document::CompositionFormat::create(
         width, height, core::PixelAspectRatio::square(), *rate);
@@ -540,6 +542,9 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     std::filesystem::remove(file);
     if (!imported.succeeded()) {
         return std::nullopt;
+    }
+    if (!keyed) {
+        return authored;
     }
     if (mode == commands::SvgImportMode::Layer) {
         const auto layer = imported.outputId<document::LayerId>("layer");
@@ -993,6 +998,95 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 }
 
 #if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
+// #646: an imported SVG asset added to another composition again (the drop, Add to Composition and
+// bloom.layer.add-from-assets all run AddDroppedLayers), in both modes at 512 x 288, exported from
+// the device: one device frame, no CPU reference frame, and the picture is the original import's
+// first frame. One layer: the file is deleted first, so the stored copy draws it.
+void reAddedOnTheDevice(Expectations& checks, const std::filesystem::path& workDir,
+                        const std::filesystem::path& loader) {
+    runtime::TaskScheduler scheduler;
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = true;
+    options.loaderPath = loader;
+    options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    auto provider = host::GpuExportProvider::create(options);
+    provider->prepare(scheduler);
+    for (const auto mode : {commands::SvgImportMode::Layer, commands::SvgImportMode::Shapes}) {
+        const bool layer = mode == commands::SvgImportMode::Layer;
+        const std::string prefix = std::string("gpu re-added ") + (layer ? "one layer" : "shapes") + ": ";
+        auto authored = author(checks, workDir, mode, 512, 288, false);
+        if (!authored.has_value())
+            continue;
+        const auto& before = authored->scripting->snapshot().project();
+        checks.expect(before.assets().size() == 1, prefix + "the import recorded one asset");
+        if (before.assets().size() != 1)
+            continue;
+        const auto asset = before.assets().front().id;
+        const auto* main = before.findComposition(authored->composition);
+        const auto made = edit<commands::AddComposition>(*authored, std::string("Again"), main->format(),
+                                                         main->duration());
+        const auto second = made.outputId<document::CompositionId>(commands::kAddCompositionOutput);
+        checks.expect(second.has_value(), prefix + "a second composition of the same size is added");
+        if (!second)
+            continue;
+        if (!layer) {
+            std::ofstream out(workDir / "artwork.svg");
+            out << artworkSvg();
+        }
+        auto prepared = commands::prepareSvgAssetSource(authored->scripting->snapshot().project(), asset, workDir);
+        checks.expect(prepared.source != nullptr && prepared.heldCopy == layer,
+                      prefix + (layer ? "the file is gone, so the stored copy is read"
+                                      : "the unchanged file is read"));
+        commands::SvgAssetSources sources;
+        sources.mode = mode;
+        sources.projectDirectory = workDir;
+        if (prepared.source)
+            sources.sources.emplace(asset, std::move(prepared.source));
+        commands::Transaction transaction("Add Layer", authored->scripting->snapshot().revision());
+        transaction.emplace<commands::AddDroppedLayers>(*second, std::vector<commands::LayerDropItem>{asset},
+                                                        commands::LayerDropPlacement{})
+            .withSvgSources(std::move(sources));
+        const auto added = authored->scripting->commandStack()->execute(std::move(transaction));
+        checks.expect(added.succeeded(), prefix + "the SVG asset adds to the second composition");
+        checks.expect(authored->scripting->snapshot().project().assets().size() == 1,
+                      prefix + "no second asset record is made");
+        std::vector<Pixels> frames;
+        for (const auto composition : {authored->composition, *second}) {
+            const auto still = workDir / (std::string("readd-") + (layer ? "layer" : "shapes") + "-" +
+                                          std::to_string(frames.size()) + ".png");
+            const auto result = scripting::Render::run(*authored->scripting, scheduler, compiler,
+                                                       {.composition = composition,
+                                                        .frame = 0,
+                                                        .range = std::nullopt,
+                                                        .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+                                                        .destination = still},
+                                                       {}, provider);
+            const std::string label = prefix + (frames.empty() ? "original" : "re-added") + " still";
+            checks.expect(result.succeeded && result.publishedFrames == 1, label + " publishes: " + result.diagnostic);
+            checks.expect(result.gpuEvaluatedFrames == 1 && result.cpuReferenceFrames == 0,
+                          label + " was evaluated on the device with no CPU reference frame");
+            frames.push_back(decodePng(still));
+            checks.expect(frames.back().ok && frames.back().width == 512 && frames.back().height == 288,
+                          label + " is written at 512 x 288");
+            std::filesystem::remove(still);
+        }
+        if (frames.size() == 2 && frames[0].ok && frames[1].ok) {
+            std::size_t drawn = 0;
+            for (std::size_t index = 3; index < frames[1].rgba.size(); index += 4)
+                drawn += frames[1].rgba[index] != 0 ? 1 : 0;
+            checks.expect(drawn > 1000, prefix + "the re-added artwork draws");
+            checks.expect(framesMatch(frames[0], frames[1]),
+                          prefix + "the re-added asset is the original import's frame (RGB within one code, exact alpha)");
+            std::cout << prefix << "device export, " << drawn << " covered pixels\n";
+        }
+        std::filesystem::remove(workDir / "artwork.svg");
+    }
+    checks.expect(provider->shutdownAndWait(10s), "gpu re-added: the export provider retires");
+}
+#endif
+
+#if defined(BLOOM_UI_SVG_ARTWORK_ROUTES_GPU)
 // A real file in the interactive Viewer at a real size, on the application's own memory wiring
 // (the shared composition-root wiring the soak harness also runs): a scheduler with the delivered
 // budget view, the processing policy sampled from this machine through the application's sampler,
@@ -1231,6 +1325,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     } else {
         exerciseRoute(checks, {"gpu", true}, workDir, loader);
         exerciseRoute(checks, {"gpu-layer", true, true}, workDir, loader);
+        reAddedOnTheDevice(checks, workDir, loader);
     }
 #else
     std::cout << "NotRun: gpu route: this build has no Vulkan support\n";

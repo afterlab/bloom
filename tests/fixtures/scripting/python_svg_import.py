@@ -117,4 +117,31 @@ with tempfile.TemporaryDirectory(prefix="bloom-svg-import-") as directory:
     assert len(bloom.data.nodes(composition)) == before + 1, "one undo gives the layer back"
     bloom.transactions.undo()
     assert len(bloom.data.nodes(composition)) == before, "and one more removes the import"
+
+    # #646: a project that holds an image layer made from an SVG asset (before an SVG asset could be
+    # added again) says by name that the layer draws nothing; the `warnings` of the layer and node
+    # records carry it at runtime, and every other record says nothing.
+    imported = bloom.ops.layer.add_svg(path=str(file), name="art", fit=False,
+                                       projectDirectory=directory, mode="shapes")
+    asset = next(o["id"] for o in imported["outputs"] if o["name"] == "asset")
+    merge = next(n.id for n in bloom.data.nodes(composition)
+                 if n.resolve()["type_id"] == "bloom.layer-stack")
+
+    def output(result, name):
+        return next(o["id"] for o in result["outputs"] if o["name"] == name)
+
+    source = output(bloom.ops.node.add(nodeType="bloom.image-source"), "node")
+    bloom.ops.node.set_parameter_value(node=source, role="asset", text=str(asset))
+    wired = bloom.ops.node.connect(sourceNode=source, sourcePort="image", targetNode=merge,
+                                   role="content")
+    legacy = output(bloom.ops.merge.set_entry_parameter(
+        merge=merge, slot=output(wired, "layerSlot"), role="opacity", value=0.5), "layer")
+    expected = "'art.svg' is an SVG source, not footage: add it again from Assets to rebuild the artwork"
+    warned = {l.id: tuple(l.resolve()["warnings"]) for l in bloom.data.layers(composition)}
+    assert warned[legacy] == (expected,), warned
+    assert all(not found for key, found in warned.items() if key != legacy), warned
+    node_warnings = {n.id: tuple(n.resolve()["warnings"]) for n in bloom.data.nodes(composition)}
+    assert node_warnings[source] == (expected,), node_warnings
+    assert all(not found for key, found in node_warnings.items() if key != source), node_warnings
+    print("legacy SVG footage warning:", warned[legacy])
     print("python svg import: PASS")
