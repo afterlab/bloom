@@ -8638,6 +8638,80 @@ class NodeOps:
         Related: transact
         """
         ...
+    def write_to_path(self, node: int | Proxy, port: str = ..., target: int | Proxy = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+        """bloom.node.write-to-path  (operation, node)
+        Writes what a Path-producing value node (Resample Path, Trim Path, Transform Path, Offset Path,
+        Path Stroke, a Path node, and the others that answer a Path) gives at `time` into a Path node
+        (bloom.value-path) as stored points, so the points can be moved and keyed by hand. The node is
+        evaluated when the operation is created, off the UI thread, and stops when the request is
+        cancelled. With no `target` a new Path node is added beside the source and wired to nothing; the
+        source's links never change. With a `target` Path node, a constant value is replaced and an
+        animated one gets a whole-path key at `time`. `port` names the Path output; the default is the
+        node's first. Keys stay whole-path: all points of a path share their key times. Outputs: node
+        (the Path node written). Errors: "Node N does not exist"; "Node N has no Path output"; the
+        node's own diagnostic when it fails at that time (a count past the Path caps, a bad operand);
+        "Node N is not a Path node"; "The Path node's value is driven by another node; disconnect it
+        first"; bloom.scripting.cancelled. Undo: one step removes the new node, or restores the target's
+        value. MCP example: {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The node whose Path result is written (Resample Path and the other Path producers).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              The Path output to write. Defaults to the node's first Path output.
+              Unit: port name (query:node-types lists each type's ports)
+          target  id  optional, default selection
+              Id. An existing Path node to write into. Defaults to a new Path node beside the source.
+              Unit: stable id (a positive integer)
+              Range: >= 1
+              Values:
+                "selection"  The union of the layers' bounds
+                "composition"  The composition frame
+                "key-object"  The key layer's bounds
+          time  time  optional, defaults to the playhead (frame 0 headless) (context time)
+              The time whose result is written (and where an animated target is keyed). Defaults to the
+              current playhead time.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.node.write-to-path","args":{"node":1}}]}}
+          Python:
+            bloom.ops.node.write_to_path(node=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.node.write-to-path","args":{"node":1}}]
+
+        Related: transact
+        """
+        ...
 
 node: NodeOps
 

@@ -17,6 +17,8 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -28,6 +30,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGraphicsItem>
 #include <QGraphicsProxyWidget>
 #include <QKeyEvent>
@@ -659,6 +662,46 @@ void testAddFromTheCanvasIsOneUndoableCommand(Expectations& expectations) {
     menu->deleteLater();
 }
 
+// #637: the node menu of a Resample Path offers Write to a Path; it evaluates off the UI thread, then
+// stores the result as one command, so one undo step removes the new Path node.
+void testWriteToAPathIsOneUndoStep(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Write To Path Test"));
+    commands::Transaction add("Add", fixture.session.snapshot().revision());
+    add.emplace<commands::AddNode>(fixture.session.compositionId(),
+                                   std::string(document::kResamplePathNodeType), document::Vec2d{});
+    const auto added = fixture.session.executeNodeTransaction(std::move(add));
+    const auto resample = added.outputId<document::NodeId>(commands::kAddNodeOutput);
+    expectations.expect(resample.has_value(), "a Resample Path node is added");
+    if (!resample)
+        return;
+    fixture.session.selectNode(*resample);
+    QCoreApplication::processEvents();
+    std::unique_ptr<QMenu> menu(fixture.editor.contextMenuForTest(true));
+    QAction* write = nullptr;
+    if (menu)
+        for (auto* action : menu->findChildren<QAction*>())
+            if (action->objectName() == QStringLiteral("nodeWriteToPathAction"))
+                write = action;
+    expectations.expect(write != nullptr, "the node menu offers Write to a Path");
+    if (write == nullptr)
+        return;
+    const auto pathNodes = [&] {
+        std::size_t count = 0;
+        for (const auto& node : fixture.session.composition()->graph().nodes())
+            count += node.typeId == document::kPathValueNodeType ? 1U : 0U;
+        return count;
+    };
+    expectations.expect(pathNodes() == 0, "no Path node exists yet");
+    write->trigger();
+    QElapsedTimer timer;
+    timer.start();
+    while (pathNodes() == 0 && timer.elapsed() < 20000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(pathNodes() == 1, "Write to a Path adds one Path node");
+    expectations.expect(fixture.session.undo() && pathNodes() == 0,
+                        "ONE undo step removes the Path node it wrote");
+}
+
 // --- Decision 5: in-node edits take the Properties panel's own path -----------------------------
 
 void testInNodeValueFieldsCommitThroughThePropertiesPath(Expectations& expectations) {
@@ -1127,6 +1170,7 @@ int runAll() {
     testContextMenuOffersOnlyRealCommands(expectations);
     testShapeMenuAndVisibility(expectations);
     testAddFromTheCanvasIsOneUndoableCommand(expectations);
+    testWriteToAPathIsOneUndoStep(expectations);
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
     testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);
