@@ -4,6 +4,7 @@
 // names or stored integers with labels (scripting/node_reference.hpp owns the vocabulary).
 #include "core_internal.hpp"
 
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/scripting/merge_entry_view.hpp>
@@ -255,6 +256,11 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
                     source = graph.findNode(edge.source.nodeId);
             }
         }
+        // #646: named warnings (an image layer made from an SVG asset draws nothing).
+        auto* layerWarnings = out.array();
+        if (const auto warning = document::layerSvgFootageWarning(project, comp, layer.layerId))
+            out.append(layerWarnings, out.text(*warning));
+        out.set(row, "warnings", layerWarnings);
         out.set(row, "sourceNode", source ? out.number(source->id.value()) : out.null());
         out.set(row, "sourceType", source ? out.text(source->typeId) : out.null());
         out.set(row, "enabled", out.boolean(layer.enabled));
@@ -738,7 +744,7 @@ void projectRecords(Json& out, yyjson_mut_val* result, yyjson_val* arguments) {
 
 void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                      const document::Composition& composition,
-                     const std::optional<document::LayerId> layer) {
+                     const std::optional<document::LayerId> layer, const document::Project* project) {
     const auto& graph = composition.graph();
     // With a layer filter: that layer's node (or its Merge entry's source) and everything upstream.
     std::set<document::NodeId> included;
@@ -796,6 +802,12 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
         out.set(record, "category",
                 definition ? out.text(scripting::nodeCategoryName(*definition)) : out.null());
         out.set(record, "parameters", roles(out, &node));
+        // #646: named warnings (an image source on an SVG record draws nothing).
+        auto* nodeWarnings = out.array();
+        if (project != nullptr)
+            if (const auto warning = document::svgFootageWarning(*project, composition, node))
+                out.append(nodeWarnings, out.text(*warning));
+        out.set(record, "warnings", nodeWarnings);
         const auto placed = layout.find(node.id);
         if (placed != layout.end()) {
             auto* position = out.array();

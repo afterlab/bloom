@@ -4,6 +4,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/path_value.hpp>
@@ -230,6 +231,11 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
                 bindings[nb::str(binding.role.c_str())] = binding.parameterId.value();
             }
             record["parameters"] = bindings;
+            // #646: named warnings about the node (an image source on an SVG record draws nothing).
+            nb::list warnings;
+            if (const auto warning = document::svgFootageWarning(snapshot.project(), composition, node))
+                warnings.append(*warning);
+            record["warnings"] = warnings;
             nodes.append(record);
         }
         row["nodes"] = nodes;
@@ -244,6 +250,11 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
             record["locked"] = boundary.locked;
             record["shy"] = boundary.shy;
             record["name_follows_source"] = boundary.nameFollowsSource;
+            nb::list layerWarnings;
+            if (const auto warning =
+                    document::layerSvgFootageWarning(snapshot.project(), composition, boundary.layerId))
+                layerWarnings.append(*warning);
+            record["warnings"] = layerWarnings;
             record["parent"] =
                 boundary.parent.has_value() ? nb::cast(boundary.parent->value()) : nb::none();
             record["in"] =

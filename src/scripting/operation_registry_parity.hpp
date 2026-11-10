@@ -6,7 +6,9 @@
 // their own files (operation_registry_parity_*.cpp); this header is their shared schema and
 // argument-reading vocabulary.
 
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/scripting/operation_registry.hpp>
@@ -77,6 +79,72 @@ inline void add(std::vector<OperationDescriptor>& descriptors, std::string id,
                                       .description = std::move(description)},
                            .factory = std::move(factory),
                            .contextualFactory = {}});
+}
+
+// #646: the `mode` argument of an operation that can add an imported SVG asset: how that SVG is
+// built ("layer", the default and never a prompt, or "shapes").
+[[nodiscard]] inline ArgumentSchema svgModeArgument() {
+    return {.name = "mode",
+            .kind = ValueKind::String,
+            .required = false,
+            .inExample = false,
+            .context = ContextSource::None,
+            .example = "layer",
+            .summary = "How an imported SVG asset among the items is built: \"layer\" (the default) makes one "
+                       "Vector Artwork layer that stays crisp at any scale and uses the SVG the project holds; "
+                       "\"shapes\" makes editable Shape layers with a Path node per element. Ignored when no "
+                       "item is an SVG. The SVG asset's record is reused, never added twice."};
+}
+
+// Reads `mode`: absent is the default; anything else must be one of the two spellings.
+[[nodiscard]] inline std::optional<commands::SvgImportMode> svgModeFrom(const Arguments& args,
+                                                                        const std::string& operation,
+                                                                        OperationCreateResult& error) {
+    const auto found = args.find("mode");
+    if (found == args.end())
+        return commands::kDefaultSvgImportMode;
+    const auto* name = std::get_if<std::string>(&found->second.storage);
+    const auto mode = name != nullptr ? commands::svgImportModeFromName(*name) : std::nullopt;
+    if (!mode)
+        error = argumentFailure(operation, "mode",
+                                "expects \"layer\" (one Vector Artwork layer) or \"shapes\" (editable shapes)");
+    return mode;
+}
+
+[[nodiscard]] inline commands::SvgAssetSources svgModeOnly(const commands::SvgImportMode mode) {
+    commands::SvgAssetSources sources;
+    sources.mode = mode;
+    return sources;
+}
+
+// The SVG assets among `assets`, read and parsed here: the project's file when it is there, else the
+// project's stored copy. A factory runs on the client thread, so nothing is read when the operation
+// applies. An asset that cannot be prepared is refused by name when the operation applies.
+[[nodiscard]] inline commands::SvgAssetSources
+svgSourcesFor(const OperationContext& context, const std::vector<document::AssetId>& assets,
+              const commands::SvgImportMode mode) {
+    commands::SvgAssetSources sources;
+    sources.mode = mode;
+    if (!context.source)
+        return sources;
+    const auto source = context.source();
+    if (!source)
+        return sources;
+    sources.projectDirectory = source->assetBaseDirectory;
+    const auto stop = context.stop;
+    for (const auto id : assets) {
+        const auto* record = source->snapshot.project().findAsset(id);
+        if (record == nullptr || !document::isSvgSourceAsset(*record) || sources.sources.contains(id) ||
+            sources.refusals.contains(id))
+            continue;
+        auto prepared = commands::prepareSvgAssetSource(source->snapshot.project(), id, sources.projectDirectory,
+                                                        [stop] { return stop.stop_requested(); });
+        if (prepared.source)
+            sources.sources.emplace(id, std::move(prepared.source));
+        else
+            sources.refusals.emplace(id, prepared.cancelled ? "The add was cancelled" : prepared.refusal);
+    }
+    return sources;
 }
 
 // Reads arguments for one operation and keeps the first rejection, so a factory reads every

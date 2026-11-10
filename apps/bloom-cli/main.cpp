@@ -11,6 +11,7 @@
 #include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/command_diagnostics.hpp>
 #include <bloom/scripting/export.hpp>
 #include <bloom/scripting/json_script.hpp>
 #include <bloom/scripting/operation_reference.hpp>
@@ -223,7 +224,18 @@ frameRange(std::string_view value) {
             return 4;
         }
         if (!result.succeeded()) {
-            std::cerr << "error[bloom-cli.command-rejected] " << transaction.operation << '\n';
+            // Say why: the operation's own refusal (or the validation that failed), not only that
+            // it was refused.
+            bool reason = false;
+            if (result.command.has_value())
+                for (const auto& diagnostic : scripting::commandDiagnostics(*result.command))
+                    if (diagnostic.severity == "error") {
+                        std::cerr << "error[bloom-cli.command-rejected] " << transaction.operation << ": "
+                                  << diagnostic.message << '\n';
+                        reason = true;
+                    }
+            if (!reason)
+                std::cerr << "error[bloom-cli.command-rejected] " << transaction.operation << '\n';
             return 5;
         }
         for (const auto& warning : result.command->warnings)

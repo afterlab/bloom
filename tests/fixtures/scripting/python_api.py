@@ -423,6 +423,42 @@ class PythonApi(unittest.TestCase):
                                      {'op': 'bloom.layer.break-apart-svg', 'args': {'layer': 1}}])
             self.assertNotEqual(none.returncode, 0)
             self.assertIn(b'bloom.layer.break-apart-svg', none.stderr)
+            # The refusal's reason is printed, not only that the operation was refused.
+            self.assertIn(b'does not hold an SVG as one Vector Artwork layer', none.stderr)
+
+    def test_cli_adds_an_imported_svg_asset_again(self):
+        """#646: bloom-cli run adds an imported SVG asset to a composition again as artwork (mode as
+        for bloom.layer.add-svg), and bloom.layer.add-image refuses an SVG asset. (A script cannot delete a file between its own
+        operations; the missing-file refusal by name is asserted in bloom.scripting.svg-import-modes.)"""
+        with tempfile.TemporaryDirectory(prefix='bloom-cli-readd-') as directory:
+            def write(name):
+                svg = pathlib.Path(directory) / name
+                svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+                               '<rect x="10" y="10" width="80" height="60" fill="#c33"/></svg>')
+                return svg
+
+            def run(name, edits):
+                script = pathlib.Path(directory) / name
+                script.write_text(json.dumps(edits))
+                return subprocess.run([CLI, 'run', str(script)], capture_output=True, timeout=60)
+
+            # One layer: the project holds the SVG, so the file can go; both modes add again.
+            held = write('held.svg')
+            first = [{'op': 'bloom.layer.add-svg', 'args': {'path': str(held), 'mode': 'layer'}}]
+            for mode in ('layer', 'shapes'):
+                again = run('again-%s.json' % mode, first + [
+                    {'op': 'bloom.layer.add-from-assets', 'args': {'assets': [1], 'mode': mode}}])
+                self.assertEqual(again.returncode, 0, again.stderr.decode())
+                self.assertIn(b'executed 2 transaction(s)', again.stdout)
+            # The asset is added again, never as an image layer.
+            image = run('image.json', first + [{'op': 'bloom.layer.add-image', 'args': {'asset': 1}}])
+            self.assertNotEqual(image.returncode, 0)
+            self.assertIn(b'is an SVG, not footage', image.stderr)
+            # A bad mode is named.
+            bad = run('bad-mode.json', first + [
+                {'op': 'bloom.layer.add-from-assets', 'args': {'assets': [1], 'mode': 'flat'}}])
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn(b"argument 'mode'", bad.stderr)
 
     def test_cli_export_renders_the_saved_queue(self):
         """ADR 0033: bloom-cli export renders a saved queue headlessly and reports the result."""

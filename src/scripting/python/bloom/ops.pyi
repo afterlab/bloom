@@ -2617,7 +2617,7 @@ class CompositionOps:
         Related: bloom.composition.set-settings, query:compositions, bloom.layer.add-solid, transact
         """
         ...
-    def add_from_assets(self, assets: tuple, folder: int | Proxy = ..., *, template: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_from_assets(self, assets: tuple, folder: int | Proxy = ..., mode: str = ..., *, template: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.composition.add-from-assets  (operation, composition)
         Creates a composition from footage, as New Composition from Selection in the Assets panel does:
         sized, timed and named from the first image, sequence or video asset (the first asset when all
@@ -2641,6 +2641,14 @@ class CompositionOps:
               Id. The Assets folder the composition is filed in. Default: the Assets root.
               Unit: Assets folder id (query:assets .folder)
               Range: >= 1
+          mode  str  optional, default layer
+              How an imported SVG asset among the items is built: "layer" (the default) makes one Vector
+              Artwork layer that stays crisp at any scale and uses the SVG the project holds; "shapes"
+              makes editable Shape layers with a Path node per element. Ignored when no item is an SVG.
+              The SVG asset's record is reused, never added twice.
+              Values:
+                "layer"  As one layer: a Vector Artwork layer that stays crisp at any scale
+                "shapes"  As editable shapes: a Shape layer and a Path node per element
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -4394,7 +4402,7 @@ class LayerOps:
         Related: bloom.asset.import, query:layers, transact
         """
         ...
-    def add_from_assets(self, assets: tuple = ..., compositions: tuple = ..., placement: str = ..., before: int | Proxy = ..., sequence: bool = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+    def add_from_assets(self, assets: tuple = ..., compositions: tuple = ..., placement: str = ..., before: int | Proxy = ..., sequence: bool = ..., mode: str = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-from-assets  (operation, layer)
         Adds footage and compositions as layers, as dropping them from Assets on the Timeline or the
         Viewer does (ADR 0030), in ONE undo step. Each asset becomes the layer for its kind: an image,
@@ -4448,6 +4456,14 @@ class LayerOps:
               Range: >= 1
           sequence  bool  optional
               Boolean. true: each layer starts where the previous one ends. Default false.
+          mode  str  optional, default layer
+              How an imported SVG asset among the items is built: "layer" (the default) makes one Vector
+              Artwork layer that stays crisp at any scale and uses the SVG the project holds; "shapes"
+              makes editable Shape layers with a Path node per element. Ignored when no item is an SVG.
+              The SVG asset's record is reused, never added twice.
+              Values:
+                "layer"  As one layer: a Vector Artwork layer that stays crisp at any scale
+                "shapes"  As editable shapes: a Shape layer and a Path node per element
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -7709,7 +7725,7 @@ class NodeOps:
         Related: query:node-types, bloom.node.connect, query:nodes, transact
         """
         ...
-    def add_asset_source(self, asset: int | Proxy, position: tuple[float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_asset_source(self, asset: int | Proxy, position: tuple[float, float] = ..., mode: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.node.add-asset-source  (operation, node)
         Adds a source node for an asset, as dropping a footage asset on the Node canvas does: an Image
         Source for an image or image sequence, a Video Source for a video, an Audio Source for audio,
@@ -7726,12 +7742,21 @@ class NodeOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           asset  id  required
-              Id. An image, image sequence, video or audio asset.
+              Id. An image, image sequence, video or audio asset. An imported SVG asset becomes its
+              artwork's nodes (see mode), not an image node.
               Unit: asset id (query:assets)
               Range: >= 1
           position  vec2  optional
               Vec2 [x, y] in Node canvas units (pixels at 100% zoom). Default [0, 0].
               Unit: node-editor layout units
+          mode  str  optional, default layer
+              How an imported SVG asset among the items is built: "layer" (the default) makes one Vector
+              Artwork layer that stays crisp at any scale and uses the SVG the project holds; "shapes"
+              makes editable Shape layers with a Path node per element. Ignored when no item is an SVG.
+              The SVG asset's record is reused, never added twice.
+              Values:
+                "layer"  As one layer: a Vector Artwork layer that stays crisp at any scale
+                "shapes"  As editable shapes: a Shape layer and a Path node per element
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 

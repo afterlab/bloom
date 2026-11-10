@@ -800,7 +800,9 @@ void refine(const std::string& op, ArgumentSchema& argument) {
         argument.defaultText = "4 (centre)";
     } else if ((name == "before" || name == "after") && op == "bloom.layer.set-time-modes") {
         chooseIntegers(argument, {"None", "Hold", "Loop", "Ping-pong"});
-    } else if (name == "mode" && op == "bloom.layer.add-svg") {
+    } else if (name == "mode" && (op == "bloom.layer.add-svg" || op == "bloom.layer.add-from-assets" ||
+                                 op == "bloom.composition.add-from-assets" ||
+                                 op == "bloom.node.add-asset-source")) {
         choose(argument, {{"layer", "As one layer: a Vector Artwork layer that stays crisp at any scale"},
                           {"shapes", "As editable shapes: a Shape layer and a Path node per element"}});
         argument.defaultText = "layer";

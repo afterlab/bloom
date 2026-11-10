@@ -1126,7 +1126,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                                std::to_string(snapshot.revision().value()));
         if (kind == "nodes") {
             appendNodeGraph(out, result, records, *composition,
-                            layerFilter(*composition, arguments));
+                            layerFilter(*composition, arguments), &snapshot.project());
         } else if (parameterPage) {
             // A summary only carries bounded structural strings (at most 256 bytes each),
             // never a value. Even worst-case JSON escaping and the MCP text copy fit 4 MiB.

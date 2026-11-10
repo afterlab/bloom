@@ -1369,6 +1369,70 @@ std::string text(yyjson_val* value, const char* key) {
     return found ? std::string(found) : std::string{};
 }
 
+// #646: a project that already holds an image layer made from an SVG asset (before an SVG asset could
+// be added again) says by name that the layer draws nothing; queries of layers and nodes carry it.
+void svgFootageWarningQuery() {
+    Headless server;
+    const auto path = std::filesystem::temp_directory_path() / "bloom-mcp-legacy-logo.svg";
+    std::ofstream(path, std::ios::binary)
+        << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#c33"/></svg>)svg";
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.layer.add-svg","args":{"composition":1,"path":")" + path.generic_string() +
+                           R"(","mode":"shapes"}})");
+    const auto asset = outputId(result, "asset");
+    expect(asset != 0, "the SVG imports and records its file: " + result);
+    std::uint64_t merge = 0;
+    {
+        const JsonResponse nodes(server.call("query", R"({"kind":"nodes","composition":1})"));
+        yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(nodes.content(), "records"));
+        while (auto* node = yyjson_arr_iter_next(&iter))
+            if (text(node, "typeId") == "bloom.layer-stack" && merge == 0)
+                merge = yyjson_get_uint(yyjson_obj_get(node, "id"));
+    }
+    // The legacy shape: an Image Source naming the SVG record, wired as a layer.
+    result = transact(R"({"op":"bloom.node.add","args":{"composition":1,"nodeType":"bloom.image-source"}})");
+    const auto source = outputId(result, "node");
+    result = transact(R"({"op":"bloom.node.set-parameter-value","args":{"composition":1,"node":)" +
+                      std::to_string(source) + R"(,"role":"asset","text":")" + std::to_string(asset) + R"("}})");
+    expect(contains(result, R"("isError":false)"), "the image source names the SVG record: " + result);
+    result = transact(R"({"op":"bloom.node.connect","args":{"composition":1,"sourceNode":)" +
+                      std::to_string(source) + R"(,"sourcePort":"image","targetNode":)" + std::to_string(merge) +
+                      R"(,"role":"content"}})");
+    const auto slot = outputId(result, "layerSlot");
+    result = transact(R"({"op":"bloom.merge.set-entry-parameter","args":{"composition":1,"merge":)" +
+                      std::to_string(merge) + R"(,"slot":)" + std::to_string(slot) +
+                      R"(,"role":"opacity","value":0.5}})");
+    const auto layer = outputId(result, "layer");
+    expect(layer != 0, "the legacy image layer exists: " + result);
+    const std::string warning = "'bloom-mcp-legacy-logo.svg' is an SVG source, not footage: add it again from "
+                                "Assets to rebuild the artwork";
+    {
+        const auto response = server.call("query", R"({"kind":"layers","composition":1})");
+        const JsonResponse read(response);
+        auto* record = layerRecord(read.content(), layer);
+        auto* warnings = record ? yyjson_obj_get(record, "warnings") : nullptr;
+        expect(warnings != nullptr && yyjson_arr_size(warnings) == 1 &&
+                   std::string(yyjson_get_str(yyjson_arr_get_first(warnings))) == warning,
+               "query layers names the warning on the legacy layer: " + response);
+        // Every other layer says nothing.
+        yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(read.content(), "records"));
+        bool others = true;
+        while (auto* other = yyjson_arr_iter_next(&iter))
+            if (yyjson_get_uint(yyjson_obj_get(other, "id")) != layer)
+                others = others && yyjson_arr_size(yyjson_obj_get(other, "warnings")) == 0;
+        expect(others, "no other layer carries a warning: " + response);
+    }
+    {
+        const auto response = server.call("query", R"({"kind":"nodes","composition":1})");
+        expect(contains(response, std::string(R"("warnings":[")") + warning + R"("])"),
+               "query nodes names the warning on the image source: " + response);
+    }
+    std::filesystem::remove(path);
+}
+
 void mergeEntryReadBack() {
     Headless server;
     const auto transact = [&](const std::string& operations) {
@@ -2219,6 +2283,7 @@ int main() {
         secondProjectFile();
         fileSessionsBesideALiveProject();
         mergeEntryReadBack();
+        svgFootageWarningQuery();
         fieldTestArguments();
         gradientReadBack();
         curvesAutoAnchors();

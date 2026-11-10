@@ -327,7 +327,8 @@ struct TransientResult final {
 // and everything upstream of it; `links` and `groups` are narrowed to those nodes.
 void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                      const document::Composition& composition,
-                     std::optional<document::LayerId> layer = std::nullopt);
+                     std::optional<document::LayerId> layer = std::nullopt,
+                     const document::Project* project = nullptr);
 // The `layer` argument of a nodes or layers query: a layer of `composition`, or the refusal
 // listing where layers are found.
 [[nodiscard]] std::optional<document::LayerId> layerFilter(const document::Composition& composition,

@@ -214,9 +214,14 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors) {
                R"(Id. The layer the new layers go directly above. Required with placement )"
                R"("before"; giving it alone implies "before".)"),
          maybe("sequence", ValueKind::Boolean, false,
-               "Boolean. true: each layer starts where the previous one ends. Default false.")},
+               "Boolean. true: each layer starts where the previous one ends. Default false."),
+         svgModeArgument()},
         [](const std::string& op, const Arguments& args) {
             Reader read(op, args);
+            OperationCreateResult modeError(nullptr, std::nullopt);
+            const auto svgMode = svgModeFrom(args, op, modeError);
+            if (!svgMode)
+                return modeError;
             const auto compositionId = read.id<CompositionId>("composition");
             const auto start = read.time("time");
             const auto assets = read.ids<AssetId>("assets", false);
@@ -250,26 +255,69 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors) {
                 return argumentFailure(op, "assets",
                                        "needs at least one asset or composition id (assets or "
                                        "compositions)");
-            return made(std::make_unique<commands::AddDroppedLayers>(compositionId,
-                                                                     std::move(items), where));
+            auto drop = std::make_unique<commands::AddDroppedLayers>(compositionId, std::move(items), where);
+            drop->withSvgSources(svgModeOnly(*svgMode));
+            return made(std::move(drop));
         });
+    // An imported SVG among the assets is read and parsed here, on the client thread, from its file or
+    // the project's stored copy; applying reads nothing.
+    descriptors.back().contextualFactory = [factory = descriptors.back().factory](
+                                               const std::string& op, const Arguments& args,
+                                               const OperationContext& context) {
+        auto created = factory(op, args);
+        if (!created)
+            return created;
+        Reader read(op, args);
+        auto assets = read.ids<AssetId>("assets", false);
+        OperationCreateResult modeError(nullptr, std::nullopt);
+        const auto svgMode = svgModeFrom(args, op, modeError);
+        auto operation = std::move(created).takeOperation();
+        if (svgMode && !assets.empty())
+            static_cast<commands::AddDroppedLayers&>(*operation)
+                .withSvgSources(svgSourcesFor(context, assets, *svgMode));
+        return made(std::move(operation));
+    };
 
     add(descriptors, "bloom.node.add-asset-source", kAddAssetSource,
         {composition(),
          need("asset", ValueKind::Id, StableId{1},
-              "Id. An image, image sequence, video or audio asset."),
+              "Id. An image, image sequence, video or audio asset. An imported SVG asset becomes its "
+              "artwork's nodes (see mode), not an image node."),
          maybe("position", ValueKind::Vec2, document::Vec2d{0.0, 0.0},
-               "Vec2 [x, y] in Node canvas units (pixels at 100% zoom). Default [0, 0].")},
+               "Vec2 [x, y] in Node canvas units (pixels at 100% zoom). Default [0, 0]."),
+         svgModeArgument()},
         [](const std::string& op, const Arguments& args) {
             Reader read(op, args);
+            OperationCreateResult modeError(nullptr, std::nullopt);
+            const auto svgMode = svgModeFrom(args, op, modeError);
+            if (!svgMode)
+                return modeError;
             const auto compositionId = read.id<CompositionId>("composition");
             const auto asset = read.id<AssetId>("asset");
             const auto position = read.vec2("position");
             if (read.failed())
                 return read.error();
-            return made(std::make_unique<commands::AddAssetSourceNode>(
-                compositionId, asset, position.value_or(document::Vec2d{})));
+            auto node = std::make_unique<commands::AddAssetSourceNode>(compositionId, asset,
+                                                                       position.value_or(document::Vec2d{}));
+            node->withSvgSources(svgModeOnly(*svgMode));
+            return made(std::move(node));
         });
+    descriptors.back().contextualFactory = [factory = descriptors.back().factory](
+                                               const std::string& op, const Arguments& args,
+                                               const OperationContext& context) {
+        auto created = factory(op, args);
+        if (!created)
+            return created;
+        Reader read(op, args);
+        const auto asset = read.id<AssetId>("asset", false);
+        OperationCreateResult modeError(nullptr, std::nullopt);
+        const auto svgMode = svgModeFrom(args, op, modeError);
+        auto operation = std::move(created).takeOperation();
+        if (svgMode && asset.isValid())
+            static_cast<commands::AddAssetSourceNode&>(*operation)
+                .withSvgSources(svgSourcesFor(context, {asset}, *svgMode));
+        return made(std::move(operation));
+    };
 
     add(descriptors, "bloom.node.add-composition-source", kAddCompositionSource,
         {composition(),

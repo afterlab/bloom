@@ -126,18 +126,43 @@ void addProjectOperations(std::vector<OperationDescriptor>& descriptors) {
          need("assets", ValueKind::Array, ValueArray{Value(StableId{1})},
               "Array of asset ids; the first visual one sizes the composition."),
          maybe("folder", ValueKind::Id, StableId{1},
-               "Id. The Assets folder the composition is filed in. Default: the Assets root.")},
+               "Id. The Assets folder the composition is filed in. Default: the Assets root."),
+         svgModeArgument()},
         [](const std::string& op, const Arguments& args) {
             Reader read(op, args);
+            OperationCreateResult modeError(nullptr, std::nullopt);
+            const auto svgMode = svgModeFrom(args, op, modeError);
+            if (!svgMode)
+                return modeError;
             const auto templateComposition = read.id<CompositionId>("template");
             auto assets = read.ids<AssetId>("assets");
             const auto folder = read.id<AssetFolderId>("folder", false);
             if (read.failed())
                 return read.error();
-            return made(std::make_unique<commands::AddCompositionFromFootage>(
+            auto footage = std::make_unique<commands::AddCompositionFromFootage>(
                 std::move(assets), templateComposition, std::string{},
-                folder.isValid() ? std::optional(folder) : std::nullopt));
+                folder.isValid() ? std::optional(folder) : std::nullopt);
+            footage->withSvgSources(svgModeOnly(*svgMode));
+            return made(std::move(footage));
         });
+    // An imported SVG among the assets is read and parsed here, on the client thread, from its file or
+    // the project's stored copy; applying reads nothing.
+    descriptors.back().contextualFactory = [factory = descriptors.back().factory](
+                                               const std::string& op, const Arguments& args,
+                                               const OperationContext& context) {
+        auto created = factory(op, args);
+        if (!created)
+            return created;
+        Reader read(op, args);
+        auto assets = read.ids<AssetId>("assets", false);
+        OperationCreateResult modeError(nullptr, std::nullopt);
+        const auto svgMode = svgModeFrom(args, op, modeError);
+        auto operation = std::move(created).takeOperation();
+        if (svgMode && !assets.empty())
+            static_cast<commands::AddCompositionFromFootage&>(*operation)
+                .withSvgSources(svgSourcesFor(context, assets, *svgMode));
+        return made(std::move(operation));
+    };
 
     add(descriptors, "bloom.parameter.reset", kReset,
         {composition(),

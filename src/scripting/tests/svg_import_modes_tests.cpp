@@ -4,6 +4,7 @@
 // editable shapes in place, as one undo step, from the copy the project holds.
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/asset.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/scripting/operation_registry.hpp>
@@ -213,6 +214,102 @@ int main() {
                 "bloom.layer.break-apart-svg",
                 {{"composition", Value{StableId{composition.value()}}}, {"layer", Value{StableId{layer->value()}}}});
             expect(!refused.succeeded(), "a solid layer is not broken apart");
+        }
+    }
+
+    // #646: an imported SVG asset added again through the registry builds the artwork, never an
+    // image layer, on the existing record; from the stored copy when the file is gone; refused by
+    // name when neither exists; one undo step.
+    for (const auto* modeName : {"layer", "shapes"}) {
+        auto session = newSession();
+        const auto composition = session->snapshot().project().compositions().front().id();
+        const Value compositionValue{StableId{composition.value()}};
+        const auto file646 = writeFile(std::string("readd-") + modeName);
+        const auto imported = session->executeJsonOperation(
+            "bloom.layer.add-svg",
+            {{"composition", compositionValue}, {"path", Value{file646.string()}}, {"mode", Value{modeName}}});
+        const auto asset = imported.command ? imported.command->outputId<bloom::document::AssetId>("asset") : std::nullopt;
+        expect(asset.has_value(), std::string(modeName) + ": the import records the file");
+        if (!asset)
+            continue;
+        const auto label = std::string(modeName) + ": ";
+        const auto assets = [&] { return session->snapshot().project().assets().size(); };
+        const auto blocks = [&] { return session->snapshot().project().typedDataBlocks().size(); };
+        const auto layers = [&] {
+            return session->snapshot().project().findComposition(composition)->graph().layerOutputs().size();
+        };
+        const Arguments again{{"composition", compositionValue},
+                              {"assets", Value{bloom::scripting::ValueArray{Value{StableId{asset->value()}}}}},
+                              {"mode", Value{modeName}}};
+        const auto assetsBefore = assets();
+        const auto blocksBefore = blocks();
+        const auto layersBefore = layers();
+        const auto added = session->executeJsonOperation("bloom.layer.add-from-assets", again);
+        expect(added.succeeded(), label + "bloom.layer.add-from-assets adds an SVG asset");
+        expect(assets() == assetsBefore && blocks() == blocksBefore, label + "no second record or block");
+        expect(layers() > layersBefore && countNodes(*session, composition, "bloom.image-source") == 0,
+               label + "the artwork is built, not an image layer");
+        if (std::string(modeName) == "layer")
+            expect(countNodes(*session, composition, kVectorArtworkNodeType) == 2, label + "a second Vector Artwork layer");
+        const auto undone = session->undo();
+        expect(undone.command && undone.command->changed() && layers() == layersBefore,
+               label + "one undo removes the whole re-add");
+        // A bad mode is named.
+        auto bad = again;
+        bad.insert_or_assign("mode", Value{"flat"});
+        const auto refusedMode = session->executeJsonOperation("bloom.layer.add-from-assets", bad);
+        expect(!refusedMode.succeeded() && refusedMode.diagnostic && refusedMode.diagnostic->argument == "mode",
+               label + "an invalid mode is refused, naming mode");
+
+        // The image route refuses an SVG asset by name.
+        const auto image = session->executeJsonOperation(
+            "bloom.layer.add-image",
+            {{"composition", compositionValue}, {"asset", Value{StableId{asset->value()}}}});
+        expect(!image.succeeded() && image.command && !image.command->operationFailures.empty() &&
+                   image.command->operationFailures.front().issue.message.find("SVG") != std::string::npos,
+               label + "bloom.layer.add-image refuses an SVG asset");
+
+        // The node route: unconnected artwork nodes, no image node.
+        const auto nodesBefore = session->snapshot().project().findComposition(composition)->graph().nodes().size();
+        const auto node = session->executeJsonOperation(
+            "bloom.node.add-asset-source",
+            {{"composition", compositionValue},
+             {"asset", Value{StableId{asset->value()}}},
+             {"mode", Value{modeName}},
+             {"position", Value{bloom::document::Vec2d{40.0, 60.0}}}});
+        expect(node.succeeded() && countNodes(*session, composition, "bloom.image-source") == 0 &&
+                   session->snapshot().project().findComposition(composition)->graph().nodes().size() > nodesBefore &&
+                   assets() == assetsBefore,
+               label + "bloom.node.add-asset-source builds the artwork's nodes on the same record");
+        (void)session->undo();
+
+        // New composition from the asset.
+        const auto compositions = session->snapshot().project().compositions().size();
+        const auto fresh = session->executeJsonOperation(
+            "bloom.composition.add-from-assets",
+            {{"template", compositionValue},
+             {"assets", Value{bloom::scripting::ValueArray{Value{StableId{asset->value()}}}}},
+             {"mode", Value{modeName}}});
+        expect(fresh.succeeded() && session->snapshot().project().compositions().size() == compositions + 1 &&
+                   assets() == assetsBefore,
+               label + "bloom.composition.add-from-assets builds the artwork in a new composition");
+        (void)session->undo();
+
+        // The file is gone.
+        std::filesystem::remove(file646);
+        const auto layersGone = layers();
+        const auto afterDelete = session->executeJsonOperation("bloom.layer.add-from-assets", again);
+        if (std::string(modeName) == "layer") {
+            expect(afterDelete.succeeded() && layers() > layersGone,
+                   label + "with the file gone the project's stored copy is used");
+        } else {
+            const auto* record = session->snapshot().project().findAsset(*asset);
+            expect(!afterDelete.succeeded() && afterDelete.command && !afterDelete.command->operationFailures.empty() &&
+                       record != nullptr &&
+                       afterDelete.command->operationFailures.front().issue.message.find(record->name) !=
+                           std::string::npos &&
+                       layers() == layersGone,
+                   label + "with neither the file nor a copy the add is refused by the asset's name and adds nothing");
         }
     }
     std::filesystem::remove(path);
