@@ -23,10 +23,10 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/path_value.hpp>
-#include <bloom/document/value_operations.hpp>
-#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_operations.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <chrono>
@@ -475,8 +475,9 @@ int main(int argc, char** argv) {
             if (keyed)
                 states.emplace_back("transform path skew", std::move(*keyed));
         }
-        // Warp Path (Function): a group's sine moves x by y; then a second group's cosine moves y by
-        // x as well, the issue's (x + sin y, y + cos x) on one node, in a turned and slanted space.
+        // Warp Path (Function): a group's sine moves x by y; then a second group's cosine moves y
+        // by x as well, the issue's (x + sin y, y + cos x) on one node, in a turned and slanted
+        // space.
         for (const bool both : {false, true}) {
             const std::string label = both ? "function x and y" : "function x";
             Fixture function(512, 512, 0, document::kWarpPathFunctionNodeType);

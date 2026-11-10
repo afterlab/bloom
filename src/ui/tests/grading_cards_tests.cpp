@@ -20,65 +20,55 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QStyleOptionGraphicsItem>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
-#include <bloom/document/color_grade_nodes.hpp>
-#include <bloom/document/channel_nodes.hpp>
-#include <bloom/document/colorize_nodes.hpp>
-#include <bloom/document/light_rays_nodes.hpp>
-#include <bloom/document/depth_effect_nodes.hpp>
-#include <bloom/document/lens_flare_definition.hpp>
-#include <bloom/document/film_grain_definition.hpp>
-#include <bloom/document/motion_blur_parameters.hpp>
-#include <bloom/document/motion_blur_nodes.hpp>
-#include <bloom/document/sharpen_definition.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
+#include <bloom/document/auto_exposure_nodes.hpp>
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/lens_flare_definition.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
-#include <bloom/document/value_nodes.hpp>
-#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/shape.hpp>
+#include <bloom/document/sharpen_definition.hpp>
+#include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
+#include <bloom/host/project_color_choice.hpp>
+#include <bloom/ui/chromatic_aberration_widget.hpp>
+#include <bloom/ui/codec_degrade_widget.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/corner_pin_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/depth_effect_widget.hpp>
-#include <bloom/ui/motion_blur_widget.hpp>
+#include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
-#include <bloom/ui/lens_flare_widget.hpp>
-#include <bloom/ui/codec_degrade_widget.hpp>
-#include <bloom/document/auto_exposure_nodes.hpp>
-#include <bloom/ui/lens_distortion_widget.hpp>
-#include <bloom/ui/chromatic_aberration_widget.hpp>
-#include <bloom/ui/corner_pin_widget.hpp>
-#include <bloom/document/warp_nodes.hpp>
-#include <bloom/ui/test_card_widget.hpp>
-#include <bloom/color/ocio_builtin_registry.hpp>
-#include <bloom/color/ocio_cpu_color_space_processor.hpp>
-#include <bloom/color/ocio_cpu_display_processor.hpp>
-#include <bloom/host/project_color_choice.hpp>
-#include <QRegularExpression>
-#include <algorithm>
-#include <array>
-#include <optional>
-#include <vector>
-#include <bloom/document/test_card_nodes.hpp>
-#include <bloom/ui/light_rays_widget.hpp>
-#include <bloom/ui/film_grain_widget.hpp>
-#include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
-#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/gradient_editor.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
@@ -87,16 +77,26 @@
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/lens_distortion_widget.hpp>
+#include <bloom/ui/lens_flare_widget.hpp>
+#include <bloom/ui/light_rays_widget.hpp>
+#include <bloom/ui/motion_blur_widget.hpp>
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/scalar_slider_widget.hpp>
+#include <bloom/ui/sharpen_widget.hpp>
+#include <bloom/ui/test_card_widget.hpp>
 #include <bloom/ui/vignette_widget.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
+#include <optional>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 using namespace bloom;
 
@@ -2861,10 +2861,9 @@ void motionBlurCards() {
     }
 }
 
-
-// #598: a Warp Path whose size is 0 draws nothing, and the card and Properties say why in the words the
-// MCP refusal carries: a warning badge on the card's header with the reason on hover, and the reason on
-// the node's Path readout in Properties. A size above 0 clears both.
+// #598: a Warp Path whose size is 0 draws nothing, and the card and Properties say why in the words
+// the MCP refusal carries: a warning badge on the card's header with the reason on hover, and the
+// reason on the node's Path readout in Properties. A size above 0 clears both.
 void warpPathRefusal() {
     CardFixture fixture(document::kWarpPathNodeType);
     const auto composition = fixture.project.initialCompositionId;
@@ -2879,15 +2878,15 @@ void warpPathRefusal() {
     square.closed = true;
     for (const auto& point : {document::Vec2d{-40, -40}, document::Vec2d{40, -40},
                               document::Vec2d{40, 40}, document::Vec2d{-40, 40}})
-        square.anchors.push_back({point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
+        square.anchors.push_back(
+            {point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
     geometry.path = document::PathValue::fromContour(square);
     commands::ShapeLayerStyle style;
     style.fillColor = core::Color4d{0.9, 0.5, 0.1, 1.0};
-    const auto shape =
-        run([&](auto& t) {
-            t.template emplace<commands::AddShapeLayer>(composition, document::ShapeKind::Path,
-                                                        geometry, style);
-        }).template outputId<document::NodeId>("shapeNode");
+    const auto shape = run([&](auto& t) {
+                           t.template emplace<commands::AddShapeLayer>(
+                               composition, document::ShapeKind::Path, geometry, style);
+                       }).template outputId<document::NodeId>("shapeNode");
     expect(shape.has_value(), "warp refusal: the shape layer is added");
     if (!shape)
         return;
@@ -2905,9 +2904,9 @@ void warpPathRefusal() {
          {std::tuple{path, std::string(document::kValuePortName), fixture.node},
           std::tuple{fixture.node, std::string("path"), *shape}})
         expect(run([&](auto& t) {
-                   t.template emplace<commands::ConnectPorts>(
-                       composition, document::OutputPortRef{from, port},
-                       document::NodeInputRef{to, "path"});
+                   t.template emplace<commands::ConnectPorts>(composition,
+                                                              document::OutputPortRef{from, port},
+                                                              document::NodeInputRef{to, "path"});
                }).succeeded(),
                "warp refusal: the path chain connects");
     ui::PropertiesEditor properties(fixture.session);
@@ -2942,10 +2941,13 @@ void warpPathRefusal() {
            "warp refusal: the card carries the refusal and its reason on hover");
     expect(fixture.session.valueNodeDiagnostic(fixture.node).contains(reason),
            "warp refusal: the session holds the node's refusal");
-    expect(readout().contains(reason), "warp refusal: Properties shows the refusal on the Path readout");
+    expect(readout().contains(reason),
+           "warp refusal: Properties shows the refusal on the Path readout");
     capture(fixture, QStringLiteral("warp-path-size-zero"));
-    if (const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR"); !directory.isEmpty())
-        (void)properties.grab().save(directory + QStringLiteral("/warp-path-size-zero-properties.png"));
+    if (const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        !directory.isEmpty())
+        (void)properties.grab().save(directory +
+                                     QStringLiteral("/warp-path-size-zero-properties.png"));
     expect(fixture.session.setParameterValue(parameterOf(fixture.node, "size"), 40.0, "Size 40"),
            "warp refusal: the size is set back");
     expect(settle(false) && !readout().contains(reason),

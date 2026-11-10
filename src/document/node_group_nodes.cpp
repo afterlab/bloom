@@ -120,8 +120,8 @@ namespace {
 }
 
 // #598 Warp Path (Function): the group is read as `f` and the optional second group as `g`, and a
-// point (x, y) of the warp's space goes to (x + amount * f(y / size), y + amount * g(x / size)); with
-// no second group, y stays. Its operands are Warp Path's, in the same order, less the function
+// point (x, y) of the warp's space goes to (x + amount * f(y / size), y + amount * g(x / size));
+// with no second group, y stays. Its operands are Warp Path's, in the same order, less the function
 // selector and the phase, so a set of value nodes that drives one drives the other.
 [[nodiscard]] NodeDefinition warpPathFunctionDefinition() {
     NodeDefinition definition{{std::string(kWarpPathFunctionNodeType), kNodeGroupNodeSchemaVersion},
@@ -133,9 +133,9 @@ namespace {
                               NodeCardinality::Many,
                               NodeCategory::Values};
     for (const auto role : {kNodeGroupReferenceRole, kWarpPathFunctionYGroupRole})
-        definition.parameters.push_back({std::string(role),
-                                         std::string(kNodeGroupReferenceSchemaKey),
-                                         ParameterValueKind::Integer, true, false, std::int64_t{0}});
+        definition.parameters.push_back(
+            {std::string(role), std::string(kNodeGroupReferenceSchemaKey),
+             ParameterValueKind::Integer, true, false, std::int64_t{0}});
     const auto operand = [&](const std::string_view role, const SocketValueKind kind,
                              const std::string_view key, ParameterValue value) {
         definition.inputs.push_back({std::string(role), kind, false});
@@ -303,8 +303,8 @@ class Expander final {
     }
 
     // Brings the definition's nodes in under ids derived from `key`, and splices them in place of a
-    // Node Group or holds them as the body `key` names. False, with the reason under `key`, when the
-    // definition cannot be expanded.
+    // Node Group or holds them as the body `key` names. False, with the reason under `key`, when
+    // the definition cannot be expanded.
     [[nodiscard]] bool expandDefinition(const NodeRecord& instance, const CompositionId reference,
                                         const NodeId key) {
         const auto* definition = project_.findComposition(reference);

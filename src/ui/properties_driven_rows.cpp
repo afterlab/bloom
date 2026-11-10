@@ -106,8 +106,9 @@ void PropertiesEditor::configureDrivenRows() {
                 label->setText(text.isEmpty() ? tr("Resolving…") : text);
                 // #598: the readout carries a refusal's summary; its tooltip the whole reason.
                 const auto problem = session_.valueNodeDiagnostic(node);
-                label->setToolTip(problem.isEmpty() ? label->text()
-                                                    : label->text() + QStringLiteral("\n") + problem);
+                label->setToolTip(problem.isEmpty()
+                                      ? label->text()
+                                      : label->text() + QStringLiteral("\n") + problem);
             }
         });
     }

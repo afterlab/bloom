@@ -1,11 +1,12 @@
 // #598: Warp Path travels the routes an artist actually uses. A Path node keyed from a small
 // circle to a large one feeds Warp Path (Wave, in a turned and slanted space), which feeds a Path
 // Shape Source; the same again with Warp Path (Function) reading a sine group for x and a cosine
-// group for y in place of the Wave; the real Viewer preview path shows it at several times, a RAM preview fills the range
-// cold at Half and replays it warm with no new work, and the real export route renders the same
-// frames as a still, a PNG range and a movie. Each Viewer frame equals the exported frame (RGB within
-// one code, exact alpha), the picture moves with the keys, and the key that holds holds. A second
-// authoring edits the node (a different amount) and the picture changes: the edit is not served stale.
+// group for y in place of the Wave; the real Viewer preview path shows it at several times, a RAM
+// preview fills the range cold at Half and replays it warm with no new work, and the real export
+// route renders the same frames as a still, a PNG range and a movie. Each Viewer frame equals the
+// exported frame (RGB within one code, exact alpha), the picture moves with the keys, and the key
+// that holds holds. A second authoring edits the node (a different amount) and the picture changes:
+// the edit is not served stale.
 //
 // The CPU reference half always runs (CPU preview pipeline against the CPU export provider). The
 // GPU half runs the GPU-prepared packed preview product against the GPU export provider when
@@ -17,19 +18,19 @@
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/group_definition_operations.hpp>
-#include <bloom/core/scalar_primitives.hpp>
-#include <bloom/document/node_group_nodes.hpp>
-#include <bloom/document/value_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/path_value.hpp>
-#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_operations.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_analysis.hpp>
@@ -246,9 +247,9 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
 }
 
 [[nodiscard]] std::optional<document::ParameterId> parameterIn(const Authored& authored,
-                                                              const document::CompositionId id,
-                                                              const document::NodeId node,
-                                                              const std::string_view role) {
+                                                               const document::CompositionId id,
+                                                               const document::NodeId node,
+                                                               const std::string_view role) {
     const auto* composition = authored.scripting->snapshot().project().findComposition(id);
     const auto* record = composition ? composition->graph().findNode(node) : nullptr;
     if (record != nullptr)
@@ -258,24 +259,26 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
     return std::nullopt;
 }
 
-// A new group made from Warp Path (Function)'s chooser for `role`, holding one Math node, `operation`
-// of the group's argument, as its answer: the authoring an artist does in Properties and the group.
+// A new group made from Warp Path (Function)'s chooser for `role`, holding one Math node,
+// `operation` of the group's argument, as its answer: the authoring an artist does in Properties
+// and the group.
 [[nodiscard]] bool addFunctionGroup(Authored& authored, const document::NodeId warp,
                                     const std::string_view role,
                                     const core::primitives::ScalarPrimitive operation) {
     const auto created = edit<commands::CreateGroupDefinition>(
         authored, authored.composition, std::string(role), warp, std::string(role));
-    const auto group = created.outputId<document::CompositionId>(commands::kCreateGroupDefinitionOutput);
+    const auto group =
+        created.outputId<document::CompositionId>(commands::kCreateGroupDefinitionOutput);
     const auto input =
         created.outputId<document::NodeId>(commands::kCreateGroupDefinitionInputNodeOutput);
     const auto output =
         created.outputId<document::NodeId>(commands::kCreateGroupDefinitionOutputNodeOutput);
     if (!group || !input || !output)
         return false;
-    const auto math = edit<commands::AddNode>(authored, *group,
-                                              std::string(document::kScalarMathNodeType),
-                                              document::Vec2d{240, 0})
-                          .outputId<document::NodeId>(commands::kAddNodeOutput);
+    const auto math =
+        edit<commands::AddNode>(authored, *group, std::string(document::kScalarMathNodeType),
+                                document::Vec2d{240, 0})
+            .outputId<document::NodeId>(commands::kAddNodeOutput);
     if (!math)
         return false;
     const auto operationParameter = parameterIn(authored, *group, *math, "operation");
@@ -284,7 +287,8 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
                authored, *group, *operationParameter,
                document::ConstantValueSource{document::scalarOperationStoredValue(operation)})
                .succeeded() &&
-           edit<commands::ConnectPorts>(authored, *group, document::OutputPortRef{*input, "scalar1"},
+           edit<commands::ConnectPorts>(authored, *group,
+                                        document::OutputPortRef{*input, "scalar1"},
                                         document::NodeInputRef{*math, "a"})
                .succeeded() &&
            edit<commands::ConnectPorts>(

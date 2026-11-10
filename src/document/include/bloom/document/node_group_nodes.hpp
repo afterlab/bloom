@@ -111,7 +111,8 @@ inline constexpr std::string_view kFunctionOutputSlot = "scalar1";
 
 // The roles of a node type that name a group: `group` on every type that uses a group reference,
 // then Warp Path (Function)'s `groupY`. Empty for every other type.
-[[nodiscard]] std::span<const std::string_view> groupReferenceRoles(std::string_view typeId) noexcept;
+[[nodiscard]] std::span<const std::string_view>
+groupReferenceRoles(std::string_view typeId) noexcept;
 
 // The definition a node references: the constant value of its `role` parameter (`group` unless
 // named), or nothing when the node has none, or it is not constant, or it is not positive.

@@ -169,8 +169,8 @@ void PropertiesEditor::configureRegistryRows() {
                 auto* label = kit::makePropertyRowLabel(text, section->body());
                 auto* selector = new kit::KDropdown(section->body());
                 selector->setObjectName(QStringLiteral("propertiesNodeGroup") + suffix);
-                selector->setProperty("groupRole", QString::fromLatin1(role.data(),
-                                                                       static_cast<int>(role.size())));
+                selector->setProperty(
+                    "groupRole", QString::fromLatin1(role.data(), static_cast<int>(role.size())));
                 if (node->typeId == document::kWarpPathFunctionNodeType)
                     selector->setToolTip(second ? tr("The function that moves y: y + Amount × "
                                                      "g(x / Size). None leaves y.")
@@ -523,9 +523,11 @@ void PropertiesEditor::configureRegistryRows() {
         selector->setCurrentIndex(index);
         const bool locked = session_.composition()->nodeLocked(node->id);
         selector->setEnabled(!locked);
-        if (auto* open = findChild<kit::KButton*>(QStringLiteral("propertiesOpenNodeGroup") + suffix))
+        if (auto* open =
+                findChild<kit::KButton*>(QStringLiteral("propertiesOpenNodeGroup") + suffix))
             open->setEnabled(session_.snapshot().project().findComposition(target) != nullptr);
-        if (auto* create = findChild<kit::KButton*>(QStringLiteral("propertiesNewNodeGroup") + suffix))
+        if (auto* create =
+                findChild<kit::KButton*>(QStringLiteral("propertiesNewNodeGroup") + suffix))
             create->setEnabled(!locked);
     }
     if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {

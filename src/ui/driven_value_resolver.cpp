@@ -312,11 +312,11 @@ void DrivenValueResolver::start() {
                     if (!diagnostic.nodeId.isValid())
                         continue;
                     auto& text = values->nodeDiagnostics[diagnostic.nodeId];
-                    const auto line = QString::fromStdString(diagnostic.summary) +
-                                      (diagnostic.detail.empty()
-                                           ? QString{}
-                                           : QStringLiteral(": ") +
-                                                 QString::fromStdString(diagnostic.detail));
+                    const auto line =
+                        QString::fromStdString(diagnostic.summary) +
+                        (diagnostic.detail.empty()
+                             ? QString{}
+                             : QStringLiteral(": ") + QString::fromStdString(diagnostic.detail));
                     if (!text.contains(line))
                         text += (text.isEmpty() ? QString{} : QStringLiteral("\n")) + line;
                 }
@@ -342,7 +342,8 @@ void DrivenValueResolver::start() {
                         // MCP and scripts get.
                         for (const auto& diagnostic : valueDiagnostics)
                             if (diagnostic.nodeId == node->id)
-                                text += QString(" · %1").arg(QString::fromStdString(diagnostic.summary));
+                                text += QString(" · %1").arg(
+                                    QString::fromStdString(diagnostic.summary));
                         values->outputs[{node->id, output.name}] = std::move(text);
                     }
                 }

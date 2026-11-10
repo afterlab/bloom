@@ -418,11 +418,11 @@ struct CompiledValueFunctionPlot final {
     friend bool operator==(const CompiledValueFunctionPlot&, const CompiledValueFunctionPlot&);
 };
 
-// #598: Warp Path (Function). The body is run at each point's distance along the warp's space (divided
-// by `size`) and the answer, times `amount`, is how far the point slides across it. `bodyY`, when the
-// node names a second group, is run at the distance across (x / size) and moves the point along y by
-// that answer times `amount`; null leaves y. The operands, in order: path, amount, size, tolerance,
-// position, anchor, scale, rotation, skew, skew axis.
+// #598: Warp Path (Function). The body is run at each point's distance along the warp's space
+// (divided by `size`) and the answer, times `amount`, is how far the point slides across it.
+// `bodyY`, when the node names a second group, is run at the distance across (x / size) and moves
+// the point along y by that answer times `amount`; null leaves y. The operands, in order: path,
+// amount, size, tolerance, position, anchor, scale, rotation, skew, skew axis.
 struct CompiledValueWarpFunction final {
     std::shared_ptr<const CompiledFunctionBody> body;
     std::shared_ptr<const CompiledFunctionBody> bodyY;

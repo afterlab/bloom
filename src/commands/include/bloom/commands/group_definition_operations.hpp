@@ -18,10 +18,10 @@ inline constexpr std::string_view kCreateGroupDefinitionOutput = "group";
 inline constexpr std::string_view kCreateGroupDefinitionInputNodeOutput = "groupInput";
 inline constexpr std::string_view kCreateGroupDefinitionOutputNodeOutput = "groupOutput";
 
-// Adds a group definition holding a Group Input and a Group Output, sized like the composition it is
-// made from. When `instance` names a Node Group in that composition, the new group becomes the one
-// it reads, in the same step: in its `group` parameter, or in `role` when that names another group
-// reference of the node (Warp Path (Function)'s `groupY`).
+// Adds a group definition holding a Group Input and a Group Output, sized like the composition it
+// is made from. When `instance` names a Node Group in that composition, the new group becomes the
+// one it reads, in the same step: in its `group` parameter, or in `role` when that names another
+// group reference of the node (Warp Path (Function)'s `groupY`).
 class CreateGroupDefinition final : public Operation {
   public:
     CreateGroupDefinition(document::CompositionId from, std::string name,
