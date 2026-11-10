@@ -9,6 +9,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -23,6 +24,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -378,6 +380,39 @@ void testLinkWidthIsConstant() {
         std::cerr << "  ink per pixel at 0.25: " << zoomedOut << ", at 2: " << zoomedIn << '\n';
 }
 
+// #599: a Shape Source grows a socket row only for what its kind reads. A Line shows its two
+// ends' sockets; a Rectangle shows none of them (nor the Path socket), so no empty socket band sits
+// above its first row.
+void testShapeSocketsFollowTheKind() {
+    Fixture f;
+    const auto sockets = [&](const document::ShapeKind kind) {
+        if (!f.session.addShapeLayer(kind, {.position = document::Vec2d{100.0, 100.0},
+                                            .size = document::Vec2d{80.0, 60.0},
+                                            .lineStart = document::Vec2d{0.0, 0.0},
+                                            .lineEnd = document::Vec2d{80.0, 0.0},
+                                            .path = {}}))
+            throw std::runtime_error("fixture shape layer");
+        QCoreApplication::processEvents();
+        const auto layer = std::get<document::LayerId>(f.session.selection().primary);
+        const auto shape = f.session.directSourceNodeForLayer(layer);
+        std::set<QString> names;
+        if (auto* card = shape ? f.card(*shape) : nullptr)
+            for (auto* socket : card->sockets())
+                names.insert(socket->name);
+        return names;
+    };
+    const auto line = sockets(document::ShapeKind::Line);
+    expect(line.contains(QStringLiteral("lineStart")) && line.contains(QStringLiteral("lineEnd")),
+           "a Line card shows its ends' sockets");
+    expect(!line.contains(QStringLiteral("size")) && !line.contains(QStringLiteral("path")),
+           "a Line card shows no Size or Path socket");
+    const auto rectangle = sockets(document::ShapeKind::Rectangle);
+    expect(rectangle.contains(QStringLiteral("size")) &&
+               !rectangle.contains(QStringLiteral("lineStart")) &&
+               !rectangle.contains(QStringLiteral("lineEnd")),
+           "a Rectangle card shows its Size socket and no Line end sockets");
+}
+
 // Item 12: Merge's links each plug into their own segment of the stack pill.
 void testMergeSlotsHaveTheirOwnSockets() {
     Fixture f;
@@ -714,6 +749,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testLinkWidthIsConstant();
         bloom::ui::test::testMergeSlotsHaveTheirOwnSockets();
         bloom::ui::test::testSourceCardsHaveNoPreview();
+        bloom::ui::test::testShapeSocketsFollowTheKind();
         bloom::ui::test::testNodesIcon();
         bloom::ui::test::testGlowingPathPresets();
         bloom::ui::test::testOutlineStrokeMenu();

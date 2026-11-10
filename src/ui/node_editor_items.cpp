@@ -1009,9 +1009,9 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                       }()
                     : links.edgeInto(input);
             // #589: Shape Source reads its Path socket only as a Path shape, so the other kinds do
-            // not grow a row for it. A link it already has still shows, so it cannot dangle.
-            if (!linked && shapeSource_ && port.name == "path" &&
-                shapeKind_ != document::ShapeKind::Path)
+            // not grow a row for it; #599: likewise a Line's ends (and any socket whose role the
+            // kind does not show). A link it already has still shows, so it cannot dangle.
+            if (!linked && shapeSource_ && !document::shapeRoleVisible(shapeKind_, port.name))
                 continue;
             if (linked)
                 linkedInputs_.insert(QString::fromStdString(port.name));
