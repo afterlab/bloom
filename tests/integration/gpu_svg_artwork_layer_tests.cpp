@@ -12,8 +12,13 @@
 // - The one layer equals the editable import of the same file on the device, whole frame, on the
 //   in-repo synthetic files (gradients, clips, masks, opacity groups, blur, dashes, runs of more
 //   than 256 siblings).
-// - 1920 x 1080 and 3840 x 2160 prepare and run on the device (no comparison at these sizes; the
-//   export route's provenance is read by bloom.ui.viewer_export_svg_artwork).
+// - A layer the composition changes (a mask, a Gaussian Blur and a Drop Shadow between the artwork
+//   and its slot, its scale, rotation and opacity keyed; a layer pivoting on its content; a
+//   retimed layer) is drawn at its output scale (the oversampled route) and matches the CPU
+//   reference cold and warm with its bounds, 512 x 288 over frames 0 to 2.
+// - 1920 x 1080 and 3840 x 2160 prepare and run on the device, the plain layer and the oversampled
+//   one (no comparison at these sizes; the export route's provenance is read by
+//   bloom.ui.viewer_export_svg_artwork).
 // - Admission (the phase admits the scene; a machine too small refuses it and holds nothing),
 //   retirement (releasing the scene returns every claimed byte), cancellation (a cancelled
 //   preparation and a cancelled run publish nothing) and the executor's request budget.
@@ -25,8 +30,12 @@
 #include "gpu_coverage_ocio_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
@@ -137,6 +146,7 @@ struct Fixture final {
     document::Document document;
     commands::CommandStack commands;
     document::LayerId art;
+    std::optional<document::NodeId> artworkNode;
 
     Fixture(const std::filesystem::path& file, const commands::SvgImportMode mode, const std::uint32_t width,
             const std::uint32_t height)
@@ -147,10 +157,42 @@ struct Fixture final {
           main(initial.initialCompositionId), document(std::move(initial.project)), commands(document) {
         const auto imported = apply<commands::AddSvgArtwork>(document, commands, main, nullptr, file, "art", true, mode);
         art = *imported.outputId<document::LayerId>("layer");
+        artworkNode = imported.outputId<document::NodeId>("node");
     }
     [[nodiscard]] document::ParameterId layerParameter(const std::string_view role) const {
+        return layerParameter(art, role);
+    }
+    [[nodiscard]] document::ParameterId layerParameter(const document::LayerId layer, const std::string_view role) const {
         const auto& graph = composition(document, main).graph();
-        return document::layerParameterBinding(graph, *graph.findLayer(art), role)->parameterId;
+        return document::layerParameterBinding(graph, *graph.findLayer(layer), role)->parameterId;
+    }
+    [[nodiscard]] document::ParameterId nodeParameter(const document::NodeId node, const std::string_view role) const {
+        for (const auto& binding : composition(document, main).graph().findNode(node)->parameters)
+            if (binding.role == role)
+                return binding.parameterId;
+        throw std::runtime_error("a node parameter is missing");
+    }
+    void set(const document::ParameterId parameter, const document::ParameterValue value) {
+        apply<commands::SetParameterSource>(document, commands, main, parameter, document::ConstantValueSource{value});
+    }
+    document::NodeId addNode(const std::string_view type) {
+        return *apply<commands::AddNode>(document, commands, main, std::string(type), document::Vec2d{0, -300})
+                    .outputId<document::NodeId>(commands::kAddNodeOutput);
+    }
+    template <typename Input> void connect(const document::NodeId from, const Input to) {
+        apply<commands::ConnectPorts>(document, commands, main, document::OutputPortRef{from, "image"}, to);
+    }
+    // Puts `nodes`, in order, between the artwork and the layer's slot.
+    void insertBetween(const std::vector<document::NodeId>& nodes) {
+        const auto* boundary = composition(document, main).graph().findLayer(art);
+        const auto merge = boundary->nodeId;
+        const auto slot = *boundary->entrySlot;
+        auto from = *artworkNode;
+        for (const auto node : nodes) {
+            connect(from, document::NodeInputRef{node, "input"});
+            from = node;
+        }
+        connect(from, document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
     }
     template <typename Value> void key(const std::string_view role, const Value first, const Value last) {
         // The first key holds the value the constant already has, so the moved key goes in first.
@@ -163,10 +205,15 @@ struct Fixture final {
 
 core::RationalTime frameAt(const std::int64_t index) { return *core::RationalTime::create(index, 24); }
 
+// How the layer's artwork is drawn sharp: B's composed route (the layer's transform through the
+// geometry) or the oversampled route (drawn at the layer's output scale, one resample after).
+enum class Sharp { Composed, Oversampled };
+
 // The CPU reference of a composition at a time and resolution.
 [[nodiscard]] std::optional<Reference> referenceAt(Expectations& expectations, const Fixture& fixture,
                                                    const core::RationalTime time, const std::string& label,
-                                                   const runtime::EvaluationResolution resolution = {}) {
+                                                   const runtime::EvaluationResolution resolution = {},
+                                                   const Sharp sharp = Sharp::Composed) {
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     const auto compiled = compiler.compile({fixture.document.snapshot(), fixture.main}, {});
     expectations.expect(compiled.plan != nullptr,
@@ -175,12 +222,16 @@ core::RationalTime frameAt(const std::int64_t index) { return *core::RationalTim
     if (!compiled.plan)
         return std::nullopt;
     expectations.expect(std::ranges::any_of(compiled.plan->operations(),
-                                            [](const auto& operation) {
+                                            [sharp](const auto& operation) {
                                                 const auto* layer = std::get_if<runtime::CompiledLayerOutput>(&operation);
-                                                return layer != nullptr && layer->composedArtwork.has_value();
+                                                if (layer == nullptr)
+                                                    return false;
+                                                return sharp == Sharp::Composed ? layer->composedArtwork.has_value()
+                                                                                : layer->contentScale > 1.0;
                                             }) ||
                             label.find("shapes") != std::string::npos,
-                        label + ": the layer's transform is drawn through its artwork's geometry");
+                        label + (sharp == Sharp::Composed ? ": the layer's transform is drawn through its artwork's geometry"
+                                                          : ": the layer's artwork is drawn at its output scale"));
     auto request = requestFor(*compiled.plan);
     request.time = time;
     request.resolution = resolution;
@@ -482,6 +533,134 @@ void largeOnTheDevice(Expectations& expectations, const Device& device, const st
     }
 }
 
+// The content scale the compiled plan draws `layer`'s artwork at (1 when it is not oversampled).
+[[nodiscard]] double contentScaleOf(const runtime::CompiledCompositionPlan& plan, const document::LayerId layer) {
+    for (const auto& operation : plan.operations())
+        if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation); output != nullptr && output->layerId == layer)
+            return output->contentScale;
+    return 0.0;
+}
+
+void addMask(Fixture& fixture, const document::LayerId layer, const std::vector<document::Vec2d>& points, const double feather) {
+    document::PathValue mask;
+    document::PathContour contour;
+    contour.closed = true;
+    for (const auto& point : points)
+        contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+    mask.contours.push_back(contour);
+    apply<commands::AddLayerMask>(fixture.document, fixture.commands, fixture.main, layer, mask);
+    fixture.set(composition(fixture.document, fixture.main).graph().findLayer(layer)->masks.back().feather,
+                document::ParameterValue{feather});
+}
+
+// A Gaussian Blur then a Drop Shadow between the artwork and its slot, every length in the
+// composition's pixels.
+void effectsBetween(Fixture& fixture) {
+    const auto blur = fixture.addNode("bloom.gaussian-blur");
+    fixture.set(fixture.nodeParameter(blur, "radius"), document::ParameterValue{1.5});
+    const auto shadow = fixture.addNode(document::kDropShadowNodeType);
+    fixture.set(fixture.nodeParameter(shadow, "distance"), document::ParameterValue{4.0});
+    fixture.set(fixture.nodeParameter(shadow, "softness"), document::ParameterValue{2.0});
+    fixture.insertBetween({blur, shadow});
+}
+
+// #642 B2: the layers the composition changes, drawn at their output scale, on the device.
+void oversampledOnTheDevice(Expectations& expectations, const Device& device) {
+    const auto file = writeSvg("icon", kIcon);
+    {
+        // Masked, a blur and a drop shadow between, scale (1 to 2.6), rotation and opacity keyed:
+        // the largest scale 2.6 draws the artwork at 4x for every frame.
+        Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+        addMask(layer, layer.art, {{190, 60}, {330, 70}, {320, 230}, {180, 220}}, 2.0);
+        effectsBetween(layer);
+        layer.key(document::kScaleParameterRole, document::Vec2d{1, 1}, document::Vec2d{2.6, 2.6});
+        layer.key(document::kRotationParameterRole, 0.0, 20.0);
+        layer.key(document::kOpacityParameterRole, 1.0, 0.7);
+        std::vector<std::vector<render::Rgba32f>> frames;
+        for (const std::int64_t index : {0, 1, 2}) {
+            const auto label = "oversampled frame " + std::to_string(index);
+            const auto reference = referenceAt(expectations, layer, frameAt(index), label, {}, Sharp::Oversampled);
+            if (!reference)
+                continue;
+            expectations.expect(contentScaleOf(*reference->plan, layer.art) == 4.0, label + ": drawn at 4x");
+            parityOn(expectations, device, *reference, label);
+            const auto pixels = reference->frame->processImage().pixels();
+            frames.emplace_back(pixels.begin(), pixels.end());
+        }
+        expectations.expect(frames.size() == 3 && !parity(frames[0], frames[1]) && !parity(frames[1], frames[2]),
+                            "oversampled: the keyed transform and opacity change every frame");
+    }
+    {
+        // A Layer node pivoting on its content between the artwork and the entry's own Layer node.
+        Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+        const auto pivoting = layer.addNode(document::kLayerOutputNodeType);
+        const auto outer = layer.addNode(document::kLayerOutputNodeType);
+        layer.connect(*layer.artworkNode, document::NodeInputRef{pivoting, std::string(document::kLayerOutputContentInputPort)});
+        layer.connect(pivoting, document::NodeInputRef{outer, std::string(document::kLayerOutputContentInputPort)});
+        const auto* entry = composition(layer.document, layer.main).graph().findLayer(layer.art);
+        layer.connect(outer, document::LayerStackInputRef{entry->nodeId, *entry->entrySlot,
+                                                          std::string(document::kLayerStackContentInputRole)});
+        std::optional<document::LayerId> held;
+        for (const auto& boundary : composition(layer.document, layer.main).graph().layerOutputs())
+            if (!boundary.entryOwned() && boundary.nodeId == pivoting)
+                held = boundary.layerId;
+        expectations.expect(held.has_value() && composition(layer.document, layer.main).graph().findLayer(*held)->pivot ==
+                                                    document::LayerPivot::Content,
+                            "content pivot: the Layer node pivots on its content");
+        if (held) {
+            layer.set(layer.layerParameter(*held, document::kScaleParameterRole), document::ParameterValue{document::Vec2d{2.5, 2.5}});
+            layer.set(layer.layerParameter(*held, document::kRotationParameterRole), document::ParameterValue{15.0});
+            layer.set(layer.layerParameter(*held, document::kAnchorParameterRole), document::ParameterValue{document::Vec2d{6.0, -4.0}});
+            if (const auto reference = referenceAt(expectations, layer, frameAt(0), "content pivot", {}, Sharp::Oversampled)) {
+                expectations.expect(contentScaleOf(*reference->plan, *held) == 4.0, "content pivot: drawn at 4x");
+                parityOn(expectations, device, *reference, "content pivot");
+            }
+        }
+    }
+    {
+        // Retimed (starting a frame late) and scaled 3x: drawn at 4x, frames 1 and 2.
+        Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+        apply<commands::SetLayerTiming>(layer.document, layer.commands, layer.main, layer.art, frameAt(1), core::RationalTime{},
+                                        core::RationalTime::fromInteger(4));
+        layer.set(layer.layerParameter(document::kScaleParameterRole), document::ParameterValue{document::Vec2d{3.0, 3.0}});
+        for (const std::int64_t index : {1, 2}) {
+            const auto label = "retimed frame " + std::to_string(index);
+            if (const auto reference = referenceAt(expectations, layer, frameAt(index), label, {}, Sharp::Oversampled)) {
+                expectations.expect(contentScaleOf(*reference->plan, layer.art) == 4.0, label + ": drawn at 4x");
+                parityOn(expectations, device, *reference, label);
+            }
+        }
+    }
+    // 1080p and 4K: a blur between, scaled 1.5x and turned, drawn at 2x (the 8192-pixel cap allows
+    // 4x at 1080p, 2x at 4K; 1.5x turned asks for 2x).
+    for (const auto& [width, height] : {std::pair{1920U, 1080U}, std::pair{3840U, 2160U}}) {
+        const auto label = "oversampled " + std::to_string(width) + "x" + std::to_string(height);
+        Fixture layer(file, commands::SvgImportMode::Layer, width, height);
+        const auto blur = layer.addNode("bloom.gaussian-blur");
+        layer.set(layer.nodeParameter(blur, "radius"), document::ParameterValue{3.0});
+        layer.insertBetween({blur});
+        layer.set(layer.layerParameter(document::kScaleParameterRole), document::ParameterValue{document::Vec2d{1.5, 1.5}});
+        layer.set(layer.layerParameter(document::kRotationParameterRole), document::ParameterValue{-12.0});
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({layer.document.snapshot(), layer.main}, {});
+        expectations.expect(compiled.plan != nullptr && contentScaleOf(*compiled.plan, layer.art) == 2.0,
+                            label + ": compiles, drawn at 2x");
+        if (!compiled.plan)
+            continue;
+        auto request = requestFor(*compiled.plan);
+        request.pixelStorageByteLimit = 8 * kGib;
+        const auto pixels = deviceFrame(expectations, device, Reference{compiled.plan, request, nullptr}, label, 4 * kGib);
+        expectations.expect(pixels.size() == std::size_t{width} * height, label + ": the device frame is the composition's size");
+        std::size_t covered = 0;
+        for (const auto& pixel : pixels)
+            covered += pixel.alpha() > 0.5F ? 1 : 0;
+        expectations.expect(covered > pixels.size() / 8,
+                            label + ": the artwork covers the frame on the device (" + std::to_string(covered) + " pixels)");
+        std::cout << label << ": the production GPU route prepared and ran the oversampled layer\n";
+    }
+    std::filesystem::remove(file);
+}
+
 void cancellationOnTheDevice(Expectations& expectations, const Device& device, const Reference& reference) {
     runtime::CpuCompositionEvaluator evaluator;
     const auto built = toolsBuilder(expectations, evaluator).build(reference.plan, reference.request);
@@ -551,13 +730,15 @@ int main(int argc, char** argv) {
         if (admissionFrame)
             cancellationOnTheDevice(expectations, device, *admissionFrame);
         largeOnTheDevice(expectations, device, composite);
+        oversampledOnTheDevice(expectations, device);
         std::filesystem::remove(composite);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " Vector Artwork layer expectation(s) failed\n";
             return 1;
         }
         std::cout << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the editable import, "
-                     "keyed, turned, scaled, at half resolution, at 1080p and 4K, admitted, retired and cancelled\n";
+                     "keyed, turned, scaled, masked, retimed, with effects between, at half resolution, at 1080p and 4K, "
+                     "admitted, retired and cancelled\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

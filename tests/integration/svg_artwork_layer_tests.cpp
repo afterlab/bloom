@@ -320,17 +320,36 @@ void layerComposesThroughTheExpansionRoot() {
                return node.typeId == document::kVectorArtworkNodeType;
            }) == 1,
            "the dressed layer still holds one Vector Artwork node");
+    // #642 B2: the dressed layer (scaled 1.2x, turned, masked, a blur between) is drawn at its
+    // output scale by default (2x here); with that off, the expansion's root is the editable root
+    // exactly. The default picture is the same artwork drawn from more pixels: its coverage is the
+    // resampled one's.
+    document::VectorArtworkExpansionContext resample;
+    resample.composeLayerTransform = false;
     for (const std::int64_t index : {0, 1, 2}) {
         const auto label = "frame " + std::to_string(index);
         const auto editable = renderProject(shapes.document, shapes.main, frame(index), "editable " + label);
-        const auto one = renderExpanded(layer.document, layer.main, frame(index), "one layer " + label);
-        if (!editable || !one)
+        const auto one = renderExpandedWith(layer.document, layer.main, frame(index), "one layer " + label, resample);
+        const auto sharp = renderExpanded(layer.document, layer.main, frame(index), "one layer sharp " + label);
+        if (!editable || !one || !sharp)
             continue;
         const auto worst = difference(*editable, *one);
         expect(worst <= kGate, label + ": opacity, blend, transform, parent, track matte, mask and effect compose "
                                        "through the expansion's root as through the editable root (worst " +
                                    std::to_string(worst) + ")");
         expect(coverage(*one) > 100.0, label + ": the dressed layer draws");
+        expect(std::abs(coverage(*sharp) - coverage(*one)) <= 0.01 * coverage(*one),
+               label + ": drawn at its output scale, the dressed layer covers what the resampled one does");
+    }
+    {
+        const auto snapshot = layer.document.snapshot();
+        document::VectorArtworkExpansionContext context;
+        context.fonts = noFonts();
+        const auto expansion =
+            document::expandVectorArtwork(snapshot.project(), *snapshot.project().findComposition(layer.main), context);
+        const auto found = expansion.oversampled.find(layer.art);
+        expect(found != expansion.oversampled.end() && found->second.scale == 2.0,
+               "the dressed layer is drawn at 2x (scaled 1.2x and turned)");
     }
     // The opacity key moves the picture: the frames differ, so the comparison above saw animation.
     const auto first = renderExpanded(layer.document, layer.main, frame(0), "frame 0");
@@ -948,21 +967,32 @@ void whatResamplesAndWhatFollows() {
             contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
         mask.contours.push_back(contour);
         masked.run<commands::AddLayerMask>(masked.main, masked.art, mask);
+        // #642 B2: at the identity it needs no more pixels than the composition's; scaled up it is
+        // drawn at its output scale (VectorArtworkOversampledLayer) rather than resampled.
+        const auto identity = expansionOf(masked);
+        expect(identity.composed.empty() && identity.oversampled.empty() && identity.resampled.empty(),
+               "a masked layer at the identity is drawn at the composition's scale, which is its output scale");
+        setTransform(masked, masked.art, {2.0, 2.0}, 0.0);
         const auto expansion = expansionOf(masked);
-        const auto why = expansion.resampled.find(*masked.artworkNode);
-        expect(expansion.composed.empty() && why != expansion.resampled.end() && why->second.find("masks") != std::string::npos,
-               "resampled: a masked layer keeps the resampled picture, saying it has masks");
+        const auto found = expansion.oversampled.find(masked.art);
+        expect(expansion.composed.empty() && expansion.resampled.empty() && found != expansion.oversampled.end() &&
+                   found->second.scale == 2.0,
+               "oversampled: a masked layer scaled 2x draws its artwork at 2x instead of resampling it");
     }
     {
         Fixture retimed(file, commands::SvgImportMode::Layer, 256, 144);
         retimed.run<commands::SetLayerTiming>(retimed.main, retimed.art, frame(1), core::RationalTime{},
                                               core::RationalTime::fromInteger(4));
+        retimed.run<commands::SetParameterSource>(
+            retimed.main, retimed.layerParameter(retimed.art, document::kRotationParameterRole),
+            document::ConstantValueSource{document::ParameterValue{12.0}});
         const auto expansion = expansionOf(retimed);
-        const auto why = expansion.resampled.find(*retimed.artworkNode);
-        expect(expansion.composed.empty() && why != expansion.resampled.end() && why->second.find("timing") != std::string::npos,
-               "resampled: a retimed layer keeps the resampled picture, saying it has its own timing");
+        const auto found = expansion.oversampled.find(retimed.art);
+        expect(expansion.composed.empty() && expansion.resampled.empty() && found != expansion.oversampled.end() &&
+                   found->second.scale == 2.0,
+               "oversampled: a retimed layer that turns draws its artwork at 2x instead of resampling it");
         expect(static_cast<bool>(renderExpanded(retimed.document, retimed.main, frame(2), "retimed")),
-               "resampled: the retimed layer renders");
+               "oversampled: the retimed layer renders");
     }
     {
         // A Layer node between the artwork and its slot (it adopts the entry's values, pivot
@@ -1014,6 +1044,572 @@ void whatResamplesAndWhatFollows() {
     std::filesystem::remove(file);
 }
 
+// ---- #642 package B2: a layer the composition changes stays sharp ----
+//
+// A layer that pivots on its content, has masks or its own timing, or reads the artwork through
+// effects is drawn as a pre-composition `factor` times larger (VectorArtworkOversampledLayer). Its
+// reference is built independently through the editable import: the file with its points `factor`
+// times larger about the composition's origin, the same edits with every length times `factor`,
+// and the root layer's own matrix times a scale of 1 / factor (its scale divided, its pivot
+// multiplied). That is the scaled pre-composition by definition; the one layer must equal it, and
+// the resampled picture (composeLayerTransform off) must be visibly softer.
+
+constexpr std::uint32_t kB2Width = 512;
+constexpr std::uint32_t kB2Height = 288;
+const document::Vec2d kB2Centre{kB2Width / 2.0, kB2Height / 2.0};
+
+// The file with its points `factor` times larger about the composition's origin, imported unfitted:
+// the 120 x 80 viewport is centred, a point p landing at p + o, o = (196, 104), and factor * (p + o)
+// = (factor * p + (factor - 1) * o) + o.
+std::string bakedSharpSvg(const double factor, const bool stroke = true) {
+    const double ox = (kB2Width - 120.0) / 2.0 * (factor - 1.0);
+    const double oy = (kB2Height - 80.0) / 2.0 * (factor - 1.0);
+    return sharpSvg("translate(" + std::to_string(ox) + " " + std::to_string(oy) + ") scale(" + std::to_string(factor) + ")",
+                    stroke);
+}
+
+void unfit(Fixture& fixture) {
+    fixture.run<commands::SetParameterSource>(
+        fixture.main, fixture.nodeParameter(*fixture.artworkNode, document::kVectorArtworkFitParameterRole),
+        document::ConstantValueSource{document::ParameterValue{false}});
+}
+
+struct LayerEdits final {
+    document::Vec2d scale{1.0, 1.0};
+    double degrees = 0.0;
+    bool mask = false;
+    bool retime = false;
+    // A Gaussian Blur then a Drop Shadow between the artwork and the slot.
+    bool effects = false;
+    // A Hue/Saturation node between (no length of its own).
+    bool colour = false;
+    // Parented to a null that scales by this (zero opacity).
+    double parentScale = 0.0;
+};
+
+void setLayerValue(Fixture& fixture, const document::LayerId layer, const std::string_view role,
+                   const document::ParameterValue value) {
+    const auto id = fixture.layerParameter(layer, role);
+    const auto* record = fixture.composition().parameters().find(id);
+    const auto* constant = record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+    if (constant != nullptr && constant->value == value)
+        return;
+    fixture.run<commands::SetParameterSource>(fixture.main, id, document::ConstantValueSource{value});
+}
+
+void setNodeValue(Fixture& fixture, const document::NodeId node, const std::string_view role, const double value) {
+    const auto id = fixture.nodeParameter(node, role);
+    const auto* record = fixture.composition().parameters().find(id);
+    const auto* constant = record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+    if (constant != nullptr && constant->value == document::ParameterValue{value})
+        return;
+    fixture.run<commands::SetParameterSource>(fixture.main, id, document::ConstantValueSource{document::ParameterValue{value}});
+}
+
+document::NodeId addNode(Fixture& fixture, const std::string& type) {
+    return *fixture.run<commands::AddNode>(fixture.main, type, document::Vec2d{0, -300})
+                .outputId<document::NodeId>(commands::kAddNodeOutput);
+}
+
+// Puts `nodes`, in order, between `source` and the slot of `layer` (an entry layer).
+void insertBetween(Fixture& fixture, const document::LayerId layer, const document::NodeId source,
+                   const std::vector<document::NodeId>& nodes) {
+    using namespace commands;
+    const auto* boundary = fixture.composition().graph().findLayer(layer);
+    const auto merge = boundary->nodeId;
+    const auto slot = *boundary->entrySlot;
+    auto from = source;
+    for (const auto node : nodes) {
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{from, "image"}, document::NodeInputRef{node, "input"});
+        from = node;
+    }
+    fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{from, "image"},
+                              document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
+}
+
+// The edits on `layer` (whose artwork is `source`), with every length times `factor` and the
+// layer's matrix times a scale of 1 / factor about the origin: factor 1 is the one layer's own
+// edits, a larger one the scaled pre-composition's.
+void applyEdits(Fixture& fixture, const document::LayerId layer, const document::NodeId source, const LayerEdits& edits,
+                const double factor) {
+    using namespace commands;
+    if (edits.parentScale != 0.0) {
+        const auto parent = fixture.run<AddSolidLayer>(fixture.main, "Null", core::Color4d{1, 0, 0, 1},
+                                                       document::Vec2d{200, 120}, 0.0);
+        const auto parentLayer = *parent.outputId<document::LayerId>(kAddSolidLayerLayerOutput);
+        setLayerValue(fixture, parentLayer, document::kScaleParameterRole,
+                      document::Vec2d{edits.parentScale, edits.parentScale});
+        setLayerValue(fixture, parentLayer, document::kRotationParameterRole, 9.0);
+        fixture.run<SetLayerParent>(fixture.main, layer, parentLayer);
+    }
+    setLayerValue(fixture, layer, document::kScaleParameterRole,
+                  document::Vec2d{edits.scale.x / factor, edits.scale.y / factor});
+    setLayerValue(fixture, layer, document::kRotationParameterRole, edits.degrees);
+    // A frame pivot is the frame's centre plus the anchor: times `factor`, (factor - 1) * centre.
+    setLayerValue(fixture, layer, document::kAnchorParameterRole,
+                  document::Vec2d{(factor - 1.0) * kB2Centre.x, (factor - 1.0) * kB2Centre.y});
+    if (edits.mask) {
+        document::PathValue mask;
+        document::PathContour contour;
+        contour.closed = true;
+        for (const auto& point : {document::Vec2d{200, 104}, document::Vec2d{318, 110}, document::Vec2d{300, 186},
+                                  document::Vec2d{214, 176}})
+            contour.anchors.push_back(document::PathAnchor{{point.x * factor, point.y * factor}, std::nullopt, std::nullopt});
+        mask.contours.push_back(contour);
+        fixture.run<AddLayerMask>(fixture.main, layer, mask);
+        const auto feather = fixture.composition().graph().findLayer(layer)->masks.back().feather;
+        fixture.run<SetParameterSource>(fixture.main, feather,
+                                        document::ConstantValueSource{document::ParameterValue{1.5 * factor}});
+    }
+    if (edits.retime)
+        fixture.run<SetLayerTiming>(fixture.main, layer, frame(1), core::RationalTime{}, core::RationalTime::fromInteger(4));
+    std::vector<document::NodeId> between;
+    if (edits.effects) {
+        const auto blur = addNode(fixture, "bloom.gaussian-blur");
+        setNodeValue(fixture, blur, "radius", 1.5 * factor);
+        const auto shadow = addNode(fixture, std::string(document::kDropShadowNodeType));
+        setNodeValue(fixture, shadow, "distance", 5.0 * factor);
+        setNodeValue(fixture, shadow, "softness", 2.0 * factor);
+        between = {blur, shadow};
+    }
+    if (edits.colour) {
+        const auto hue = addNode(fixture, "bloom.hue-saturation");
+        between.push_back(hue);
+    }
+    if (!between.empty())
+        insertBetween(fixture, layer, source, between);
+}
+
+document::VectorArtworkExpansion artworkExpansion(const Fixture& fixture,
+                                                   document::VectorArtworkExpansionContext context = {}) {
+    if (!context.fonts)
+        context.fonts = noFonts();
+    const auto snapshot = fixture.document.snapshot();
+    return document::expandVectorArtwork(snapshot.project(), *snapshot.project().findComposition(fixture.main), context);
+}
+
+struct SharpnessReport final {
+    double worst = 0.0;
+    std::size_t moved = 0;
+    std::size_t edges = 0;
+    std::size_t softMoved = 0;
+    std::size_t softEdges = 0;
+};
+
+// The one layer against its scaled pre-composition and the resampled picture, at `time`.
+std::optional<SharpnessReport> compareSharp(const Fixture& layer, const Fixture& reference, const core::RationalTime time,
+                                            const std::string& label) {
+    const auto one = renderExpanded(layer.document, layer.main, time, label + " one layer");
+    const auto precomposed = renderProject(reference.document, reference.main, time, label + " scaled pre-composition");
+    document::VectorArtworkExpansionContext resample;
+    resample.composeLayerTransform = false;
+    const auto soft = renderExpandedWith(layer.document, layer.main, time, label + " resampled", resample);
+    if (!one || !precomposed || !soft)
+        return std::nullopt;
+    SharpnessReport report;
+    report.worst = difference(*one, *precomposed);
+    report.moved = differingPixels(*one, *precomposed, 1e-3);
+    report.edges = partialPixels(*one);
+    report.softMoved = differingPixels(*soft, *precomposed, 1e-2);
+    report.softEdges = partialPixels(*soft);
+    std::cout << label << ": worst difference to the scaled pre-composition " << report.worst << " on " << report.moved
+              << " pixels (edge pixels " << report.edges << "); the resampled picture differs on " << report.softMoved
+              << " pixels (edge pixels " << report.softEdges << ")\n";
+    expect(coverage(*one) > 1000.0, label + ": the artwork draws");
+    expect(std::abs(coverage(*one) - coverage(*soft)) <= 0.01 * coverage(*soft),
+           label + ": the sharp picture covers what the resampled one does (the same artwork, placed alike)");
+    return report;
+}
+
+// The one layer is its scaled pre-composition, and the resampled picture is far softer. At a band of
+// 2 the two are the same pixels. At a band of 4 the curves' flattenings differ: the one layer
+// flattens in the file's units through a 4x matrix, the baked file at its own 4x size, and each
+// polyline is within 1/32 pixel of the curve at that size, but where a curve passes that close to
+// one of a pixel's 4 x 4 coverage samples the two may land it on opposite sides, one or two of the
+// sixteen samples (the composed layer of sharpWhenScaledAndTurned shows the same at 4x). Those few
+// edge pixels then pass through the layer's single resample. Nothing else differs.
+void expectSharp(const SharpnessReport& report, const std::string& label, const double factor, const bool countEdges) {
+    if (factor <= 2.0)
+        expect(report.worst <= 1e-6, label + ": the layer is its scaled pre-composition, pixel for pixel (worst " +
+                                         std::to_string(report.worst) + " on " + std::to_string(report.moved) + " pixels)");
+    else
+        expect(report.worst <= 2.0 / 16.0 + 1.0 / 255.0 && report.moved * 4 <= report.edges,
+               label + ": the layer is its scaled pre-composition up to two of a pixel's sixteen coverage samples on "
+                       "curved edges (worst " + std::to_string(report.worst) + " on " + std::to_string(report.moved) +
+                   " of " + std::to_string(report.edges) + " edge pixels)");
+    expect(report.softMoved >= 10 * report.moved + 1000,
+           label + ": the resampled picture is far from it (" + std::to_string(report.softMoved) + " pixels against " +
+               std::to_string(report.moved) + ")");
+    if (countEdges)
+        expect(report.softEdges > report.edges + report.edges / 2,
+               label + ": a resampled picture would be visibly softer (" + std::to_string(report.softEdges) +
+                   " edge pixels against " + std::to_string(report.edges) + ")");
+}
+
+// Each case of a layer the composition changes is drawn at its output scale.
+void sharpUnderEveryLayerEdit() {
+    struct Case final {
+        std::string name;
+        LayerEdits edits;
+        double factor;
+        std::int64_t frame = 0;
+        // Effects soften every edge they reach, so their edge count is no measure of sharpness;
+        // the distance to the scaled pre-composition still is.
+        bool countEdges = true;
+    };
+    const std::vector<Case> cases{
+        {"retimed, scaled 2x", {.scale = {2.0, 2.0}, .retime = true}, 2.0, 2},
+        {"masked, scaled 1.6x and turned 20 degrees", {.scale = {1.6, 1.6}, .degrees = 20.0, .mask = true}, 2.0},
+        {"masked, scaled 3x and turned 20 degrees", {.scale = {3.0, 3.0}, .degrees = 20.0, .mask = true}, 4.0},
+        {"retimed, scaled 3x", {.scale = {3.0, 3.0}, .retime = true}, 4.0, 2},
+        {"a blur and a drop shadow between, scaled 2.2x and turned 27 degrees",
+         {.scale = {2.2, 2.2}, .degrees = 27.0, .effects = true},
+         4.0,
+         0,
+         false},
+        {"a colour node between, scaled 3x", {.scale = {3.0, 3.0}, .colour = true}, 4.0},
+        {"masked under a parent scaled 2x, scaled 1.5x", {.scale = {1.5, 1.5}, .mask = true, .parentScale = 2.0}, 4.0},
+    };
+    const auto plain = writeSvg("b2-plain", sharpSvg(""));
+    for (const auto& item : cases) {
+        const auto bakedFile = writeSvg("b2-baked", bakedSharpSvg(item.factor));
+        Fixture layer(plain, commands::SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(layer);
+        applyEdits(layer, layer.art, *layer.artworkNode, item.edits, 1.0);
+        Fixture reference(bakedFile, commands::SvgImportMode::Shapes, kB2Width, kB2Height, false);
+        applyEdits(reference, reference.art, *reference.rootMerge, item.edits, item.factor);
+        std::filesystem::remove(bakedFile);
+        const auto expansion = artworkExpansion(layer);
+        const auto oversampled = expansion.oversampled.find(layer.art);
+        expect(expansion.composed.empty() && expansion.resampled.empty() && oversampled != expansion.oversampled.end() &&
+                   oversampled->second.scale == item.factor && oversampled->second.limited.empty() &&
+                   !oversampled->second.leaves.empty(),
+               item.name + ": the layer's artwork is drawn at " + std::to_string(item.factor) + "x");
+        const auto report = compareSharp(layer, reference, frame(item.frame), item.name);
+        if (report)
+            expectSharp(*report, item.name, item.factor, item.countEdges);
+    }
+    std::filesystem::remove(plain);
+}
+
+// A layer pivoting on its content: an artwork read by a Layer node (content pivot) that feeds the
+// entry's own Layer node. Its pivot is the centre of the picture at the composition's scale.
+void sharpOnAContentPivot() {
+    constexpr double kFactor = 4.0;
+    const auto plain = writeSvg("b2-pivot", sharpSvg(""));
+    const auto bakedFile = writeSvg("b2-pivot-baked", bakedSharpSvg(kFactor));
+    const auto build = [](Fixture& fixture, const document::NodeId source, const double factor) {
+        using namespace commands;
+        const auto* entry = fixture.composition().graph().findLayer(fixture.art);
+        const auto merge = entry->nodeId;
+        const auto slot = *entry->entrySlot;
+        const auto pivoting = addNode(fixture, std::string(document::kLayerOutputNodeType));
+        const auto outer = addNode(fixture, std::string(document::kLayerOutputNodeType));
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{source, "image"},
+                                  document::NodeInputRef{pivoting, std::string(document::kLayerOutputContentInputPort)});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{pivoting, std::string(document::kLayerOutputOutputPort)},
+                                  document::NodeInputRef{outer, std::string(document::kLayerOutputContentInputPort)});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{outer, std::string(document::kLayerOutputOutputPort)},
+                                  document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
+        std::optional<document::LayerId> held;
+        for (const auto& boundary : fixture.composition().graph().layerOutputs())
+            if (!boundary.entryOwned() && boundary.nodeId == pivoting)
+                held = boundary.layerId;
+        if (!held || fixture.composition().graph().findLayer(*held)->pivot != document::LayerPivot::Content)
+            throw std::runtime_error("the Layer node does not pivot on its content");
+        // A content pivot is the content's centre plus the anchor: times `factor`, the anchor too.
+        setLayerValue(fixture, *held, document::kScaleParameterRole, document::Vec2d{2.5 / factor, 2.5 / factor});
+        setLayerValue(fixture, *held, document::kRotationParameterRole, 15.0);
+        setLayerValue(fixture, *held, document::kAnchorParameterRole, document::Vec2d{6.0 * factor, -4.0 * factor});
+        return *held;
+    };
+    Fixture layer(plain, commands::SvgImportMode::Layer, kB2Width, kB2Height);
+    unfit(layer);
+    const auto held = build(layer, *layer.artworkNode, 1.0);
+    Fixture reference(bakedFile, commands::SvgImportMode::Shapes, kB2Width, kB2Height, false);
+    static_cast<void>(build(reference, *reference.rootMerge, kFactor));
+    const auto expansion = artworkExpansion(layer);
+    const auto oversampled = expansion.oversampled.find(held);
+    expect(oversampled != expansion.oversampled.end() && oversampled->second.scale == kFactor,
+           "content pivot: the Layer node's artwork is drawn at 4x");
+    if (const auto report = compareSharp(layer, reference, frame(0), "content pivot, scaled 2.5x and turned 15 degrees"))
+        expectSharp(*report, "content pivot", kFactor, true);
+    // Its bounds are the resampled layer's: the same box, polygon and pivot.
+    const auto plan = compilePlan(layer.document, layer.main, "content pivot bounds");
+    const auto evaluated = plan ? evaluate(plan, frame(0), "content pivot bounds") : std::nullopt;
+    document::VectorArtworkExpansionContext resample;
+    resample.composeLayerTransform = false;
+    resample.fonts = noFonts();
+    auto softExpansion = artworkExpansion(layer, resample);
+    document::Project project = layer.document.snapshot().project();
+    *project.findComposition(layer.main) = *softExpansion.composition;
+    const document::Document soft(std::move(project));
+    const auto softPlan = compilePlan(soft, layer.main, "content pivot bounds resampled");
+    const auto softEvaluated = softPlan ? evaluate(softPlan, frame(0), "content pivot bounds resampled") : std::nullopt;
+    const auto* bounds = evaluated ? boundsOf(*evaluated->frame, held) : nullptr;
+    const auto* softBounds = softEvaluated ? boundsOf(*softEvaluated->frame, held) : nullptr;
+    expect(bounds != nullptr && softBounds != nullptr, "content pivot: both publish the layer's bounds");
+    if (bounds != nullptr && softBounds != nullptr) {
+        expect(std::abs(bounds->local.left - softBounds->local.left) <= 1.0 &&
+                   std::abs(bounds->local.right - softBounds->local.right) <= 1.0 &&
+                   std::abs(bounds->local.top - softBounds->local.top) <= 1.0 &&
+                   std::abs(bounds->local.bottom - softBounds->local.bottom) <= 1.0,
+               "content pivot: the local box is the picture's at the composition's scale");
+        double worst = 0.0;
+        for (std::size_t i = 0; i < 4; ++i)
+            worst = std::max({worst, std::abs(bounds->polygon[i].x - softBounds->polygon[i].x),
+                              std::abs(bounds->polygon[i].y - softBounds->polygon[i].y)});
+        expect(worst <= 4.0, "content pivot: the polygon is the resampled layer's within its edge pixels (" +
+                                 std::to_string(worst) + ")");
+        expect(std::abs(bounds->anchor.x - softBounds->anchor.x) <= 0.5 && std::abs(bounds->anchor.y - softBounds->anchor.y) <= 0.5,
+               "content pivot: the anchor is the resampled layer's");
+    }
+    std::filesystem::remove(plain);
+    std::filesystem::remove(bakedFile);
+}
+
+// What still cannot be drawn sharp is named, and still renders: a node not known to draw the same
+// at a larger scale, a layer scale and a blur radius driven by the graph. The band is capped by the
+// composition's size and halved while a length would leave its range.
+void namedWhenItCannotBeSharp() {
+    using namespace commands;
+    const auto plain = writeSvg("b2-named", sharpSvg(""));
+    const auto renders = [](const Fixture& fixture, const std::string& label) {
+        const auto frame0 = renderExpanded(fixture.document, fixture.main, frame(0), label);
+        expect(frame0 && coverage(*frame0) > 100.0, label + ": still renders");
+    };
+    {
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        setLayerValue(fixture, fixture.art, document::kScaleParameterRole, document::Vec2d{3.0, 3.0});
+        const auto vignette = addNode(fixture, "bloom.vignette");
+        insertBetween(fixture, fixture.art, *fixture.artworkNode, {vignette});
+        const auto expansion = artworkExpansion(fixture);
+        const auto why = expansion.resampled.find(*fixture.artworkNode);
+        expect(expansion.oversampled.empty() && why != expansion.resampled.end() &&
+                   why->second.find("bloom.vignette") != std::string::npos &&
+                   why->second.find("not known to draw the same at a larger scale") != std::string::npos,
+               "named: a node not known to scale is named: " + (why != expansion.resampled.end() ? why->second : ""));
+        renders(fixture, "named vignette");
+    }
+    {
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        setLayerValue(fixture, fixture.art, document::kScaleParameterRole, document::Vec2d{3.0, 3.0});
+        const auto blur = addNode(fixture, "bloom.gaussian-blur");
+        insertBetween(fixture, fixture.art, *fixture.artworkNode, {blur});
+        const auto value = addNode(fixture, "bloom.value-scalar");
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{value, "value"}, document::NodeInputRef{blur, "radius"});
+        const auto expansion = artworkExpansion(fixture);
+        const auto why = expansion.resampled.find(*fixture.artworkNode);
+        expect(expansion.oversampled.empty() && why != expansion.resampled.end() &&
+                   why->second.find("radius driven by the graph") != std::string::npos,
+               "named: a blur radius driven by the graph is named: " + (why != expansion.resampled.end() ? why->second : ""));
+        renders(fixture, "named driven radius");
+    }
+    {
+        // A Layer node reading the artwork, its scale driven by a value node, masked.
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        const auto* entry = fixture.composition().graph().findLayer(fixture.art);
+        const auto merge = entry->nodeId;
+        const auto slot = *entry->entrySlot;
+        const auto node = addNode(fixture, std::string(document::kLayerOutputNodeType));
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{*fixture.artworkNode, "image"},
+                                  document::NodeInputRef{node, std::string(document::kLayerOutputContentInputPort)});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{node, std::string(document::kLayerOutputOutputPort)},
+                                  document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
+        std::optional<document::LayerId> held;
+        for (const auto& boundary : fixture.composition().graph().layerOutputs())
+            if (!boundary.entryOwned() && boundary.nodeId == node)
+                held = boundary.layerId;
+        const auto value = addNode(fixture, "bloom.value-vector2");
+        fixture.run<SetParameterSource>(fixture.main, fixture.nodeParameter(value, "value"),
+                                        document::ConstantValueSource{document::ParameterValue{document::Vec2d{2.0, 2.0}}});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{value, "value"},
+                                  document::NodeInputRef{node, std::string(document::kScaleParameterRole)});
+        document::PathValue mask;
+        document::PathContour contour;
+        contour.closed = true;
+        for (const auto& point : {document::Vec2d{200, 100}, document::Vec2d{320, 100}, document::Vec2d{260, 190}})
+            contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+        mask.contours.push_back(contour);
+        fixture.run<AddLayerMask>(fixture.main, *held, mask);
+        const auto expansion = artworkExpansion(fixture);
+        const auto why = expansion.resampled.find(*fixture.artworkNode);
+        expect(expansion.oversampled.empty() && why != expansion.resampled.end() &&
+                   why->second.find("scale is driven by the graph") != std::string::npos,
+               "named: a layer scale driven by the graph is named: " + (why != expansion.resampled.end() ? why->second : ""));
+        renders(fixture, "named driven scale");
+    }
+    {
+        // A 3840 x 2160 composition oversamples at most 2x (8192 pixels on its longer side).
+        // Expansion only: no 4K CPU frame.
+        Fixture fixture(plain, SvgImportMode::Layer, 3840, 2160);
+        applyEdits(fixture, fixture.art, *fixture.artworkNode, {.scale = {6.0, 6.0}, .mask = true}, 1.0);
+        const auto expansion = artworkExpansion(fixture);
+        const auto found = expansion.oversampled.find(fixture.art);
+        expect(found != expansion.oversampled.end() && found->second.scale == 2.0 &&
+                   found->second.limited.find("2x") != std::string::npos,
+               "cap: a 4K composition draws the artwork at 2x and says so: " +
+                   (found != expansion.oversampled.end() ? found->second.limited : ""));
+        Fixture small(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        applyEdits(small, small.art, *small.artworkNode, {.scale = {20.0, 20.0}, .mask = true}, 1.0);
+        const auto capped = artworkExpansion(small);
+        const auto most = capped.oversampled.find(small.art);
+        expect(most != capped.oversampled.end() && most->second.scale == document::kVectorArtworkMaxOversample &&
+                   !most->second.limited.empty(),
+               "cap: no layer is drawn past 8x");
+    }
+    {
+        // A blur radius of 100 at 4x would be 400, past the 256 a blur takes: drawn at 2x, named.
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        setLayerValue(fixture, fixture.art, document::kScaleParameterRole, document::Vec2d{3.0, 3.0});
+        const auto blur = addNode(fixture, "bloom.gaussian-blur");
+        setNodeValue(fixture, blur, "radius", 100.0);
+        insertBetween(fixture, fixture.art, *fixture.artworkNode, {blur});
+        const auto expansion = artworkExpansion(fixture);
+        const auto found = expansion.oversampled.find(fixture.art);
+        expect(found != expansion.oversampled.end() && found->second.scale == 2.0 &&
+                   found->second.limited.find("bloom.blur.radius") != std::string::npos,
+               "domain: a length past its range at the band halves it, named");
+        renders(fixture, "domain-limited blur");
+    }
+    {
+        // A layer that neither scales up nor turns needs no more pixels than the composition's.
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        applyEdits(fixture, fixture.art, *fixture.artworkNode, {.scale = {0.8, 0.8}, .mask = true}, 1.0);
+        const auto expansion = artworkExpansion(fixture);
+        expect(expansion.oversampled.empty() && expansion.composed.empty() && expansion.resampled.empty(),
+               "a masked layer at 0.8x is drawn at the composition's scale, which is already sharp");
+    }
+    std::filesystem::remove(plain);
+}
+
+// Cache identity: the band is part of the plan. An animated transform renders every frame from one
+// plan and one oversampled picture of the artwork (operation-cache hits); an edit inside the band
+// keeps the artwork's picture (its operations hit across revisions); an edit that moves the band
+// draws a new one. A preview override of the layer's scale moves the band; an override of a mask's
+// path is multiplied as the stored path is. Cancellation and the request's budget reach the
+// oversampled layer.
+void oversampledCacheIdentity() {
+    using namespace commands;
+    const auto plain = writeSvg("b2-identity", sharpSvg(""));
+    Fixture layer(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+    unfit(layer);
+    applyEdits(layer, layer.art, *layer.artworkNode, {.mask = true}, 1.0);
+    const auto scale = layer.layerParameter(layer.art, document::kScaleParameterRole);
+    const auto rotation = layer.layerParameter(layer.art, document::kRotationParameterRole);
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, scale, frame(2), document::Vec2d{3.0, 3.0});
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, scale, frame(0), document::Vec2d{1.2, 1.2});
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, rotation, frame(2), 18.0);
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, rotation, frame(0), 0.0);
+    const auto contentScaleOf = [&](const runtime::CompiledCompositionPlan& plan) {
+        double found = 0.0;
+        for (const auto& operation : plan.operations())
+            if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation); output && output->layerId == layer.art)
+                found = output->contentScale;
+        return found;
+    };
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::CompiledPlanCache plans;
+    const auto keyed = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+    expect(keyed.plan != nullptr && contentScaleOf(*keyed.plan) == 4.0,
+           "identity: a scale keyed from 1.2x to 3x is drawn in the 4x band");
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto cachedAt = [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan, const std::int64_t index) {
+        auto request = referenceRequest(*plan, frame(index));
+        request.bypassOperationCache = false;
+        const auto before = evaluator.operationCache()->statistics().hits;
+        const auto result = evaluator.evaluate(plan, request, {});
+        expect(result.frame() != nullptr, "identity: frame " + std::to_string(index) + " evaluates");
+        return std::pair{evaluator.operationCache()->statistics().hits - before,
+                         result.frame() ? std::optional{pixelsOf(*result.frame())} : std::nullopt};
+    };
+    std::vector<Frame> frames;
+    std::size_t animatedHits = 0;
+    for (const std::int64_t index : {0, 1, 2}) {
+        const auto [hits, pixels] = cachedAt(keyed.plan, index);
+        if (index > 0)
+            animatedHits += hits;
+        if (pixels)
+            frames.push_back(*pixels);
+    }
+    expect(frames.size() == 3 && difference(frames[0], frames[1]) > 1e-3 && difference(frames[1], frames[2]) > 1e-3,
+           "identity: the animated transform changes every frame");
+    const auto again = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+    expect(again.plan == keyed.plan && plans.statistics().compiles == 1,
+           "identity: animating the transform never compiles again");
+    expect(animatedHits > 0, "identity: frames 1 and 2 reuse the oversampled artwork's picture from the cache (" +
+                                 std::to_string(animatedHits) + " hits)");
+    // An edit inside the band: a new plan (a new revision), the same picture of the artwork.
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, scale, frame(2), document::Vec2d{3.6, 3.6});
+    const auto inside = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+    expect(inside.plan != nullptr && inside.plan != keyed.plan && contentScaleOf(*inside.plan) == 4.0,
+           "identity: a key moved inside the band keeps the 4x band");
+    const auto insideHits = inside.plan ? cachedAt(inside.plan, 0).first : 0;
+    expect(insideHits > 0, "identity: inside the band the artwork's operations hit the cache (" +
+                               std::to_string(insideHits) + " hits)");
+    // An edit that moves the band: a picture of its own.
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, scale, frame(2), document::Vec2d{5.0, 5.0});
+    const auto moved = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+    expect(moved.plan != nullptr && contentScaleOf(*moved.plan) == 8.0, "identity: a key past 4x moves to the 8x band");
+    const auto movedHits = moved.plan ? cachedAt(moved.plan, 0).first : 0;
+    expect(movedHits < insideHits, "identity: a new band draws a new picture of the artwork (" + std::to_string(movedHits) +
+                                       " hits against " + std::to_string(insideHits) + ")");
+
+    // Preview overrides: the layer's scale sets the band; a mask path is multiplied like the stored one.
+    {
+        Fixture still(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(still);
+        applyEdits(still, still.art, *still.artworkNode, {.scale = {1.5, 1.5}, .mask = true}, 1.0);
+        runtime::SnapshotCompileRequest grow{still.document.snapshot(), still.main};
+        grow.parameterOverrides.push_back({still.document.snapshot().revision(),
+                                           still.layerParameter(still.art, document::kScaleParameterRole),
+                                           document::Vec2d{6.0, 6.0}});
+        const auto grown = compiler.compile(grow, {});
+        double grownScale = 0.0;
+        if (grown.plan)
+            for (const auto& operation : grown.plan->operations())
+                if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation); output && output->layerId == still.art)
+                    grownScale = output->contentScale;
+        expect(grownScale == 8.0, "override: dragging the layer's scale to 6x draws its artwork in the 8x band");
+        // The mask dragged: an override equals the same path stored.
+        const auto maskPath = still.composition().graph().findLayer(still.art)->masks.back().path;
+        document::PathValue dragged;
+        document::PathContour contour;
+        contour.closed = true;
+        for (const auto& point : {document::Vec2d{190, 90}, document::Vec2d{330, 120}, document::Vec2d{250, 200}})
+            contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+        dragged.contours.push_back(contour);
+        runtime::SnapshotCompileRequest drag{still.document.snapshot(), still.main};
+        drag.parameterOverrides.push_back({still.document.snapshot().revision(), maskPath, dragged});
+        const auto preview = compiler.compile(drag, {});
+        const auto previewFrame = preview.plan ? evaluate(preview.plan, frame(0), "mask override") : std::nullopt;
+        still.run<SetParameterSource>(still.main, maskPath, document::ConstantValueSource{document::ParameterValue{dragged}});
+        const auto stored = renderExpanded(still.document, still.main, frame(0), "mask stored");
+        expect(previewFrame && stored && difference(pixelsOf(*previewFrame->frame), *stored) == 0.0,
+               "override: a mask dragged in the Viewer previews exactly what it draws once stored");
+    }
+
+    // Cancellation and the request's budget.
+    {
+        const auto token = cancelledToken();
+        const auto cancelledCompile = compiler.compile({layer.document.snapshot(), layer.main}, token);
+        expect(cancelledCompile.status == runtime::SnapshotCompileStatus::Cancelled && cancelledCompile.plan == nullptr,
+               "cancel: a cancelled compile of an oversampled layer reports Cancelled and no plan");
+        if (moved.plan) {
+            const auto result = runtime::CpuCompositionEvaluator{}.evaluate(moved.plan, referenceRequest(*moved.plan, frame(2)), token);
+            expect(result.status() == runtime::EvaluationStatus::Cancelled && result.frame() == nullptr,
+                   "cancel: a cancelled evaluation of an oversampled layer publishes no frame");
+            auto request = referenceRequest(*moved.plan, frame(2));
+            request.pixelStorageByteLimit = 4096;
+            const auto refused = runtime::CpuCompositionEvaluator{}.evaluate(moved.plan, request, {});
+            expect(refused.frame() == nullptr && refused.status() == runtime::EvaluationStatus::Failed &&
+                       !refused.diagnostics().empty(),
+                   "budget: a request too small for the oversampled picture is refused, with a reason");
+        }
+    }
+    std::filesystem::remove(plain);
+}
+
 } // namespace
 
 int main() {
@@ -1028,6 +1624,10 @@ int main() {
         budgetAdmissionAndRetirement();
         unreadableArtworkIsRefusedByName();
         whatResamplesAndWhatFollows();
+        sharpUnderEveryLayerEdit();
+        sharpOnAContentPivot();
+        namedWhenItCannotBeSharp();
+        oversampledCacheIdentity();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return EXIT_FAILURE;

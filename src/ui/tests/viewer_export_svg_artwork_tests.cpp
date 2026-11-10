@@ -26,12 +26,14 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -314,6 +316,46 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     key(rotation, 0.0, 20.0);
     key(opacity, 1.0, 0.7);
     return ok;
+}
+
+// #642 B2: a Gaussian Blur between the one layer's artwork and its slot, so the layer is drawn at
+// its output scale (the oversampled route) rather than through its geometry. True when the
+// compiled plan draws the layer's content at more than 1x.
+[[nodiscard]] bool blurBetween(Authored& authored, const runtime::SnapshotCompiler& compiler) {
+    const auto* main = authored.scripting->snapshot().project().findComposition(authored.composition);
+    const document::LayerOutputBoundary* entry = nullptr;
+    for (const auto& boundary : main->graph().layerOutputs())
+        if (boundary.entryOwned() && boundary.entrySlot.has_value())
+            entry = &boundary;
+    std::optional<document::NodeId> artwork;
+    for (const auto& node : main->graph().nodes())
+        if (node.typeId == document::kVectorArtworkNodeType)
+            artwork = node.id;
+    if (entry == nullptr || !artwork)
+        return false;
+    const auto layer = entry->layerId;
+    const auto merge = entry->nodeId;
+    const auto slot = *entry->entrySlot;
+    const auto added = edit<commands::AddNode>(authored, authored.composition, std::string("bloom.gaussian-blur"),
+                                               document::Vec2d{0, -300});
+    const auto blur = added.outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!blur)
+        return false;
+    if (!edit<commands::ConnectPorts>(authored, authored.composition, document::OutputPortRef{*artwork, "image"},
+                                      document::NodeInputRef{*blur, "input"})
+             .succeeded() ||
+        !edit<commands::ConnectPorts>(authored, authored.composition, document::OutputPortRef{*blur, "image"},
+                                      document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)})
+             .succeeded())
+        return false;
+    const auto compiled = compiler.compile({authored.scripting->snapshot(), authored.composition}, {});
+    if (!compiled.plan)
+        return false;
+    for (const auto& operation : compiled.plan->operations())
+        if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation);
+            output != nullptr && output->layerId == layer && output->contentScale > 1.0)
+            return true;
+    return false;
 }
 
 [[nodiscard]] std::optional<Authored> author(Expectations& checks,
@@ -733,13 +775,22 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     } else {
         std::cout << "NotRun: " << route.name << " movie: no media worker here\n";
     }
-    // #642: the one layer at 1080p and 4K, exported from the device with no CPU reference frame.
+    // #642: the one layer at 1080p and 4K, exported from the device with no CPU reference frame;
+    // B2: and with a blur between its artwork and its slot (drawn at its output scale).
     if (route.gpu && route.layer) {
-        for (const auto& [width, height] : {std::pair{1920U, 1080U}, std::pair{3840U, 2160U}}) {
-            const auto size = std::to_string(width) + "x" + std::to_string(height);
+        for (const auto& [width, height, blurred] :
+             {std::tuple{1920U, 1080U, false}, std::tuple{3840U, 2160U, false}, std::tuple{1920U, 1080U, true},
+              std::tuple{3840U, 2160U, true}}) {
+            const auto size = std::to_string(width) + "x" + std::to_string(height) + (blurred ? " oversampled" : "");
             auto large = author(checks, workDir, commands::SvgImportMode::Layer, width, height);
             if (!large.has_value())
                 continue;
+            if (blurred) {
+                const bool oversampled = blurBetween(*large, exportCompiler);
+                checks.expect(oversampled, prefix + size + ": a blur goes between and the layer is drawn at its output scale");
+                if (!oversampled)
+                    continue;
+            }
             const auto still = workDir / (std::string(route.name) + "-still-" + size + ".png");
             const auto result =
                 scripting::Render::run(*large->scripting, exportScheduler, exportCompiler,
