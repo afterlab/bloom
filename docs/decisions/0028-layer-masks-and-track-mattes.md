@@ -95,7 +95,8 @@ one; a shape layer's path stays constant.
 
 Interpolation is per anchor. Points and handles are interpolated by the eased segment factor, and a
 missing handle counts as its anchor point. Two keys whose anchor counts or `closed` flags differ
-hold the earlier key until the later key's time. The evaluator samples a Path curve exactly as it
+held the earlier key until the later key's time; since #597 they morph (path-value.md, "Morphing
+between different shapes"), and a Hold key still holds. The evaluator samples a Path curve exactly as it
 samples a scalar curve: rational segment factor, the same ease rule, and no allocation beyond the
 sampled value.
 

@@ -307,8 +307,11 @@ A contour of length zero answers copies of its point for Fixed count and is repo
 failure. The result's anchors are charged to the evaluation's retained-path budget. Cancellation is
 observed between contours.
 
-The arithmetic (`src/runtime/path_resample.hpp`) is shared: the morph (#597) gives two contours the same
-number of points with `resampleToCount`. Warp Path subdivides by curve parameter and not by length (see
+The arithmetic (`src/runtime/path_resample.hpp`) is shared: `resampleToCount` gives a contour an exact
+count spread evenly by length. The morph (#597) gives two contours the same count by subdividing instead
+(`subdivideContourSegment`, path-value.md), so every original anchor and the drawn shape stay exactly;
+Resample Path with Fixed count before a morph evens the points out when an artist wants that. Warp
+Path subdivides by curve parameter and not by length (see
 Warp Path), so it can follow a Resample Path in a chain but does not call it.
 
 ### Write to a Path

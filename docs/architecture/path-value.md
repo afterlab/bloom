@@ -126,14 +126,77 @@ Color is stored for the consumers that will read it. No current consumer paints 
 
 ## Animating a whole path value
 
-A path parameter's keys are whole values. Between two keys, `samplePathCurve` interpolates only when
-`pathKeysInterpolate` says the two have the same contour count and, contour by contour, the same anchor
-count and closed flag. Otherwise it **holds the earlier key** until the next one. That is the same rule
-one contour always had, read across all contours. Interpolation pairs contours and anchors by index;
-morphing anything beyond this is #597.
+A path parameter's keys are whole values. Between two keys, `samplePathCurve` interpolates by index
+when `pathKeysInterpolate` says the two have the same contour count and, contour by contour, the same
+anchor count and closed flag: contour `i` anchor `j` moves to contour `i` anchor `j`, exactly as it
+always has (a value keyed this way renders byte for byte as before #597).
 
-While interpolating, the anchor points and handles move; the fill rule, groups, group attributes,
-closed flags and anchor modes are the earlier key's.
+Otherwise the two keys **morph** (#597): the sample is `morphPaths(earlier, later, factor)`, the
+alignment step of the next section. It is the earlier key exactly at its own time and the later key
+exactly at its own, never the aligned form. A **Hold** key still holds up to the next key, whatever
+its shape. In the rare case where the aligned form would pass the path caps (a closed contour of 4096
+anchors meeting an open one needs 4097), the earlier key holds as it did before #597.
+
+This is a change for documents older than #597: keys of different shapes used to hold the earlier key
+and now morph. Keys of matching shapes and Hold keys render as they did, so making the earlier key a
+Hold key gives the old picture back (the path-value migration test proves this on a document saved
+before 1.43).
+
+While interpolating or morphing, the anchor points and handles move; the fill rule, groups, group
+attributes (a group's colour), closed flags and anchor modes are the earlier key's until the later key
+arrives.
+
+The same rule holds for every whole-value path key: a Path node's value, a mask path, and a Curves
+curve (a curve keyed with a different number of points morphs through the same step; its points stay
+plain points, because subdividing a straight segment adds a corner with no handles).
+
+## Morphing between different shapes
+
+`runtime::pathmorph::alignPaths(from, to)` (`src/runtime/path_morph.hpp`) is the one step every morph
+runs through. It answers two values with the same structure (contour count, and contour by contour the
+same anchor count and closed flag), each drawing exactly the shape it came from, so the morph is a
+straight line from each anchor and handle to its partner. Nothing is stored on the path or in the
+document: the answer is a deterministic function of the two values (the same inputs give the same
+bytes), recomputed wherever it is needed.
+
+- **Contour order.** Contour `i` of `from` stays contour `i`, so `from`'s groups still name the same
+  contours throughout. Contours of `to` with no partner are appended after them.
+- **Pairing.** Contours of two groups with the same key (`matchPathGroups`) pair among themselves,
+  wherever the groups sit in their lists. The other contours (in no group, or in a group the other value
+  does not hold) pair among themselves. Within each set the cheapest pairs are taken first, the cost
+  being the squared distance between the outlines' centroids plus the squared differences of their
+  sizes (the square root of the enclosed area) and of a quarter of their lengths; ties fall to the lower
+  indices. A set of more than 2^20 candidate pairs pairs by order instead. A caller can also ask for
+  `Pairing::ByOrder`: contour `i` with contour `i`.
+- **Leftovers.** A contour without a partner shrinks to a point at its own centroid (when `from` has
+  more) or grows from one (when `to` has more): its partner is the same anchors, all at that point, with
+  no handles. A contour with no anchors pairs with nothing.
+- **Equal anchor counts.** The contour with fewer anchors is subdivided at its longest segment (by
+  measured length, the first of equals), at the segment's middle, by `subdivideContourSegment`, again
+  and again until the counts match. The drawn shape is unchanged and every original anchor stays.
+- **Start and direction.** Two closed contours: the cyclic start and the direction of `to`'s contour
+  are the ones that make the summed squared distance between corresponding anchors least (forward is
+  preferred on a tie, then the earliest start). Up to 1024 anchors every start is summed exactly;
+  above, the same sums come from one circular correlation through an FFT. Two open contours keep their
+  ends at the ends; `to`'s is reversed when its ends lie nearer the opposite ends of `from`'s.
+- **Open and closed.** A closed contour paired with an open one is cut open at the anchor, and in the
+  direction, that makes the same sum least, its start repeated at its end with the closing segment's
+  handle. Both are then open: the morph's in-between frames are open (an open contour fills as though
+  closed by a straight line, so the outline closes as its ends meet), and the closed key is exact at its
+  own time.
+- **Limits.** The aligned form is bounded by the value's caps (4096 anchors per contour, 262144 per
+  value, 65536 contours). An alignment that would pass one answers `TooMany` with the count it would
+  need, and makes nothing.
+
+`morphPaths(from, to, amount)` is `from` exactly at 0 and `to` exactly at 1, and the mix of the
+alignment otherwise (an eased key that overshoots may pass outside 0 to 1), carrying `from`'s fill rule,
+groups and group attributes. Tests: `bloom.runtime.path_morph` (anchor counts, contour counts 1 to 3 and
+3 to 1, empty to a shape, open and closed, a rotated start, a reversed direction past and below the exact
+limit, group keys across a reorder, by order, a group in one value only, a value with itself, the caps,
+determinism), `bloom.runtime.path-value` (keys that morph, keys that interpolate byte for byte as
+before, Hold, rendering) and `bloom.runtime.gpu_path_value_native` (every quarter second of a star into
+a two-holed square into an open wave against the CPU reference on the device at 512 px, each key's
+frame exactly its key, a 1080p morph frame on the production route).
 
 ## Keys when contours merge
 

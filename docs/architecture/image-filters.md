@@ -266,8 +266,9 @@ diagnostic. The constant `clamp` switch (`bloom.curves.clamp`) limits each grade
 `[0, 1]`.
 
 Each curve is animatable as a whole value (ADR 0028's whole-value Path keys): a keyed curve
-interpolates point by point between keys with the same number of points and holds the earlier key
-otherwise. A curve is never driven; the graph is its only editor.
+interpolates point by point between keys with the same number of points and morphs between keys whose
+counts differ (path-value.md, "Morphing between different shapes"); a Hold key holds. A curve is
+never driven; the graph is its only editor.
 
 The hue curves read one colour model, chosen to agree with Hue/Saturation: the Filter Effects
 luminance weights `0.213, 0.715, 0.072`, and a chroma plane `w . c = 0` spanned by `e1`, the chroma

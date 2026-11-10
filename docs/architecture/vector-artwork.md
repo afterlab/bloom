@@ -56,7 +56,8 @@ file's own pixels).
 ### Animating points
 
 Points animate through the Path node: a whole-value key interpolates point by point when both keys
-hold the same contours and anchor counts (point-count morphing is #597 and is out of scope). The
+hold the same contours and anchor counts, and morphs when they do not (different anchor counts,
+contour counts or closed flags; path-value.md, "Morphing between different shapes", #597). The
 Viewer's anchor and handle tools edit any contour of an imported shape, compound shapes included:
 a press on a point of another contour makes it the contour under edit, a gesture edits one contour
 and writes the whole value back with the other contours, the fill rule and the groups untouched,
