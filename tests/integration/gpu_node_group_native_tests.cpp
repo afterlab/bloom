@@ -13,6 +13,9 @@
 // an instance slot or the definition changes the pixels and is dispatched; an unrelated edit is
 // not. Preparation and the native job cancel, and the budget refuses.
 //
+// A ChannelSet through a group (Image to Channel Set outside, Channel Pass inside at `channels1`,
+// and the reverse) is held to the flat chain's CPU pixels and, on the device, to the CPU reference.
+//
 // The CPU assertions always run. Without a device the GPU half reports an explicit SKIP (exit 77)
 // after the CPU half passed; --require-device makes that a failure.
 
@@ -37,6 +40,7 @@ using namespace bloom;
 using namespace bloom::test::document_render;
 using render::composite_proof::Options;
 using render::composite_proof::parseOptions;
+using bloom::test::node_group::buildChannelChain;
 using bloom::test::node_group::buildTone;
 using bloom::test::node_group::Fixture;
 using bloom::test::node_group::ToneOptions;
@@ -300,6 +304,38 @@ int main(int argc, char** argv) {
                                 samePixels(*definitionEdit, *flatDefinitionEdit),
                             "an edit inside the definition matches the flat edit");
 
+        // 2b. A ChannelSet through a group (entering and leaving) renders the flat chain's pixels.
+        auto flatChannels = buildChannelChain(false);
+        auto enterChannels = buildChannelChain(true, false);
+        auto leaveChannels = buildChannelChain(true, true);
+        struct ChannelCase final {
+            std::string label;
+            std::optional<Reference> group;
+            std::optional<Reference> flat;
+        };
+        std::vector<ChannelCase> channelCases;
+        for (const auto& [label, fixture] :
+             {std::pair<const char*, Fixture*>{"ChannelSet entering", enterChannels.get()},
+              std::pair<const char*, Fixture*>{"ChannelSet leaving", leaveChannels.get()}}) {
+            ChannelCase entry{label, referenceAt(expectations, *fixture, 0, std::string(label) + " (group)"),
+                              referenceAt(expectations, *flatChannels, 0, std::string(label) + " (flat)")};
+            expectations.expect(entry.group && entry.flat &&
+                                    shapeOf(*entry.group->plan) == shapeOf(*entry.flat->plan),
+                                entry.label + ": the group compiles to the flat chain's operations");
+            expectations.expect(entry.group && entry.flat && samePixels(*entry.group, *entry.flat),
+                                entry.label + ": the group renders the flat chain's CPU pixels exactly");
+            if (entry.flat) {
+                const auto pixels = entry.flat->frame->processImage().pixels();
+                expectations.expect(std::ranges::any_of(pixels,
+                                                        [](const render::Rgba32f& pixel) {
+                                                            return pixel.red() > 0.0F &&
+                                                                   pixel.alpha() > 0.0F;
+                                                        }),
+                                    entry.label + ": the Channel Pass reads the plate's colour back");
+            }
+            channelCases.push_back(std::move(entry));
+        }
+
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " node group expectation(s) failed\n";
             return 1;
@@ -344,6 +380,23 @@ int main(int argc, char** argv) {
                 gpuParity(expectations, run, *entry.group, entry.label + " (group)", builder);
             if (entry.flat)
                 gpuParity(expectations, run, *entry.flat, entry.label + " (flat)", builder);
+        }
+
+        // 3b. The ChannelSet chain through channels1, held to the CPU reference on the device.
+        for (const auto& entry : channelCases) {
+            if (entry.group)
+                gpuParity(expectations, run, *entry.group, entry.label + " (group)", builder);
+            if (entry.flat)
+                gpuParity(expectations, run, *entry.flat, entry.label + " (flat)", builder);
+            if (entry.group && entry.flat) {
+                const auto groupScene = builder.build(entry.group->plan, entry.group->request);
+                const auto flatScene = builder.build(entry.flat->plan, entry.flat->request);
+                expectations.expect(groupScene.hasValue() && flatScene.hasValue() &&
+                                        groupScene.scene->commands().size() ==
+                                            flatScene.scene->commands().size(),
+                                    entry.label + ": the group's prepared scene holds the flat "
+                                                  "chain's number of commands");
+            }
         }
 
         // 4. The prepared scenes hold the same commands and dispatch the same number of times.
@@ -409,7 +462,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::cout << "PASS: a Node Group with an image, a second image, a Mask and a keyed value "
-                     "slot matches the flat graph and the CPU reference on the device, cold and "
+                     "slot (and a ChannelSet entering and leaving at channels1) matches the flat graph and the CPU reference on the device, cold and "
                      "warm, at three frames, over a region of interest and at half resolution, "
                      "with the same prepared commands and dispatches, cache identity and "
                      "invalidation, cancellation and budget\n";

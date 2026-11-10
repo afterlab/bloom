@@ -207,4 +207,58 @@ struct Fixture final {
     return fixture;
 }
 
+// The ChannelSet chain: `plate -> Image to Channel Set -> Channel Pass -> Layer`. Grouped, the
+// Channel Pass sits inside a group definition and the set enters at `channels1` (leaving: the pack
+// sits inside and the set leaves at `channels1` into a Channel Pass outside).
+[[nodiscard]] inline std::unique_ptr<Fixture> buildChannelChain(const bool grouped,
+                                                                const bool leaving = false) {
+    auto fixture = std::make_unique<Fixture>();
+    auto& f = *fixture;
+    auto& p = f.parts;
+    f.buildPlates();
+    const auto content = std::string(document::kLayerOutputContentInputPort);
+    const auto pack = [&](const document::CompositionId in) {
+        const auto node = f.addNode(in, "bloom.image-to-channel-set");
+        f.set(in, node, "layer", std::string("pass"));
+        return node;
+    };
+    const auto pass = [&](const document::CompositionId in) {
+        const auto node = f.addNode(in, "bloom.channel-pass");
+        f.set(in, node, "pass", std::string("pass"));
+        return node;
+    };
+    if (!grouped) {
+        const auto packNode = pack(f.main);
+        const auto passNode = pass(f.main);
+        f.connect(f.main, p.plate, "image", packNode, "image");
+        f.connect(f.main, packNode, "channels", passNode, "channels");
+        f.connect(f.main, passNode, "image", p.layer, content);
+        return fixture;
+    }
+    p.instance = f.addNode(f.main, document::kNodeGroupNodeType);
+    const auto made = f.run<commands::CreateGroupDefinition>(f.main, "Channels", p.instance);
+    p.group = *made.outputId<document::CompositionId>(commands::kCreateGroupDefinitionOutput);
+    p.groupInput = *made.outputId<document::NodeId>(commands::kCreateGroupDefinitionInputNodeOutput);
+    p.groupOutput =
+        *made.outputId<document::NodeId>(commands::kCreateGroupDefinitionOutputNodeOutput);
+    if (!leaving) {
+        const auto packNode = pack(f.main);
+        const auto passNode = pass(p.group);
+        f.connect(f.main, p.plate, "image", packNode, "image");
+        f.connect(f.main, packNode, "channels", p.instance, "channels1");
+        f.connect(p.group, p.groupInput, "channels1", passNode, "channels");
+        f.connect(p.group, passNode, "image", p.groupOutput, "image1");
+        f.connect(f.main, p.instance, "image1", p.layer, content);
+    } else {
+        const auto packNode = pack(p.group);
+        const auto passNode = pass(f.main);
+        f.connect(p.group, p.groupInput, "image1", packNode, "image");
+        f.connect(p.group, packNode, "channels", p.groupOutput, "channels1");
+        f.connect(f.main, p.plate, "image", p.instance, "image1");
+        f.connect(f.main, p.instance, "channels1", passNode, "channels");
+        f.connect(f.main, passNode, "image", p.layer, content);
+    }
+    return fixture;
+}
+
 } // namespace bloom::test::node_group
