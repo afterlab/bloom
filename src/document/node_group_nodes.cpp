@@ -1,5 +1,6 @@
 #include <bloom/document/node_group_nodes.hpp>
 
+#include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
@@ -416,6 +417,12 @@ class Expander final {
                 destination != nullptr && destination->nodeId == boundaryOutput)
                 produced.emplace(destination->port, edge.source);
 
+        // A muted instance is bypassed as a muted node is: each pixel output is the input of the
+        // same name (image1, mask1, channels1) and the group's own nodes are left unread. Its
+        // value outputs still read Group Output's republished values.
+        const bool muted = nodeMuted(work_.nodeLayout(), instanceId);
+        const auto& pixelOutputs = muted ? fed : produced;
+
         std::vector<EdgeRecord> fromInstance;
         for (const auto& edge : work_.graph().edges())
             if (edge.source.nodeId == instanceId)
@@ -423,8 +430,8 @@ class Expander final {
         for (auto edge : fromInstance) {
             (void)work_.graph().eraseEdge(edge.id);
             if (isPixelPort(edge.source.port)) {
-                const auto source = produced.find(edge.source.port);
-                if (source == produced.end())
+                const auto source = pixelOutputs.find(edge.source.port);
+                if (source == pixelOutputs.end())
                     continue;
                 edge.source = source->second;
             } else {
@@ -443,8 +450,8 @@ class Expander final {
             const auto retarget = [&](std::optional<OutputPortRef>& reference) {
                 if (!reference || reference->nodeId != instanceId)
                     return;
-                const auto source = produced.find(reference->port);
-                if (source == produced.end())
+                const auto source = pixelOutputs.find(reference->port);
+                if (source == pixelOutputs.end())
                     reference.reset();
                 else
                     reference = source->second;

@@ -852,7 +852,8 @@ set a group can expose.
 Evidence: `bloom.runtime.node-group-reopen` (save and reopen through the archive writer and reader,
 wrong-kind links refused by `ConnectPorts`), `bloom.runtime.snapshot_compiler` (`testNodeGroup*`: a
 Mask and a ChannelSet entering and leaving a group, wrong-kind links, nested groups, the depth and
-node caps) and `bloom.runtime.gpu_node_group_native` (the group against the flat graph and the CPU
+node caps, a muted instance, an unconnected image slot) and `bloom.runtime.gpu_node_group_native`
+(the group, with an image, Mask, ChannelSet and value slots, against the flat graph and the CPU
 reference on the device).
 
 ### Expansion
@@ -865,6 +866,11 @@ operands become the values Group Input publishes. Groups inside groups expand th
 depth of eight and twenty thousand nodes in all, past which the instance stays and the compile
 fails with a diagnostic on it. An instance that names no group, or a group with no Group Input and
 Group Output, fails the same way, and only when something reachable reads it.
+
+A muted Node Group is bypassed as any muted node is: each pixel output (`image1`, `mask1`,
+`channels1`) reads the input of the same name and the group's nodes are not read; the instance's
+value outputs still read Group Output. An image slot nobody connects reaches the group's nodes as an
+unconnected input, exactly as it would on the flat nodes.
 
 Because the plan holds ordinary nodes, a group has no evaluator of its own. The CPU reference, the
 GPU route and every export read the same operations a hand-built graph of the same nodes compiles

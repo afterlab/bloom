@@ -2179,6 +2179,8 @@ int main() {
         testNodeGroupRefusals(expectations);
         testNodeGroupMask(expectations);
         testNodeGroupChannelSet(expectations);
+        testNodeGroupMutedInstance(expectations);
+        testNodeGroupUnconnectedImageSlot(expectations);
         testNodeGroupWrongKinds(expectations);
         testNodeGroupNesting(expectations);
         testNodeGroupDepthRefusal(expectations);

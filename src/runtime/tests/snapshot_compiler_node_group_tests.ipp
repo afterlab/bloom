@@ -581,6 +581,69 @@ void testNodeGroupChannelSet(Expectations& expectations) {
         "an unconnected channels1 compiles and renders as the flat graph's unconnected Pass does");
 }
 
+// ---- Muted instance and unconnected image slot ---------------------------------------------
+
+// A muted Node Group is bypassed as a muted effect node is: the picture on image1 goes straight
+// through, so the layer shows the plain source. The flat twin is the same Exposure muted.
+void testNodeGroupMutedInstance(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    auto grouped = makeGroupedProject(false, 1.0, false);
+    auto flat = makeGroupedProject(true, 1.0, false);
+    const auto plain = compile(makeProject(singleLayerOptions()), registry);
+    const auto live = compile(makeGroupedProject(false, 1.0, false), registry);
+    grouped.findComposition(kCompositionId)->nodeLayout()[kInstanceA].muted = true;
+    flat.findComposition(kCompositionId)->nodeLayout()[kInstanceA].muted = true;
+    const auto mutedGroup = compile(std::move(grouped), registry);
+    const auto mutedFlat = compile(std::move(flat), registry);
+    if (!plain.plan || !live.plan || !mutedGroup.plan || !mutedFlat.plan) {
+        expectations.expect(false, "the muted Node Group documents compile");
+        return;
+    }
+    const auto plainPixels = renderReference(plain.plan);
+    expectations.expect(!samePixelBits(renderReference(live.plan), plainPixels),
+                        "the live group changes the picture (the mute is observable)");
+    expectations.expect(samePixelBits(renderReference(mutedFlat.plan), plainPixels),
+                        "a muted Exposure passes the plain source through");
+    expectations.expect(samePixelBits(renderReference(mutedGroup.plan), plainPixels),
+                        "a muted Node Group passes the plain source through, as a muted node does");
+    expectations.expect(operationShape(*mutedGroup.plan) == operationShape(*mutedFlat.plan),
+                        "a muted Node Group compiles to the muted flat node's operations");
+}
+
+// An image slot nobody connects is handled as the flat node's unconnected input is.
+void testNodeGroupUnconnectedImageSlot(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    auto grouped = makeGroupedProject(false, 1.0, false);
+    auto flat = makeGroupedProject(true, 1.0, false);
+    // 7001 is the edge from the first plate into the instance (the flat Exposure).
+    require(grouped.findComposition(kCompositionId)->graph().eraseEdge(EdgeId::fromRaw(7001)),
+            "the plate no longer feeds the instance");
+    require(flat.findComposition(kCompositionId)->graph().eraseEdge(EdgeId::fromRaw(7001)),
+            "the plate no longer feeds the Exposure");
+    const auto groupedResult = compile(std::move(grouped), registry);
+    const auto flatResult = compile(std::move(flat), registry);
+    expectations.expect((groupedResult.plan == nullptr) == (flatResult.plan == nullptr),
+                        "an unconnected image1 compiles exactly when the flat node's does");
+    if (groupedResult.plan && flatResult.plan) {
+        expectations.expect(operationShape(*groupedResult.plan) == operationShape(*flatResult.plan),
+                            "an unconnected image1 compiles to the flat plan's operations");
+        expectations.expect(samePixelBits(renderReference(groupedResult.plan),
+                                          renderReference(flatResult.plan)),
+                            "an unconnected image1 renders the flat graph's pixels exactly");
+    } else if (!groupedResult.plan && !flatResult.plan) {
+        expectations.expect(groupedResult.diagnostics.empty() == flatResult.diagnostics.empty(),
+                            "an unconnected image1 reports as the flat node does");
+    }
+}
+
 // ---- Wrong kinds ---------------------------------------------------------------------------
 
 void testNodeGroupWrongKinds(Expectations& expectations) {
