@@ -1080,7 +1080,8 @@ void testImportedCompoundPointEditing(Expectations& expectations) {
     fixture.viewer.show();
     toolReady(fixture, expectations);
     commands::Transaction transaction("Import SVG", fixture.session.snapshot().revision());
-    transaction.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), nullptr, file, "art", false);
+    transaction.emplace<commands::AddSvgArtwork>(fixture.session.compositionId(), nullptr, file, "art", false,
+                                                 commands::SvgImportMode::Shapes);
     expectations.expect(fixture.session.executeTransaction(std::move(transaction)).succeeded(),
                         "the SVG imports");
     std::filesystem::remove(file);

@@ -1666,6 +1666,18 @@ set_tests_properties(bloom.ui.warp-viewer PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;integration" TIMEOUT 180)
 
+# #645: drilling into grouped and SVG artwork in the Viewer: levels, picks on evaluated outlines
+# on a worker, Escape/Enter/double-click, keyed point drags, selection sync, MCP level, Break Apart.
+add_executable(bloom_viewer_drill_test viewer_drill_tests.cpp)
+target_include_directories(bloom_viewer_drill_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_viewer_drill_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands Qt6::Test)
+bloom_enable_warnings(bloom_viewer_drill_test)
+add_test(NAME bloom.ui.viewer-drill COMMAND bloom_viewer_drill_test)
+set_tests_properties(bloom.ui.viewer-drill PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;integration" TIMEOUT 180)
+
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
 add_executable(bloom_channel_pickers_ui_test channel_pickers_ui_tests.cpp)
