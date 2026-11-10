@@ -1372,6 +1372,11 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     }
     setFocus(Qt::MouseFocusReason);
     auto mapping = currentMapping();
+    // #645: a click right after a selection change arrives before the new selection overlay is
+    // painted, so currentMapping() is empty. Inside a group the pick is the worker's and reads the
+    // displayed frame, so the frame's own mapping (as the double-click uses) is enough.
+    if (!mapping.has_value() && !session_.viewerLevel().groups.empty())
+        mapping = drillMapping();
     if (!mapping.has_value() || !contentRect().contains(event->position())) {
         QWidget::mousePressEvent(event);
         return;

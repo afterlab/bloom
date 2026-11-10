@@ -38,7 +38,9 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/mcp_live_ui_binding.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
@@ -1364,6 +1366,72 @@ void testStrokeSmallGroups() {
     app.key(Qt::Key_Escape);
 }
 
+// A single click that lands before the changed selection's overlay is painted is not dropped:
+// inside a group the displayed frame's mapping picks it.
+void testClickBeforeOverlayPaints(App& app, const Scene& s) {
+    expect(app.session.setViewerLevel({{s.root, s.outer, s.middle, s.inner}, std::nullopt}).ok(),
+           "inside inner");
+    app.session.selectLayerFromViewer(s.tri);
+    expect(app.settle(), "the Viewer paints the selection");
+    const auto screen = app.at({110.0, 50.0}); // on the ring
+    app.session.selectLayerFromViewer(s.tri);
+    app.session.clearSelectionFromViewer();
+    app.session.selectLayerFromViewer(s.tri);
+    // No event loop since the selection changed: the overlay of this selection is not painted.
+    expect(!app.viewer->mappingForTest().has_value(),
+           "the selection overlay is not painted yet, so currentMapping() is empty");
+    app.mouse(QEvent::MouseButtonPress, screen, Qt::LeftButton);
+    app.mouse(QEvent::MouseButtonRelease, screen, Qt::NoButton);
+    app.waitPick();
+    expect(app.primary() == s.ring && app.level().size() == 4,
+           "the click before the overlay painted still picks the ring and keeps the level");
+    expect(app.session.setViewerLevel({}).ok(), "back to the top");
+}
+
+// #644: a Path node drawing a nested shape is keyed from the Timeline: the layer's expanded rows list
+// the Path node's Value with the same diamond, and one click is one whole-path key at the playhead.
+void testTimelineKeysAPathNode(App& app, const Scene& s) {
+    const auto keys = [&] { return pathKeys(app.composition(), s.triPath); };
+    expect(keys() == 2, "tri's Path node starts with the two keys of the scene");
+    ui::TimelineEditor editor(app.session, *app.preview);
+    editor.resize(1400, 3200); // Tall enough that no opened row is scrolled out of the table.
+    editor.show();
+    app.session.selectLayerFromViewer(s.tri);
+    QApplication::processEvents();
+    // The shape sits three groups deep: open each group, then the shape's own rows.
+    for (const auto layer : {s.root, s.outer, s.middle, s.inner, s.tri}) {
+        editor.layerStackForTest()->expansionRequested(layer);
+        QApplication::processEvents();
+    }
+    const auto diamond = [&]() -> ui::KeyframeDiamond* {
+        for (auto* candidate : editor.findChildren<ui::KeyframeDiamond*>())
+            if (candidate->isVisible() && candidate->parameterId() == s.triPath)
+                return candidate;
+        return nullptr;
+    };
+    expect(diamond() != nullptr, "the Timeline row of the Path node's Value carries a key diamond");
+    if (diamond() == nullptr)
+        return;
+    const auto half = core::RationalTime::create(12, 24);
+    expect(half && app.session.setCurrentTime(*half), "the playhead moves between the two keys");
+    QApplication::processEvents();
+    expect(diamond()->state() == ui::KeyframeDiamondState::AnimatedWithoutKey,
+           "between keys the Timeline diamond is animated without a key");
+    const auto history = app.session.snapshot().revision();
+    QTest::mouseClick(diamond(), Qt::LeftButton);
+    QApplication::processEvents();
+    expect(keys() == 3 && diamond()->state() == ui::KeyframeDiamondState::AnimatedWithKey &&
+               app.session.snapshot().revision() != history,
+           "one click on the Timeline diamond adds one whole-path key at the playhead");
+    QTest::mouseClick(diamond(), Qt::LeftButton);
+    QApplication::processEvents();
+    expect(keys() == 2 && diamond()->state() == ui::KeyframeDiamondState::AnimatedWithoutKey,
+           "a click on that key removes it");
+    expect(app.session.undo() && keys() == 3, "one undo brings the key back");
+    expect(app.session.undo() && keys() == 2, "one more undo removes it");
+    expect(app.session.setCurrentTime(kOne), "back to 1 s");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1385,6 +1453,8 @@ int main(int argc, char** argv) {
             testBreadcrumb(app, scene);
             testMaskedPick(app, scene);
             testDeepGestures(app, scene);
+            testClickBeforeOverlayPaints(app, scene);
+            testTimelineKeysAPathNode(app, scene);
         }
         testBreakApartOffer();
         testStrokeSmallGroups();
