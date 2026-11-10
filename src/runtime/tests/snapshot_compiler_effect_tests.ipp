@@ -1987,6 +1987,140 @@ void testQuantizeLowering(Expectations& expectations) {
     expectations.expect(lower({}, {}, true).passedThrough, "a muted Quantize passes its Image through");
 }
 
+// #527 Dither lowers to one DitherKernel: the pattern, matrix size (read only by Ordered), bit depth,
+// domain, animation, seed and Monochrome as constants, the amplitude with its identity. Every Frame
+// varies with time, Held does not unless the amplitude is keyed; a keyed matrix size cannot exist (a
+// constant). A muted node passes its Image through.
+void testDitherLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(994);
+    const auto* definition = builtInNodeDefinitions().find(kDitherNodeType, 1);
+    require(definition != nullptr, "the Dither definition exists");
+    struct Lowered final {
+        const runtime::DitherKernel* kernel = nullptr;
+        std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
+        std::map<std::string, ParameterId> ids;
+        bool timeDependent = false;
+        bool passedThrough = false;
+    };
+    const auto lower = [&](const std::map<std::string, ParameterValue>& values,
+                           const bool keyAmplitude = false, const bool muted = false) {
+        Lowered out;
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 3200;
+        for (const auto& parameter : definition->parameters) {
+            const auto found = values.find(parameter.role);
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey,
+                         ConstantValueSource{found == values.end() ? parameter.defaultValue
+                                                                   : found->second}}),
+                    "Dither parameter is valid");
+            out.ids[parameter.role] = id;
+            bindings.push_back({parameter.role, id});
+        }
+        if (keyAmplitude) {
+            constexpr auto curveId = AnimationCurveId::fromRaw(3300);
+            ScalarAnimationCurve curve{curveId, {}};
+            curve.keyframes = {{KeyframeId::fromRaw(3301), core::RationalTime::fromInteger(0), 0.5,
+                                KeyframeInterpolation::Linear},
+                               {KeyframeId::fromRaw(3302), core::RationalTime::fromInteger(1), 2.0,
+                                KeyframeInterpolation::Linear}};
+            require(composition->animationCurves().insert(std::move(curve)), "the curve is publishable");
+            require(composition->parameters().setSource(out.ids.at("amplitude"),
+                                                        AnimationCurveSource{curveId}),
+                    "the amplitude animates");
+        }
+        require(graph.addNode({effectId, std::string(kDitherNodeType), std::move(bindings), 1}),
+                "Dither node is accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{effectId, "input"}}),
+                "source feeds Dither");
+        require(graph.addEdge({EdgeId::fromRaw(994), {effectId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "Dither feeds Layer");
+        if (muted)
+            composition->nodeLayout()[effectId].muted = true;
+        expectations.expect(project.validate().ok(), "Dither graph is valid document truth");
+        auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "Dither graph compiles");
+        out.plan = result.plan;
+        if (!out.plan)
+            return out;
+        for (std::size_t index = 0; index < out.plan->operations().size(); ++index) {
+            const auto* item = std::get_if<runtime::CompiledImageEffect>(&out.plan->operations()[index]);
+            if (item && item->sourceNodeId == effectId) {
+                out.kernel = std::get_if<runtime::DitherKernel>(&item->kernel);
+                out.timeDependent =
+                    out.plan->operationTimeDependent(runtime::OperationIndex::fromRaw(index));
+                break;
+            }
+        }
+        out.passedThrough = out.kernel == nullptr;
+        return out;
+    };
+    // The defaults: blue noise (64), 8 bit, display, Every Frame, seed 1, per channel, 1 LSB.
+    {
+        const auto base = lower({});
+        require(base.kernel != nullptr, "Dither lowers to a dither kernel");
+        const auto* amplitude = std::get_if<double>(&base.kernel->amplitude.source);
+        expectations.expect(base.kernel->blueNoise && base.kernel->side == 64 && base.kernel->bits == 8 &&
+                                !base.kernel->stored && base.kernel->everyFrame &&
+                                base.kernel->seed == 1 && !base.kernel->monochrome &&
+                                amplitude != nullptr && *amplitude == 1.0 &&
+                                base.kernel->amplitude.id == base.ids.at("amplitude"),
+                            "Dither's defaults lower blue noise, 8 bit, display, every frame, seed 1 "
+                            "and 1 LSB with the amplitude's identity");
+        expectations.expect(base.timeDependent, "Every Frame varies with time");
+    }
+    // Every constant reaches the kernel.
+    {
+        const auto ordered = lower({{"pattern", std::int64_t{kDitherOrdered}},
+                                    {"matrixSize", std::int64_t{3}},
+                                    {"bitDepth", std::int64_t{2}},
+                                    {"domain", std::int64_t{kDitherStored}},
+                                    {"animation", std::int64_t{kDitherHeld}},
+                                    {"seed", std::int64_t{77}},
+                                    {"monochrome", true},
+                                    {"amplitude", 2.5}});
+        require(ordered.kernel != nullptr, "an ordered dither lowers");
+        expectations.expect(!ordered.kernel->blueNoise && ordered.kernel->side == 16 &&
+                                ordered.kernel->bits == 12 && ordered.kernel->stored &&
+                                !ordered.kernel->everyFrame && ordered.kernel->seed == 77 &&
+                                ordered.kernel->monochrome,
+                            "Ordered 16 x 16, 12 bit, stored, held, seed 77 and Monochrome lower");
+        expectations.expect(!ordered.timeDependent, "Held with a constant amplitude does not vary");
+        for (const auto& [size, side] : std::array<std::pair<std::int64_t, std::int64_t>, 4>{
+                 {{0, 2}, {1, 4}, {2, 8}, {3, 16}}}) {
+            const auto bayer = lower({{"pattern", std::int64_t{kDitherOrdered}}, {"matrixSize", size}});
+            expectations.expect(bayer.kernel != nullptr && bayer.kernel->side == side,
+                                "a matrix size lowers its Bayer side");
+        }
+        for (const auto& [depth, bits] : std::array<std::pair<std::int64_t, std::int64_t>, 4>{
+                 {{0, 8}, {1, 10}, {2, 12}, {3, 16}}}) {
+            const auto deep = lower({{"bitDepth", depth}});
+            expectations.expect(deep.kernel != nullptr && deep.kernel->bits == bits,
+                                "a bit depth lowers its bits");
+        }
+        // Blue noise ignores the matrix size: the same kernel whatever it holds.
+        const auto a = lower({{"matrixSize", std::int64_t{0}}});
+        const auto b = lower({{"matrixSize", std::int64_t{3}}});
+        expectations.expect(a.kernel != nullptr && b.kernel != nullptr && *a.kernel == *b.kernel,
+                            "blue noise lowers the same kernel whatever the matrix size");
+    }
+    auto held = std::map<std::string, ParameterValue>{{"animation", std::int64_t{kDitherHeld}}};
+    expectations.expect(lower(held, true).timeDependent, "a keyed amplitude varies a held dither");
+    expectations.expect(lower({}, false, true).passedThrough, "a muted Dither passes its Image through");
+}
+
 // #523: an Image qualified by HSL Qualifier feeds Image Mix's mask. It lowers to a ColorTool kernel
 // with the qualifier's choices and nine operands with their identities; muted it is an empty Mask.
 void testHslQualifierLowering(Expectations& expectations) {

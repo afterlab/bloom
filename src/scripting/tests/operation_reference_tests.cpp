@@ -247,7 +247,7 @@ void everyNodeGroupIsNamed() {
     pinned({"bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"},
            "keying-mattes");
     pinned({"bloom.vignette", "bloom.film-grain", "bloom.codec-degrade", "bloom.alpha-contour",
-            "bloom.quantize"},
+            "bloom.quantize", "bloom.dither"},
            "stylize");
     pinned({"bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
             "bloom.corner-pin", "bloom.st-map", "bloom.displace"},

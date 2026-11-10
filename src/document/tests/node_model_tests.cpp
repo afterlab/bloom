@@ -302,6 +302,7 @@ int main() {
                              "bloom.color-matrix",
                              "bloom.hsl-qualifier",
                              "bloom.quantize",
+                             "bloom.dither",
                              "bloom.edge-extend",
                              "bloom.alpha-contour",
                              "bloom.inner-shadow",

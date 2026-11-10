@@ -207,6 +207,7 @@ void blurNodeReopen() {
                              "bloom.color-matrix",
                              "bloom.hsl-qualifier",
                              "bloom.quantize",
+                             "bloom.dither",
                              "bloom.edge-extend",
                              "bloom.alpha-contour",
                              "bloom.inner-shadow",
@@ -354,6 +355,10 @@ void blurNodeReopen() {
                        : document::colorCleanupParameterSpec(parameter.schemaKey)->kind ==
                                document::DepthParameterKind::Choice
                            ? document::ParameterValue{std::int64_t{1}}
+                       // #527 Dither's seed.
+                       : document::colorCleanupParameterSpec(parameter.schemaKey)->kind ==
+                               document::DepthParameterKind::Integer
+                           ? document::ParameterValue{std::int64_t{424242}}
                            : document::ParameterValue{
                                  document::colorCleanupParameterSpec(parameter.schemaKey)->softMaximum *
                                  0.5 +

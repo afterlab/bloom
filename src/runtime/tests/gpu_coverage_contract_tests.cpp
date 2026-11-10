@@ -45,6 +45,7 @@
 #include "pixel_math_test_support.hpp"
 #include "color_tool_test_support.hpp"
 #include "film_grain_test_support.hpp"
+#include "dither_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "sharpen_test_support.hpp"
 #include "field_test_programs.hpp"
@@ -2668,6 +2669,80 @@ displayProofRunner(const bool customView) {
                                 "production Film Grain node: the default, strong distinct "
                                 "channels, Monochrome and Sensor Noise, on a moved frame, full "
                                 "frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #527 Dither: both patterns, every Bayer side, the bit depths, both domains, Monochrome and Held,
+    // over HDR and partial alpha, on a moved frame, full frame, ROI and a half-scale proxy.
+    const auto runDither = [](const std::vector<bloom::dither_test::DitherSettings>& variants,
+                              std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& settings : variants) {
+            const auto plan = bloom::dither_test::ditherPlan(settings, idBase);
+            idBase += 200;
+            auto request = requestFor(*plan);
+            request.time = *bloom::core::RationalTime::create(7, 24);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            auto regional = request;
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 9, 7);
+            regional.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, regional);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            auto proxy = request;
+            const auto extent = bloom::render::ImageExtent::create(
+                bloom::dither_test::kDitherWidth / 2, bloom::dither_test::kDitherHeight / 2);
+            proxy.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+            frame = runBuilderWithRequest(plan, proxy);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    {
+        using bloom::dither_test::DitherSettings;
+        using bloom::dither_test::everyPath;
+        using bloom::dither_test::ordered;
+        auto stored = everyPath();
+        stored.stored = true;
+        auto mono = everyPath();
+        mono.monochrome = true;
+        auto held = everyPath();
+        held.everyFrame = false;
+        auto deep = everyPath();
+        deep.bits = 10;
+        auto sixteen = ordered(16);
+        sixteen.bits = 16;
+        sixteen.amplitude = 12.0;
+        auto orderedStored = ordered(4);
+        orderedStored.stored = true;
+        orderedStored.amplitude = 3.0;
+        add(
+            "effect.DitherKernel", GpuCoverageFixtureCriterion::Prepared, "src/runtime dither tests",
+            [runDither, stored, mono, held, deep, sixteen, orderedStored] {
+                return runDither({DitherSettings{}, everyPath(), ordered(2), ordered(4), ordered(8),
+                                  sixteen, stored, orderedStored, mono, held, deep},
+                                 527000,
+                                 "production Dither: blue noise and Bayer 2, 4, 8 and 16, 8, 10 and "
+                                 "16 bit, the display encoding and the stored value, Monochrome and "
+                                 "Held, over HDR and partial alpha, on a moved frame, full frame, "
+                                 "ROI and half scale");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "node.bloom.dither", GpuCoverageFixtureCriterion::Prepared, "src/runtime dither tests",
+            [runDither, stored, mono] {
+                return runDither({DitherSettings{}, everyPath(), ordered(8), stored, mono}, 529000,
+                                 "production Dither node: the default blue noise, a strong dither, "
+                                 "Bayer 8, the stored value and Monochrome, on a moved frame, full "
+                                 "frame, ROI and half scale");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }

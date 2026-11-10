@@ -2128,6 +2128,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_rolling_shutter_tests.ipp"
 #include "snapshot_compiler_warp_tests.ipp"
 #include "snapshot_compiler_tile_mirror_tests.ipp"
+#include "snapshot_compiler_dither_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 #include "snapshot_compiler_test_card_tests.ipp"
 #include "snapshot_compiler_four_color_gradient_tests.ipp"
@@ -2172,6 +2173,7 @@ int main() {
         testAlphaAssociationLowering(expectations);
         testColorToolLowering(expectations);
         testQuantizeLowering(expectations);
+        testDitherLowering(expectations);
         testColorMatrixLowering(expectations);
         testHslQualifierLowering(expectations);
         testColorizeLowering(expectations);
@@ -2223,6 +2225,7 @@ int main() {
         testTileMirrorPixels(expectations);
         testTileMirrorSmallInput(expectations);
         testTileMirrorCacheIdentity(expectations);
+        testDitherCacheIdentity(expectations);
         testTrackJob(expectations);
         testLightRaysLowering(expectations);
         testLightRaysPixels(expectations);

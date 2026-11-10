@@ -1214,6 +1214,40 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qRed,
                                ConstantValueSource{0.0});
 
+    // #527 Dither: its amplitude, choices, seed and Monochrome edit within their domains and refuse
+    // outside them (an amplitude 0 to 16 LSBs, two patterns, four matrix sizes and bit depths).
+    const auto dither = addRecipe("bloom.dither");
+    const auto dPattern = dither.outputId<ParameterId>("parameter.pattern");
+    const auto dSize = dither.outputId<ParameterId>("parameter.matrixSize");
+    const auto dDepth = dither.outputId<ParameterId>("parameter.bitDepth");
+    const auto dAmplitude = dither.outputId<ParameterId>("parameter.amplitude");
+    const auto dDomain = dither.outputId<ParameterId>("parameter.domain");
+    const auto dAnimation = dither.outputId<ParameterId>("parameter.animation");
+    const auto dSeed = dither.outputId<ParameterId>("parameter.seed");
+    const auto dMono = dither.outputId<ParameterId>("parameter.monochrome");
+    if (!dPattern || !dSize || !dDepth || !dAmplitude || !dDomain || !dAnimation || !dSeed || !dMono)
+        throw std::logic_error("Dither exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *dPattern, ConstantValueSource{std::int64_t{0}});
+    (void)exercise<SetParameterSource>(test, fixture, *dSize, ConstantValueSource{std::int64_t{3}});
+    (void)exercise<SetParameterSource>(test, fixture, *dDepth, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *dAmplitude, ConstantValueSource{2.5});
+    (void)exercise<SetParameterSource>(test, fixture, *dDomain, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *dAnimation, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *dSeed, ConstantValueSource{std::int64_t{123456}});
+    (void)exercise<SetParameterSource>(test, fixture, *dMono, ConstantValueSource{true});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dPattern,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dSize,
+                               ConstantValueSource{std::int64_t{4}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dDepth,
+                               ConstantValueSource{std::int64_t{4}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dAmplitude,
+                               ConstantValueSource{-0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dAmplitude,
+                               ConstantValueSource{16.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *dSeed,
+                               ConstantValueSource{std::int64_t{-1}});
+
     // #348 Corner Pin, ST Map and Displace: their corners, amounts and choices edit within their
     // domains and refuse outside them.
     const auto pin = addRecipe("bloom.corner-pin");
