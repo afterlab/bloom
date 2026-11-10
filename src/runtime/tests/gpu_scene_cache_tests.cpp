@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -431,6 +432,56 @@ void testZeroRetention(Expectations& expectations, GpuDevice& device, GpuSolid& 
                         "zero-retention cache remains empty while the active image survives");
 }
 
+// #642: the live images are one pool for the process, so the caches share one retained-image
+// share however many devices they serve (two caches on one device stand for the Viewer's and an
+// export's here). A cache at the share evicts its own least recently used entry; an empty one keeps
+// nothing more; an entry leaving any way (eviction, clear, destruction) gives its share back.
+void testProcessShare(Expectations& expectations, GpuDevice& device, GpuSolid& solid) {
+    const auto base = GpuSceneCache::processRetainedImages();
+    GpuSceneCacheBudgets budgets{1ULL << 32ULL};
+    budgets.maxProcessRetainedImages = base + 3;
+    auto first = GpuSceneCache::create(device, budgets);
+    auto second = GpuSceneCache::create(device, budgets);
+    expectations.expect(first.hasValue() && second.hasValue(), "the two sharing caches are created");
+    if (!first || !second) {
+        return;
+    }
+    GpuSceneCache& a = *first.cache;
+    GpuSceneCache& b = *second.cache;
+    for (int index = 0; index < 3; ++index) {
+        auto image = makeSolidImage(solid, 16, 16, 0.1 * (index + 1));
+        expectations.expect(image != nullptr &&
+                                a.insert("share-a" + std::to_string(index), image) ==
+                                    GpuSceneCacheInsertResult::Inserted,
+                            "the first cache retains up to the process's share");
+    }
+    expectations.expect(GpuSceneCache::processRetainedImages() == base + 3 && a.entryCount() == 3,
+                        "the process counts the first cache's entries");
+    auto refused = makeSolidImage(solid, 16, 16, 0.7);
+    expectations.expect(refused != nullptr && b.insert("share-b0", refused) ==
+                                                  GpuSceneCacheInsertResult::RefusedOverBudget,
+                        "a cache with nothing to evict keeps nothing past the process's share");
+    expectations.expect(b.entryCount() == 0 && b.counters().refusals == 1 && a.entryCount() == 3,
+                        "the refusal leaves both caches as they were");
+    auto more = makeSolidImage(solid, 16, 16, 0.8);
+    expectations.expect(more != nullptr &&
+                            a.insert("share-a3", more) == GpuSceneCacheInsertResult::Inserted &&
+                            a.entryCount() == 3 && a.find("share-a0") == nullptr &&
+                            a.counters().evictions == 1,
+                        "a cache at the share evicts its own least recently used entry");
+    expectations.expect(GpuSceneCache::processRetainedImages() == base + 3,
+                        "the eviction gave its share back");
+    a.clear();
+    expectations.expect(GpuSceneCache::processRetainedImages() == base,
+                        "clearing a cache gives its share back");
+    expectations.expect(b.insert("share-b0", refused) == GpuSceneCacheInsertResult::Inserted &&
+                            GpuSceneCache::processRetainedImages() == base + 1,
+                        "the share is free again for the other cache");
+    second.cache.reset();
+    expectations.expect(GpuSceneCache::processRetainedImages() == base,
+                        "destroying a cache gives its share back");
+}
+
 // The cache holds no Vulkan handle and dropping entries / destroying it on a foreign thread must
 // not call Vulkan. Run last.
 void testForeignThreadLifetime(Expectations& expectations, GpuDevice& device, GpuSolid& solid) {
@@ -495,6 +546,7 @@ int main(const int argc, char** argv) {
     testPinnedReplacement(expectations, *device.device, *solid.solid);
     testReclaimOnDemand(expectations, *device.device, *solid.solid);
     testZeroRetention(expectations, *device.device, *solid.solid);
+    testProcessShare(expectations, *device.device, *solid.solid);
     testForeignThreadCreate(expectations, *device.device);
     testWrongThread(expectations, *device.device);
     testForeignThreadLifetime(expectations, *device.device, *solid.solid);

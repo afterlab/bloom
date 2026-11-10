@@ -1922,9 +1922,14 @@ slots. Each is now counted as what it is; no budget was raised.
   runaway-plan guard at 2^20: a command holds no pixels, its storage is charged to the host claim,
   and the importer stops at 20,000 elements, so the former 4,096 refused real files for no memory
   reason.
-- **The scene cache keeps stacks, not every layer.** A device has a fixed number of image slots
-  (4096 per family, whatever their size). `GpuSceneCacheBudgets::maxRetainedImages` (2048) evicts by
-  count as it evicts by bytes, and a scene of more than
+- **The scene cache keeps stacks, not every layer.** The process has a fixed number of image slots
+  (4096 per family, whatever their size, shared by every device). `GpuSceneCacheBudgets::maxRetainedImages`
+  (2048) evicts by count as it evicts by bytes, and `maxProcessRetainedImages` (2048) bounds every
+  cache in the process together: the Viewer's device and an export's each kept their own 2048 and
+  filled the slots between them, so the export's next image could not be created (#642, an animated
+  Vector Artwork layer of 1,200 elements exported while the Viewer held its frames). A cache at that
+  share evicts its own least recently used entry, and one with nothing to evict keeps nothing more
+  (`bloom.runtime.gpu_scene_cache`, `testProcessShare`). A scene of more than
   `GpuSceneExecutorBudgets::maxCommandsOfferingEveryImage` (1024) commands offers only its output and
   its Merges of three or more entries to the cache, so an edit re-runs one stack and a warm frame
   dispatches nothing.

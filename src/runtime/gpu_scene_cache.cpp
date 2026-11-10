@@ -1,5 +1,6 @@
 #include <bloom/runtime/gpu_scene_cache.hpp>
 
+#include <atomic>
 #include <list>
 #include <new>
 #include <string_view>
@@ -9,6 +10,11 @@
 
 namespace bloom::runtime {
 namespace {
+
+// Entries of every cache in the process (GpuSceneCacheBudgets::maxProcessRetainedImages). Caches
+// live on different device owner threads, so this is the one shared count; a cache adds its entry
+// after inserting and takes it away when the entry leaves, from whichever thread destroys it.
+std::atomic<std::size_t> processRetained{0};
 
 [[nodiscard]] GpuSceneCacheDiagnostic makeDiagnostic(const GpuSceneCacheDiagnosticCode code,
                                                      std::string message) {
@@ -21,6 +27,17 @@ struct GpuSceneCache::Impl final {
     Impl() = default;
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
+    ~Impl() { forgetAll(); }
+
+    [[nodiscard]] bool processShareFull() const noexcept {
+        return processRetained.load(std::memory_order_relaxed) >= budgets.maxProcessRetainedImages;
+    }
+    void forgetAll() noexcept {
+        processRetained.fetch_sub(entries.size(), std::memory_order_relaxed);
+        entries.clear();
+        order.clear();
+        retainedBytes = 0;
+    }
 
     [[nodiscard]] bool onOwnerThread() const noexcept {
         return device != nullptr && owner == std::this_thread::get_id();
@@ -40,6 +57,7 @@ struct GpuSceneCache::Impl final {
         retainedBytes -= found->second.bytes;
         order.erase(found->second.position);
         entries.erase(found);
+        processRetained.fetch_sub(1, std::memory_order_relaxed);
     }
 
     // The least-recently used entry that is not pinned by an external shared_ptr and is not the key
@@ -116,6 +134,10 @@ GpuSceneCacheCreateResult GpuSceneCache::create(render::GpuDevice& device,
             GpuSceneCacheDiagnostic{}};
 }
 
+std::size_t GpuSceneCache::processRetainedImages() noexcept {
+    return processRetained.load(std::memory_order_relaxed);
+}
+
 bool GpuSceneCache::isValid() const noexcept { return impl_ != nullptr; }
 
 bool GpuSceneCache::isBoundTo(render::GpuDevice& device) const noexcept {
@@ -160,7 +182,8 @@ GpuSceneCache::insert(std::string semanticKey,
         ++impl.counters.refusals;
         return GpuSceneCacheInsertResult::InvalidArgument;
     }
-    if (bytes > impl.budgets.maxRetainedBytes || impl.budgets.maxRetainedImages == 0) {
+    if (bytes > impl.budgets.maxRetainedBytes || impl.budgets.maxRetainedImages == 0 ||
+        impl.budgets.maxProcessRetainedImages == 0) {
         ++impl.counters.refusals;
         return GpuSceneCacheInsertResult::RefusedOverBudget;
     }
@@ -215,9 +238,11 @@ GpuSceneCache::insert(std::string semanticKey,
             return GpuSceneCacheInsertResult::RefusedOverBudget;
         }
     }
-    // Likewise for the image count: an entry this insertion replaces leaves no extra room to make.
-    const bool imageCountFull = existing == impl.entries.end() &&
-                                impl.entries.size() >= impl.budgets.maxRetainedImages;
+    // Likewise for the image count, this cache's and the process's caches' together: an entry this
+    // insertion replaces leaves no extra room to make.
+    const bool imageCountFull =
+        existing == impl.entries.end() &&
+        (impl.entries.size() >= impl.budgets.maxRetainedImages || impl.processShareFull());
     if (imageCountFull && impl.findEvictable(key) == impl.order.end()) {
         ++impl.counters.refusals;
         return GpuSceneCacheInsertResult::RefusedOverBudget;
@@ -229,10 +254,12 @@ GpuSceneCache::insert(std::string semanticKey,
         impl.removeAt(key);
     }
     while (wouldExceed(impl.retainedBytes, bytes, maxBytes) ||
-           impl.entries.size() >= impl.budgets.maxRetainedImages) {
+           impl.entries.size() >= impl.budgets.maxRetainedImages || impl.processShareFull()) {
         const auto victim = impl.findEvictable(key);
         if (victim == impl.order.end()) {
-            // Phase 1 proved this cannot happen; fail closed rather than corrupt accounting.
+            // Phase 1 proved this cannot happen for this cache's own budgets (another cache's
+            // insertion on its own thread can take the process's last share meanwhile); fail closed
+            // rather than corrupt accounting.
             ++impl.counters.refusals;
             return GpuSceneCacheInsertResult::RefusedOverBudget;
         }
@@ -267,6 +294,7 @@ GpuSceneCache::insert(std::string semanticKey,
         return GpuSceneCacheInsertResult::InvalidArgument;
     }
     impl.retainedBytes += bytes;
+    processRetained.fetch_add(1, std::memory_order_relaxed);
     ++impl.counters.insertions;
     return GpuSceneCacheInsertResult::Inserted;
 }
@@ -303,18 +331,14 @@ void GpuSceneCache::clear() noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return;
     }
-    impl_->entries.clear();
-    impl_->order.clear();
-    impl_->retainedBytes = 0;
+    impl_->forgetAll();
 }
 
 void GpuSceneCache::invalidateDevice() noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return;
     }
-    impl_->entries.clear();
-    impl_->order.clear();
-    impl_->retainedBytes = 0;
+    impl_->forgetAll();
     ++impl_->invalidationEpoch;
 }
 

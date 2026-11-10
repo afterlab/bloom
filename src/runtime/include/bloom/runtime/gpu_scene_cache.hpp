@@ -49,6 +49,12 @@ struct GpuSceneCacheBudgets final {
     // images until the next image it needs cannot be created (#343). Half is left for the scene
     // running now and the frames being shown; the rest is evicted like a byte budget.
     std::size_t maxRetainedImages = 2048;
+    // Retained images of every scene cache in the process together (#642). The live images are one
+    // pool for the whole process, not one per device, so two caches each keeping their own 2048
+    // (the Viewer's device and an export's) fill it, and the next image either scene needs cannot
+    // be created. While the process's caches hold this many, a cache makes room by evicting its own
+    // least recently used unpinned entries, and with none to evict it keeps nothing more.
+    std::size_t maxProcessRetainedImages = 2048;
 };
 
 enum class GpuSceneCacheDiagnosticCode : std::uint8_t {
@@ -111,6 +117,9 @@ class GpuSceneCache final {
     // the GpuDevice must outlive the cache.
     [[nodiscard]] static GpuSceneCacheCreateResult create(render::GpuDevice& device,
                                                           GpuSceneCacheBudgets budgets = {});
+
+    // The images every scene cache in the process retains now (see maxProcessRetainedImages).
+    [[nodiscard]] static std::size_t processRetainedImages() noexcept;
 
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] bool isBoundTo(render::GpuDevice& device) const noexcept;
