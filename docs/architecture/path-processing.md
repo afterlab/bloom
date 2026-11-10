@@ -272,6 +272,12 @@ original segment is the exact sub-curve, and a span over several is a least-squa
 deviation from the original is at most 0.25 px at the original density or finer. Straight joins the new
 points with lines.
 
+**Controls.** The card and Properties show the operands the mode reads: Count for Fixed count, Gap for
+Gap, Density for By length, and a slider from 0 to 200 percent for Percentage. Start offset is a slider
+from 0 to 100 percent, Keep corners a switch, and Mode and Output are choice lists. A cached Resample
+Path result is keyed by its operands and by the keys of the Path node that feeds it, so editing either
+draws a new picture. Benchmark scenario: `resample-path-2k` in `tools/bench` (written, not run).
+
 **Across frames.** Fixed count gives the same number of points on every contour at every frame, so two
 paths resampled to the same count have the same structure and interpolate (the path animation rule in
 path-value.md). Gap, By length and Percentage follow the path's length or point count, so the count may
@@ -290,7 +296,7 @@ with it and the morph (#597) gives two contours the same number of points with `
 ### Write to a Path
 
 The command `bloom.node.write-to-path` (node context menu "Write to a Path", MCP, Python
-`bloom.ops.node.write_to_path`, CLI) reads what any Path-producing value node answers at the playhead and
+`bloom.ops.node.write_to_path`, and the same operation id in a `bloom-cli run` script) reads what any Path-producing value node answers at the playhead and
 writes the points into a Path node: a new one beside the source, or an existing constant, or a whole-path
 key at that time on an animated one. A driven Path node is refused. It is one undo step, and the groups
 and fill rule are kept. The read runs off the UI thread and is cancellable.
