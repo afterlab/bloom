@@ -335,6 +335,12 @@ window's thread, and stop when the request is cancelled (`bloom.scripting.cancel
   folder is the base for both the relative path and the stored locator (`projectDirectory` only
   stands in for an unsaved project), so the locator is stored project-relative like an import's. An
   unreadable path is refused with the reason and the absolute path that was tried.
+- `bloom.layer.add-svg` (`composition`, `path`, optional `name`, `fit`, `projectDirectory` and
+  `mode`) imports an SVG as one Vector Artwork layer (`mode` `"layer"`, the default) or as editable
+  shapes (`"shapes"`). The file is read and parsed when the call is made, on the MCP thread, never on
+  the application's interface thread. `bloom.layer.break-apart-svg` (`composition`, `layer`) turns a
+  one-layer SVG into editable shapes in place, in one undo step, from the copy the project holds; a
+  layer that holds no Vector Artwork is refused by name.
 - `bloom.layer.set-anchor-preset` (`layer` contextual, `anchor` one of `top-left`, `top`,
   `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`, `time`
   contextual) is the anchor grid in Properties > Transform: it measures the layer's evaluated local

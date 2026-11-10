@@ -22,7 +22,7 @@ or create, is refused under the field and OK waits.
 | Page | What it controls | When it takes effect |
 | --- | --- | --- |
 | General | Audio playback, loop playback, **Crash recovery** (see below), and the two **Agents** switches (see below) | Immediately |
-| Import | **Sequence frame rate** (Match composition, or a rate such as 24 or 23.976; default 24) and **Still duration** (Composition length, or a fixed length in seconds) that newly imported footage starts with. See [Interpret Footage](interpret-footage.md#import-options-and-preferences) | The next import |
+| Import | **Sequence frame rate** (Match composition, or a rate such as 24 or 23.976; default 24) and **Still duration** (Composition length, or a fixed length in seconds) that newly imported footage starts with, and **SVG files** (Ask each time, As one layer or As editable shapes). See [Interpret Footage](interpret-footage.md#import-options-and-preferences) | The next import |
 | Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
 | Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
@@ -68,6 +68,11 @@ The Import page sets what footage starts with when it is imported: a new image s
 seconds as `n/d`, or `composition` for the composition's length). Bloom writes them into each new
 asset's interpretation when it imports; footage already in the project keeps its own, which
 **Interpret Footage** changes. An unreadable or out-of-range stored value reads as the default.
+
+The Import page also has **SVG files**: what an imported or dropped SVG becomes (`import/svg-mode`,
+`ask`, `layer` or `shapes`). **Ask each time** (the default) offers the choice for every import;
+**As one layer** and **As editable shapes** use that mode without asking. Ticking **Remember my
+choice** in the chooser sets this row. See [Vector Artwork](vector-artwork.md#importing-an-svg).
 
 ## Export workers
 

@@ -45,6 +45,10 @@ Dropping a folder imports every image, image sequence, video, audio file and LUT
 inside it and its subfolders; other files and hidden files are left out. Imports keep stable
 identities, so organizing them preserves the nodes and layers that already use them.
 
+SVG files import as a vector layer or as editable shapes, as you choose: Bloom asks once per
+import or drop, and **Remember my choice** (or **Preferences > Import > SVG files**) keeps the
+answer. See [Vector Artwork](vector-artwork.md#importing-an-svg).
+
 ### Import options
 
 The **Import Media** dialog has its options under **Files of type** (see

@@ -248,6 +248,18 @@ Operations inside a group return `None`; the group's `result` becomes available 
 created IDs in `outputs`. Outside a group, an operation returns its immutable command result.
 Headless authoring and history calls run on the host's creating thread.
 
+## Importing an SVG
+
+```python
+one = bloom.ops.layer.add_svg(path="/art/logo.svg")                  # one layer (the default)
+shapes = bloom.ops.layer.add_svg(path="/art/icon.svg", mode="shapes")  # editable shapes
+layer = next(o["id"] for o in one["outputs"] if o["name"] == "layer")
+bloom.ops.layer.break_apart_svg(layer=layer)   # one undo step; the layer keeps its transform and keys
+```
+
+`mode` is `"layer"` or `"shapes"`. The file is read when the call is made, and the one-layer SVG is
+held in the project, so Break Apart needs no file. See [Vector Artwork](vector-artwork.md#importing-an-svg).
+
 ## Building a scene
 
 `bloom.scene` is a small library on top of transactions for scene setup, wiring and timed

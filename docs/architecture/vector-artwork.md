@@ -57,6 +57,42 @@ missing reference), and a block no node names is kept until removed. A file that
 Assets record of the source file is recorded as for editable shapes; with the file gone it shows
 missing and nothing else changes.
 
+### Choosing the mode, and Break Apart (#642)
+
+**Argument.** `bloom.layer.add-svg` takes `mode` (`layer` when omitted; anything else is an
+`invalid-argument` naming both spellings). The registry factory (`createAddSvg`,
+`src/scripting/operation_registry.cpp`) reads, hashes and parses the file with `prepareSvgSource()`
+(and enumerates fonts when the file has text) where the operation is *created*: the client thread of
+MCP, Python or the CLI, stopped by the call's `OperationContext::stop`. Applying it reads nothing
+(`AddSvgArtwork(composition, PreparedSvgSource, ...)`), so a live MCP commit on the owner thread does
+no file I/O and no font enumeration. A file that cannot be prepared still makes the operation, which
+rejects with the reason when it applies (`withPreparationFailure`).
+
+**Desktop.** `AssetController::chooseSvgImportMode(count, done)` is the one call every route shares
+(File > Import, drops on Assets, Timeline and Viewer; later Add to Composition): it answers from
+**Preferences > Import > SVG files** (`ApplicationPreferences::importSvgMode`, `import/svg-mode`:
+`ask`, `layer`, `shapes`) when that is not Ask, otherwise opens `SvgImportModeDialog` over the active
+window (As one layer selected, "Remember my choice" storing the answer). It asks once per batch;
+Cancel imports none of the batch's SVG files. With no window to ask in (headless) the default, As one
+layer, applies. The worker passes the mode to `AddSvgArtwork`.
+
+**Break Apart.** `BreakApartSvgArtwork` (`bloom.layer.break-apart-svg`) finds the Vector Artwork node
+that feeds the layer (`findLayerVectorArtwork`, through the nodes between), builds the description
+from the block's bytes (`buildSvgArtwork`, fonts from the prepared source), writes it with ids from
+the project (`SvgArtworkWriter`) and makes every reader of the node read the new root Merge, then
+removes the node and its parameters. The holding layer is not touched, so its transform and keys,
+parent, timing, masks, track matte, opacity, blend mode, the nodes between and the layers parented
+to it stay as they are and apply to the root group as they apply to an editable import's. This is
+exactly the expansion's resampled form (`composeLayerTransform` off), so the frame is identical
+(`bloom.runtime.svg-artwork-layer`: before and after equal at keyed frames to the 2e-6 gate; a
+scaled or turned layer equals the resampled expansion exactly and is the editable import's picture,
+which a Merge resamples, so it is softer than the one layer's sharper route when scaled up). The
+data block and the Assets record stay. `prepareVectorArtworkSource()` prepares the held copy where
+file I/O is allowed: the desktop does it on the import worker, the registry in the operation factory.
+One undo restores the layer exactly. The Composition menu and the Timeline layer context menu offer
+it for a selected one-layer SVG.
+
+### Expansion
 ### Expansion
 
 `document::expandVectorArtwork(project, composition, context)` replaces every Vector Artwork node

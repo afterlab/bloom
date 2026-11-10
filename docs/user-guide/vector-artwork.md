@@ -1,8 +1,8 @@
 # Vector Artwork
 
 Vector artwork is built from shapes, and a shape's outline is a path. This page says how to work
-with paths and path values on the node canvas. Later sections of this page cover importing and
-editing SVG artwork.
+with paths and path values on the node canvas. The later sections cover importing an SVG, as one layer or as
+editable shapes, and breaking a one-layer SVG apart.
 
 ## Keying a Path node
 
@@ -34,3 +34,48 @@ The same diamond appears on every card row that shows a keyable whole value: a P
 and the gradient of a Linear or Radial Gradient. A row that another node drives
 shows no diamond; key the driving node instead. A Shape Source's own **path** is not keyable: to
 animate a shape's outline, add a Path node, key it, and connect it to the shape's **path** input.
+
+## Importing an SVG
+
+An SVG file imports in one of two modes. Both draw the same picture: gradients, clips, masks,
+opacity, blur and text with the file's fonts, and both name what the file holds that Bloom does not
+take.
+
+| Mode | What you get | Use it for |
+| --- | --- | --- |
+| **As one layer** (the default) | One layer, with one Vector Artwork node in the graph. It stays crisp at any scale, rotation and render size, because it is drawn from the file's vector geometry at the output resolution, not from a picture made at import. The project keeps the file's bytes, so the layer renders, saves and reopens with the file gone | A logo or an icon you place, scale and animate as a whole |
+| **As editable shapes** | A shape layer and a Path node for every element, groups kept as groups. You can move and key points, wire in Trim Path or Offset Path, and recolour one element | Artwork whose parts you animate. A complex file becomes many nodes, which is hard to read in the node editor |
+
+### Choosing the mode
+
+When you import SVG files with **File > Import**, or drop them on the Assets panel, the Timeline or
+the Viewer, Bloom asks once for the whole batch: **As one layer** is selected, **As editable
+shapes** is the deliberate choice, and **Cancel** imports none of the SVG files in the batch (other
+files still import). Tick **Remember my choice** to stop being asked. The answer is stored as
+**Preferences > Import > SVG files**, which you can set to **Ask each time**, **As one layer** or
+**As editable shapes** at any time.
+
+The Vector Artwork node's card and the layer's Properties show a read-only **Artwork** line with the
+file's name and how much of it the project holds (`logo.svg · 1 KB held`). It changes only by
+importing again.
+
+### Break Apart
+
+**Composition > Break Apart SVG**, or **Break Apart SVG** in a layer's right-click menu in the
+Timeline, turns a one-layer SVG into editable shapes in place, in one undo step. The layer keeps its
+name, transform and keys, parent, timing, masks, track matte, opacity, blend mode and effects, and
+now draws the shapes of the file's root group. Nothing is read from disk: the shapes come from the
+copy the project holds. Undo gives the one-layer SVG back exactly.
+
+The picture does not change while the layer is not scaled up or turned. A layer scaled past 100% or
+rotated draws sharp as one layer; broken apart it is a group that is resampled like any group, so
+it can look softer when scaled up. Break Apart when you need the parts, not before.
+
+### From MCP, Python and the command line
+
+`bloom.layer.add-svg` takes `mode`: `"layer"` (the default when omitted) or `"shapes"`; anything
+else is refused, naming both spellings. `bloom.layer.break-apart-svg` takes the `layer` and returns
+the new root group as `merge`. Both work from MCP `transact`, `bloom.ops.layer.add_svg(path=...,
+mode="shapes")` and `bloom.ops.layer.break_apart_svg(layer=...)` in Python, and `bloom-cli run`.
+The file is read and parsed when the call is made, on the calling thread, so a live session's
+interface stays responsive.
