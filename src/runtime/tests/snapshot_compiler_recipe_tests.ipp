@@ -672,11 +672,107 @@ void testAlphaContourLowering(Expectations& expectations) {
                         "Contour only publishes the band's raster");
 }
 
+// #528 Inner Shadow: the input's alpha blurred by the softness, moved as Drop Shadow's, a white held
+// out by it (the hole), Levels shaping it by the choke, Levels colouring it, then an Atop Merge.
+void testInnerShadowLowering(Expectations& expectations) {
+    using namespace document;
+    auto fixture = recipeFixture(
+        kInnerShadowNodeType,
+        {{"softness", 6.0}, {"distance", 3.0}, {"choke", 0.5}, {"opacity", 0.5}, {"shadowOnly", false}});
+    const auto node = fixture.node;
+    const auto softnessId = fixture.parameters.at("softness");
+    auto result = compileRecipe(std::move(fixture.project));
+    expectations.expect(result.plan != nullptr, "Inner Shadow compiles");
+    if (!result.plan)
+        return;
+    const auto& plan = *result.plan;
+    const auto ops = recipeOperations(plan, node);
+    require(ops.size() == 7, "Inner Shadow lowers to seven primitives");
+    const auto* blur = recipeKernel<runtime::SeparableBlurKernel>(plan, ops[0]);
+    const auto* move = recipeKernel<runtime::Transform2DKernel>(plan, ops[1]);
+    const auto* white = recipeKernel<runtime::ChannelSelectKernel>(plan, ops[2]);
+    const auto* hole = recipeKernel<runtime::ImageCombineKernel>(plan, ops[3]);
+    const auto* shape = recipeKernel<runtime::LevelsKernel>(plan, ops[4]);
+    const auto* paint = recipeKernel<runtime::LevelsKernel>(plan, ops[5]);
+    const auto* merge = recipeMerge(plan, ops[6]);
+    const auto* radius = blur ? std::get_if<double>(&blur->radius.source) : nullptr;
+    expectations.expect(blur && blur->channels == runtime::BlurChannels::Coverage &&
+                            blur->edge == runtime::BlurEdgeMode::Transparent && radius &&
+                            *radius == 6.0 && blur->radius.id == softnessId,
+                        "the input's alpha blurs by the softness as a coverage with a transparent edge");
+    expectations.expect(move != nullptr, "the coverage is moved by the offset");
+    expectations.expect(white && white->sources[3] == runtime::ImageChannelSource::One && hole &&
+                            hole->mode == runtime::ImageCombineMode::MultiplyAlpha && hole->invert,
+                        "the shadow is a white held out by the moved coverage");
+    const auto* whitePoint = shape ? std::get_if<double>(&shape->channels[4].inputWhite.source) : nullptr;
+    expectations.expect(whitePoint && *whitePoint == 0.25,
+                        "a choke of one half puts the white point at a quarter");
+    const auto* fade = paint ? std::get_if<double>(&paint->channels[4].outputWhite.source) : nullptr;
+    expectations.expect(paint && fade && *fade == 0.5 && !paint->clamp,
+                        "the paint fades the alpha by the opacity and leaves the colour unclamped");
+    expectations.expect(merge && merge->entries.size() == 2 &&
+                            merge->entries[0].blendMode == core::BlendMode::Atop,
+                        "the shadow is composited Atop the input");
+    auto only = recipeFixture(kInnerShadowNodeType, {{"shadowOnly", true}});
+    const auto onlyNode = only.node;
+    auto onlyResult = compileRecipe(std::move(only.project));
+    const auto onlyOps =
+        onlyResult.plan ? recipeOperations(*onlyResult.plan, onlyNode) : std::vector<std::size_t>{};
+    const auto* onlyMerge =
+        onlyOps.size() == 7 ? recipeMerge(*onlyResult.plan, onlyOps[6]) : nullptr;
+    expectations.expect(onlyMerge && onlyMerge->entries[0].blendMode == core::BlendMode::In,
+                        "Shadow Only composites the shadow In the input");
+}
+
+// #528 Inner Glow: the same chain without the offset; Centre inverts the paint's alpha.
+void testInnerGlowLowering(Expectations& expectations) {
+    using namespace document;
+    auto fixture = recipeFixture(kInnerGlowNodeType,
+                                 {{"size", 8.0}, {"intensity", 2.0}, {"source", kInnerGlowSourceCentre}});
+    const auto node = fixture.node;
+    const auto sizeId = fixture.parameters.at("size");
+    auto result = compileRecipe(std::move(fixture.project));
+    expectations.expect(result.plan != nullptr, "Inner Glow compiles");
+    if (!result.plan)
+        return;
+    const auto& plan = *result.plan;
+    const auto ops = recipeOperations(plan, node);
+    require(ops.size() == 6, "Inner Glow lowers to six primitives");
+    const auto* blur = recipeKernel<runtime::SeparableBlurKernel>(plan, ops[0]);
+    const auto* paint = recipeKernel<runtime::LevelsKernel>(plan, ops[4]);
+    const auto* merge = recipeMerge(plan, ops[5]);
+    const auto* radius = blur ? std::get_if<double>(&blur->radius.source) : nullptr;
+    expectations.expect(blur && radius && *radius == 8.0 && blur->radius.id == sizeId &&
+                            blur->channels == runtime::BlurChannels::Coverage,
+                        "the input's alpha blurs by the size");
+    const auto* gain = paint ? std::get_if<double>(&paint->channels[1].outputWhite.source) : nullptr;
+    const auto* from = paint ? std::get_if<double>(&paint->channels[4].outputBlack.source) : nullptr;
+    const auto* to = paint ? std::get_if<double>(&paint->channels[4].outputWhite.source) : nullptr;
+    expectations.expect(gain && *gain == 2.0 && from && *from == 0.75 && to && *to == 0.0,
+                        "Centre inverts the paint's alpha and the colour is scaled by the intensity");
+    expectations.expect(merge && merge->entries[0].blendMode == core::BlendMode::Atop,
+                        "the glow is composited Atop the input");
+    auto edge = recipeFixture(kInnerGlowNodeType, {{"glowOnly", true}});
+    const auto edgeNode = edge.node;
+    auto edgeResult = compileRecipe(std::move(edge.project));
+    const auto edgeOps =
+        edgeResult.plan ? recipeOperations(*edgeResult.plan, edgeNode) : std::vector<std::size_t>{};
+    const auto* edgePaint =
+        edgeOps.size() == 6 ? recipeKernel<runtime::LevelsKernel>(*edgeResult.plan, edgeOps[4]) : nullptr;
+    const auto* edgeMerge = edgeOps.size() == 6 ? recipeMerge(*edgeResult.plan, edgeOps[5]) : nullptr;
+    const auto* edgeFrom =
+        edgePaint ? std::get_if<double>(&edgePaint->channels[4].outputBlack.source) : nullptr;
+    expectations.expect(edgeFrom && *edgeFrom == 0.0 && edgeMerge &&
+                            edgeMerge->entries[0].blendMode == core::BlendMode::In,
+                        "Edge keeps the alpha upright and Glow Only composites In the input");
+}
+
 // A muted recipe passes its input through, like every image effect.
 void testRecipeMute(Expectations& expectations) {
     using namespace document;
     for (const auto type : {kDropShadowNodeType, kGlowNodeType, kLightWrapNodeType,
-                            kEdgeExtendNodeType, kAlphaContourNodeType}) {
+                            kEdgeExtendNodeType, kAlphaContourNodeType, kInnerShadowNodeType,
+                            kInnerGlowNodeType}) {
         auto fixture = recipeFixture(type, {}, type == kLightWrapNodeType
                                                    ? std::vector<std::string>{"background"}
                                                    : std::vector<std::string>{});

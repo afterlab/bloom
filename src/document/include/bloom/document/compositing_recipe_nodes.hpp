@@ -19,6 +19,8 @@ inline constexpr std::string_view kGlowNodeType = "bloom.glow";
 inline constexpr std::string_view kLightWrapNodeType = "bloom.light-wrap";
 inline constexpr std::string_view kEdgeExtendNodeType = "bloom.edge-extend";
 inline constexpr std::string_view kAlphaContourNodeType = "bloom.alpha-contour";
+inline constexpr std::string_view kInnerShadowNodeType = "bloom.inner-shadow";
+inline constexpr std::string_view kInnerGlowNodeType = "bloom.inner-glow";
 // #541: Glow schema 2 tints its octaves through a gradient value (`tintGradient`) in place of
 // schema 1's outer tint; Drop Shadow and Light Wrap stay at schema 1.
 inline constexpr std::uint32_t kGlowNodeSchemaVersion = 2;
@@ -121,6 +123,30 @@ inline constexpr std::int64_t kAlphaContourOnly = 2;
 inline constexpr double kMaximumAlphaContourWidth = 256.0;
 inline constexpr double kMaximumAlphaContourSoftness = 64.0;
 inline constexpr double kMaximumAlphaContourOffset = 256.0;
+// #528 Inner Shadow. The shadow is cast by everything outside the input's alpha onto the inside of
+// it: the input's alpha is softened by `softness`, moved `distance` pixels toward `direction`
+// (degrees clockwise from up, as Drop Shadow's), inverted, hardened by `choke`, coloured, faded by
+// `opacity` and composited Atop the input, so the input's alpha never changes.
+inline constexpr std::string_view kInnerShadowColorSchemaKey = "bloom.inner-shadow.color";
+inline constexpr std::string_view kInnerShadowOpacitySchemaKey = "bloom.inner-shadow.opacity";
+inline constexpr std::string_view kInnerShadowDirectionSchemaKey = "bloom.inner-shadow.direction";
+inline constexpr std::string_view kInnerShadowDistanceSchemaKey = "bloom.inner-shadow.distance";
+inline constexpr std::string_view kInnerShadowSoftnessSchemaKey = "bloom.inner-shadow.softness";
+inline constexpr std::string_view kInnerShadowChokeSchemaKey = "bloom.inner-shadow.choke";
+inline constexpr std::string_view kInnerShadowShadowOnlySchemaKey = "bloom.inner-shadow.shadow-only";
+
+// #528 Inner Glow. A glow of `size` pixels that starts at the input's alpha edge and fades inward
+// (source Edge) or starts at the middle and fades toward the edge (source Centre), coloured,
+// scaled by `intensity`, faded by `opacity` and composited Atop the input.
+inline constexpr std::string_view kInnerGlowColorSchemaKey = "bloom.inner-glow.color";
+inline constexpr std::string_view kInnerGlowOpacitySchemaKey = "bloom.inner-glow.opacity";
+inline constexpr std::string_view kInnerGlowIntensitySchemaKey = "bloom.inner-glow.intensity";
+inline constexpr std::string_view kInnerGlowSizeSchemaKey = "bloom.inner-glow.size";
+inline constexpr std::string_view kInnerGlowChokeSchemaKey = "bloom.inner-glow.choke";
+inline constexpr std::string_view kInnerGlowSourceSchemaKey = "bloom.inner-glow.source";
+inline constexpr std::string_view kInnerGlowGlowOnlySchemaKey = "bloom.inner-glow.glow-only";
+inline constexpr std::int64_t kInnerGlowSourceEdge = 0;
+inline constexpr std::int64_t kInnerGlowSourceCentre = 1;
 
 // The radii are the blur radii, so they share kMaximumBlurRadiusPixels (parameter.hpp).
 inline constexpr double kMaximumRecipeBlurRadius = 256.0;
@@ -186,6 +212,20 @@ recipeScalarDomain(const std::string_view schemaKey) noexcept {
         return RecipeScalarDomain{0.0, kMaximumAlphaContourSoftness, 0.0};
     if (schemaKey == kAlphaContourOffsetSchemaKey)
         return RecipeScalarDomain{-kMaximumAlphaContourOffset, kMaximumAlphaContourOffset, 0.0};
+    if (schemaKey == kInnerShadowOpacitySchemaKey || schemaKey == kInnerGlowOpacitySchemaKey)
+        return RecipeScalarDomain{0.0, 1.0, 0.75};
+    if (schemaKey == kInnerShadowDirectionSchemaKey)
+        return RecipeScalarDomain{-kMaximumDropShadowDirection, kMaximumDropShadowDirection, 135.0};
+    if (schemaKey == kInnerShadowDistanceSchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumDropShadowDistance, 5.0};
+    if (schemaKey == kInnerShadowSoftnessSchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumRecipeBlurRadius, 5.0};
+    if (schemaKey == kInnerGlowSizeSchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumRecipeBlurRadius, 10.0};
+    if (schemaKey == kInnerShadowChokeSchemaKey || schemaKey == kInnerGlowChokeSchemaKey)
+        return RecipeScalarDomain{0.0, 1.0, 0.0};
+    if (schemaKey == kInnerGlowIntensitySchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumGlowIntensity, 1.0};
     return std::nullopt;
 }
 
@@ -197,13 +237,16 @@ recipeScalarDomain(const std::string_view schemaKey) noexcept {
 // glow tints (their alpha is not used) and the contour colour (its alpha scales the band).
 [[nodiscard]] constexpr bool isRecipeColorSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kDropShadowColorSchemaKey || schemaKey == kGlowTintSchemaKey ||
-           schemaKey == kGlowOuterTintSchemaKey || schemaKey == kAlphaContourColorSchemaKey;
+           schemaKey == kGlowOuterTintSchemaKey || schemaKey == kAlphaContourColorSchemaKey ||
+           schemaKey == kInnerShadowColorSchemaKey ||
+           schemaKey == kInnerGlowColorSchemaKey;
 }
 
 // The constant switches: no socket, no animation.
 [[nodiscard]] constexpr bool isRecipeBooleanSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kDropShadowShadowOnlySchemaKey || schemaKey == kGlowGlowOnlySchemaKey ||
-           schemaKey == kLightWrapWrapOnlySchemaKey || schemaKey == kGlowGradientSchemaKey;
+           schemaKey == kLightWrapWrapOnlySchemaKey || schemaKey == kGlowGradientSchemaKey ||
+           schemaKey == kInnerShadowShadowOnlySchemaKey || schemaKey == kInnerGlowGlowOnlySchemaKey;
 }
 
 // The constant integers (they decide the chain's shape): no socket, no animation, each within its
@@ -223,6 +266,9 @@ recipeIntegerDomain(const std::string_view schemaKey) noexcept {
         return RecipeIntegerDomain{kMinimumGlowPoints, kMaximumGlowPoints, kDefaultGlowPoints};
     if (schemaKey == kAlphaContourCompositeSchemaKey)
         return RecipeIntegerDomain{kAlphaContourOver, kAlphaContourOnly, kAlphaContourOver};
+    if (schemaKey == kInnerGlowSourceSchemaKey)
+        return RecipeIntegerDomain{kInnerGlowSourceEdge, kInnerGlowSourceCentre,
+                                   kInnerGlowSourceEdge};
     return std::nullopt;
 }
 [[nodiscard]] constexpr bool isRecipeIntegerSchemaKey(const std::string_view schemaKey) noexcept {

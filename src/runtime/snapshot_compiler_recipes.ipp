@@ -37,7 +37,8 @@ recipeOptionalInput(const document::NodeId nodeId, const std::string_view port,
 [[nodiscard]] static bool isRecipeNodeType(const std::string_view typeId) noexcept {
     return typeId == document::kDropShadowNodeType || typeId == document::kGlowNodeType ||
            typeId == document::kLightWrapNodeType || typeId == document::kEdgeExtendNodeType ||
-           typeId == document::kAlphaContourNodeType;
+           typeId == document::kAlphaContourNodeType ||
+           typeId == document::kInnerShadowNodeType || typeId == document::kInnerGlowNodeType;
 }
 
 // #514 Denoise & Smooth. Median, Bilateral and Spatial are one DenoiseKernel on the input. Temporal
@@ -459,6 +460,39 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
                 emitter, *input,
                 {*shadowColor, *opacity, *direction, *distance, *softness, *shadowOnly});
         addTopologyFailure(node.id, "Drop Shadow parameters could not be lowered.");
+        return std::nullopt;
+    }
+    if (node.typeId == document::kInnerShadowNodeType) {
+        auto shadowColor = color("color");
+        auto opacity = scalar("opacity");
+        auto direction = scalar("direction");
+        auto distance = scalar("distance");
+        auto softness = scalar("softness");
+        auto choke = scalar("choke");
+        const auto* shadowOnly = flag("shadowOnly");
+        if (shadowColor && opacity && direction && distance && softness && choke && shadowOnly)
+            return runtime::detail::appendInnerShadow(
+                emitter, *input,
+                {*shadowColor, *opacity, *direction, *distance, *softness, *choke, *shadowOnly});
+        addTopologyFailure(node.id, "Inner Shadow parameters could not be lowered.");
+        return std::nullopt;
+    }
+    if (node.typeId == document::kInnerGlowNodeType) {
+        auto glowColor = color("color");
+        auto opacity = scalar("opacity");
+        auto intensity = scalar("intensity");
+        auto size = scalar("size");
+        auto choke = scalar("choke");
+        const auto* source = parameterConstant<std::int64_t>(findParameterBinding(node, "source"));
+        const auto* glowOnly = flag("glowOnly");
+        if (glowColor && opacity && intensity && size && choke && source && glowOnly &&
+            *source >= document::kInnerGlowSourceEdge &&
+            *source <= document::kInnerGlowSourceCentre)
+            return runtime::detail::appendInnerGlow(
+                emitter, *input,
+                {*glowColor, *opacity, *intensity, *size, *choke,
+                 *source == document::kInnerGlowSourceCentre, *glowOnly});
+        addTopologyFailure(node.id, "Inner Glow parameters could not be lowered.");
         return std::nullopt;
     }
     if (node.typeId == document::kEdgeExtendNodeType) {

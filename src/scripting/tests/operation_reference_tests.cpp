@@ -254,7 +254,8 @@ void everyNodeGroupIsNamed() {
     pinned({"bloom.tile-mirror"}, "transform");
     pinned({"bloom.test-card"}, "sources");
     pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");
-    pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},
+    pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare",
+            "bloom.inner-shadow", "bloom.inner-glow"},
            "light-shadow");
     pinned({"bloom.echo", "bloom.frame-rate-hold"}, "time");
     pinned({"bloom.alpha-association", "bloom.layer-stack", "bloom.layer-output",

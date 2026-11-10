@@ -2165,6 +2165,8 @@ int main() {
         testLightWrapLowering(expectations);
         testEdgeExtendLowering(expectations);
         testAlphaContourLowering(expectations);
+        testInnerShadowLowering(expectations);
+        testInnerGlowLowering(expectations);
         testRecipeMute(expectations);
         testColorGradeLowering(expectations);
         testAlphaAssociationLowering(expectations);

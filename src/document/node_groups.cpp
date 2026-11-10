@@ -55,10 +55,9 @@ constexpr std::array<std::string_view, 12> kBlurSharpen{"bloom.gaussian-blur",
                                                         "bloom.spin-blur",
                                                         "bloom.zoom-blur", "bloom.sharpen",
                                                         "bloom.denoise"};
-// Planned: Inner Shadow, Inner Glow.
-constexpr std::array<std::string_view, 6> kLightShadow{"bloom.glow",      "bloom.light-wrap",
-                                                       "bloom.drop-shadow", "bloom.depth-fog",
-                                                       "bloom.lens-flare", "bloom.light-rays"};
+constexpr std::array<std::string_view, 8> kLightShadow{
+    "bloom.glow",       "bloom.light-wrap", "bloom.drop-shadow", "bloom.inner-shadow",
+    "bloom.inner-glow", "bloom.depth-fog",  "bloom.lens-flare",  "bloom.light-rays"};
 // Planned: Dither, Quantize.
 constexpr std::array<std::string_view, 4> kStylize{"bloom.vignette", "bloom.film-grain",
                                                    "bloom.codec-degrade", "bloom.alpha-contour"};

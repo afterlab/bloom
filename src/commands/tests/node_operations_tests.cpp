@@ -809,6 +809,45 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *color,
                                ConstantValueSource{bloom::core::Color4d{0.0, 0.0, 0.0, 2.0}});
 
+    // #528 Inner Shadow and Inner Glow: their colour, angle, distance, choke, switch and source edit
+    // within their domains and refuse outside them; each edit is undoable.
+    const auto inner = addRecipe("bloom.inner-shadow");
+    const auto innerColor = inner.outputId<ParameterId>("parameter.color");
+    const auto innerDirection = inner.outputId<ParameterId>("parameter.direction");
+    const auto innerChoke = inner.outputId<ParameterId>("parameter.choke");
+    const auto innerOnly = inner.outputId<ParameterId>("parameter.shadowOnly");
+    const auto innerOpacity = inner.outputId<ParameterId>("parameter.opacity");
+    const auto innerGlow = addRecipe("bloom.inner-glow");
+    const auto innerSource = innerGlow.outputId<ParameterId>("parameter.source");
+    const auto innerSize = innerGlow.outputId<ParameterId>("parameter.size");
+    const auto innerGlowOnly = innerGlow.outputId<ParameterId>("parameter.glowOnly");
+    const auto innerIntensity = innerGlow.outputId<ParameterId>("parameter.intensity");
+    if (!innerColor || !innerDirection || !innerChoke || !innerOnly || !innerOpacity ||
+        !innerSource || !innerSize || !innerGlowOnly || !innerIntensity)
+        throw std::logic_error("Inner Shadow and Inner Glow expose registered control identities");
+    (void)exercise<SetParameterSource>(
+        test, fixture, *innerColor, ConstantValueSource{bloom::core::Color4d{0.1, 0.0, 3.0, 0.5}});
+    (void)exercise<SetParameterSource>(test, fixture, *innerDirection, ConstantValueSource{-45.0});
+    (void)exercise<SetParameterSource>(test, fixture, *innerChoke, ConstantValueSource{0.4});
+    (void)exercise<SetParameterSource>(test, fixture, *innerOnly, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *innerSource,
+                                       ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *innerSize, ConstantValueSource{32.0});
+    (void)exercise<SetParameterSource>(test, fixture, *innerGlowOnly, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *innerIntensity, ConstantValueSource{12.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *innerChoke,
+                               ConstantValueSource{1.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *innerOpacity,
+                               ConstantValueSource{-0.1});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *innerSource,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *innerSource,
+                               ConstantValueSource{true});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *innerSize,
+                               ConstantValueSource{300.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *innerColor,
+                               ConstantValueSource{bloom::core::Color4d{0.0, 0.0, 0.0, 2.0}});
+
     const auto glow = addRecipe("bloom.glow");
     const auto glowId = glow.outputId<NodeId>(kAddNodeOutput);
     const auto threshold = glow.outputId<ParameterId>("parameter.threshold");

@@ -275,6 +275,8 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return {{"Elliptical", kVignetteElliptical}, {"Rectangular", kVignetteRectangular}};
     if (schemaKey == kVignetteModeSchemaKey)
         return {{"Multiply", kVignetteMultiply}, {"Exposure (stops)", kVignetteExposure}};
+    if (schemaKey == kInnerGlowSourceSchemaKey)
+        return {{"Edge", kInnerGlowSourceEdge}, {"Center", kInnerGlowSourceCentre}};
     if (schemaKey == kGlowModeSchemaKey)
         return {{"Classic", kGlowModeClassic},
                 {"Physical", kGlowModePhysical},

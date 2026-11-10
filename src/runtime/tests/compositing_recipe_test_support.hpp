@@ -32,7 +32,9 @@ enum class Recipe : std::uint8_t {
     EdgeExtend,
     ChannelBlur,
     Denoise,
-    AlphaContour
+    AlphaContour,
+    InnerShadow,
+    InnerGlow
 };
 
 // Which image the plan's Composition Output publishes: the recipe, or one of the images it reads
@@ -80,6 +82,11 @@ struct RecipeValues final {
     double radius = 3.0;
     double amount = 0.75;
     bool wrapOnly = false;
+    // #528 Inner Shadow (shadowColor, opacity, direction, distance, softness and shadowOnly above)
+    // and Inner Glow (tint, opacity, intensity, size and glowOnly above): the choke of both and the
+    // glow's Centre source.
+    double choke = 0.0;
+    bool centre = false;
     // #516 Edge Extend
     double extendDistance = 4.0;
     double extendAmount = 1.0;
@@ -279,6 +286,22 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                 result.input,
                 DenoiseKernel{DenoiseMode::Median, scalar(idBase + 81, values.denoiseRadius),
                               scalar(idBase + 82, values.denoiseStrength)});
+            break;
+        case Recipe::InnerShadow:
+            result.recipe = detail::appendInnerShadow(
+                emitter, result.input,
+                {CompiledColorParameter{ParameterId::fromRaw(idBase + 91), values.shadowColor},
+                 scalar(idBase + 92, values.opacity), scalar(idBase + 93, values.direction),
+                 animatedScalar(idBase + 94, values.distance), scalar(idBase + 95, values.softness),
+                 scalar(idBase + 96, values.choke), values.shadowOnly});
+            break;
+        case Recipe::InnerGlow:
+            result.recipe = detail::appendInnerGlow(
+                emitter, result.input,
+                {CompiledColorParameter{ParameterId::fromRaw(idBase + 97), values.tint},
+                 scalar(idBase + 98, values.opacity), animatedScalar(idBase + 99, values.intensity),
+                 scalar(idBase + 100, values.size), scalar(idBase + 101, values.choke),
+                 values.centre, values.glowOnly});
             break;
         case Recipe::EdgeExtend:
             result.recipe =

@@ -149,7 +149,7 @@ struct NodeControlsEstimate final {
         return {0, 0, true};
     if (typeId == "bloom.glow")
         return {1, 0, false, 1};
-    if (typeId == "bloom.drop-shadow" || typeId == "bloom.layer-output" ||
+    if (typeId == "bloom.drop-shadow" || typeId == "bloom.inner-shadow" || typeId == "bloom.layer-output" ||
         typeId == "bloom.hue-shift" || typeId == "bloom.rotate-2d" ||
         typeId == "bloom.polar-to-cartesian" || typeId == "bloom.degrees-to-radians" ||
         typeId == "bloom.radians-to-degrees")

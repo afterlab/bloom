@@ -512,6 +512,57 @@ constexpr double kContourReachMargin = 2.0;
     return std::nullopt;
 }
 
+// The smallest white point of the inner coverage's Levels (a Choke of 1): the ramp is then 1/1024
+// of the blurred coverage wide, an edge that is hard to within a thousandth.
+constexpr double kInnerHardestWhitePoint = 1.0 / 1024.0;
+
+// The blurred outside coverage m of an input, one minus it where the input is, and the choke:
+//  * hole = white held out by m (Multiply Alpha, inverted): alpha 1 - m over the input's window,
+//    so the data window is the input's and the pixels beyond the shifted blur count as outside;
+//  * Levels on alpha only maps hole h to clamp(h / w), w = max((1 - choke) / 2, 1/1024). A pixel
+//    exactly on an edge has h = 1/2, so at choke 0 the edge is full strength and fades inward over
+//    the blur; each step of choke lowers w and so widens the solid band until choke 1, where
+//    anything the blur reaches is solid.
+// `invert` turns the result into 1 - the shaped coverage (Inner Glow's Centre source).
+[[nodiscard]] OperationIndex innerCoverage(RecipeEmitter& emitter, const OperationIndex input,
+                                           const OperationIndex blurredAlpha,
+                                           const CompiledScalarParameter& choke) {
+    const auto white = emitter.effect(
+        input, ChannelSelectKernel{{ImageChannelSource::One, ImageChannelSource::One,
+                                    ImageChannelSource::One, ImageChannelSource::One},
+                                   false});
+    const auto hole = emitter.effect(
+        white,
+        ImageCombineKernel{ImageCombineMode::MultiplyAlpha, RecipeEmitter::constant(1.0),
+                           render::ImageCoverageChannel::Alpha, std::nullopt, true},
+        blurredAlpha);
+    LevelsKernel levels;
+    for (auto& channel : levels.channels)
+        channel = identityChannel();
+    levels.channels[4].inputWhite = emitter.scalar(
+        ScalarPrimitive::Maximum,
+        {emitter.scalar(ScalarPrimitive::MultiplyAdd,
+                        {choke, RecipeEmitter::constant(-0.5), RecipeEmitter::constant(0.5)}),
+         RecipeEmitter::constant(kInnerHardestWhitePoint)});
+    levels.clamp = false;
+    return emitter.effect(hole, std::move(levels));
+}
+
+// Colours coverage `shaped` (alpha only; straight colour 1): the straight colour times `gain`, the
+// alpha times `alpha` (or, inverted, alpha * (1 - coverage)). Nothing is clamped but alpha.
+[[nodiscard]] OperationIndex innerPaint(RecipeEmitter& emitter, const OperationIndex shaped,
+                                        const std::array<CompiledScalarParameter, 3>& gains,
+                                        const CompiledScalarParameter& alpha, const bool invert) {
+    LevelsKernel kernel = gainLevels(gains, std::nullopt);
+    if (invert) {
+        kernel.channels[4].outputBlack = alpha;
+        kernel.channels[4].outputWhite = RecipeEmitter::constant(0.0);
+    } else {
+        kernel.channels[4].outputWhite = alpha;
+    }
+    return emitter.effect(shaped, std::move(kernel));
+}
+
 } // namespace
 
 double alphaContourReach(const AlphaContourOperands& operands) {
@@ -630,6 +681,64 @@ OperationIndex appendAlphaContour(RecipeEmitter& emitter, const OperationIndex i
         break;
     }
     return emitter.merge({{contour, core::BlendMode::Normal}, {input, core::BlendMode::Normal}});
+}
+
+// Inner Shadow. The input's alpha is blurred by `softness` (Matte Blur coverage, transparent halo),
+// moved by the offset exactly as Drop Shadow's, and the shadow is what that coverage does NOT
+// cover, inside the input: innerCoverage, then coloured and faded by opacity * colour alpha (Levels).
+// An Atop Merge puts it on the input (co = shadow * a + input * (1 - shadow alpha), alpha a), which
+// keeps the input's alpha and its premultiplication; Shadow Only composites it In the input instead
+// (shadow * a, alpha shadow alpha * a).
+OperationIndex appendInnerShadow(RecipeEmitter& emitter, const OperationIndex input,
+                                 const InnerShadowOperands& operands) {
+    const auto coverage = emitter.effect(
+        input, SeparableBlurKernel{SeparableBlurKind::Gaussian, operands.softness,
+                                   BlurEdgeMode::Transparent, BlurChannels::Coverage});
+    const auto radians =
+        emitter.scalar(ScalarPrimitive::Multiply,
+                       {operands.direction, RecipeEmitter::constant(std::numbers::pi / 180.0)});
+    const auto x =
+        emitter.scalar(ScalarPrimitive::Multiply,
+                       {operands.distance, emitter.scalar(ScalarPrimitive::Sine, {radians})});
+    const auto y = emitter.scalar(
+        ScalarPrimitive::Multiply,
+        {operands.distance, emitter.scalar(ScalarPrimitive::Negate,
+                                           {emitter.scalar(ScalarPrimitive::Cosine, {radians})})});
+    const auto moved = emitter.effect(
+        coverage,
+        Transform2DKernel{emitter.vector(x, y), CompiledVec2Parameter{{}, document::Vec2d{}},
+                          CompiledVec2Parameter{{}, document::Vec2d{1.0, 1.0}},
+                          RecipeEmitter::constant(0.0), Transform2DExtent::Transformed,
+                          kResampleFilterBilinear});
+    const auto shaped = innerCoverage(emitter, input, moved, operands.choke);
+    const auto colour = emitter.components(operands.color);
+    const auto alpha = emitter.scalar(ScalarPrimitive::Multiply, {operands.opacity, colour[3]});
+    const auto shadow =
+        innerPaint(emitter, shaped, {colour[0], colour[1], colour[2]}, alpha, false);
+    return emitter.merge({{shadow, operands.shadowOnly ? core::BlendMode::In : core::BlendMode::Atop},
+                          {input, core::BlendMode::Normal}});
+}
+
+// Inner Glow. The shaped inner coverage of a `size` blur with no offset (Edge: full at the alpha
+// edge, fading inward), or its complement (Centre: nothing at the edge, full deep inside), coloured
+// by colour * intensity (unclamped, so HDR glows keep their values) and faded by opacity * colour
+// alpha, then composited Atop the input (In for Glow Only) like Inner Shadow.
+OperationIndex appendInnerGlow(RecipeEmitter& emitter, const OperationIndex input,
+                               const InnerGlowOperands& operands) {
+    const auto coverage = emitter.effect(
+        input, SeparableBlurKernel{SeparableBlurKind::Gaussian, operands.size,
+                                   BlurEdgeMode::Transparent, BlurChannels::Coverage});
+    const auto shaped = innerCoverage(emitter, input, coverage, operands.choke);
+    const auto colour = emitter.components(operands.color);
+    const auto alpha = emitter.scalar(ScalarPrimitive::Multiply, {operands.opacity, colour[3]});
+    const auto glow = innerPaint(
+        emitter, shaped,
+        {emitter.scalar(ScalarPrimitive::Multiply, {colour[0], operands.intensity}),
+         emitter.scalar(ScalarPrimitive::Multiply, {colour[1], operands.intensity}),
+         emitter.scalar(ScalarPrimitive::Multiply, {colour[2], operands.intensity})},
+        alpha, operands.centre);
+    return emitter.merge({{glow, operands.glowOnly ? core::BlendMode::In : core::BlendMode::Atop},
+                          {input, core::BlendMode::Normal}});
 }
 
 OperationIndex appendSharpen(RecipeEmitter& emitter, const OperationIndex input,

@@ -535,6 +535,32 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
     return composite(band, input, Composite::Over);
 }
 
+// #528 Inner Shadow and Inner Glow written without the primitives: the input's alpha blurred as a
+// coverage (Gaussian, transparent halo), moved by (0, distance) for direction 180, one minus it
+// inside the input's window (beyond the blur the pixel is outside), divided by the white point
+// max((1 - choke) / 2, 1/1024) and clamped to [0, 1]; Centre's glow is one minus that; the paint is
+// the colour (times the intensity for the glow) with alpha opacity * colour alpha * coverage,
+// composited Atop the input (In for the Only switches).
+[[nodiscard]] Image innerReference(const Image& input, const RecipeValues& values, const bool glow) {
+    const auto softened = blur(input, glow ? values.size : values.softness, false, true);
+    const auto dy = glow ? 0 : static_cast<std::int64_t>(std::llround(values.distance));
+    const double white = std::max(0.5 * (1.0 - values.choke), 1.0 / 1024.0);
+    const auto& colour = glow ? values.tint : values.shadowColor;
+    const double gain = glow ? values.intensity : 1.0;
+    const double fade = values.opacity * colour.alpha;
+    auto paint = Image::blank(input.x0, input.y0, input.width, input.height);
+    for (auto y = paint.y0; y < paint.y0 + paint.height; ++y)
+        for (auto x = paint.x0; x < paint.x0 + paint.width; ++x) {
+            const double outside = 1.0 - softened.at(x, y - dy)[3];
+            const double edge = std::clamp(outside / white, 0.0, 1.0);
+            const double alpha = fade * (glow && values.centre ? 1.0 - edge : edge);
+            paint(x, y) = {colour.red * gain * alpha, colour.green * gain * alpha,
+                           colour.blue * gain * alpha, alpha};
+        }
+    const bool only = glow ? values.glowOnly : values.shadowOnly;
+    return composite(paint, input, only ? Composite::In : Composite::Atop);
+}
+
 [[nodiscard]] Image reference(const runtime::CpuCompositionEvaluator& evaluator,
                               const Recipe recipe, const RecipeValues& values) {
     using recipe_test::Published;
@@ -556,6 +582,10 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
         return edgeExtendReference(input, values.extendDistance, values.extendAmount);
     case Recipe::AlphaContour:
         return alphaContourReference(input, values);
+    case Recipe::InnerShadow:
+        return innerReference(input, values, false);
+    case Recipe::InnerGlow:
+        return innerReference(input, values, true);
     case Recipe::ChannelBlur:
     case Recipe::Denoise:
         return {}; // held to the CPU reference by the separable blur tests, and on a device
@@ -601,7 +631,8 @@ void testCacheAndRoi() {
            "a changed opacity re-runs only Levels, the recipe's Merge and the output's Merge and "
            "Composition Output");
     for (const auto recipe : {Recipe::DropShadow, Recipe::Glow, Recipe::LightWrap,
-                              Recipe::EdgeExtend, Recipe::AlphaContour}) {
+                              Recipe::EdgeExtend, Recipe::AlphaContour, Recipe::InnerShadow,
+                              Recipe::InnerGlow}) {
         const auto roiPlan = recipe_test::recipePlan(recipe, {});
         const auto full = evaluator.evaluate(roiPlan.plan, request(roiPlan.plan->output()), {});
         auto roiRequest = request(roiPlan.plan->output());
@@ -725,6 +756,152 @@ void testEdgeExtend() {
                 fixedPoint = fixedPoint &&
                              std::abs(flat.pixels[i][c] - flatExtended.pixels[i][c]) <= 1e-5;
         expect(fixedPoint, where + "one uniform colour is a fixed point");
+    }
+}
+
+// #528 Inner Shadow and Inner Glow. The known answers on the production chain: alpha is never
+// changed and no colour lies outside the input's alpha; the data window is the input's; a choke of
+// 0 and of 1, Centre against Edge, HDR colour and intensity and a partial-alpha input;
+// an opacity of 0 is the input; at a half-size proxy the same rules hold with half the reach.
+void testInner() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto halfExtent = render::ImageExtent::create(recipe_test::kRecipeWidth / 2,
+                                                        recipe_test::kRecipeHeight / 2);
+    if (!halfExtent)
+        throw std::logic_error("the proxy extent is valid");
+    const auto run = [&](const Recipe recipe, const RecipeValues& values, const bool recipePublished,
+                         const runtime::EvaluationResolution resolution) {
+        const auto plan = recipe_test::recipePlan(recipe, values, 3900,
+                                                  recipePublished ? recipe_test::Published::Recipe
+                                                                  : recipe_test::Published::Input)
+                              .plan;
+        auto value = request(plan->output());
+        value.resolution = resolution;
+        const auto result = evaluator.evaluate(plan, value, {});
+        if (!result.frame())
+            throw std::logic_error("Inner fixture does not evaluate");
+        return imageOf(result.frame()->processImage());
+    };
+    for (const auto recipe : {Recipe::InnerShadow, Recipe::InnerGlow})
+        for (const auto& [resolution, label] :
+             {std::pair<runtime::EvaluationResolution, const char*>{
+                  runtime::CompositionFormatResolution{}, "full scale"},
+              std::pair<runtime::EvaluationResolution, const char*>{
+                  runtime::ProxyResolution{*halfExtent.value()}, "half scale"}}) {
+            const bool glow = recipe == Recipe::InnerGlow;
+            const std::string where =
+                std::string(glow ? "Inner Glow" : "Inner Shadow") + " at " + label + ": ";
+            for (const bool centred : {false, true}) {
+                RecipeValues values;
+                values.centred = centred;
+                values.tint = {4.0, 2.0, 0.5, 1.0}; // HDR
+                const auto source = run(recipe, values, false, resolution);
+                const auto lit = run(recipe, values, true, resolution);
+                bool alphaKept = true;
+                bool nothingOutside = true;
+                bool changed = false;
+                for (auto y = lit.y0; y < lit.y0 + lit.height; ++y)
+                    for (auto x = lit.x0; x < lit.x0 + lit.width; ++x) {
+                        const auto a = source.at(x, y);
+                        const auto b = lit.at(x, y);
+                        alphaKept = alphaKept && std::abs(a[3] - b[3]) <= 1e-6;
+                        if (a[3] == 0.0)
+                            nothingOutside = nothingOutside && b == Pixel{};
+                        else if (std::abs(a[0] - b[0]) > 1e-4)
+                            changed = true;
+                    }
+                expect(alphaKept, where + "the output alpha equals the input alpha");
+                expect(nothingOutside, where + "no colour lies outside the input's alpha");
+                expect(changed, where + "the paint changes the colour inside the alpha");
+                values.opacity = 0.0;
+                expect(run(recipe, values, true, resolution).pixels == source.pixels,
+                       where + "opacity 0 is the input");
+            }
+            // Choke 1 hardens the edge that choke 0 leaves soft.
+            RecipeValues values;
+            values.centred = true;
+            values.shadowOnly = true;
+            values.glowOnly = true;
+            values.opacity = 1.0;
+            values.shadowColor = {1.0, 1.0, 1.0, 1.0};
+            values.tint = {1.0, 1.0, 1.0, 1.0};
+            values.intensity = 1.0;
+            values.distance = 0.0;
+            values.softness = 4.0;
+            values.size = 4.0;
+            const auto soft = run(recipe, values, true, resolution);
+            values.choke = 1.0;
+            const auto hard = run(recipe, values, true, resolution);
+            const auto fractional = [&](const Image& image) {
+                std::size_t count = 0;
+                for (const auto& pixel : image.pixels)
+                    if (pixel[3] > 1e-3 && pixel[3] < 0.6 - 1e-3)
+                        ++count;
+                return count;
+            };
+            expect(fractional(soft) > 0, where + "choke 0 leaves a soft edge");
+            expect(fractional(hard) < fractional(soft), where + "choke 1 hardens the edge");
+        }
+    // Centre is the complement of Edge inside the alpha.
+    RecipeValues values;
+    values.centred = true;
+    values.glowOnly = true;
+    values.opacity = 1.0;
+    values.tint = {1.0, 1.0, 1.0, 1.0};
+    values.intensity = 1.0;
+    values.size = 3.0;
+    const auto edge = evaluated(evaluator, Recipe::InnerGlow, values, recipe_test::Published::Recipe);
+    values.centre = true;
+    const auto centre =
+        evaluated(evaluator, Recipe::InnerGlow, values, recipe_test::Published::Recipe);
+    const auto input = evaluated(evaluator, Recipe::InnerGlow, values, recipe_test::Published::Input);
+    bool complement = true;
+    for (auto y = input.y0; y < input.y0 + input.height; ++y)
+        for (auto x = input.x0; x < input.x0 + input.width; ++x)
+            complement = complement &&
+                         std::abs(edge.at(x, y)[3] + centre.at(x, y)[3] - input.at(x, y)[3]) <= 1e-5;
+    expect(complement, "Inner Glow's Centre alpha plus its Edge alpha is the input's alpha");
+}
+
+// #528: the chain's cache identity. A warm frame reuses everything; a changed opacity or colour
+// re-runs only the paint and the composites; a changed choke re-runs the shaping too; a changed
+// distance or softness re-runs the blur and the rest.
+void testInnerCache() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    for (const auto recipe : {Recipe::InnerShadow, Recipe::InnerGlow}) {
+        const std::string name = recipe == Recipe::InnerShadow ? "Inner Shadow" : "Inner Glow";
+        RecipeValues values;
+        const auto plan = recipe_test::recipePlan(recipe, values);
+        const auto cold = evaluator.evaluate(plan.plan, request(plan.plan->output()), {});
+        const auto warm = evaluator.evaluate(plan.plan, request(plan.plan->output()), {});
+        expect(cold.frame() && warm.frame() &&
+                   std::ranges::equal(cold.frame()->processImage().pixels(),
+                                      warm.frame()->processImage().pixels()) &&
+                   warm.frame()->operationCacheStatistics().misses == 0,
+               "a warm " + name + " frame reuses every operation with identical pixels");
+        const auto misses = [&](const RecipeValues& changed) -> std::optional<std::uint64_t> {
+            const auto next = recipe_test::recipePlan(recipe, changed);
+            const auto result = evaluator.evaluate(next.plan, request(next.plan->output()), {});
+            if (!result.frame())
+                return std::nullopt;
+            return result.frame()->operationCacheStatistics().misses;
+        };
+        auto opacity = values;
+        opacity.opacity = 0.5;
+        auto colour = values;
+        colour.shadowColor.red = 0.9;
+        colour.tint.red = 0.2;
+        auto choke = values;
+        choke.choke = 0.5;
+        // Paint (Levels), the recipe's Merge, the output's Merge and Composition Output.
+        expect(misses(opacity) == 4U, "a changed " + name + " opacity re-runs only the paint and the composites");
+        expect(misses(colour) == 4U, "a changed " + name + " colour re-runs only the paint and the composites");
+        // The shaping Levels as well.
+        expect(misses(choke) == 5U, "a changed " + name + " choke re-runs the shaping and the late operations");
+        auto size = values;
+        size.softness = 3.0;
+        size.size = 3.0;
+        expect(misses(size).value_or(0) > 5U, "a changed " + name + " blur re-runs the blur and what follows");
     }
 }
 
@@ -1163,6 +1340,38 @@ int main() {
         values.contourColor = core::Color4d{6.0, 3.0, 0.5, 1.0};
         testReference(Recipe::AlphaContour, values, "Alpha Contour (solid input, wide, HDR)");
         testAlphaContour();
+        values = {};
+        testReference(Recipe::InnerShadow, values, "Inner Shadow");
+        values.shadowOnly = true;
+        values.choke = 0.5;
+        values.centred = true;
+        values.direction = 90.0;
+        values.distance = 0.0;
+        testReference(Recipe::InnerShadow, values, "Inner Shadow (shadow only, choke, centred)");
+        values = {};
+        values.softness = 0.0;
+        testReference(Recipe::InnerShadow, values, "Inner Shadow (blur 0)");
+        values = {};
+        values.choke = 1.0;
+        values.distance = 2.0;
+        testReference(Recipe::InnerShadow, values, "Inner Shadow (choke 1)");
+        values = {};
+        values.centred = true;
+        testReference(Recipe::InnerGlow, values, "Inner Glow (Edge, HDR intensity)");
+        values.centre = true;
+        values.choke = 0.4;
+        testReference(Recipe::InnerGlow, values, "Inner Glow (Centre, choke)");
+        values.glowOnly = true;
+        values.choke = 1.0;
+        testReference(Recipe::InnerGlow, values, "Inner Glow (Centre, choke 1, glow only)");
+        values = {};
+        values.size = 0.0;
+        testReference(Recipe::InnerGlow, values, "Inner Glow (size 0)");
+        values = {};
+        values.solidInput = true;
+        testReference(Recipe::InnerGlow, values, "Inner Glow (solid input)");
+        testInner();
+        testInnerCache();
         testModes();
         testPhysicalEnergy();
         testCacheAndRoi();

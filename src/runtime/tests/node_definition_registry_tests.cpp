@@ -167,15 +167,15 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds
     // Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #509 adds Mask Path, Text
     // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth; #637
-    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror.
-    expectations.expect(registry.definitions().size() == 247,
+    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow.
+    expectations.expect(registry.definitions().size() == 249,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
           "bloom.resize", "bloom.fit", "bloom.transform-2d", "bloom.gaussian-blur",
           "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate",
           "bloom.luma-key", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.edge-extend", "bloom.alpha-contour"})
+          "bloom.edge-extend", "bloom.alpha-contour", "bloom.inner-shadow", "bloom.inner-glow"})
         // #541: the gradient generators and Glow are at schema 2.
         expectations.expect(registry.find(type, std::string_view(type) == "bloom.glow" ||
                                                         std::string_view(type).ends_with("-gradient")
@@ -186,7 +186,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Light Wrap's background are optional Images, Glow's mask an optional Mask; every animatable
     // value has its socket and the switches and Glow's octaves are constants.
     for (const auto* type : {"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-                             "bloom.edge-extend", "bloom.alpha-contour"}) {
+                             "bloom.edge-extend", "bloom.alpha-contour", "bloom.inner-shadow",
+                             "bloom.inner-glow"}) {
         const auto* recipe = registry.find(type, std::string_view(type) == "bloom.glow" ? 2 : 1);
         bool sockets = recipe != nullptr;
         // #541: a gradient value animates as a whole and has no socket kind.
@@ -596,7 +597,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "#566: Auto Exposure has a look-back constant and a socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
                     "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association",
-                    "bloom.edge-extend", "bloom.alpha-contour"},
+                    "bloom.edge-extend", "bloom.alpha-contour", "bloom.inner-shadow", "bloom.inner-glow"},
                    document::NodeCategory::Compositing);
     // #503 Alpha Association: an Image in and out, a constant mode (Unmult by default) and white
     // switch with no socket, and an animatable background colour with a Color socket.

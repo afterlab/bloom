@@ -152,6 +152,28 @@ struct AlphaContourOperands final {
     AlphaContourComposite composite = AlphaContourComposite::Over;
 };
 
+// #528 Inner Shadow: the shadow everything outside the input's alpha casts onto its inside.
+struct InnerShadowOperands final {
+    CompiledColorParameter color;
+    CompiledScalarParameter opacity;
+    CompiledScalarParameter direction; // degrees clockwise from up
+    CompiledScalarParameter distance;  // full-resolution pixels
+    CompiledScalarParameter softness;  // blur radius, full-resolution pixels
+    CompiledScalarParameter choke;     // [0, 1]
+    bool shadowOnly = false;
+};
+
+// #528 Inner Glow: a glow that fades inward from the input's alpha edge, or outward from its middle.
+struct InnerGlowOperands final {
+    CompiledColorParameter color;
+    CompiledScalarParameter opacity;
+    CompiledScalarParameter intensity;
+    CompiledScalarParameter size;  // blur radius, full-resolution pixels
+    CompiledScalarParameter choke; // [0, 1]
+    bool centre = false;           // source Centre; otherwise Edge
+    bool glowOnly = false;
+};
+
 // #486 Sharpen, which unlike the recipes above has one pixel kernel of its own over the blur.
 struct SharpenOperands final {
     CompiledScalarParameter amount;
@@ -172,6 +194,10 @@ struct SharpenOperands final {
 [[nodiscard]] OperationIndex appendLightWrap(RecipeEmitter& emitter, OperationIndex input,
                                              OperationIndex background,
                                              const LightWrapOperands& operands);
+[[nodiscard]] OperationIndex appendInnerShadow(RecipeEmitter& emitter, OperationIndex input,
+                                               const InnerShadowOperands& operands);
+[[nodiscard]] OperationIndex appendInnerGlow(RecipeEmitter& emitter, OperationIndex input,
+                                             const InnerGlowOperands& operands);
 [[nodiscard]] OperationIndex appendEdgeExtend(RecipeEmitter& emitter, OperationIndex input,
                                               const EdgeExtendOperands& operands);
 

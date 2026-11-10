@@ -465,6 +465,23 @@ template <typename Definition>
         scalar("offset", kAlphaContourOffsetSchemaKey);
         color("color", kAlphaContourColorSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
         integer("composite", kAlphaContourCompositeSchemaKey);
+    } else if (typeId == kInnerShadowNodeType) {
+        // #528.
+        color("color", kInnerShadowColorSchemaKey, bloom::core::Color4d{0.0, 0.0, 0.0, 1.0});
+        scalar("opacity", kInnerShadowOpacitySchemaKey);
+        scalar("direction", kInnerShadowDirectionSchemaKey);
+        scalar("distance", kInnerShadowDistanceSchemaKey);
+        scalar("softness", kInnerShadowSoftnessSchemaKey);
+        scalar("choke", kInnerShadowChokeSchemaKey);
+        flag("shadowOnly", kInnerShadowShadowOnlySchemaKey);
+    } else if (typeId == kInnerGlowNodeType) {
+        color("color", kInnerGlowColorSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
+        scalar("opacity", kInnerGlowOpacitySchemaKey);
+        scalar("intensity", kInnerGlowIntensitySchemaKey);
+        scalar("size", kInnerGlowSizeSchemaKey);
+        scalar("choke", kInnerGlowChokeSchemaKey);
+        integer("source", kInnerGlowSourceSchemaKey);
+        flag("glowOnly", kInnerGlowGlowOnlySchemaKey);
     } else {
         scalar("radius", kLightWrapRadiusSchemaKey);
         scalar("amount", kLightWrapAmountSchemaKey);
@@ -674,7 +691,9 @@ template <typename Definition>
         if (definition.key.typeId == kDropShadowNodeType ||
             definition.key.typeId == kGlowNodeType || definition.key.typeId == kLightWrapNodeType ||
             definition.key.typeId == kEdgeExtendNodeType ||
-            definition.key.typeId == kAlphaContourNodeType)
+            definition.key.typeId == kAlphaContourNodeType ||
+            definition.key.typeId == kInnerShadowNodeType ||
+            definition.key.typeId == kInnerGlowNodeType)
             return definition == recipeDefinition(definition.key.typeId);
         if (definition.key.typeId == "bloom.transform-2d") {
             const auto motion = bloom::document::transformMotionBlurParameterDefinitions();
@@ -1864,6 +1883,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         recipeDefinition(kLightWrapNodeType),
         recipeDefinition(kEdgeExtendNodeType),
         recipeDefinition(kAlphaContourNodeType),
+        recipeDefinition(kInnerShadowNodeType),
+        recipeDefinition(kInnerGlowNodeType),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),
