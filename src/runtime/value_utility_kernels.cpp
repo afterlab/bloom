@@ -104,6 +104,8 @@ enum class Family : std::uint8_t {
     case Kernel::MergePaths:
     case Kernel::RoundCorners:
     case Kernel::PathStroke:
+    case Kernel::MaskPath:
+    case Kernel::TextOutline:
         return Family::Path;
     case Kernel::DataSample:
     case Kernel::RampSample:

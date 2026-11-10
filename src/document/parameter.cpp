@@ -108,7 +108,8 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     };
     const auto integer = [&] { return std::holds_alternative<std::int64_t>(constant.value); };
     if (schemaKey == kScalarValueParameterSchemaKey ||
-        schemaKey == kScalarOperandParameterSchemaKey) {
+        schemaKey == kScalarOperandParameterSchemaKey ||
+        schemaKey == kStampRotationParameterSchemaKey) {
         return finiteScalar();
     }
     if (schemaKey == kIntegerValueParameterSchemaKey ||
@@ -193,6 +194,19 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kStrokeCapParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kStrokeCaps, *stored).has_value();
+    }
+    // #509: a node id, or 0 for the composition's first readable node.
+    if (isPathSourceParameterSchemaKey(schemaKey)) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && *stored >= 0;
+    }
+    if (schemaKey == kStrokeStampParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kStrokeStamps, *stored).has_value();
+    }
+    if (schemaKey == kStampAlignParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kStampAligns, *stored).has_value();
     }
     // #344: a path operand holds any valid path value, as a constant or a driver.
     if (schemaKey == kPathOperandParameterSchemaKey) {

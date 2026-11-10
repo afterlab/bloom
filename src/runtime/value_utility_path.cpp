@@ -806,6 +806,10 @@ ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation) 
         return roundCorners(invocation);
     case Kernel::PathStroke:
         return evaluateValuePathStroke(invocation);
+    case Kernel::MaskPath:
+        return evaluateValueMaskPath(invocation);
+    case Kernel::TextOutline:
+        return evaluateValueTextOutline(invocation);
     default:
         break;
     }

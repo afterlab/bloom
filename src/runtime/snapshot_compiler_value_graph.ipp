@@ -104,20 +104,44 @@ struct DriverReference final {
     return !hasFailure_;
 }
 
+// #509: the node a Mask Path or Text Outline reads (nullptr for every other node, or when there is
+// none to read).
+[[nodiscard]] const document::NodeRecord* pathSourceNodeOf(const document::NodeRecord& node) const {
+    const auto* descriptor = document::findValueUtilityDescriptor(node.typeId);
+    if (descriptor == nullptr || !document::isPathSourceReader(descriptor->kernel))
+        return nullptr;
+    const auto* stored = parameterConstant<std::int64_t>(
+        runtime::detail::findParameterBinding(node, document::kPathSourceParameterRole));
+    if (stored == nullptr)
+        return nullptr;
+    const auto* source =
+        document::resolvePathSourceNode(composition_->graph(), descriptor->kernel, *stored);
+    return source == nullptr || source->id == node.id ? nullptr : source;
+}
+
 [[nodiscard]] std::vector<DriverReference>
 driverReferences(const document::NodeRecord& node) const {
     std::vector<DriverReference> references;
-    for (const auto& binding : node.parameters) {
-        const auto* parameter = findParameter(binding.parameterId);
-        const auto* driver = parameter == nullptr
-                                 ? nullptr
-                                 : std::get_if<document::DriverBindingSource>(&parameter->source);
-        if (driver == nullptr) {
-            continue;
+    const auto collect = [&](const document::NodeRecord& owner) {
+        for (const auto& binding : owner.parameters) {
+            const auto* parameter = findParameter(binding.parameterId);
+            const auto* driver =
+                parameter == nullptr
+                    ? nullptr
+                    : std::get_if<document::DriverBindingSource>(&parameter->source);
+            if (driver == nullptr) {
+                continue;
+            }
+            references.push_back(
+                {node.id, binding.parameterId, binding.role,
+                 document::OutputPortRef{driver->sourceNodeId, driver->outputPort}});
         }
-        references.push_back({node.id, binding.parameterId, binding.role,
-                              document::OutputPortRef{driver->sourceNodeId, driver->outputPort}});
-    }
+    };
+    collect(node);
+    // #509: a Text Outline reads its text's driven values, so whatever drives the text is computed
+    // (and reached) before it, as if it drove the Text Outline itself.
+    if (const auto* source = pathSourceNodeOf(node))
+        collect(*source);
     return references;
 }
 
@@ -692,8 +716,24 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         }
         std::vector<runtime::CompiledValueOperand> operands;
         operands.reserve(descriptor->operands.size());
+        // An operand or selector added after the node shipped is optional: a node saved before it
+        // has no binding, and lowers it at the definition's default (project-format.md).
+        const auto unboundDefault =
+            [&](const std::string_view role) -> std::optional<runtime::CompiledValue> {
+            if (runtime::detail::findParameterBinding(node, role) != nullptr)
+                return std::nullopt;
+            const auto declared = std::ranges::find(definition.parameters, role,
+                                                    &document::ParameterDefinition::role);
+            if (declared == definition.parameters.end() || declared->required)
+                return std::nullopt;
+            return compiledValueFrom(declared->defaultValue);
+        };
         for (const auto& declared : descriptor->operands) {
             auto value = operandOf(declared.role);
+            if (!value.has_value() && declared.optional) {
+                if (auto fallback = unboundDefault(declared.role))
+                    value = runtime::CompiledValueOperand{{}, *std::move(fallback)};
+            }
             if (!value.has_value()) {
                 return std::nullopt;
             }
@@ -704,6 +744,15 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         for (const auto& declared : descriptor->selectors) {
             const auto* stored = parameterConstant<std::int64_t>(
                 runtime::detail::findParameterBinding(node, declared.role));
+            if (stored == nullptr && declared.optional) {
+                const auto fallback = unboundDefault(declared.role);
+                const auto* integer =
+                    fallback.has_value() ? std::get_if<std::int64_t>(&*fallback) : nullptr;
+                if (integer != nullptr) {
+                    selectors.push_back(*integer);
+                    continue;
+                }
+            }
             if (stored == nullptr) {
                 return std::nullopt;
             }
@@ -720,8 +769,86 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
                 return std::nullopt;
             dataBlock = *block;
         }
+        std::vector<runtime::CompiledMaskPathSource> pathSources;
+        std::optional<runtime::CompiledTextOutlineSource> textSource;
+        if (document::isPathSourceReader(descriptor->kernel)) {
+            // #509: what the node reads, resolved here from the document like a data reader's
+            // block. Nothing to read answers the empty path; it is not a failure.
+            const auto* source = pathSourceNodeOf(node);
+            const auto addPath = [&](const document::ParameterId id) {
+                const auto compiled = compiledPathParameter(id);
+                if (!compiled)
+                    return false;
+                if (const auto* constant = std::get_if<document::PathValue>(&compiled->source))
+                    pathSources.emplace_back(runtime::CompiledPathValue{
+                        std::make_shared<document::PathValue>(*constant)});
+                else
+                    pathSources.emplace_back(
+                        std::get<runtime::CompiledPathCurve>(compiled->source));
+                return true;
+            };
+            if (source != nullptr && descriptor->kernel == document::ValueUtilityKernel::MaskPath) {
+                if (source->typeId == document::kMaskNodeType) {
+                    const auto* binding = runtime::detail::findParameterBinding(*source, "path");
+                    if (binding == nullptr || !addPath(binding->parameterId))
+                        return std::nullopt;
+                } else {
+                    for (const auto& boundary : composition_->graph().layerOutputs()) {
+                        if (boundary.nodeId != source->id)
+                            continue;
+                        for (const auto& mask : boundary.masks)
+                            if (!mask.matte && !addPath(mask.path))
+                                return std::nullopt;
+                    }
+                }
+            }
+            if (source != nullptr &&
+                descriptor->kernel == document::ValueUtilityKernel::TextOutline) {
+                const auto lowered = lowerText(*source);
+                const auto* text =
+                    lowered ? std::get_if<runtime::CompiledText>(&*lowered) : nullptr;
+                if (text == nullptr)
+                    return std::nullopt;
+                // The content, size, line height, letter spacing and alignment, as the text reads
+                // them: a key or a driver on the text moves the outline.
+                operands.push_back(
+                    text->drivenContent
+                        ? runtime::CompiledValueOperand{text->contentParameterId,
+                                                        *text->drivenContent}
+                        : runtime::CompiledValueOperand{text->contentParameterId,
+                                                        runtime::CompiledValue{text->content}});
+                const auto scalar = [](const runtime::CompiledScalarParameter& parameter) {
+                    return std::visit(
+                        [&](const auto& held) -> runtime::CompiledValueOperand {
+                            using Held = std::decay_t<decltype(held)>;
+                            if constexpr (std::is_same_v<Held, double>)
+                                return {parameter.id, runtime::CompiledValue{held}};
+                            else
+                                return {parameter.id, held};
+                        },
+                        parameter.source);
+                };
+                operands.push_back(scalar(text->size));
+                operands.push_back(scalar(text->layout.lineHeight));
+                operands.push_back(scalar(text->layout.letterSpacing));
+                operands.push_back(
+                    text->layout.drivenAlignment
+                        ? runtime::CompiledValueOperand{text->layout.alignmentId,
+                                                        *text->layout.drivenAlignment}
+                        : runtime::CompiledValueOperand{
+                              text->layout.alignmentId,
+                              runtime::CompiledValue{text->layout.alignment}});
+                textSource = runtime::CompiledTextOutlineSource{text->font,
+                                                                text->layout.box,
+                                                                text->layout.wrap,
+                                                                text->layout.verticalAlignment,
+                                                                text->layout.anchorMode,
+                                                                text->layout.overflow};
+            }
+        }
         return runtime::CompiledValueKernel{runtime::CompiledValueUtility{
-            descriptor->kernel, std::move(operands), std::move(selectors), std::move(dataBlock)}};
+            descriptor->kernel, std::move(operands), std::move(selectors), std::move(dataBlock),
+            std::move(pathSources), std::move(textSource)}};
     }
     case runtime::NodeLoweringKind::ValueFieldSample:
         return lowerFieldSample(node, definition);

@@ -1005,6 +1005,16 @@ migration as `monochrome`. The node stays at schema 1 and the document schema ve
 The compiler also lowers an unbound role at its default. [Image filters](image-filters.md#film-grain)
 specifies the node.
 
+#### Path Stroke Stamps
+
+Opening a project (#509) binds the optional `bloom.path-stroke` parameters `stamp`, `stampAlign` and
+`stampRotation` on a node that lacks them. `migrateLegacyPathStrokeStamps` rewrites the decoded
+envelope as the Glow migration below does, on the open path only. The node stays at schema 1 and the
+document schema version is unchanged. `stamp` defaults to Dot, `stampAlign` to Automatic and
+`stampRotation` to 0, which stamp exactly the round dots a node saved before them drew, so the plan
+and every pixel are the same. The compiler also lowers an unbound role at its default.
+[Path processing](path-processing.md) specifies the node.
+
 #### Glow Controls
 
 Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and

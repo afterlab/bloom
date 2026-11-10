@@ -484,6 +484,11 @@ void migrateLegacyTransformMotionBlur(DecodedDocumentEnvelope& envelope);
 // the picture is unchanged. Open path only.
 void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope);
 
+// #509: opening a project binds Path Stroke's optional stamp, stamp alignment and stamp rotation on
+// a node saved before them, at Dot, Automatic and 0 degrees, so the stroke is unchanged. Open path
+// only.
+void migrateLegacyPathStrokeStamps(DecodedDocumentEnvelope& envelope);
+
 // #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
 // older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
 inline constexpr std::uint32_t kGradientColorPairsMinor = 39;

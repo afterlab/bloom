@@ -276,6 +276,10 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return {{"Classic", kGlowModeClassic},
                 {"Physical", kGlowModePhysical},
                 {"Streak", kGlowModeStreak}};
+    if (schemaKey == kAlphaContourCompositeSchemaKey)
+        return {{"Over the image", kAlphaContourOver},
+                {"Under the image", kAlphaContourUnder},
+                {"Contour only", kAlphaContourOnly}};
     if (schemaKey == "bloom.resize-fit.filter")
         return sequential({"Bilinear", "Nearest"});
     if (schemaKey == "bloom.resize-fit.policy")
@@ -367,6 +371,12 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                      [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kStrokeCapParameterSchemaKey)
         return named(kStrokeCaps, {"Butt", "Round", "Square"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kStrokeStampParameterSchemaKey)
+        return named(kStrokeStamps, {"Dot", "Square", "Diamond", "Dash"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kStampAlignParameterSchemaKey)
+        return named(kStampAligns, {"Automatic", "Follow path", "Fixed"},
                      [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kPathCombineParameterSchemaKey)
         return named(kPathCombines, {"Union", "Subtract", "Intersect", "Exclude"},

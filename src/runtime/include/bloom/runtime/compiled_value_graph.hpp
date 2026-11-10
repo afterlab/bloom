@@ -8,6 +8,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/render/embedded_fonts.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/operation_index.hpp>
 
@@ -265,11 +266,35 @@ struct CompiledValuePromotion final {
 // across seven socket kinds: these operations differ in what they COMPUTE, not in how they are
 // addressed, and sixty structs holding the same two vectors would be sixty places for the operand
 // order to drift from the table that produced it.
+// #509 Mask Path: one mask's path, its constant or its whole-value curve sampled at the frame. The
+// masks are not node parameters, so they are not operands; the evaluator samples each and hands it
+// to the kernel after the operands, in mask order.
+using CompiledMaskPathSource = std::variant<CompiledPathValue, CompiledPathCurve>;
+
+// #509 Text Outline: what it reads of the Text Source that is not a value -- the face the glyphs
+// come from (resolved as the text's own lowering resolves it) and the layout the text fixes. The
+// content, size, line height, letter spacing and alignment are operands, so a key or a driver on
+// the text moves its outline.
+struct CompiledTextOutlineSource final {
+    render::TextFont font = render::EmbeddedFace::DejaVuSans;
+    document::Vec2d box{};
+    bool wrap = false;
+    std::int64_t verticalAlignment = 0;
+    std::int64_t anchorMode = 0;
+    std::int64_t overflow = 0;
+
+    friend bool operator==(const CompiledTextOutlineSource&,
+                           const CompiledTextOutlineSource&) = default;
+};
+
 struct CompiledValueUtility final {
     document::ValueUtilityKernel operation = document::ValueUtilityKernel::ScalarToString;
     std::vector<CompiledValueOperand> operands;
     std::vector<std::int64_t> selectors;
     std::optional<document::DataBlockRecord> dataBlock;
+    // #509: Mask Path's masks and Text Outline's text (empty / absent for every other kernel).
+    std::vector<CompiledMaskPathSource> pathSources{};
+    std::optional<CompiledTextOutlineSource> textSource{};
 
     friend bool operator==(const CompiledValueUtility&, const CompiledValueUtility&) = default;
 };

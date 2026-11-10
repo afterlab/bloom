@@ -1,5 +1,7 @@
 #include <bloom/document/value_utility_nodes.hpp>
 
+#include <bloom/document/graph.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -178,7 +180,7 @@ constexpr std::array<ValueUtilityOperand, 2> kMergePathsOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
 // #509 Path Stroke. The body and the core are outlines to fill; distances are pixels, shares are percent.
-constexpr std::array<ValueUtilityOperand, 17> kPathStrokeOperands{
+constexpr std::array<ValueUtilityOperand, 18> kPathStrokeOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "width", .kind = SocketValueKind::Scalar, .number = 8.0},
     ValueUtilityOperand{.role = "start", .kind = SocketValueKind::Scalar, .number = 0.0},
@@ -195,16 +197,40 @@ constexpr std::array<ValueUtilityOperand, 17> kPathStrokeOperands{
     ValueUtilityOperand{.role = "wigglePhase", .kind = SocketValueKind::Scalar, .number = 0.0},
     ValueUtilityOperand{.role = "seed", .kind = SocketValueKind::Integer, .integer = 0},
     ValueUtilityOperand{.role = "coreWidth", .kind = SocketValueKind::Scalar, .number = 0.0},
-    ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
-constexpr std::array<ValueUtilitySelector, 2> kPathStrokeSelectors{
+    ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25},
+    // Added after the node shipped (stamps), so optional: degrees, clockwise on screen.
+    ValueUtilityOperand{.role = "stampRotation",
+                        .kind = SocketValueKind::Scalar,
+                        .number = 0.0,
+                        .optional = true,
+                        .schemaKey = bloom::document::kStampRotationParameterSchemaKey}};
+constexpr std::array<ValueUtilitySelector, 4> kPathStrokeSelectors{
     ValueUtilitySelector{"cap", bloom::document::kStrokeCapParameterSchemaKey,
                          bloom::document::selectorStoredValue(bloom::document::StrokeCap::Round)},
     ValueUtilitySelector{"join", bloom::document::kOffsetJoinParameterSchemaKey,
-                         bloom::document::selectorStoredValue(bloom::document::OffsetJoin::Round)}};
+                         bloom::document::selectorStoredValue(bloom::document::OffsetJoin::Round)},
+    ValueUtilitySelector{"stamp", bloom::document::kStrokeStampParameterSchemaKey,
+                         bloom::document::selectorStoredValue(bloom::document::StrokeStamp::Dot),
+                         true},
+    ValueUtilitySelector{
+        "stampAlign", bloom::document::kStampAlignParameterSchemaKey,
+        bloom::document::selectorStoredValue(bloom::document::StampAlign::Automatic), true}};
 constexpr std::array<ValueUtilityOutput, 3> kPathStrokeOutputs{
     ValueUtilityOutput{"path", SocketValueKind::Path},
     ValueUtilityOutput{"core", SocketValueKind::Path},
     ValueUtilityOutput{"length", SocketValueKind::Scalar}};
+// #509 Mask Path: which mask (0 every mask, 1 the first, ...) of the node `source` names.
+constexpr std::array<ValueUtilityOperand, 1> kMaskPathOperands{
+    ValueUtilityOperand{.role = "mask", .kind = SocketValueKind::Integer, .integer = 0}};
+constexpr std::array<ValueUtilitySelector, 1> kMaskPathSelectors{
+    ValueUtilitySelector{bloom::document::kPathSourceParameterRole,
+                         bloom::document::kMaskPathSourceParameterSchemaKey, 0}};
+constexpr std::array<ValueUtilitySelector, 1> kTextOutlineSelectors{
+    ValueUtilitySelector{bloom::document::kPathSourceParameterRole,
+                         bloom::document::kTextOutlineSourceParameterSchemaKey, 0}};
+constexpr std::array<ValueUtilityOutput, 2> kPathSourceOutputs{
+    ValueUtilityOutput{"path", SocketValueKind::Path},
+    ValueUtilityOutput{"count", SocketValueKind::Integer}};
 constexpr std::array<ValueUtilityOperand, 2> kRoundCornersOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "radius", .kind = SocketValueKind::Scalar, .number = 10.0}};
@@ -510,7 +536,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 79> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 81> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -751,6 +777,12 @@ constexpr std::array<ValueUtilityDescriptor, 79> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kPathStrokeNodeType, "Path Stroke",
                            ValueUtilityKernel::PathStroke, NodeCategory::Values,
                            kPathStrokeOperands, kPathStrokeSelectors, kPathStrokeOutputs},
+    ValueUtilityDescriptor{bloom::document::kMaskPathNodeType, "Mask Path",
+                           ValueUtilityKernel::MaskPath, NodeCategory::Values, kMaskPathOperands,
+                           kMaskPathSelectors, kPathSourceOutputs},
+    ValueUtilityDescriptor{bloom::document::kTextOutlineNodeType, "Text Outline",
+                           ValueUtilityKernel::TextOutline, NodeCategory::Values, kNoOperands,
+                           kTextOutlineSelectors, kPathSourceOutputs},
 };
 
 } // namespace
@@ -782,6 +814,43 @@ const ValueUtilityDescriptor* findValueUtilityDescriptor(const std::string_view 
     const auto* const match =
         std::ranges::find(kDescriptors, typeId, &ValueUtilityDescriptor::typeId);
     return match == kDescriptors.end() ? nullptr : match;
+}
+
+bool isPathSourceCandidate(const CanonicalGraph& graph, const ValueUtilityKernel kernel,
+                           const NodeRecord& node) noexcept {
+    if (kernel == ValueUtilityKernel::TextOutline)
+        return node.typeId == kTextSourceNodeType;
+    if (kernel != ValueUtilityKernel::MaskPath)
+        return false;
+    if (node.typeId == kMaskNodeType)
+        return true;
+    if (node.typeId != kLayerOutputNodeType)
+        return false;
+    // A layer whose masks include one drawn by a path (a matte mask has no path).
+    return std::ranges::any_of(graph.layerOutputs(), [&](const LayerOutputBoundary& boundary) {
+        return boundary.nodeId == node.id &&
+               std::ranges::any_of(boundary.masks,
+                                   [](const LayerMask& mask) { return !mask.matte.has_value(); });
+    });
+}
+
+const NodeRecord* resolvePathSourceNode(const CanonicalGraph& graph,
+                                        const ValueUtilityKernel kernel,
+                                        const std::int64_t stored) noexcept {
+    if (stored < 0 || !isPathSourceReader(kernel))
+        return nullptr;
+    const NodeRecord* first = nullptr;
+    for (const auto& node : graph.nodes()) {
+        if (stored > 0 && node.id.value() != static_cast<std::uint64_t>(stored))
+            continue;
+        if (!isPathSourceCandidate(graph, kernel, node))
+            continue;
+        if (stored > 0)
+            return &node;
+        if (first == nullptr || node.id.value() < first->id.value())
+            first = &node;
+    }
+    return first;
 }
 
 const DataBlockRecord* resolveDataBlockReaderBlock(const Project& project,

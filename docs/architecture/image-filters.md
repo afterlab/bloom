@@ -2072,6 +2072,62 @@ they use. `node.bloom.edge-extend` prepares through the production builder (full
 and the native harness holds two variants to the CPU oracle with warm reuse and a changed amount.
 [Benchmarks](../development/benchmarks.md) lists `edge-extend-2k`, written and not yet run.
 
+## Alpha Contour
+
+`bloom.alpha-contour`, schema 1 (#509), is a compositing recipe listed under Stylize in the Add menu: a
+stroke of an image's alpha edge, drawn in image space. It has a required Image input, `input`, and an
+Image output, `image`, takes no effect mask, and has no pixel kernel of its own: the compiler lowers
+it (`appendAlphaContour`) to the exact mask distance transform (`MaskDistanceKernel`, the one Shape
+Distance from a Mask runs) and a field raster over it (`FieldRasterKernel`), then a Normal Merge, so
+each keeps its own CPU reference, resident GPU command, cache identity, ROI, budget, cancellation and
+retirement.
+
+| Role | Default | Domain |
+|---|---|---|
+| `width` | 4 | 0 to 256 pixels; animatable and drivable |
+| `softness` | 0 | 0 to 64 pixels; animatable and drivable |
+| `offset` | 0 | -256 to 256 pixels (positive outward); animatable and drivable |
+| `color` | white | straight RGBA, HDR allowed; its alpha scales the band; animatable and drivable |
+| `composite` | Over the image | Over the image, Under the image, Contour only (a constant) |
+
+The input's coverage is its alpha at one half, the edge the distance transform reads. With `d` a
+pixel's signed distance from that edge in full-resolution pixels (outside positive; half a pixel from
+each pixel centre to the boundary between them), `h = max(width / 2, 1/2)`, `lo = h - 1/2 -
+softness / 2` and `hi = h + 1/2 + softness / 2`, the band's coverage is
+`k = clamp(1 - (|d - offset| - lo) / (hi - lo), 0, 1)`: 1 within `width / 2` of the offset edge,
+falling over one pixel (the antialiased edge) plus the softness across each side. The band is the
+colour premultiplied by its alpha times `min(width, 1)` (a band thinner than a pixel is a one-pixel
+line that fades with its width), times `k`; the raster keeps it premultiplied, so HDR colour is kept.
+Over composites the band over the input, Under the input over the band, Contour only publishes the
+band alone. Width, softness and offset are clamped to their domains first.
+
+The distance transform covers the input's data window grown by its reach, `|offset| + h + 1/2 +
+softness / 2 + 2` pixels from constant operands, or the widest band the domains allow when any of
+them is animated or driven, so a band never meets the transform's clamped distance. The output's data
+window is that grown window, and a reduced render scale reads the distance in full-resolution pixels,
+so the band keeps its width in the composition. The transform is the cost: two separable passes over
+the grown window on the CPU, a bounded search on the GPU; the raster is one pixel pass.
+
+Of Path Stroke's controls only the width, softness (of the edge) and offset apply: trim, dashes,
+tapers, brush stamps and wiggle are measured along a vector path, and an alpha edge is not one. A path
+is never traced from the pixels, which would read the frame back mid-frame (path-processing.md, "Where
+a path comes from: the boundary"); draw a vector path with Mask Path, Text Outline or a Shape for those.
+
+**Evidence.** The direct recipe test compares the chain at 1e-4 with an independent reference (a
+brute-force Euclidean distance between pixel centres, the band and the composite) for Over, Under
+with a hard edge, an inward hairline alone, and a wide soft HDR band over a solid; and checks that
+width 0 is the input, the inside beyond the band is the input exactly, Contour only is transparent away
+from the edge and carries the colour on it, a negative offset moves the band inside, the band keeps its
+width at half render scale, an animated width equals the constant one at its key, an ROI equals the
+full frame, cancellation inside the transform publishes nothing and an exhausted budget refuses the
+frame. The compiler test reads the three operations, the reach, the program and its image slot.
+`node.bloom.alpha-contour` prepares through the production builder (full frame and ROI); the native
+harness holds three variants to the CPU oracle (2e-6; the band's alpha comes from a square root the
+device rounds within an ulp, so alpha is held to the same 2e-6, not bit-exact) with warm reuse and a
+changed colour re-running only the raster; and `bloom.runtime.gpu_path_processing_native` renders two
+Alpha Contours over a curved Shape Source and a Text Source through the document route.
+[Benchmarks](../development/benchmarks.md) lists `alpha-contour-2k`, written and not yet run.
+
 ## Histogram
 
 `bloom.histogram`, schema 1, under Tracking & Analysis (issue #349), has one Image in, `input`, and one

@@ -1484,10 +1484,32 @@ void Evaluator::evaluatePromotion(const runtime::CompiledValueOperation& operati
 void Evaluator::evaluateUtility(const runtime::CompiledValueOperation& operation,
                                 const runtime::CompiledValueUtility& kernel) {
     std::vector<const CompiledValue*> operands;
-    operands.reserve(kernel.operands.size());
+    operands.reserve(kernel.operands.size() + kernel.pathSources.size());
     for (const auto& operand : kernel.operands) {
         operands.push_back(operandOf(operand));
     }
+    // #509 Mask Path: each mask's path at this frame, after the operands. A keyed mask that cannot
+    // sample is the empty path, diagnosed, as a keyed Path node's is.
+    std::vector<CompiledValue> sampledPaths;
+    sampledPaths.reserve(kernel.pathSources.size());
+    for (const auto& source : kernel.pathSources) {
+        if (const auto* constant = std::get_if<runtime::CompiledPathValue>(&source)) {
+            sampledPaths.emplace_back(*constant);
+            continue;
+        }
+        auto sampled =
+            runtime::samplePathCurve(std::get<runtime::CompiledPathCurve>(source), time_);
+        if (!sampled) {
+            fail(operation, {}, "Mask path is not evaluable at this time",
+                 "A mask's keys could not be sampled; it reads as the empty path.");
+            sampledPaths.emplace_back(runtime::CompiledPathValue{});
+            continue;
+        }
+        sampledPaths.emplace_back(
+            runtime::CompiledPathValue{std::make_shared<document::PathValue>(std::move(*sampled))});
+    }
+    for (const auto& sampled : sampledPaths)
+        operands.push_back(&sampled);
     const auto outcome = runtime::evaluateValueUtility(
         {kernel.operation,
          operands,
@@ -1498,7 +1520,8 @@ void Evaluator::evaluateUtility(const runtime::CompiledValueOperation& operation
          {.maxStringBytes = memoization_.maxStringBytes,
           .availableStringBytes = memoization_.maxRetainedStringBytes - retainedStringBytes_,
           .maxScratchBytes = memoization_.maxStringScratchBytes,
-          .cancellation = memoization_.cancellation}});
+          .cancellation = memoization_.cancellation},
+         kernel.textSource.has_value() ? &*kernel.textSource : nullptr});
     if (outcome.cancelled)
         return;
     if (outcome.failed) {

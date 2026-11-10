@@ -233,6 +233,10 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
                 continue;
             addParameterCurve(binding.parameterId);
         }
+        // #509: a Text Outline samples its text's keyed values whether or not the text is drawn.
+        if (const auto* source = pathSourceNodeOf(*node))
+            for (const auto& binding : source->parameters)
+                addParameterCurve(binding.parameterId);
         // ADR 0028: a reachable layer's masks own their parameters outside any node binding.
         if (const auto boundary = layerOutputs_.find(node->id); boundary != layerOutputs_.end())
             for (const auto& mask : boundary->second->masks)

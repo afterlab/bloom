@@ -458,6 +458,13 @@ template <typename Definition>
     } else if (typeId == kEdgeExtendNodeType) {
         scalar("distance", kEdgeExtendDistanceSchemaKey);
         scalar("amount", kEdgeExtendAmountSchemaKey);
+    } else if (typeId == kAlphaContourNodeType) {
+        // #509: a stroke of the input's alpha edge.
+        scalar("width", kAlphaContourWidthSchemaKey);
+        scalar("softness", kAlphaContourSoftnessSchemaKey);
+        scalar("offset", kAlphaContourOffsetSchemaKey);
+        color("color", kAlphaContourColorSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
+        integer("composite", kAlphaContourCompositeSchemaKey);
     } else {
         scalar("radius", kLightWrapRadiusSchemaKey);
         scalar("amount", kLightWrapAmountSchemaKey);
@@ -664,7 +671,8 @@ template <typename Definition>
             return definition == combineChannelsDefinition();
         if (definition.key.typeId == kDropShadowNodeType ||
             definition.key.typeId == kGlowNodeType || definition.key.typeId == kLightWrapNodeType ||
-            definition.key.typeId == kEdgeExtendNodeType)
+            definition.key.typeId == kEdgeExtendNodeType ||
+            definition.key.typeId == kAlphaContourNodeType)
             return definition == recipeDefinition(definition.key.typeId);
         if (definition.key.typeId == "bloom.transform-2d") {
             const auto motion = bloom::document::transformMotionBlurParameterDefinitions();
@@ -1852,6 +1860,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         recipeDefinition(kGlowNodeType),
         recipeDefinition(kLightWrapNodeType),
         recipeDefinition(kEdgeExtendNodeType),
+        recipeDefinition(kAlphaContourNodeType),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

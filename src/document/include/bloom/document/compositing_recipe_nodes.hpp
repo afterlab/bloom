@@ -18,6 +18,7 @@ inline constexpr std::string_view kDropShadowNodeType = "bloom.drop-shadow";
 inline constexpr std::string_view kGlowNodeType = "bloom.glow";
 inline constexpr std::string_view kLightWrapNodeType = "bloom.light-wrap";
 inline constexpr std::string_view kEdgeExtendNodeType = "bloom.edge-extend";
+inline constexpr std::string_view kAlphaContourNodeType = "bloom.alpha-contour";
 // #541: Glow schema 2 tints its octaves through a gradient value (`tintGradient`) in place of
 // schema 1's outer tint; Drop Shadow and Light Wrap stay at schema 1.
 inline constexpr std::uint32_t kGlowNodeSchemaVersion = 2;
@@ -103,6 +104,24 @@ inline constexpr std::string_view kLightWrapWrapOnlySchemaKey = "bloom.light-wra
 inline constexpr std::string_view kEdgeExtendDistanceSchemaKey = "bloom.edge-extend.distance";
 inline constexpr std::string_view kEdgeExtendAmountSchemaKey = "bloom.edge-extend.amount";
 
+// #509 Alpha Contour. A band of `color` along the input's alpha edge (its coverage at 1/2): the
+// pixels whose signed distance from the edge (outside positive) lies within `width` / 2 of
+// `offset`, the band's edges softened over `softness` pixels beyond a one-pixel antialiased edge.
+// Composite puts the band over the input, under it, or alone. An image-space recipe over the mask
+// distance transform and a field raster (docs/architecture/image-filters.md, "Alpha Contour"): no
+// path is traced from pixels.
+inline constexpr std::string_view kAlphaContourWidthSchemaKey = "bloom.alpha-contour.width";
+inline constexpr std::string_view kAlphaContourSoftnessSchemaKey = "bloom.alpha-contour.softness";
+inline constexpr std::string_view kAlphaContourOffsetSchemaKey = "bloom.alpha-contour.offset";
+inline constexpr std::string_view kAlphaContourColorSchemaKey = "bloom.alpha-contour.color";
+inline constexpr std::string_view kAlphaContourCompositeSchemaKey = "bloom.alpha-contour.composite";
+inline constexpr std::int64_t kAlphaContourOver = 0;
+inline constexpr std::int64_t kAlphaContourUnder = 1;
+inline constexpr std::int64_t kAlphaContourOnly = 2;
+inline constexpr double kMaximumAlphaContourWidth = 256.0;
+inline constexpr double kMaximumAlphaContourSoftness = 64.0;
+inline constexpr double kMaximumAlphaContourOffset = 256.0;
+
 // The radii are the blur radii, so they share kMaximumBlurRadiusPixels (parameter.hpp).
 inline constexpr double kMaximumRecipeBlurRadius = 256.0;
 inline constexpr double kMaximumDropShadowDistance = 16384.0;
@@ -161,6 +180,12 @@ recipeScalarDomain(const std::string_view schemaKey) noexcept {
         return RecipeScalarDomain{0.0, kMaximumRecipeBlurRadius, 4.0};
     if (schemaKey == kEdgeExtendAmountSchemaKey)
         return RecipeScalarDomain{0.0, 1.0, 1.0};
+    if (schemaKey == kAlphaContourWidthSchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumAlphaContourWidth, 4.0};
+    if (schemaKey == kAlphaContourSoftnessSchemaKey)
+        return RecipeScalarDomain{0.0, kMaximumAlphaContourSoftness, 0.0};
+    if (schemaKey == kAlphaContourOffsetSchemaKey)
+        return RecipeScalarDomain{-kMaximumAlphaContourOffset, kMaximumAlphaContourOffset, 0.0};
     return std::nullopt;
 }
 
@@ -168,11 +193,11 @@ recipeScalarDomain(const std::string_view schemaKey) noexcept {
     return recipeScalarDomain(schemaKey).has_value();
 }
 
-// The animatable straight RGBA colours: the shadow colour (its alpha scales the opacity) and the
-// glow tints (their alpha is not used).
+// The animatable straight RGBA colours: the shadow colour (its alpha scales the opacity), the
+// glow tints (their alpha is not used) and the contour colour (its alpha scales the band).
 [[nodiscard]] constexpr bool isRecipeColorSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kDropShadowColorSchemaKey || schemaKey == kGlowTintSchemaKey ||
-           schemaKey == kGlowOuterTintSchemaKey;
+           schemaKey == kGlowOuterTintSchemaKey || schemaKey == kAlphaContourColorSchemaKey;
 }
 
 // The constant switches: no socket, no animation.
@@ -196,6 +221,8 @@ recipeIntegerDomain(const std::string_view schemaKey) noexcept {
         return RecipeIntegerDomain{kGlowModeClassic, kGlowModeStreak, kGlowModeClassic};
     if (schemaKey == kGlowPointsSchemaKey)
         return RecipeIntegerDomain{kMinimumGlowPoints, kMaximumGlowPoints, kDefaultGlowPoints};
+    if (schemaKey == kAlphaContourCompositeSchemaKey)
+        return RecipeIntegerDomain{kAlphaContourOver, kAlphaContourOnly, kAlphaContourOver};
     return std::nullopt;
 }
 [[nodiscard]] constexpr bool isRecipeIntegerSchemaKey(const std::string_view schemaKey) noexcept {

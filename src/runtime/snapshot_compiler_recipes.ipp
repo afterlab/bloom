@@ -36,7 +36,8 @@ recipeOptionalInput(const document::NodeId nodeId, const std::string_view port,
 
 [[nodiscard]] static bool isRecipeNodeType(const std::string_view typeId) noexcept {
     return typeId == document::kDropShadowNodeType || typeId == document::kGlowNodeType ||
-           typeId == document::kLightWrapNodeType || typeId == document::kEdgeExtendNodeType;
+           typeId == document::kLightWrapNodeType || typeId == document::kEdgeExtendNodeType ||
+           typeId == document::kAlphaContourNodeType;
 }
 
 // #514 Denoise & Smooth. Median, Bilateral and Spatial are one DenoiseKernel on the input. Temporal
@@ -468,6 +469,23 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
             return std::nullopt;
         }
         return runtime::detail::appendEdgeExtend(emitter, *input, {*distance, *amount});
+    }
+    if (node.typeId == document::kAlphaContourNodeType) {
+        auto width = scalar("width");
+        auto softness = scalar("softness");
+        auto offset = scalar("offset");
+        auto contourColor = color("color");
+        const auto* composite =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "composite"));
+        if (!width || !softness || !offset || !contourColor || composite == nullptr ||
+            *composite < document::kAlphaContourOver || *composite > document::kAlphaContourOnly) {
+            addTopologyFailure(node.id, "Alpha Contour parameters could not be lowered.");
+            return std::nullopt;
+        }
+        return runtime::detail::appendAlphaContour(
+            emitter, *input,
+            {*width, *softness, *offset, *contourColor,
+             static_cast<runtime::detail::AlphaContourComposite>(*composite)});
     }
     if (node.typeId == document::kGlowNodeType) {
         const auto key = recipeOptionalInput(node.id, "key", operations, indices);

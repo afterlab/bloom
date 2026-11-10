@@ -10,6 +10,8 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
 #include <optional>
@@ -72,6 +74,13 @@ void migrateLegacyTransformMotionBlur(DecodedDocumentEnvelope& envelope) {
 void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope) {
     bindOptionalParameters(envelope, document::kFilmGrainNodeType,
                            document::kFilmGrainNodeSchemaVersion);
+}
+
+// #509: Path Stroke's stamp selectors and rotation, Dot / Automatic / 0, so the stroke is
+// unchanged.
+void migrateLegacyPathStrokeStamps(DecodedDocumentEnvelope& envelope) {
+    bindOptionalParameters(envelope, document::kPathStrokeNodeType,
+                           document::kValueNodeSchemaVersion);
 }
 
 } // namespace bloom::project

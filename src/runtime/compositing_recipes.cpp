@@ -1,6 +1,8 @@
 #include "compositing_recipes.hpp"
 #include "gradient_source.hpp"
 
+#include <bloom/core/field_program.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/render/image_coverage.hpp>
 
 #include <algorithm>
@@ -488,6 +490,146 @@ OperationIndex appendEdgeExtend(RecipeEmitter& emitter, const OperationIndex inp
                           ImageCombineKernel{ImageCombineMode::Mix, operands.amount,
                                              render::ImageCoverageChannel::Alpha},
                           extended, transparency);
+}
+
+namespace {
+
+// The one-pixel antialiased edge of the band: its coverage falls from 1 to 0 over one pixel (plus
+// the softness) centred on the band's edge.
+constexpr double kContourEdgePixels = 1.0;
+// Past the band's outer edge the distance transform still needs this margin, so the clamped
+// distance (reach plus one pixel) is never inside the band.
+constexpr double kContourReachMargin = 2.0;
+
+[[nodiscard]] double contourReach(const double width, const double softness, const double offset) {
+    return std::abs(offset) + std::max(0.5 * width, 0.5 * kContourEdgePixels) +
+           0.5 * kContourEdgePixels + 0.5 * softness + kContourReachMargin;
+}
+
+[[nodiscard]] std::optional<double> constantOf(const CompiledScalarParameter& parameter) {
+    if (const auto* constant = std::get_if<double>(&parameter.source))
+        return *constant;
+    return std::nullopt;
+}
+
+} // namespace
+
+double alphaContourReach(const AlphaContourOperands& operands) {
+    const auto width = constantOf(operands.width);
+    const auto softness = constantOf(operands.softness);
+    const auto offset = constantOf(operands.offset);
+    if (width && softness && offset)
+        return contourReach(std::clamp(*width, 0.0, document::kMaximumAlphaContourWidth),
+                            std::clamp(*softness, 0.0, document::kMaximumAlphaContourSoftness),
+                            std::clamp(*offset, -document::kMaximumAlphaContourOffset,
+                                       document::kMaximumAlphaContourOffset));
+    return contourReach(document::kMaximumAlphaContourWidth, document::kMaximumAlphaContourSoftness,
+                        document::kMaximumAlphaContourOffset);
+}
+
+// Alpha Contour. MaskDistanceKernel gives every pixel of the input's data window grown by the
+// reach the signed Euclidean distance d from the input's alpha edge (alpha 1/2; outside
+// positive). A field raster over that window reads d through a mask Shape and gives the band's
+// coverage k = clamp(1 - (|d - offset| - lo) / (hi - lo), 0, 1) with h = max(width / 2, 1/2),
+// lo = h - 1/2 - softness / 2 and hi = h + 1/2 + softness / 2: 1 inside the band, falling over one
+// pixel plus the softness across each of its edges. The colour is premultiplied by its alpha times
+// min(width, 1) (a band thinner than a pixel is a one-pixel line that fades with its width), and
+// k times it is the raster's premultiplied result, so HDR colour is kept. Width, softness and
+// offset are clamped to their domains, so a driven value outside them cannot outrun the reach.
+OperationIndex appendAlphaContour(RecipeEmitter& emitter, const OperationIndex input,
+                                  const AlphaContourOperands& operands) {
+    using core::field::FieldOp;
+    const auto constant = &RecipeEmitter::constant;
+    const auto width =
+        emitter.scalar(ScalarPrimitive::Clamp, {emitter.reuse(operands.width), constant(0.0),
+                                                constant(document::kMaximumAlphaContourWidth)});
+    const auto softness =
+        emitter.scalar(ScalarPrimitive::Clamp, {emitter.reuse(operands.softness), constant(0.0),
+                                                constant(document::kMaximumAlphaContourSoftness)});
+    const auto offset =
+        emitter.scalar(ScalarPrimitive::Clamp, {emitter.reuse(operands.offset),
+                                                constant(-document::kMaximumAlphaContourOffset),
+                                                constant(document::kMaximumAlphaContourOffset)});
+    const auto half =
+        emitter.scalar(ScalarPrimitive::Maximum,
+                       {emitter.scalar(ScalarPrimitive::Multiply, {width, constant(0.5)}),
+                        constant(0.5 * kContourEdgePixels)});
+    const auto spread =
+        emitter.scalar(ScalarPrimitive::MultiplyAdd,
+                       {softness, constant(0.5), constant(0.5 * kContourEdgePixels)});
+    const auto low = emitter.scalar(ScalarPrimitive::Subtract, {half, spread});
+    const auto high = emitter.scalar(ScalarPrimitive::Add, {half, spread});
+    const auto color = emitter.components(operands.color);
+    const auto alpha = emitter.scalar(
+        ScalarPrimitive::Multiply,
+        {color[3], emitter.scalar(ScalarPrimitive::Minimum, {width, constant(1.0)})});
+    const auto premultiplied = [&](const std::size_t channel) {
+        return emitter.scalar(ScalarPrimitive::Multiply, {color[channel], alpha});
+    };
+
+    const auto instruction =
+        [](const FieldOp op, const std::int8_t output, const std::array<std::int8_t, 4> inputs,
+           std::vector<std::int64_t> choices, std::vector<CompiledScalarParameter> scalars,
+           std::vector<CompiledVec2Parameter> vectors = {}, const std::int8_t slot = -1) {
+            FieldInstruction each;
+            each.op = static_cast<std::uint8_t>(op);
+            each.output = output;
+            each.inputs = inputs;
+            each.choices = std::move(choices);
+            each.scalars = std::move(scalars);
+            each.vectors = std::move(vectors);
+            each.slot = slot;
+            return each;
+        };
+    const auto mathOp = [](const core::field::FieldMathOperation operation) {
+        return std::vector<std::int64_t>{static_cast<std::int64_t>(operation)};
+    };
+    FieldProgram program;
+    // r0 the field position; r1 the signed distance (lane 0) of the mask in image slot 0.
+    program.instructions.push_back(instruction(FieldOp::Coordinate, 0, {-1, -1, -1, -1}, {}, {}));
+    program.instructions.push_back(
+        instruction(FieldOp::Shape, 1, {0, -1, -1, -1}, {1, 0, 0, 0, 5},
+                    {constant(0.0), constant(0.0), constant(0.5), constant(0.0)},
+                    {CompiledVec2Parameter{{}, document::Vec2d{}},
+                     CompiledVec2Parameter{{}, document::Vec2d{1.0, 1.0}}},
+                    0));
+    // r2 the offset; r0 |d - offset|; r1 the band's coverage.
+    program.instructions.push_back(
+        instruction(FieldOp::Constant, 2, {-1, -1, -1, -1}, {},
+                    {offset, emitter.reuse(offset), emitter.reuse(offset), emitter.reuse(offset)}));
+    program.instructions.push_back(instruction(FieldOp::Math, 0, {1, 2, -1, -1},
+                                               mathOp(core::field::FieldMathOperation::Difference),
+                                               {constant(0.1), constant(0.0)}));
+    program.instructions.push_back(
+        instruction(FieldOp::Remap, 1, {0, -1, -1, -1}, {1, 1, 0, 0},
+                    {low, high, constant(0.0), constant(1.0), constant(0.5), constant(0.5)}));
+    // r2 the coverage in every lane; r0 the premultiplied colour; r1 their product.
+    program.instructions.push_back(
+        instruction(FieldOp::Swizzle, 2, {1, -1, -1, -1}, {0, 0, 0, 0},
+                    {constant(1.0), constant(1.0), constant(1.0), constant(1.0)}));
+    program.instructions.push_back(
+        instruction(FieldOp::Constant, 0, {-1, -1, -1, -1}, {},
+                    {premultiplied(0), premultiplied(1), premultiplied(2), emitter.reuse(alpha)}));
+    program.instructions.push_back(instruction(FieldOp::Math, 1, {2, 0, -1, -1},
+                                               mathOp(core::field::FieldMathOperation::Multiply),
+                                               {constant(0.1), constant(0.0)}));
+    program.result = 1;
+    program.kind = static_cast<std::uint8_t>(core::field::FieldResultKind::Premultiplied);
+    program.mode = static_cast<std::uint8_t>(core::field::FieldOutputMode::Raw);
+
+    const auto distance = emitter.effect(input, MaskDistanceKernel{alphaContourReach(operands)});
+    const auto contour = emitter.effect(distance, FieldRasterKernel{std::move(program), 1});
+    emitter.setImages(contour, {distance});
+    switch (operands.composite) {
+    case AlphaContourComposite::ContourOnly:
+        return contour;
+    case AlphaContourComposite::Under:
+        return emitter.merge(
+            {{input, core::BlendMode::Normal}, {contour, core::BlendMode::Normal}});
+    case AlphaContourComposite::Over:
+        break;
+    }
+    return emitter.merge({{contour, core::BlendMode::Normal}, {input, core::BlendMode::Normal}});
 }
 
 OperationIndex appendSharpen(RecipeEmitter& emitter, const OperationIndex input,

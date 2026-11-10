@@ -254,6 +254,7 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                    parameter.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey ||
                    // #487: a data reader's block dropdown and a channel checklist.
                    parameter.schemaKey == document::kDataBlockParameterSchemaKey ||
+                   document::isPathSourceParameterSchemaKey(parameter.schemaKey) ||
                    parameter.schemaKey == "bloom.channel-copy.select" ||
                    parameter.schemaKey == "bloom.channel-remove.select" ||
                    parameter.schemaKey == document::kCompositionOutputLayersParameterSchemaKey;

@@ -141,6 +141,17 @@ struct EdgeExtendOperands final {
     CompiledScalarParameter amount;   // [0, 1]
 };
 
+// #509 Alpha Contour: a band along the input's alpha edge. Width, softness and offset are
+// full-resolution pixels; offset moves the band outward (positive) or inward (negative).
+enum class AlphaContourComposite : std::uint8_t { Over, Under, ContourOnly };
+struct AlphaContourOperands final {
+    CompiledScalarParameter width;
+    CompiledScalarParameter softness;
+    CompiledScalarParameter offset;
+    CompiledColorParameter color; // straight RGBA; its alpha scales the band
+    AlphaContourComposite composite = AlphaContourComposite::Over;
+};
+
 // #486 Sharpen, which unlike the recipes above has one pixel kernel of its own over the blur.
 struct SharpenOperands final {
     CompiledScalarParameter amount;
@@ -163,6 +174,16 @@ struct SharpenOperands final {
                                              const LightWrapOperands& operands);
 [[nodiscard]] OperationIndex appendEdgeExtend(RecipeEmitter& emitter, OperationIndex input,
                                               const EdgeExtendOperands& operands);
+
+// The input's exact mask distance transform (MaskDistanceKernel), reaching past the widest band
+// the operands can describe, and a field raster over it (FieldRasterKernel) that turns each
+// pixel's signed distance into the band's coverage times the colour, then the band composited
+// with the input as `composite` asks.
+[[nodiscard]] OperationIndex appendAlphaContour(RecipeEmitter& emitter, OperationIndex input,
+                                                const AlphaContourOperands& operands);
+// The distance the band's mask distance transform must reach for these operands: from constants,
+// the band's own extent; otherwise the widest band the parameter domains allow.
+[[nodiscard]] double alphaContourReach(const AlphaContourOperands& operands);
 
 // The input's Gaussian blur with the frame edge clamped, so the edge of the image is not an edge of
 // the picture, then the unsharp mask over the two.

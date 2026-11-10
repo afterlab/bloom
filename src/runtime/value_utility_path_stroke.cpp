@@ -135,6 +135,59 @@ void addDisc(PathsD& polygons, const Vec2d center, const double radius) {
     addPolygon(polygons, std::move(disc));
 }
 
+// One brush stamp: its centre, the width envelope there and the path's direction there.
+struct Stamp {
+    Vec2d center;
+    double envelope = 1.0;
+    Vec2d direction{1.0, 0.0};
+};
+
+// What every stamp is: its shape, whether it turns with the path, and the extra turn.
+struct StampShape {
+    document::StrokeStamp kind = document::StrokeStamp::Dot;
+    bool followsPath = false;
+    double cosine = 1.0; // of the stamp rotation
+    double sine = 0.0;
+};
+
+// A stamp sized by `width` (its envelope scales it): a Dot is the width across, a Square's side
+// and a Diamond's diagonal are the width, a Dash is the width long and a quarter of it thick.
+// Rotation is clockwise on screen (y grows downward), turned from the path's direction when the
+// stamp follows it, from the x axis when it does not.
+void addStamp(PathsD& polygons, const Stamp& stamp, const double width, const StampShape& shape) {
+    const double r = 0.5 * width * stamp.envelope;
+    if (shape.kind == document::StrokeStamp::Dot) {
+        addDisc(polygons, stamp.center, r); // exactly the brush's dot before stamps existed
+        return;
+    }
+    if (!(r > 1e-9))
+        return;
+    const Vec2d base = shape.followsPath ? stamp.direction : Vec2d{1.0, 0.0};
+    const Vec2d u{base.x * shape.cosine - base.y * shape.sine,
+                  base.x * shape.sine + base.y * shape.cosine};
+    const Vec2d v{-u.y, u.x};
+    const auto corner = [&](const double along, const double across) {
+        return Clipper2Lib::PointD{stamp.center.x + u.x * along + v.x * across,
+                                   stamp.center.y + u.y * along + v.y * across};
+    };
+    PathD polygon;
+    switch (shape.kind) {
+    case document::StrokeStamp::Square:
+        polygon = {corner(r, r), corner(-r, r), corner(-r, -r), corner(r, -r)};
+        break;
+    case document::StrokeStamp::Diamond:
+        polygon = {corner(r, 0.0), corner(0.0, r), corner(-r, 0.0), corner(0.0, -r)};
+        break;
+    case document::StrokeStamp::Dash:
+        polygon = {corner(r, 0.25 * r), corner(-r, 0.25 * r), corner(-r, -0.25 * r),
+                   corner(r, -0.25 * r)};
+        break;
+    case document::StrokeStamp::Dot:
+        break;
+    }
+    addPolygon(polygons, std::move(polygon));
+}
+
 struct Style {
     double width = 0.0;
     document::OffsetJoin join = document::OffsetJoin::Round;
@@ -248,14 +301,20 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
     const std::int64_t seed = reader.integer(14);
     const double coreWidth = reader.scalar(15);
     const double tolerance = reader.scalar(16);
+    const double stampRotation = reader.scalar(17);
     const auto cap = runtime::detail::selectorAt(invocation, 0, document::kStrokeCaps,
                                                  document::StrokeCap::Round);
     const auto join = runtime::detail::selectorAt(invocation, 1, document::kOffsetJoins,
                                                   document::OffsetJoin::Round);
+    const auto stamp = runtime::detail::selectorAt(invocation, 2, document::kStrokeStamps,
+                                                   document::StrokeStamp::Dot);
+    const auto stampAlign = runtime::detail::selectorAt(invocation, 3, document::kStampAligns,
+                                                        document::StampAlign::Automatic);
     if (reader.malformed())
         return outcome;
-    for (const double value : {width, start, end, offset, taperStart, taperEnd, dashLength, dashGap,
-                               dashOffset, spacing, wiggle, frequency, phase, coreWidth})
+    for (const double value :
+         {width, start, end, offset, taperStart, taperEnd, dashLength, dashGap, dashOffset, spacing,
+          wiggle, frequency, phase, coreWidth, stampRotation})
         if (!std::isfinite(value))
             return support::refuse(std::move(outcome), "Path Stroke operand is not finite",
                                    "Every number must be finite.");
@@ -444,7 +503,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
 
     // Brush spacing stamps dots; a dash cuts the pieces; neither leaves them whole.
     std::vector<Stretch> strokes;
-    std::vector<std::pair<Vec2d, double>> stamps;
+    std::vector<Stamp> stamps;
     if (spacing > 0.0) {
         for (const auto& piece : pieces) {
             const double length = lengthOf(piece.points);
@@ -470,9 +529,10 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                     std::hypot(piece.points[index + 1].x - piece.points[index].x,
                                piece.points[index + 1].y - piece.points[index].y);
                 const double t = segment > 0.0 ? std::clamp((at - base) / segment, 0.0, 1.0) : 0.0;
-                stamps.emplace_back(lerp(piece.points[index], piece.points[index + 1], t),
-                                    piece.envelope[index] +
-                                        (piece.envelope[index + 1] - piece.envelope[index]) * t);
+                stamps.push_back({lerp(piece.points[index], piece.points[index + 1], t),
+                                  piece.envelope[index] +
+                                      (piece.envelope[index + 1] - piece.envelope[index]) * t,
+                                  unit(piece.points[index], piece.points[index + 1])});
             }
         }
     } else if (dashLength > 0.0 && dashGap >= 0.0 && dashGap + dashLength > 0.0) {
@@ -531,6 +591,15 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
         strokes = pieces;
     }
 
+    StampShape stampShape;
+    stampShape.kind = stamp;
+    stampShape.followsPath =
+        stampAlign == document::StampAlign::FollowPath ||
+        (stampAlign == document::StampAlign::Automatic && stamp == document::StrokeStamp::Dash);
+    const double turn = std::remainder(stampRotation, 360.0) * std::numbers::pi / 180.0;
+    stampShape.cosine = std::cos(turn);
+    stampShape.sine = std::sin(turn);
+
     // The outline of the body, and of the core at its share of the width.
     // nullopt when the stroke is too detailed or the kernel was cancelled (`cancelled` says which).
     bool cancelled = false;
@@ -547,12 +616,12 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             if (polygons.size() > kMaximumPolygons)
                 return std::nullopt;
         }
-        for (const auto& [center, envelope] : stamps) {
+        for (const auto& placed : stamps) {
             if (support::stopRequested(invocation)) {
                 cancelled = true;
                 return std::nullopt;
             }
-            addDisc(polygons, center, 0.5 * style.width * envelope);
+            addStamp(polygons, placed, style.width, stampShape);
             if (polygons.size() > kMaximumPolygons)
                 return std::nullopt;
         }

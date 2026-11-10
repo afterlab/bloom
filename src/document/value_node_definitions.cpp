@@ -547,13 +547,17 @@ valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor
     outputs.reserve(descriptor.outputs.size());
     for (const auto& declared : descriptor.operands) {
         inputs.push_back(operand(declared.role, declared.kind));
-        parameters.push_back(parameter(declared.role, operandSchemaKeyForSocketKind(declared.kind),
-                                       parameterKindForSocketKind(declared.kind),
-                                       descriptorDefaultValue(declared)));
+        parameters.push_back(
+            parameter(declared.role,
+                      declared.schemaKey.empty() ? operandSchemaKeyForSocketKind(declared.kind)
+                                                 : declared.schemaKey,
+                      parameterKindForSocketKind(declared.kind), descriptorDefaultValue(declared)));
+        parameters.back().required = !declared.optional;
     }
     for (const auto& selector : descriptor.selectors) {
         parameters.push_back(parameter(selector.role, selector.schemaKey,
                                        ParameterValueKind::Integer, selector.defaultValue));
+        parameters.back().required = !selector.optional;
     }
     for (const auto& declared : descriptor.outputs) {
         outputs.push_back(result(declared.name, declared.kind));
@@ -634,9 +638,9 @@ bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
         schemaKey == kIntegerOperationParameterSchemaKey ||
         schemaKey == kBooleanOperationParameterSchemaKey ||
         schemaKey == kTrimModeParameterSchemaKey || schemaKey == kOffsetJoinParameterSchemaKey ||
-        schemaKey == kPathCombineParameterSchemaKey ||
-        schemaKey == kStrokeCapParameterSchemaKey ||
-        schemaKey == kDataBlockParameterSchemaKey) {
+        schemaKey == kPathCombineParameterSchemaKey || schemaKey == kStrokeCapParameterSchemaKey ||
+        schemaKey == kStrokeStampParameterSchemaKey || schemaKey == kStampAlignParameterSchemaKey ||
+        isPathSourceParameterSchemaKey(schemaKey) || schemaKey == kDataBlockParameterSchemaKey) {
         return true;
     }
     return schemaKey == kScalarOperationParameterSchemaKey ||

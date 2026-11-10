@@ -234,6 +234,10 @@ evaluateScalarPrimitive(const core::primitives::ScalarPrimitive operation,
 // #344 and #530: Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners.
 [[nodiscard]] ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValuePathStroke(const ValueUtilityInvocation& invocation);
+// #509 Mask Path and Text Outline (value_utility_path_sources.cpp).
+[[nodiscard]] ValueUtilityOutcome evaluateValueMaskPath(const ValueUtilityInvocation& invocation);
+[[nodiscard]] ValueUtilityOutcome
+evaluateValueTextOutline(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueDataBlock(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

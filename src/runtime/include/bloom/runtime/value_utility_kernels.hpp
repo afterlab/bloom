@@ -63,6 +63,8 @@ struct ValueUtilityInvocation final {
     document::FrameRate rate = document::FrameRate::framesPerSecond24();
     const document::DataBlockRecord* dataBlock = nullptr;
     ValueUtilityLimits limits{};
+    // #509 Text Outline: the face and fixed layout of the text it reads (nullptr otherwise).
+    const CompiledTextOutlineSource* textSource = nullptr;
 };
 
 struct ValueUtilityOutcome final {

@@ -26,6 +26,7 @@
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
 #include <array>
@@ -184,6 +185,9 @@ const std::vector<Entry>& table() {
         {kAnchorParameterSchemaKey, pixels(kLowest, kHighest, 4096.0)},
         {kScaleParameterSchemaKey, number(kLowest, kHighest, 0.0, 2.0, 1.0, 2, kPercent, 100.0)},
         {kRotationParameterSchemaKey, number(kLowest, kHighest, -360.0, 360.0, 1.0, 2, kDegrees)},
+        // #509 Path Stroke's stamp rotation.
+        {kStampRotationParameterSchemaKey,
+         number(kLowest, kHighest, -360.0, 360.0, 1.0, 2, kDegrees)},
         {kOpacityParameterSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {kTimeRemapParameterSchemaKey, number(kLowest, kHighest, 0.0, 10.0, 0.01, 3, kSeconds)},
         {kBlendModeParameterSchemaKey, choice()},
@@ -286,9 +290,8 @@ const std::vector<Entry>& table() {
         {kGlowPointsSchemaKey,
          whole(static_cast<double>(kMinimumGlowPoints), static_cast<double>(kMaximumGlowPoints),
                static_cast<double>(kMinimumGlowPoints), 8.0)},
-        {kGlowAngleSchemaKey,
-         number(-kMaximumDropShadowDirection, kMaximumDropShadowDirection, 0.0, 360.0, 1.0, 1,
-                kDegrees)},
+        {kGlowAngleSchemaKey, number(-kMaximumDropShadowDirection, kMaximumDropShadowDirection, 0.0,
+                                     360.0, 1.0, 1, kDegrees)},
         {kGlowLengthSchemaKey, pixels(0.0, kMaximumGlowStreakLength, 512.0)},
         {kGlowChromaticSchemaKey, factor()},
         {kGlowDirtAmountSchemaKey, number(0.0, kMaximumGlowIntensity, 0.0, 4.0, 0.01, 3)},
@@ -297,6 +300,13 @@ const std::vector<Entry>& table() {
         {kLightWrapAmountSchemaKey, factor()},
         {kEdgeExtendDistanceSchemaKey, pixels(0.0, kMaximumBlurRadiusPixels, 32.0)},
         {kEdgeExtendAmountSchemaKey, factor()},
+        // #509 Alpha Contour.
+        {kAlphaContourWidthSchemaKey, pixels(0.0, kMaximumAlphaContourWidth, 32.0)},
+        {kAlphaContourSoftnessSchemaKey, pixels(0.0, kMaximumAlphaContourSoftness, 16.0)},
+        {kAlphaContourOffsetSchemaKey,
+         pixels(-kMaximumAlphaContourOffset, kMaximumAlphaContourOffset, 32.0)},
+        {kAlphaContourColorSchemaKey, channel()},
+        {kAlphaContourCompositeSchemaKey, choice()},
         {"bloom.exposure.stops", number(kLowest, kHighest, -4.0, 4.0, 0.1, 2, kStops)},
         {"bloom.offset.amount", number(kLowest, kHighest, -1.0, 1.0, 0.01, 3)},
         {"bloom.multiply.factor", number(kLowest, kHighest, 0.0, 2.0, 0.01, 2, kTimes)},
@@ -335,8 +345,7 @@ const std::vector<Entry>& table() {
         {kVignetteFeatherSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {kVignetteHighlightProtectionSchemaKey,
          number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
-        {kVignetteCenterSchemaKey,
-         pixels(-kMaximumVignetteCenter, kMaximumVignetteCenter, 4096.0)},
+        {kVignetteCenterSchemaKey, pixels(-kMaximumVignetteCenter, kMaximumVignetteCenter, 4096.0)},
         {"bloom.set-alpha.channel", choice()},
         // #383 the matte workflow's selectors.
         {kEffectMaskChannelSchemaKey, choice()},

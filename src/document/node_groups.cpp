@@ -60,8 +60,8 @@ constexpr std::array<std::string_view, 6> kLightShadow{"bloom.glow",      "bloom
                                                        "bloom.drop-shadow", "bloom.depth-fog",
                                                        "bloom.lens-flare", "bloom.light-rays"};
 // Planned: Dither, Quantize.
-constexpr std::array<std::string_view, 3> kStylize{"bloom.vignette", "bloom.film-grain",
-                                                   "bloom.codec-degrade"};
+constexpr std::array<std::string_view, 4> kStylize{"bloom.vignette", "bloom.film-grain",
+                                                   "bloom.codec-degrade", "bloom.alpha-contour"};
 constexpr std::array<std::string_view, 12> kColorCorrection{
     "bloom.grade",  "bloom.levels",   "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
     "bloom.offset", "bloom.multiply", "bloom.invert", "bloom.colorize", "bloom.auto-exposure",
@@ -71,10 +71,11 @@ constexpr std::array<std::string_view, 2> kColorManagement{"bloom.ocio-colour-sp
 // Planned: Time Offset, Frame Hold, Time Remap, Flow Retime.
 constexpr std::array<std::string_view, 2> kTime{"bloom.echo", "bloom.frame-rate-hold"};
 // Planned: SVG Vector Source, Text Layout, Text Animator, Text On Path, Text To Shape.
-constexpr std::array<std::string_view, 12> kTextPaths{
-    "bloom.text-source",   "bloom.shape-source", "bloom.function-plot", "bloom.axes",
-    "bloom.axis-tick",     "bloom.transform-path", "bloom.trim-path",   "bloom.offset-path",
-    "bloom.boolean-paths", "bloom.merge-paths",  "bloom.round-corners", "bloom.path-stroke"};
+constexpr std::array<std::string_view, 14> kTextPaths{
+    "bloom.text-source",   "bloom.shape-source",   "bloom.function-plot", "bloom.axes",
+    "bloom.axis-tick",     "bloom.transform-path", "bloom.trim-path",     "bloom.offset-path",
+    "bloom.boolean-paths", "bloom.merge-paths",    "bloom.round-corners", "bloom.path-stroke",
+    "bloom.mask-path",     "bloom.text-outline"};
 // Planned: Point, Grid, Scatter, Points Along Path, Shape To Points, Text To Points, Clone To
 // Points, Draw Instances, Particle System.
 constexpr std::array<std::string_view, 0> kInstancesParticles{};

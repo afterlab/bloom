@@ -129,6 +129,10 @@ enum class ValueUtilityKernel : std::uint8_t {
     RoundCorners,
     // #509: a path drawn as a stroke, answered as the outline it covers.
     PathStroke,
+    // #509: the outline paths of a layer's masks or a Mask node, and the glyph outlines of a Text
+    // Source, as Path values.
+    MaskPath,
+    TextOutline,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -219,6 +223,8 @@ inline constexpr std::string_view kBooleanPathsNodeType = "bloom.boolean-paths";
 inline constexpr std::string_view kMergePathsNodeType = "bloom.merge-paths";
 inline constexpr std::string_view kRoundCornersNodeType = "bloom.round-corners";
 inline constexpr std::string_view kPathStrokeNodeType = "bloom.path-stroke";
+inline constexpr std::string_view kMaskPathNodeType = "bloom.mask-path";
+inline constexpr std::string_view kTextOutlineNodeType = "bloom.text-outline";
 
 // #344 and #530 path processing (docs/architecture/path-processing.md). A Path operand is a socket
 // whose unconnected value is the empty path; it holds a constant or a driver, never keys (keys
@@ -229,6 +235,11 @@ inline constexpr std::string_view kTrimModeParameterSchemaKey = "bloom.path.trim
 inline constexpr std::string_view kOffsetJoinParameterSchemaKey = "bloom.path.offset-join";
 inline constexpr std::string_view kPathCombineParameterSchemaKey = "bloom.path.combine";
 inline constexpr std::string_view kStrokeCapParameterSchemaKey = "bloom.path.stroke-cap";
+// #509 Path Stroke's brush stamp and how a stamp turns.
+inline constexpr std::string_view kStrokeStampParameterSchemaKey = "bloom.path.stroke-stamp";
+inline constexpr std::string_view kStampAlignParameterSchemaKey = "bloom.path.stamp-align";
+// The stamp rotation in degrees: its own key, so both surfaces give it an angle dial.
+inline constexpr std::string_view kStampRotationParameterSchemaKey = "bloom.path.stamp-rotation";
 
 // Trim Path trims every contour against the length of all of them together, or each against its own.
 enum class TrimMode : std::uint8_t { Simultaneously = 0, Individually = 1 };
@@ -246,6 +257,17 @@ inline constexpr std::array<PathCombine, 4> kPathCombines{
 enum class StrokeCap : std::uint8_t { Butt = 0, Round = 1, Square = 2 };
 inline constexpr std::array<StrokeCap, 3> kStrokeCaps{StrokeCap::Butt, StrokeCap::Round,
                                                       StrokeCap::Square};
+// The shape Path Stroke's brush stamps every `spacing` pixels, each sized by the width: a round dot
+// (the original brush), a square, a diamond (a square turned 45 degrees) or a dash (as long as the
+// width and a quarter as thick).
+enum class StrokeStamp : std::uint8_t { Dot = 0, Square = 1, Diamond = 2, Dash = 3 };
+inline constexpr std::array<StrokeStamp, 4> kStrokeStamps{StrokeStamp::Dot, StrokeStamp::Square,
+                                                          StrokeStamp::Diamond, StrokeStamp::Dash};
+// Whether a stamp turns with the path: Automatic turns a dash along the path and leaves the others
+// upright; Follow path turns every stamp; Fixed turns none. `stampRotation` is added either way.
+enum class StampAlign : std::uint8_t { Automatic = 0, FollowPath = 1, Fixed = 2 };
+inline constexpr std::array<StampAlign, 3> kStampAligns{StampAlign::Automatic,
+                                                        StampAlign::FollowPath, StampAlign::Fixed};
 // The hard bounds of the processed value: a coordinate beyond this magnitude, or an offset or tolerance
 // that would make a result larger than a path value may be, is refused with a diagnostic.
 inline constexpr double kMaximumPathCoordinate = 1.0e9;
@@ -287,6 +309,32 @@ dataBlockReaderKind(const ValueUtilityKernel kernel) noexcept {
         return std::nullopt;
     }
 }
+
+// #509 Mask Path and Text Outline: the node whose paths they read, by its node id. 0 (the default)
+// reads the composition's first node they can read, so one added beside a masked layer or a text
+// reads it without a blank choice first.
+inline constexpr std::string_view kPathSourceParameterRole = "source";
+inline constexpr std::string_view kMaskPathSourceParameterSchemaKey = "bloom.path.mask-source";
+inline constexpr std::string_view kTextOutlineSourceParameterSchemaKey = "bloom.path.text-source";
+
+[[nodiscard]] constexpr bool isPathSourceReader(const ValueUtilityKernel kernel) noexcept {
+    return kernel == ValueUtilityKernel::MaskPath || kernel == ValueUtilityKernel::TextOutline;
+}
+[[nodiscard]] constexpr bool isPathSourceParameterSchemaKey(const std::string_view key) noexcept {
+    return key == kMaskPathSourceParameterSchemaKey || key == kTextOutlineSourceParameterSchemaKey;
+}
+
+class CanonicalGraph;
+struct NodeRecord;
+// Whether Mask Path (a Layer node whose layer has a path mask, or a Mask node) or Text Outline (a
+// Text Source node) can read `node`.
+[[nodiscard]] bool isPathSourceCandidate(const CanonicalGraph& graph, ValueUtilityKernel kernel,
+                                         const NodeRecord& node) noexcept;
+// The node a Mask Path or Text Outline reads: the candidate `stored` names (nullptr when it is gone
+// or is not one), or for 0 the first candidate in node id order (nullptr when there is none).
+[[nodiscard]] const NodeRecord* resolvePathSourceNode(const CanonicalGraph& graph,
+                                                      ValueUtilityKernel kernel,
+                                                      std::int64_t stored) noexcept;
 
 class Project;
 // #487: the block a data reader reads. A positive `stored` id names it (nullptr when that block is
@@ -444,6 +492,13 @@ struct ValueUtilityOperand final {
     std::int64_t integer = 0;
     bool flag = false;
     std::string_view text{};
+    // An operand added to a node after it shipped: its parameter is optional, so a node saved
+    // before it still validates, the compiler lowers it at `number`/`integer`/... when unbound, and
+    // opening a project binds it at that default (project-format.md).
+    bool optional = false;
+    // The parameter's schema when it is not the plain operand of its kind (an angle, so both
+    // surfaces show a dial); empty for the operand schema.
+    std::string_view schemaKey{};
 };
 
 // An inline selector: a closed integer vocabulary with NO socket, exactly as a Math node's
@@ -453,6 +508,8 @@ struct ValueUtilitySelector final {
     std::string_view role;
     std::string_view schemaKey;
     std::int64_t defaultValue = 0;
+    // As ValueUtilityOperand::optional.
+    bool optional = false;
 };
 
 struct ValueUtilityOutput final {

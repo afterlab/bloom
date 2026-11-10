@@ -44,6 +44,12 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
             std::holds_alternative<CompiledValueAudioAmplitude>(operation.kernel) ||
             // #349: the statistics of the picture at this time.
             std::holds_alternative<CompiledValueImageStatistics>(operation.kernel) ||
+            // #509: a Mask Path over a keyed mask.
+            (utility != nullptr &&
+             std::ranges::any_of(utility->pathSources,
+                                 [](const CompiledMaskPathSource& source) {
+                                     return std::holds_alternative<CompiledPathCurve>(source);
+                                 })) ||
             (utility != nullptr &&
              (utility->operation == document::ValueUtilityKernel::FrameNumber ||
               utility->operation == document::ValueUtilityKernel::LightFlicker ||
