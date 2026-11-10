@@ -17,7 +17,8 @@
 // compiler expands), whose position, scale, rotation and opacity are keyed instead of a Path node:
 // Viewer frames from the expected route matching the CPU route's, a cold and a warm RAM preview,
 // a still, a range and a movie with their provenance, and on the GPU route a 1920 x 1080 and a
-// 3840 x 2160 still exported from the device with no CPU reference frame.
+// 3840 x 2160 still exported from the device with no CPU reference frame (plain, with a blur
+// between, masked and scaled 8x, and in a group scaled 3x).
 //
 // `--svg <file> --size <W>x<H>` (with --loader) instead shows a real file's first frame in the
 // Viewer at that size, through the GPU-prepared packed product wired as the application wires it,
@@ -26,7 +27,10 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -356,6 +360,81 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
             output != nullptr && output->layerId == layer && output->contentScale > 1.0)
             return true;
     return false;
+}
+
+// #642 B3: the one layer scaled past the frame on the export route. `group` false: masked and
+// scaled 8x (drawn at 8x, only the window the frame shows). True: held in a new group whose layer
+// is scaled 3x and not turned (the group drawn at 4x). The content scale the compiled plan draws
+// the artwork's own layer at, or 0 when an edit fails.
+[[nodiscard]] double scaledPastTheFrame(Authored& authored, const runtime::SnapshotCompiler& compiler, const bool group) {
+    const auto* main = authored.scripting->snapshot().project().findComposition(authored.composition);
+    const document::LayerOutputBoundary* entry = nullptr;
+    for (const auto& boundary : main->graph().layerOutputs())
+        if (boundary.entryOwned() && boundary.entrySlot.has_value())
+            entry = &boundary;
+    std::optional<document::NodeId> artwork;
+    for (const auto& node : main->graph().nodes())
+        if (node.typeId == document::kVectorArtworkNodeType)
+            artwork = node.id;
+    if (entry == nullptr || !artwork)
+        return 0.0;
+    const auto layer = entry->layerId;
+    const auto top = entry->nodeId;
+    const auto slot = *entry->entrySlot;
+    const auto constant = [&](const document::LayerId id, const std::string_view role, const document::ParameterValue value) {
+        const auto* graph = &authored.scripting->snapshot().project().findComposition(authored.composition)->graph();
+        const auto* binding = document::layerParameterBinding(*graph, *graph->findLayer(id), role);
+        return binding != nullptr &&
+               edit<commands::SetParameterSource>(authored, authored.composition, binding->parameterId,
+                                                  document::ConstantValueSource{value})
+                   .succeeded();
+    };
+    auto holding = layer;
+    if (group) {
+        const auto added = edit<commands::AddNode>(authored, authored.composition, std::string(document::kLayerStackNodeType),
+                                                   document::Vec2d{0, -300});
+        const auto merge = added.outputId<document::NodeId>(commands::kAddNodeOutput);
+        if (!merge)
+            return 0.0;
+        const auto entered =
+            edit<commands::ConnectPorts>(authored, authored.composition, document::OutputPortRef{*artwork, "image"},
+                                         document::LayerStackInputRef{*merge, {}, std::string(document::kLayerStackContentInputRole)});
+        const auto inner = entered.outputId<document::LayerSlotId>(commands::kConnectPortsSlotOutput);
+        if (!inner ||
+            !edit<commands::ConnectPorts>(authored, authored.composition, document::OutputPortRef{*merge, "image"},
+                                          document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)})
+                 .succeeded())
+            return 0.0;
+        const auto ensured = edit<commands::EnsureEntryLayer>(authored, authored.composition, *merge, *inner);
+        const auto innerLayer = ensured.outputId<document::LayerId>(commands::kEntryLayerOutput);
+        if (!innerLayer)
+            return 0.0;
+        holding = *innerLayer;
+        if (!constant(layer, document::kScaleParameterRole, document::ParameterValue{document::Vec2d{3.0, 3.0}}) ||
+            !constant(layer, document::kRotationParameterRole, document::ParameterValue{0.0}))
+            return 0.0;
+    } else {
+        document::PathValue mask;
+        document::PathContour contour;
+        contour.closed = true;
+        const double w = main->format().width();
+        const double h = main->format().height();
+        for (const auto& point : {document::Vec2d{w * 0.40, h * 0.30}, document::Vec2d{w * 0.62, h * 0.32},
+                                  document::Vec2d{w * 0.60, h * 0.70}, document::Vec2d{w * 0.38, h * 0.68}})
+            contour.anchors.push_back(document::PathAnchor{point, std::nullopt, std::nullopt});
+        mask.contours.push_back(contour);
+        if (!edit<commands::AddLayerMask>(authored, authored.composition, layer, mask).succeeded() ||
+            !constant(layer, document::kScaleParameterRole, document::ParameterValue{document::Vec2d{8.0, 8.0}}))
+            return 0.0;
+    }
+    const auto compiled = compiler.compile({authored.scripting->snapshot(), authored.composition}, {});
+    if (!compiled.plan)
+        return 0.0;
+    for (const auto& operation : compiled.plan->operations())
+        if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation);
+            output != nullptr && output->layerId == holding)
+            return output->contentScale;
+    return 0.0;
 }
 
 [[nodiscard]] std::optional<Authored> author(Expectations& checks,
@@ -776,19 +855,35 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         std::cout << "NotRun: " << route.name << " movie: no media worker here\n";
     }
     // #642: the one layer at 1080p and 4K, exported from the device with no CPU reference frame;
-    // B2: and with a blur between its artwork and its slot (drawn at its output scale).
+    // B2: and with a blur between its artwork and its slot (drawn at its output scale); B3: at 4K
+    // masked and scaled 8x (drawn at 8x) and in a group scaled 3x (drawn at 4x), only the window
+    // the frame shows.
     if (route.gpu && route.layer) {
-        for (const auto& [width, height, blurred] :
-             {std::tuple{1920U, 1080U, false}, std::tuple{3840U, 2160U, false}, std::tuple{1920U, 1080U, true},
-              std::tuple{3840U, 2160U, true}}) {
-            const auto size = std::to_string(width) + "x" + std::to_string(height) + (blurred ? " oversampled" : "");
+        enum class Dressed { Plain, Blurred, Masked8x, Group3x };
+        for (const auto& [width, height, dressed] :
+             {std::tuple{1920U, 1080U, Dressed::Plain}, std::tuple{3840U, 2160U, Dressed::Plain},
+              std::tuple{1920U, 1080U, Dressed::Blurred}, std::tuple{3840U, 2160U, Dressed::Blurred},
+              std::tuple{3840U, 2160U, Dressed::Masked8x}, std::tuple{3840U, 2160U, Dressed::Group3x}}) {
+            const auto size = std::to_string(width) + "x" + std::to_string(height) +
+                              (dressed == Dressed::Blurred    ? " oversampled"
+                               : dressed == Dressed::Masked8x ? " masked 8x"
+                               : dressed == Dressed::Group3x  ? " group 3x"
+                                                              : "");
             auto large = author(checks, workDir, commands::SvgImportMode::Layer, width, height);
             if (!large.has_value())
                 continue;
-            if (blurred) {
+            if (dressed == Dressed::Blurred) {
                 const bool oversampled = blurBetween(*large, exportCompiler);
                 checks.expect(oversampled, prefix + size + ": a blur goes between and the layer is drawn at its output scale");
                 if (!oversampled)
+                    continue;
+            } else if (dressed != Dressed::Plain) {
+                const auto group = dressed == Dressed::Group3x;
+                const auto drawn = scaledPastTheFrame(*large, exportCompiler, group);
+                checks.expect(drawn == (group ? 4.0 : 8.0),
+                              prefix + size + ": the artwork is drawn at " + (group ? "4x" : "8x") + " (" +
+                                  std::to_string(drawn) + ")");
+                if (drawn <= 1.0)
                     continue;
             }
             const auto still = workDir / (std::string(route.name) + "-still-" + size + ".png");

@@ -30,6 +30,7 @@
 #include "gpu_coverage_ocio_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -38,6 +39,8 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/svg_artwork.hpp>
+#include <bloom/platform/font_catalog.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -49,9 +52,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <variant>
 
 namespace {
 
@@ -147,17 +152,19 @@ struct Fixture final {
     commands::CommandStack commands;
     document::LayerId art;
     std::optional<document::NodeId> artworkNode;
+    std::optional<document::NodeId> rootMerge;
 
     Fixture(const std::filesystem::path& file, const commands::SvgImportMode mode, const std::uint32_t width,
-            const std::uint32_t height)
+            const std::uint32_t height, const bool fit = true)
         : initial(document::makeNewProject(
               "SVG layer", "Main", core::RationalTime::fromInteger(4),
               *document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(),
                                                    *document::FrameRate::create(24, 1)))),
           main(initial.initialCompositionId), document(std::move(initial.project)), commands(document) {
-        const auto imported = apply<commands::AddSvgArtwork>(document, commands, main, nullptr, file, "art", true, mode);
+        const auto imported = apply<commands::AddSvgArtwork>(document, commands, main, nullptr, file, "art", fit, mode);
         art = *imported.outputId<document::LayerId>("layer");
         artworkNode = imported.outputId<document::NodeId>("node");
+        rootMerge = imported.outputId<document::NodeId>("merge");
     }
     [[nodiscard]] document::ParameterId layerParameter(const std::string_view role) const {
         return layerParameter(art, role);
@@ -631,8 +638,7 @@ void oversampledOnTheDevice(Expectations& expectations, const Device& device) {
             }
         }
     }
-    // 1080p and 4K: a blur between, scaled 1.5x and turned, drawn at 2x (the 8192-pixel cap allows
-    // 4x at 1080p, 2x at 4K; 1.5x turned asks for 2x).
+    // 1080p and 4K: a blur between, scaled 1.5x and turned, drawn at 2x (1.5x turned asks for 2x).
     for (const auto& [width, height] : {std::pair{1920U, 1080U}, std::pair{3840U, 2160U}}) {
         const auto label = "oversampled " + std::to_string(width) + "x" + std::to_string(height);
         Fixture layer(file, commands::SvgImportMode::Layer, width, height);
@@ -687,6 +693,335 @@ void cancellationOnTheDevice(Expectations& expectations, const Device& device, c
                         "budget: the executor refuses a request below one frame");
 }
 
+
+// ---- #642 B3: the window, and groups above the layer, on the device ----
+
+// The picture of `source` (the artwork node, or the editable import's root Merge) alone in a new
+// group: a Merge holding it in one entry whose layer is at its defaults (the identity), read by the
+// slot `source` fed, whose layer (`fixture.art`) becomes the group's layer.
+struct Group final {
+    document::NodeId merge;
+    document::LayerId inner;
+};
+Group groupAround(Fixture& fixture, const document::NodeId source) {
+    const auto* boundary = composition(fixture.document, fixture.main).graph().findLayer(fixture.art);
+    const auto top = boundary->nodeId;
+    const auto slot = *boundary->entrySlot;
+    const auto merge = fixture.addNode(document::kLayerStackNodeType);
+    const auto entered = apply<commands::ConnectPorts>(
+        fixture.document, fixture.commands, fixture.main, document::OutputPortRef{source, "image"},
+        document::LayerStackInputRef{merge, {}, std::string(document::kLayerStackContentInputRole)});
+    const auto innerSlot = *entered.outputId<document::LayerSlotId>(commands::kConnectPortsSlotOutput);
+    fixture.connect(merge, document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)});
+    const auto ensured = apply<commands::EnsureEntryLayer>(fixture.document, fixture.commands, fixture.main, merge, innerSlot);
+    return {merge, *ensured.outputId<document::LayerId>(commands::kEntryLayerOutput)};
+}
+
+// A solid sibling in a group, its own entry layer moved and turned.
+document::LayerId addSibling(Fixture& fixture, const document::NodeId merge, const document::Vec2d position) {
+    const auto solid = fixture.addNode(document::kSolidSourceNodeType);
+    fixture.set(fixture.nodeParameter(solid, "color"), document::ParameterValue{core::Color4d{0.9, 0.5, 0.1, 1.0}});
+    fixture.set(fixture.nodeParameter(solid, document::kSolidWidthParameterRole), document::ParameterValue{std::int64_t{60}});
+    fixture.set(fixture.nodeParameter(solid, document::kSolidHeightParameterRole), document::ParameterValue{std::int64_t{30}});
+    const auto entered = apply<commands::ConnectPorts>(
+        fixture.document, fixture.commands, fixture.main, document::OutputPortRef{solid, "image"},
+        document::LayerStackInputRef{merge, {}, std::string(document::kLayerStackContentInputRole)});
+    const auto slot = *entered.outputId<document::LayerSlotId>(commands::kConnectPortsSlotOutput);
+    const auto sibling = *apply<commands::EnsureEntryLayer>(fixture.document, fixture.commands, fixture.main, merge, slot)
+                              .outputId<document::LayerId>(commands::kEntryLayerOutput);
+    fixture.set(fixture.layerParameter(sibling, document::kPositionParameterRole), document::ParameterValue{position});
+    fixture.set(fixture.layerParameter(sibling, document::kRotationParameterRole), document::ParameterValue{10.0});
+    return sibling;
+}
+
+// The largest window any command of a prepared scene draws, in device pixels.
+[[nodiscard]] std::uint64_t largestWindow(const runtime::PreparedGpuScene& scene) {
+    std::uint64_t largest = 0;
+    const auto area = [&](const render::ImageWindow& window) {
+        largest = std::max(largest, std::uint64_t{window.extent().width()} * window.extent().height());
+    };
+    for (const auto& command : scene.commands())
+        std::visit(
+            [&](const auto& item) {
+                if constexpr (requires { item.outputWindow; })
+                    area(item.outputWindow);
+                else if constexpr (requires { item.dataWindow; })
+                    area(item.dataWindow);
+            },
+            command);
+    return largest;
+}
+
+// The production builder's scene of a reference, for its windows.
+[[nodiscard]] std::uint64_t largestWindowOf(Expectations& expectations, const Reference& reference, const std::string& label) {
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto built = toolsBuilder(expectations, evaluator).build(reference.plan, reference.request);
+    expectations.expect(built.hasValue(), label + ": prepares: " + built.diagnostic.message);
+    return built.hasValue() ? largestWindow(*built.scene) : 0;
+}
+
+// #642 B3: an artwork in a group whose layer is keyed from 2x to 3x and turned, with a mask on the
+// artwork's own layer and a solid sibling in the group: the group is drawn at 4x on the device as
+// on the CPU reference, cold and warm, with its bounds, 512 x 288 over frames 0 to 2.
+void groupOnTheDevice(Expectations& expectations, const Device& device) {
+    const auto file = writeSvg("icon", kIcon);
+    Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+    std::filesystem::remove(file);
+    const auto group = groupAround(layer, *layer.artworkNode);
+    addMask(layer, group.inner, {{180, 50}, {340, 60}, {330, 240}, {170, 230}}, 2.0);
+    static_cast<void>(addSibling(layer, group.merge, {150, 90}));
+    layer.key(document::kScaleParameterRole, document::Vec2d{2, 2}, document::Vec2d{3, 3});
+    layer.key(document::kRotationParameterRole, 0.0, 15.0);
+    layer.key(document::kOpacityParameterRole, 1.0, 0.8);
+    std::vector<std::vector<render::Rgba32f>> frames;
+    for (const std::int64_t index : {0, 1, 2}) {
+        const auto label = "group frame " + std::to_string(index);
+        const auto reference = referenceAt(expectations, layer, frameAt(index), label, {}, Sharp::Oversampled);
+        if (!reference)
+            continue;
+        expectations.expect(contentScaleOf(*reference->plan, layer.art) == 4.0 &&
+                                contentScaleOf(*reference->plan, group.inner) == 4.0,
+                            label + ": the group and its artwork are drawn at 4x");
+        parityOn(expectations, device, *reference, label);
+        const auto pixels = reference->frame->processImage().pixels();
+        frames.emplace_back(pixels.begin(), pixels.end());
+    }
+    expectations.expect(frames.size() == 3 && !parity(frames[0], frames[1]) && !parity(frames[1], frames[2]),
+                        "group: the keyed group changes every frame");
+}
+
+// #642 B3: a whole-frame artwork scaled 5x (drawn at 8x), masked, with a blur, a drop shadow and a
+// glow between, panned so most of its 8x picture is off the frame: only the window the frame shows
+// is drawn (through the mask, the glow's keys and octaves and the shadow's move), on the device as
+// on the CPU reference, 512 x 288 over frames 0 to 2.
+void clippedOnTheDevice(Expectations& expectations, const Device& device) {
+    const auto file = writeSvg("icon", kIcon);
+    Fixture layer(file, commands::SvgImportMode::Layer, 512, 288);
+    std::filesystem::remove(file);
+    addMask(layer, layer.art, {{150, 20}, {380, 30}, {370, 270}, {140, 260}}, 3.0);
+    const auto blur = layer.addNode("bloom.gaussian-blur");
+    layer.set(layer.nodeParameter(blur, "radius"), document::ParameterValue{1.5});
+    const auto shadow = layer.addNode(document::kDropShadowNodeType);
+    layer.set(layer.nodeParameter(shadow, "distance"), document::ParameterValue{4.0});
+    layer.set(layer.nodeParameter(shadow, "softness"), document::ParameterValue{2.0});
+    const auto glow = layer.addNode(document::kGlowNodeType);
+    layer.set(layer.nodeParameter(glow, "size"), document::ParameterValue{6.0});
+    layer.insertBetween({blur, shadow, glow});
+    layer.set(layer.layerParameter(document::kScaleParameterRole), document::ParameterValue{document::Vec2d{5.0, 5.0}});
+    layer.key(document::kPositionParameterRole, document::Vec2d{256, 144}, document::Vec2d{420, 60});
+    // The frame's own region of the 8x picture (the layer shows it 5/8 as large), with a margin of
+    // 256 of its pixels for the effects' reach (the glow's octaves, the blur, the shadow's move and
+    // the mask's feather), against the whole 8x picture of the 288 x 288 fitted icon.
+    const double region = (512.0 * 8.0 / 5.0 + 512.0) * (288.0 * 8.0 / 5.0 + 512.0);
+    const double whole = 288.0 * 288.0 * 64.0;
+    for (const std::int64_t index : {0, 1, 2}) {
+        const auto label = "clipped frame " + std::to_string(index);
+        const auto reference = referenceAt(expectations, layer, frameAt(index), label, {}, Sharp::Oversampled);
+        if (!reference)
+            continue;
+        expectations.expect(contentScaleOf(*reference->plan, layer.art) == 8.0, label + ": drawn at 8x");
+        parityOn(expectations, device, *reference, label);
+        const auto largest = largestWindowOf(expectations, *reference, label);
+        std::cout << label << ": the largest window drawn is " << largest << " pixels (the frame's region with "
+                  << "the effects' margin is " << region << "; the whole 8x picture would be " << whole << ")\n";
+        expectations.expect(largest > 0 && static_cast<double>(largest) <= region && static_cast<double>(largest) * 4.0 <= whole,
+                            label + ": only the window the frame shows is drawn (its region and the effects' margin, "
+                                    "under a quarter of the whole picture)");
+    }
+}
+
+// Flat shapes, a compound path and a stroke (the CPU test's sharp file), 120 x 80.
+std::string sharpSvg(const std::string& transform) {
+    return R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><g transform=")svg" +
+           transform + R"svg(">
+<rect x="8" y="8" width="40" height="28" fill="#e33"/>
+<circle cx="84" cy="24" r="16" fill="#3a6"/>
+<path d="M14 46 H58 V74 H14 Z M26 54 H46 V66 H26 Z" fill="#36c" fill-rule="evenodd"/>
+<path d="M66 70 L90 46 L112 70" fill="none" stroke="#fd0" stroke-width="3" stroke-linejoin="round"/>
+</g></svg>)svg";
+}
+
+// Pixels of a `width`-wide frame inside the rectangle.
+[[nodiscard]] std::vector<render::Rgba32f> crop(const std::vector<render::Rgba32f>& frame, const std::uint32_t width,
+                                                const std::uint32_t left, const std::uint32_t top,
+                                                const std::uint32_t cropWidth, const std::uint32_t cropHeight) {
+    std::vector<render::Rgba32f> pixels;
+    if (frame.size() < std::size_t{width} * (top + cropHeight))
+        return pixels;
+    for (std::uint32_t y = top; y < top + cropHeight; ++y)
+        for (std::uint32_t x = left; x < left + cropWidth; ++x)
+            pixels.push_back(frame[std::size_t{y} * width + x]);
+    return pixels;
+}
+
+[[nodiscard]] std::size_t partialPixels(const std::vector<render::Rgba32f>& pixels) {
+    return static_cast<std::size_t>(std::ranges::count_if(pixels, [](const auto& pixel) {
+        return pixel.alpha() > 0.02F && pixel.alpha() < 0.98F;
+    }));
+}
+
+[[nodiscard]] std::size_t differingPixels(const std::vector<render::Rgba32f>& a, const std::vector<render::Rgba32f>& b,
+                                          const double tolerance) {
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i)
+        for (std::size_t c = 0; c < 4; ++c)
+            if (std::abs(static_cast<double>(a[i].components()[c]) - static_cast<double>(b[i].components()[c])) > tolerance) {
+                ++count;
+                break;
+            }
+    return count;
+}
+
+[[nodiscard]] double worstDifference(const std::vector<render::Rgba32f>& a, const std::vector<render::Rgba32f>& b) {
+    if (a.size() != b.size() || a.empty())
+        return std::numeric_limits<double>::infinity();
+    double worst = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        for (std::size_t c = 0; c < 4; ++c) {
+            const auto x = static_cast<double>(a[i].components()[c]);
+            const auto y = static_cast<double>(b[i].components()[c]);
+            worst = std::max(worst, std::abs(x - y) / std::max(1.0, std::max(std::abs(x), std::abs(y))));
+        }
+    return worst;
+}
+
+// The device frame of a compiled document at 4K, and the largest window its scene draws.
+struct LargeFrame final {
+    std::vector<render::Rgba32f> pixels;
+    std::uint64_t largestWindow = 0;
+};
+[[nodiscard]] LargeFrame largeFrame(Expectations& expectations, const Device& device, const document::Document& document,
+                                    const document::CompositionId composition, const std::string& label) {
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({document.snapshot(), composition}, {});
+    expectations.expect(compiled.plan != nullptr, label + ": compiles");
+    if (!compiled.plan)
+        return {};
+    auto request = requestFor(*compiled.plan);
+    request.pixelStorageByteLimit = 8 * kGib;
+    const Reference reference{compiled.plan, request, nullptr};
+    LargeFrame result;
+    result.largestWindow = largestWindowOf(expectations, reference, label);
+    result.pixels = deviceFrame(expectations, device, reference, label, 4 * kGib);
+    return result;
+}
+
+// #642 B3: at 3840 x 2160, a whole-frame artwork scaled 4x and 8x (masked: drawn at its output
+// scale) and one in a group scaled 3x render on the production GPU route with only the window the
+// frame shows drawn, and a crop around a curved edge is the scaled pre-composition's (the file baked
+// that many times larger, drawn through the editable import on the device) up to the flattenings'
+// coverage samples, far sharper than the resampled picture. No full-size CPU frame.
+//
+// The one layer flattens the circle in the file's units through the band's matrix, the baked file
+// at its own size; each polyline is within 1/32 pixel of the curve, so where the curve passes that
+// close to a pixel's 4 x 4 coverage samples the two may land some on opposite sides. The crop is
+// centred on the circle's leftmost point, where its tangent runs along a column of samples, so up
+// to one column (four of the sixteen) can flip there; elsewhere one or two (vector-artwork.md
+// "The band"). At most a quarter of the crop's edge pixels may differ at all.
+void sharpAt4KOnTheDevice(Expectations& expectations, const Device& device) {
+    constexpr std::uint32_t kWidth = 3840;
+    constexpr std::uint32_t kHeight = 2160;
+    const document::Vec2d centre{kWidth / 2.0, kHeight / 2.0};
+    // Fitted, the 120 x 80 file is 27x about (300, 0); the circle's left edge lands at (2136, 648),
+    // which the layer's anchor puts at the frame's centre.
+    const document::Vec2d anchor{2136.0 - centre.x, 648.0 - centre.y};
+    struct Case final {
+        std::string name;
+        double scale;
+        bool group;
+        double factor;
+    };
+    const std::vector<Case> cases{{"4K, masked, scaled 4x", 4.0, false, 4.0},
+                                  {"4K, masked, scaled 8x", 8.0, false, 8.0},
+                                  {"4K, in a group scaled 3x", 3.0, true, 4.0}};
+    const auto plain = writeSvg("b3-4k", sharpSvg(""));
+    for (const auto& item : cases) {
+        // The file baked `factor` times larger, imported unfitted: a point p lands at
+        // factor * (27 p + (300, 0)) once the unfitted viewport's offset (1860, 1040) is taken off.
+        const double s = item.factor;
+        const auto baked = writeSvg("b3-4k-baked", sharpSvg("translate(" + std::to_string(s * 300.0 - 1860.0) + " " +
+                                                            std::to_string(-1040.0) + ") scale(" + std::to_string(27.0 * s) + ")"));
+        Fixture layer(plain, commands::SvgImportMode::Layer, kWidth, kHeight);
+        Fixture reference(baked, commands::SvgImportMode::Shapes, kWidth, kHeight, false);
+        std::filesystem::remove(baked);
+        // The layer that scales the picture: the artwork's own, or the group's.
+        std::optional<Group> group;
+        std::optional<Group> referenceGroup;
+        if (item.group) {
+            group = groupAround(layer, *layer.artworkNode);
+            referenceGroup = groupAround(reference, *reference.rootMerge);
+        } else {
+            const std::vector<document::Vec2d> quad{{1950, 540}, {2330, 560}, {2310, 760}, {1960, 740}};
+            addMask(layer, layer.art, quad, 2.0);
+            std::vector<document::Vec2d> scaled;
+            for (const auto& point : quad)
+                scaled.push_back({point.x * s, point.y * s});
+            addMask(reference, reference.art, scaled, 2.0 * s);
+        }
+        layer.set(layer.layerParameter(document::kAnchorParameterRole), document::ParameterValue{anchor});
+        layer.set(layer.layerParameter(document::kScaleParameterRole), document::ParameterValue{document::Vec2d{item.scale, item.scale}});
+        // The scaled pre-composition: the same matrix about s times the pivot, the scale over s.
+        reference.set(reference.layerParameter(document::kAnchorParameterRole),
+                      document::ParameterValue{document::Vec2d{s * (centre.x + anchor.x) - centre.x, s * (centre.y + anchor.y) - centre.y}});
+        if (item.scale != s)
+            reference.set(reference.layerParameter(document::kScaleParameterRole),
+                          document::ParameterValue{document::Vec2d{item.scale / s, item.scale / s}});
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({layer.document.snapshot(), layer.main}, {});
+        expectations.expect(compiled.plan != nullptr && contentScaleOf(*compiled.plan, layer.art) == s &&
+                                (!group || contentScaleOf(*compiled.plan, group->inner) == s),
+                            item.name + ": drawn at " + std::to_string(static_cast<int>(s)) + "x, not capped by the composition's size");
+
+        const auto one = largeFrame(expectations, device, layer.document, layer.main, item.name + " one layer");
+        const auto precomposed = largeFrame(expectations, device, reference.document, reference.main,
+                                            item.name + " scaled pre-composition");
+        // The resampled picture: the expansion asked not to compose (nor oversample).
+        document::VectorArtworkExpansionContext resample;
+        resample.composeLayerTransform = false;
+        auto fonts = std::make_shared<platform::FontCatalogue>();
+        fonts->status = platform::FontCatalogueStatus::Available;
+        resample.fonts = fonts;
+        const auto snapshot = layer.document.snapshot();
+        const auto expansion = document::expandVectorArtwork(snapshot.project(), *snapshot.project().findComposition(layer.main),
+                                                             resample);
+        document::Project project = snapshot.project();
+        *project.findComposition(layer.main) = *expansion.composition;
+        const document::Document softDocument(std::move(project));
+        const auto soft = largeFrame(expectations, device, softDocument, layer.main, item.name + " resampled");
+
+        const double frameArea = double{kWidth} * kHeight;
+        std::cout << item.name << ": the largest window drawn is " << one.largestWindow << " pixels (the frame is "
+                  << frameArea << "; the whole " << s << "x picture would be " << 3240.0 * 2160.0 * s * s << ")\n";
+        expectations.expect(one.largestWindow > 0 && static_cast<double>(one.largestWindow) <= 2.0 * frameArea,
+                            item.name + ": only the window the frame shows is drawn (at most two frames of pixels)");
+        // A crop around the frame's centre, where the circle's edge crosses.
+        constexpr std::uint32_t kCropWidth = 384;
+        constexpr std::uint32_t kCropHeight = 216;
+        const auto left = kWidth / 2 - kCropWidth / 2;
+        const auto top = kHeight / 2 - kCropHeight / 2;
+        const auto sharp = crop(one.pixels, kWidth, left, top, kCropWidth, kCropHeight);
+        const auto truth = crop(precomposed.pixels, kWidth, left, top, kCropWidth, kCropHeight);
+        const auto blurry = crop(soft.pixels, kWidth, left, top, kCropWidth, kCropHeight);
+        if (sharp.empty() || truth.empty() || blurry.empty())
+            continue;
+        const double worst = worstDifference(sharp, truth);
+        const auto moved = differingPixels(sharp, truth, 1e-3);
+        const auto edges = partialPixels(sharp);
+        const auto softMoved = differingPixels(blurry, truth, 1e-2);
+        const auto softEdges = partialPixels(blurry);
+        std::cout << item.name << " (crop " << kCropWidth << " x " << kCropHeight << "): worst difference to the scaled "
+                  << "pre-composition " << worst << " on " << moved << " pixels (edge pixels " << edges
+                  << "); the resampled picture differs on " << softMoved << " pixels (edge pixels " << softEdges << ")\n";
+        expectations.expect(edges > 100, item.name + ": the crop holds an edge");
+        expectations.expect(worst <= 4.0 / 16.0 + 1.0 / 255.0 && moved * 4 <= edges,
+                            item.name + ": the crop is the scaled pre-composition's up to one column of a pixel's "
+                                        "sixteen coverage samples where the curve runs along it");
+        expectations.expect(softMoved >= 10 * moved + 200 && softEdges > edges + edges / 2,
+                            item.name + ": the resampled picture would be visibly softer");
+    }
+    std::filesystem::remove(plain);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -731,14 +1066,17 @@ int main(int argc, char** argv) {
             cancellationOnTheDevice(expectations, device, *admissionFrame);
         largeOnTheDevice(expectations, device, composite);
         oversampledOnTheDevice(expectations, device);
+        groupOnTheDevice(expectations, device);
+        clippedOnTheDevice(expectations, device);
+        sharpAt4KOnTheDevice(expectations, device);
         std::filesystem::remove(composite);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " Vector Artwork layer expectation(s) failed\n";
             return 1;
         }
         std::cout << "PASS: a Vector Artwork layer renders on the GPU as the CPU reference and the editable import, "
-                     "keyed, turned, scaled, masked, retimed, with effects between, at half resolution, at 1080p and 4K, "
-                     "admitted, retired and cancelled\n";
+                     "keyed, turned, scaled, masked, retimed, with effects between, in scaled groups, clipped to the "
+                     "window the frame shows, at half resolution, at 1080p and 4K, admitted, retired and cancelled\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

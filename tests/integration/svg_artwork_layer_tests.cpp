@@ -17,6 +17,7 @@
 //   cancels, refuses an unreadable SVG by name, and says which layers keep the resampled picture.
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
@@ -1369,8 +1370,9 @@ void sharpOnAContentPivot() {
 }
 
 // What still cannot be drawn sharp is named, and still renders: a node not known to draw the same
-// at a larger scale, a layer scale and a blur radius driven by the graph. The band is capped by the
-// composition's size and halved while a length would leave its range.
+// at a larger scale, a layer scale and a blur radius driven by the graph. The band follows the
+// window the frame shows (B3), is at most 64x, is halved while its window's estimate is past the
+// named pixel budget, and is halved while a length would leave its range.
 void namedWhenItCannotBeSharp() {
     using namespace commands;
     const auto plain = writeSvg("b2-named", sharpSvg(""));
@@ -1440,23 +1442,68 @@ void namedWhenItCannotBeSharp() {
         renders(fixture, "named driven scale");
     }
     {
-        // A 3840 x 2160 composition oversamples at most 2x (8192 pixels on its longer side).
-        // Expansion only: no 4K CPU frame.
+        // #642 B3: only the window the frame shows is drawn, so a 3840 x 2160 composition draws a
+        // layer scaled 6x at 8x (about a frame of pixels). Expansion only: no 4K CPU frame.
         Fixture fixture(plain, SvgImportMode::Layer, 3840, 2160);
         applyEdits(fixture, fixture.art, *fixture.artworkNode, {.scale = {6.0, 6.0}, .mask = true}, 1.0);
         const auto expansion = artworkExpansion(fixture);
         const auto found = expansion.oversampled.find(fixture.art);
-        expect(found != expansion.oversampled.end() && found->second.scale == 2.0 &&
-                   found->second.limited.find("2x") != std::string::npos,
-               "cap: a 4K composition draws the artwork at 2x and says so: " +
-                   (found != expansion.oversampled.end() ? found->second.limited : ""));
+        expect(found != expansion.oversampled.end() && found->second.scale == 8.0 && found->second.limited.empty(),
+               "window: a 4K composition draws a layer scaled 6x at 8x: " +
+                   (found != expansion.oversampled.end() ? std::to_string(found->second.scale) + " " + found->second.limited
+                                                         : std::string("not oversampled")));
         Fixture small(plain, SvgImportMode::Layer, kB2Width, kB2Height);
-        applyEdits(small, small.art, *small.artworkNode, {.scale = {20.0, 20.0}, .mask = true}, 1.0);
+        applyEdits(small, small.art, *small.artworkNode, {.scale = {100.0, 100.0}, .mask = true}, 1.0);
         const auto capped = artworkExpansion(small);
         const auto most = capped.oversampled.find(small.art);
         expect(most != capped.oversampled.end() && most->second.scale == document::kVectorArtworkMaxOversample &&
-                   !most->second.limited.empty(),
-               "cap: no layer is drawn past 8x");
+                   most->second.limited.find("the most any layer oversamples") != std::string::npos,
+               "cap: no layer is drawn past 64x, and it says so");
+    }
+    {
+        // #642 B3, the named pixel budget: a whole-frame artwork keyed from 1x to 8x in a 4K
+        // composition would draw sixty-four frames of pixels at its first key; it is drawn at 2x
+        // and says why. A content pivot cannot be clipped (its matrix follows its content), so a
+        // whole-frame one scaled 6x is drawn at 2x too, named. Expansion only.
+        Fixture keyed(plain, SvgImportMode::Layer, 3840, 2160);
+        applyEdits(keyed, keyed.art, *keyed.artworkNode, {.mask = true}, 1.0);
+        const auto scale = keyed.layerParameter(keyed.art, document::kScaleParameterRole);
+        keyed.run<SetKeyframeAtTimeForParameter>(keyed.main, scale, frame(2), document::Vec2d{8.0, 8.0});
+        keyed.run<SetKeyframeAtTimeForParameter>(keyed.main, scale, frame(0), document::Vec2d{1.0, 1.0});
+        const auto expansion = artworkExpansion(keyed);
+        const auto found = expansion.oversampled.find(keyed.art);
+        expect(found != expansion.oversampled.end() && found->second.scale == 2.0 &&
+                   found->second.limited.find("pixel budget") != std::string::npos,
+               "budget: a whole-frame artwork keyed 1x to 8x at 4K is drawn at 2x, the budget named: " +
+                   (found != expansion.oversampled.end() ? found->second.limited : std::string("not oversampled")));
+        Fixture pivot(plain, SvgImportMode::Layer, 3840, 2160);
+        const auto* entry = pivot.composition().graph().findLayer(pivot.art);
+        const auto merge = entry->nodeId;
+        const auto slot = *entry->entrySlot;
+        // A Layer node pivoting on its content, read by the entry's own Layer node (as in
+        // sharpOnAContentPivot).
+        const auto node = addNode(pivot, std::string(document::kLayerOutputNodeType));
+        const auto outer = addNode(pivot, std::string(document::kLayerOutputNodeType));
+        pivot.run<ConnectPorts>(pivot.main, document::OutputPortRef{*pivot.artworkNode, "image"},
+                                document::NodeInputRef{node, std::string(document::kLayerOutputContentInputPort)});
+        pivot.run<ConnectPorts>(pivot.main, document::OutputPortRef{node, std::string(document::kLayerOutputOutputPort)},
+                                document::NodeInputRef{outer, std::string(document::kLayerOutputContentInputPort)});
+        pivot.run<ConnectPorts>(pivot.main, document::OutputPortRef{outer, std::string(document::kLayerOutputOutputPort)},
+                                document::LayerStackInputRef{merge, slot, std::string(document::kLayerStackContentInputRole)});
+        std::optional<document::LayerId> held;
+        for (const auto& boundary : pivot.composition().graph().layerOutputs())
+            if (!boundary.entryOwned() && boundary.nodeId == node && boundary.pivot == document::LayerPivot::Content)
+                held = boundary.layerId;
+        expect(held.has_value(), "budget: the Layer node pivots on its content");
+        if (held) {
+            setLayerValue(pivot, *held, document::kScaleParameterRole, document::Vec2d{6.0, 6.0});
+            const auto pivoted = artworkExpansion(pivot);
+            const auto drawn = pivoted.oversampled.find(*held);
+            expect(drawn != pivoted.oversampled.end() && drawn->second.scale == 2.0 &&
+                       drawn->second.limited.find("pixel budget") != std::string::npos,
+                   "budget: a whole-frame content-pivot layer scaled 6x at 4K is drawn at 2x, the budget named: " +
+                       (drawn != pivoted.oversampled.end() ? drawn->second.limited : std::string("not oversampled")));
+        }
     }
     {
         // A blur radius of 100 at 4x would be 400, past the 256 a blur takes: drawn at 2x, named.
@@ -1610,6 +1657,358 @@ void oversampledCacheIdentity() {
     std::filesystem::remove(plain);
 }
 
+
+// ---- #642 package B3: the groups above the layer, and the window ----
+//
+// A group layer (a Merge in another Merge's entry, or read by a Layer node) that scales or turns the
+// artwork's picture counts in its band: the group's picture is drawn at its output scale too
+// (VectorArtworkOversampledGroup), every entry's layer drawing into it that many times larger and
+// the group's layer mapping it back. The reference is again the scaled pre-composition built through
+// the editable import: the file baked `factor` times larger in the same groups, each group's layer
+// carrying its matrix between the picture inside (`inner` times larger) and the one it draws into.
+
+struct Group final {
+    document::NodeId merge;
+    // The entry layer holding the grouped picture inside the group.
+    document::LayerId inner;
+};
+
+// Puts the picture of `source` (the artwork node, the editable import's root Merge, or a group's
+// Merge) alone in a new group: a Merge holding it in one entry whose layer is at its defaults (the
+// identity), read by the slot `source` fed, whose layer (`fixture.art`) becomes the group's layer.
+Group groupAround(Fixture& fixture, const document::NodeId source) {
+    using namespace commands;
+    const auto* boundary = fixture.composition().graph().findLayer(fixture.art);
+    const auto top = boundary->nodeId;
+    const auto slot = *boundary->entrySlot;
+    const auto merge = addNode(fixture, std::string(document::kLayerStackNodeType));
+    const auto entered = fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{source, "image"},
+                                                   document::LayerStackInputRef{merge, {}, std::string(document::kLayerStackContentInputRole)});
+    const auto innerSlot = *entered.outputId<document::LayerSlotId>(kConnectPortsSlotOutput);
+    fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{merge, "image"},
+                              document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)});
+    const auto ensured = fixture.run<EnsureEntryLayer>(fixture.main, merge, innerSlot);
+    return {merge, *ensured.outputId<document::LayerId>(kEntryLayerOutput)};
+}
+
+// A frame-pivot layer's transform (its position the frame's centre) carried between a picture drawn
+// `inner` times larger and one drawn `outer` times larger, as a scaled pre-composition carries it:
+// position times outer, pivot times inner, scale times outer / inner.
+void precompose(Fixture& fixture, const document::LayerId layer, const double scale, const double degrees,
+                const double inner, const double outer) {
+    setLayerValue(fixture, layer, document::kPositionParameterRole, document::Vec2d{kB2Centre.x * outer, kB2Centre.y * outer});
+    setLayerValue(fixture, layer, document::kAnchorParameterRole,
+                  document::Vec2d{(inner - 1.0) * kB2Centre.x, (inner - 1.0) * kB2Centre.y});
+    setLayerValue(fixture, layer, document::kScaleParameterRole, document::Vec2d{scale * outer / inner, scale * outer / inner});
+    setLayerValue(fixture, layer, document::kRotationParameterRole, degrees);
+}
+
+// The artwork in a group scaled 3x, in one scaled 1.6x and turned, and in a group scaled 1.5x inside
+// a group scaled 2x: drawn at the groups' output scale, sharp.
+void sharpInsideScaledGroups() {
+    struct Case final {
+        std::string name;
+        double inner;  // the scale of the group holding the artwork
+        double degrees;
+        double outer;  // the scale of a group holding that group; 0: none
+        double factor; // the band of the artwork and of the group holding it
+        double outerFactor;
+    };
+    const std::vector<Case> cases{
+        {"in a group scaled 3x", 3.0, 0.0, 0.0, 4.0, 0.0},
+        {"in a group scaled 1.6x and turned 25 degrees", 1.6, 25.0, 0.0, 2.0, 0.0},
+        {"in a group scaled 1.5x inside a group scaled 2x", 1.5, 0.0, 2.0, 4.0, 2.0},
+    };
+    const auto plain = writeSvg("b3-group", sharpSvg(""));
+    for (const auto& item : cases) {
+        const auto bakedFile = writeSvg("b3-group-baked", bakedSharpSvg(item.factor));
+        Fixture layer(plain, commands::SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(layer);
+        const auto group = groupAround(layer, *layer.artworkNode);
+        std::optional<Group> outer;
+        if (item.outer != 0.0)
+            outer = groupAround(layer, group.merge);
+        // Without an outer group the group's layer is `art`; with one, `art` is the outer group's.
+        const auto groupLayer = outer ? outer->inner : layer.art;
+        setLayerValue(layer, groupLayer, document::kScaleParameterRole, document::Vec2d{item.inner, item.inner});
+        setLayerValue(layer, groupLayer, document::kRotationParameterRole, item.degrees);
+        if (outer)
+            setLayerValue(layer, layer.art, document::kScaleParameterRole, document::Vec2d{item.outer, item.outer});
+
+        Fixture reference(bakedFile, commands::SvgImportMode::Shapes, kB2Width, kB2Height, false);
+        std::filesystem::remove(bakedFile);
+        const auto referenceGroup = groupAround(reference, *reference.rootMerge);
+        if (item.outer != 0.0) {
+            const auto referenceOuter = groupAround(reference, referenceGroup.merge);
+            precompose(reference, referenceOuter.inner, item.inner, item.degrees, item.factor, item.outerFactor);
+            precompose(reference, reference.art, item.outer, 0.0, item.outerFactor, 1.0);
+        } else {
+            precompose(reference, reference.art, item.inner, item.degrees, item.factor, 1.0);
+        }
+
+        const auto expansion = artworkExpansion(layer);
+        const auto drawn = expansion.groups.find(group.merge);
+        const auto held = expansion.oversampled.find(group.inner);
+        expect(drawn != expansion.groups.end() && drawn->second.scale == item.factor && drawn->second.reader == groupLayer &&
+                   drawn->second.limited.empty() &&
+                   std::ranges::find(drawn->second.entries, group.inner) != drawn->second.entries.end() &&
+                   expansion.contentScales.at(groupLayer) == item.factor &&
+                   expansion.outputScales.at(group.inner) == item.factor,
+               item.name + ": the group's picture is drawn at " + std::to_string(item.factor) + "x, mapped back by its layer");
+        expect(held != expansion.oversampled.end() && held->second.scale == item.factor && expansion.resampled.empty() &&
+                   expansion.groupsResampled.empty(),
+               item.name + ": the artwork counts the group in its band");
+        if (outer) {
+            const auto outerDrawn = expansion.groups.find(outer->merge);
+            expect(outerDrawn != expansion.groups.end() && outerDrawn->second.scale == item.outerFactor &&
+                       expansion.outputScales.at(outer->inner) == item.outerFactor &&
+                       expansion.contentScales.at(layer.art) == item.outerFactor,
+                   item.name + ": the outer group is drawn at " + std::to_string(item.outerFactor) + "x");
+        }
+        if (const auto report = compareSharp(layer, reference, frame(0), item.name))
+            expectSharp(*report, item.name, item.factor, true);
+    }
+    std::filesystem::remove(plain);
+}
+
+// A group drawn larger publishes the bounds it would publish at 1: a sibling of the artwork in the
+// group keeps its box, polygon and anchor exactly, the group's layer and the artwork's layer keep
+// theirs within the picture's edge pixels, and the sibling still draws.
+void groupBoundsAndSiblings() {
+    using namespace commands;
+    const auto plain = writeSvg("b3-sibling", sharpSvg(""));
+    Fixture layer(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+    unfit(layer);
+    const auto group = groupAround(layer, *layer.artworkNode);
+    const auto solid = addNode(layer, std::string(document::kSolidSourceNodeType));
+    layer.run<SetParameterSource>(layer.main, layer.nodeParameter(solid, "color"),
+                                  document::ConstantValueSource{document::ParameterValue{core::Color4d{0.9, 0.5, 0.1, 1.0}}});
+    layer.run<SetParameterSource>(layer.main, layer.nodeParameter(solid, document::kSolidWidthParameterRole),
+                                  document::ConstantValueSource{document::ParameterValue{std::int64_t{60}}});
+    layer.run<SetParameterSource>(layer.main, layer.nodeParameter(solid, document::kSolidHeightParameterRole),
+                                  document::ConstantValueSource{document::ParameterValue{std::int64_t{30}}});
+    const auto entered = layer.run<ConnectPorts>(layer.main, document::OutputPortRef{solid, "image"},
+                                                 document::LayerStackInputRef{group.merge, {}, std::string(document::kLayerStackContentInputRole)});
+    const auto siblingSlot = *entered.outputId<document::LayerSlotId>(kConnectPortsSlotOutput);
+    const auto sibling = *layer.run<EnsureEntryLayer>(layer.main, group.merge, siblingSlot).outputId<document::LayerId>(kEntryLayerOutput);
+    setLayerValue(layer, sibling, document::kPositionParameterRole, document::Vec2d{230, 120});
+    setLayerValue(layer, sibling, document::kRotationParameterRole, 12.0);
+    setLayerValue(layer, layer.art, document::kScaleParameterRole, document::Vec2d{2.5, 2.5});
+    setLayerValue(layer, layer.art, document::kRotationParameterRole, -8.0);
+    const auto expansion = artworkExpansion(layer);
+    const auto drawn = expansion.groups.find(group.merge);
+    expect(drawn != expansion.groups.end() && drawn->second.scale == 4.0 &&
+               std::ranges::find(drawn->second.entries, sibling) != drawn->second.entries.end(),
+           "siblings: the sibling draws into the group's larger picture too");
+    const auto plan = compilePlan(layer.document, layer.main, "siblings");
+    const auto evaluated = plan ? evaluate(plan, frame(0), "siblings") : std::nullopt;
+    document::VectorArtworkExpansionContext resample;
+    resample.composeLayerTransform = false;
+    resample.fonts = noFonts();
+    auto softExpansion = artworkExpansion(layer, resample);
+    document::Project project = layer.document.snapshot().project();
+    *project.findComposition(layer.main) = *softExpansion.composition;
+    const document::Document soft(std::move(project));
+    const auto softPlan = compilePlan(soft, layer.main, "siblings resampled");
+    const auto softEvaluated = softPlan ? evaluate(softPlan, frame(0), "siblings resampled") : std::nullopt;
+    if (!evaluated || !softEvaluated)
+        return;
+    const auto near = [](const runtime::EvaluatedOperationBounds& a, const runtime::EvaluatedOperationBounds& b,
+                         const double tolerance) {
+        double worst = std::max({std::abs(a.output.left - b.output.left), std::abs(a.output.right - b.output.right),
+                                 std::abs(a.output.top - b.output.top), std::abs(a.output.bottom - b.output.bottom),
+                                 std::abs(a.anchor.x - b.anchor.x), std::abs(a.anchor.y - b.anchor.y)});
+        for (std::size_t i = 0; i < 4; ++i)
+            worst = std::max({worst, std::abs(a.polygon[i].x - b.polygon[i].x), std::abs(a.polygon[i].y - b.polygon[i].y)});
+        return worst <= tolerance;
+    };
+    const auto* siblingBounds = boundsOf(*evaluated->frame, sibling);
+    const auto* softSibling = boundsOf(*softEvaluated->frame, sibling);
+    expect(siblingBounds != nullptr && softSibling != nullptr && siblingBounds->local == softSibling->local &&
+               near(*siblingBounds, *softSibling, 1e-9),
+           "siblings: a sibling in the larger group publishes the box, polygon and anchor it publishes at 1");
+    const auto* innerBounds = boundsOf(*evaluated->frame, group.inner);
+    const auto* softInner = boundsOf(*softEvaluated->frame, group.inner);
+    expect(innerBounds != nullptr && softInner != nullptr && near(*innerBounds, *softInner, 1.0),
+           "siblings: the artwork's layer in the larger group publishes its bounds at 1, within its edge pixel");
+    const auto* groupBounds = boundsOf(*evaluated->frame, layer.art);
+    const auto* softGroup = boundsOf(*softEvaluated->frame, layer.art);
+    expect(groupBounds != nullptr && softGroup != nullptr && near(*groupBounds, *softGroup, 4.0),
+           "siblings: the group's layer publishes the resampled group's box, polygon and anchor within its edge pixels");
+    const auto sharpFrame = pixelsOf(*evaluated->frame);
+    const auto softFrame = pixelsOf(*softEvaluated->frame);
+    expect(std::abs(coverage(sharpFrame) - coverage(softFrame)) <= 0.01 * coverage(softFrame) && coverage(sharpFrame) > 1000.0,
+           "siblings: the larger group covers what the resampled one does");
+    std::filesystem::remove(plain);
+}
+
+// What keeps a group from being drawn larger is named, the artwork still draws at its own band, and
+// the frame renders: a node between the group and its layer not known to scale, a group layer
+// whose scale is driven by the graph, an Adjustment entry in the group.
+void groupsNamedWhenTheyCannotBe() {
+    using namespace commands;
+    const auto plain = writeSvg("b3-named", sharpSvg(""));
+    const auto check = [&](Fixture& fixture, const Group& group, const std::string& phrase, const std::string& label) {
+        const auto expansion = artworkExpansion(fixture);
+        const auto why = expansion.groupsResampled.find(group.merge);
+        const auto held = expansion.oversampled.find(group.inner);
+        expect(!expansion.groups.contains(group.merge) && why != expansion.groupsResampled.end() &&
+                   why->second.find(phrase) != std::string::npos,
+               label + ": named: " + (why != expansion.groupsResampled.end() ? why->second : std::string("not named")));
+        expect(held == expansion.oversampled.end() && expansion.composed.contains(group.inner),
+               label + ": the artwork is still drawn sharp through its own layer's geometry");
+        const auto rendered = renderExpanded(fixture.document, fixture.main, frame(0), label);
+        expect(rendered && coverage(*rendered) > 100.0, label + ": still renders");
+    };
+    {
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(fixture);
+        const auto group = groupAround(fixture, *fixture.artworkNode);
+        setLayerValue(fixture, group.inner, document::kScaleParameterRole, document::Vec2d{1.5, 1.5});
+        setLayerValue(fixture, fixture.art, document::kScaleParameterRole, document::Vec2d{3.0, 3.0});
+        const auto vignette = addNode(fixture, "bloom.vignette");
+        const auto* boundary = fixture.composition().graph().findLayer(fixture.art);
+        const auto top = boundary->nodeId;
+        const auto slot = *boundary->entrySlot;
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{group.merge, "image"}, document::NodeInputRef{vignette, "input"});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{vignette, "image"},
+                                  document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)});
+        check(fixture, group, "bloom.vignette", "a vignette between the group and its layer");
+    }
+    {
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(fixture);
+        const auto group = groupAround(fixture, *fixture.artworkNode);
+        setLayerValue(fixture, group.inner, document::kScaleParameterRole, document::Vec2d{1.5, 1.5});
+        // The group's layer is a Layer node whose scale a value node drives.
+        const auto* boundary = fixture.composition().graph().findLayer(fixture.art);
+        const auto top = boundary->nodeId;
+        const auto slot = *boundary->entrySlot;
+        const auto node = addNode(fixture, std::string(document::kLayerOutputNodeType));
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{group.merge, "image"},
+                                  document::NodeInputRef{node, std::string(document::kLayerOutputContentInputPort)});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{node, std::string(document::kLayerOutputOutputPort)},
+                                  document::LayerStackInputRef{top, slot, std::string(document::kLayerStackContentInputRole)});
+        const auto value = addNode(fixture, "bloom.value-vector2");
+        fixture.run<SetParameterSource>(fixture.main, fixture.nodeParameter(value, "value"),
+                                        document::ConstantValueSource{document::ParameterValue{document::Vec2d{3.0, 3.0}}});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{value, "value"},
+                                  document::NodeInputRef{node, std::string(document::kScaleParameterRole)});
+        check(fixture, group, "driven by the graph", "a group layer whose scale is driven");
+    }
+    {
+        Fixture fixture(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+        unfit(fixture);
+        const auto group = groupAround(fixture, *fixture.artworkNode);
+        setLayerValue(fixture, group.inner, document::kScaleParameterRole, document::Vec2d{1.5, 1.5});
+        setLayerValue(fixture, fixture.art, document::kScaleParameterRole, document::Vec2d{3.0, 3.0});
+        const auto adjustment = addNode(fixture, std::string(document::kAdjustmentNodeType));
+        const auto curves = addNode(fixture, "bloom.curves");
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{adjustment, "image"}, document::NodeInputRef{curves, "input"});
+        fixture.run<ConnectPorts>(fixture.main, document::OutputPortRef{curves, "image"},
+                                  document::LayerStackInputRef{group.merge, {}, std::string(document::kLayerStackContentInputRole)});
+        check(fixture, group, "Adjustment", "an Adjustment entry in the group");
+    }
+    std::filesystem::remove(plain);
+}
+
+// #642 B3 cache identity and the window rule. The band (the plan) follows the largest scale over
+// the animation; the window each picture is drawn in follows what the frame shows of it, and is part
+// of each operation's key for that frame, not of the plan. So a pan compiles nothing new, a frame
+// that shows another part of the oversampled picture draws that part, and a frame shown again reuses
+// what it drew. The group's band behaves like the layer's. Cancellation and the request's budget
+// reach the group.
+void windowAndGroupIdentity() {
+    using namespace commands;
+    const auto plain = writeSvg("b3-identity", sharpSvg(""));
+    // Fitted (the artwork fills the frame), masked, scaled 4x: most of the 4x picture is off the
+    // frame. The pan moves the window across it.
+    Fixture layer(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+    applyEdits(layer, layer.art, *layer.artworkNode, {.scale = {4.0, 4.0}, .mask = true}, 1.0);
+    const auto position = layer.layerParameter(layer.art, document::kPositionParameterRole);
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, position, frame(2), document::Vec2d{kB2Centre.x + 300.0, kB2Centre.y + 90.0});
+    layer.run<SetKeyframeAtTimeForParameter>(layer.main, position, frame(0), kB2Centre);
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::CompiledPlanCache plans;
+    const auto panned = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+    const auto contentScaleOf = [](const runtime::CompiledCompositionPlan& plan, const document::LayerId id) {
+        for (const auto& operation : plan.operations())
+            if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation); output && output->layerId == id)
+                return output->contentScale;
+        return 0.0;
+    };
+    expect(panned.plan != nullptr && contentScaleOf(*panned.plan, layer.art) == 4.0, "window: the panned layer is drawn at 4x");
+    if (!panned.plan)
+        return;
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto hitsAt = [&](const std::int64_t index) {
+        auto request = referenceRequest(*panned.plan, frame(index));
+        request.bypassOperationCache = false;
+        const auto before = evaluator.operationCache()->statistics().hits;
+        const auto result = evaluator.evaluate(panned.plan, request, {});
+        expect(result.frame() != nullptr, "window: frame " + std::to_string(index) + " evaluates");
+        return evaluator.operationCache()->statistics().hits - before;
+    };
+    static_cast<void>(hitsAt(0));
+    const auto movedHits = hitsAt(2);
+    const auto again = plans.compile(compiler, {layer.document.snapshot(), layer.main}, {});
+    expect(again.plan == panned.plan && plans.statistics().compiles == 1, "window: a pan never compiles again");
+    const auto shownAgain = hitsAt(0);
+    std::cout << "window: frame 2 (panned) after frame 0: " << movedHits << " operation-cache hits; frame 0 shown again: "
+              << shownAgain << " hits; compiles " << plans.statistics().compiles << "\n";
+    expect(shownAgain > movedHits,
+           "window: the window is part of each frame's key: a frame showing another part draws it (" +
+               std::to_string(movedHits) + " hits), a frame shown again reuses its pictures (" + std::to_string(shownAgain) +
+               " hits)");
+
+    // The group: its layer keyed from 1.5x to 3x renders every frame from one plan in the 4x band.
+    Fixture grouped(plain, SvgImportMode::Layer, kB2Width, kB2Height);
+    unfit(grouped);
+    const auto group = groupAround(grouped, *grouped.artworkNode);
+    const auto groupScale = grouped.layerParameter(grouped.art, document::kScaleParameterRole);
+    grouped.run<SetKeyframeAtTimeForParameter>(grouped.main, groupScale, frame(2), document::Vec2d{3.0, 3.0});
+    grouped.run<SetKeyframeAtTimeForParameter>(grouped.main, groupScale, frame(0), document::Vec2d{1.5, 1.5});
+    runtime::CompiledPlanCache groupPlans;
+    const auto keyed = groupPlans.compile(compiler, {grouped.document.snapshot(), grouped.main}, {});
+    expect(keyed.plan != nullptr && contentScaleOf(*keyed.plan, grouped.art) == 4.0 &&
+               contentScaleOf(*keyed.plan, group.inner) == 4.0,
+           "group identity: a group keyed from 1.5x to 3x is drawn in the 4x band");
+    std::vector<Frame> frames;
+    for (const std::int64_t index : {0, 1, 2})
+        if (keyed.plan)
+            if (const auto evaluated = evaluate(keyed.plan, frame(index), "group frame " + std::to_string(index)))
+                frames.push_back(pixelsOf(*evaluated->frame));
+    const auto twice = groupPlans.compile(compiler, {grouped.document.snapshot(), grouped.main}, {});
+    expect(frames.size() == 3 && difference(frames[0], frames[2]) > 1e-3 && twice.plan == keyed.plan &&
+               groupPlans.statistics().compiles == 1,
+           "group identity: the keyed group changes every frame from one plan");
+    grouped.run<SetKeyframeAtTimeForParameter>(grouped.main, groupScale, frame(2), document::Vec2d{6.0, 6.0});
+    const auto moved = groupPlans.compile(compiler, {grouped.document.snapshot(), grouped.main}, {});
+    expect(moved.plan != nullptr && contentScaleOf(*moved.plan, grouped.art) == 8.0,
+           "group identity: a key past 4x moves the group to the 8x band");
+
+    // Cancellation and the request's budget.
+    const auto token = cancelledToken();
+    const auto cancelledCompile = compiler.compile({grouped.document.snapshot(), grouped.main}, token);
+    expect(cancelledCompile.status == runtime::SnapshotCompileStatus::Cancelled && cancelledCompile.plan == nullptr,
+           "group cancel: a cancelled compile of a grouped artwork reports Cancelled and no plan");
+    if (moved.plan) {
+        const auto result = runtime::CpuCompositionEvaluator{}.evaluate(moved.plan, referenceRequest(*moved.plan, frame(2)), token);
+        expect(result.status() == runtime::EvaluationStatus::Cancelled && result.frame() == nullptr,
+               "group cancel: a cancelled evaluation of a larger group publishes no frame");
+        auto request = referenceRequest(*moved.plan, frame(2));
+        request.pixelStorageByteLimit = 4096;
+        const auto refused = runtime::CpuCompositionEvaluator{}.evaluate(moved.plan, request, {});
+        std::string reason;
+        for (const auto& diagnostic : refused.diagnostics())
+            reason += diagnostic.summary + " ";
+        expect(refused.frame() == nullptr && refused.status() == runtime::EvaluationStatus::Failed &&
+                   reason.find("budget") != std::string::npos,
+               "group budget: a request too small for the larger group is refused, the budget named: " + reason);
+    }
+    std::filesystem::remove(plain);
+}
+
 } // namespace
 
 int main() {
@@ -1628,6 +2027,10 @@ int main() {
         sharpOnAContentPivot();
         namedWhenItCannotBeSharp();
         oversampledCacheIdentity();
+        sharpInsideScaledGroups();
+        groupBoundsAndSiblings();
+        groupsNamedWhenTheyCannotBe();
+        windowAndGroupIdentity();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return EXIT_FAILURE;
