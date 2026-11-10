@@ -16,10 +16,14 @@
 #include "document_render_parity_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/path_value.hpp>
+#include <bloom/document/value_operations.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -127,6 +131,34 @@ struct Fixture final {
             document, commands, main,
             parameter(document, main, producer, document::kValueParameterRole),
             core::RationalTime::fromInteger(second), std::move(value));
+    }
+    // Warp Path (Function): a new group made from the node's chooser for `role` (Group or Y Group),
+    // holding one Math node, `operation` of the group's argument, as its answer.
+    void addFunctionGroup(const std::string_view role,
+                          const core::primitives::ScalarPrimitive operation) {
+        execute<commands::CreateGroupDefinition>(document, commands, main, std::string(role), warp,
+                                                 std::string(role));
+        const auto* record = composition(document, main).graph().findNode(warp);
+        const auto group =
+            document::nodeGroupReference(*record, composition(document, main).parameters(), role);
+        if (!group)
+            throw std::runtime_error("the warp names its new group");
+        const auto& definition = composition(document, *group);
+        const auto input = document::findGroupInput(definition)->id;
+        const auto output = document::findGroupOutput(definition)->id;
+        execute<commands::AddNode>(document, commands, *group,
+                                   std::string(document::kScalarMathNodeType), Vec2d{240, 0});
+        const auto math = lastNode(document, *group, document::kScalarMathNodeType);
+        execute<commands::SetParameterSource>(
+            document, commands, *group, parameter(document, *group, math, "operation"),
+            document::ConstantValueSource{document::scalarOperationStoredValue(operation)});
+        execute<commands::ConnectPorts>(document, commands, *group,
+                                        document::OutputPortRef{input, "scalar1"},
+                                        document::NodeInputRef{math, "a"});
+        execute<commands::ConnectPorts>(
+            document, commands, *group,
+            document::OutputPortRef{math, std::string(document::kResultPortName)},
+            document::NodeInputRef{output, "scalar1"});
     }
 };
 
@@ -443,14 +475,37 @@ int main(int argc, char** argv) {
             if (keyed)
                 states.emplace_back("transform path skew", std::move(*keyed));
         }
+        // Warp Path (Function): a group's sine moves x by y; then a second group's cosine moves y by
+        // x as well, the issue's (x + sin y, y + cos x) on one node, in a turned and slanted space.
+        for (const bool both : {false, true}) {
+            const std::string label = both ? "function x and y" : "function x";
+            Fixture function(512, 512, 0, document::kWarpPathFunctionNodeType);
+            function.addFunctionGroup(document::kNodeGroupReferenceRole,
+                                      core::primitives::ScalarPrimitive::Sine);
+            if (both)
+                function.addFunctionGroup(document::kWarpPathFunctionYGroupRole,
+                                          core::primitives::ScalarPrimitive::Cosine);
+            function.setNumber(function.warp, "amount", 22.0);
+            function.setNumber(function.warp, "size", 40.0);
+            function.setNumber(function.warp, "rotation", both ? 15.0 : 0.0);
+            function.setNumber(function.warp, "skew", both ? 10.0 : 0.0);
+            buildKeyed(function);
+            auto keyed = keyedStates(expectations, function, label);
+            if (!keyed)
+                continue;
+            expectations.expect(!samePixels(keyed->start, keyed->middle) &&
+                                    !samePixels(keyed->middle, keyed->end),
+                                label + ": the warped path moves");
+            states.emplace_back(label, std::move(*keyed));
+        }
         // Large frame: prepares and runs on the production route below (no CPU reference compare).
         Fixture large(1920, 1080, kWave);
         large.setNumber(large.warp, "amount", 30.0);
         large.setNumber(large.warp, "size", 200.0);
         buildKeyed(large);
-        expectations.expect(states.size() == 10,
-                            "every function, the shared space, the open path and the skewed Transform "
-                            "Path have a reference");
+        expectations.expect(states.size() == 12,
+                            "every function, the shared space, the open path, the skewed Transform "
+                            "Path and Warp Path (Function) on one and two axes have a reference");
         // The reference for the cache, retirement and cancellation work: the wave.
         Fixture identityFixture(512, 512, kWave);
         identityFixture.setNumber(identityFixture.warp, "amount", 20.0);

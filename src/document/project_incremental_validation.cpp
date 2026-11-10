@@ -82,8 +82,8 @@ std::vector<CompositionId> Composition::buildNestedReferences(const Content& aut
         // #342: a Node Group references the group it names the way a Composition Source references
         // a composition, so a group that contains itself is a nesting cycle.
         if (usesGroupReference(node.typeId)) {
-            if (const auto group = nodeGroupReference(node, authored.parameters))
-                references.push_back(*group);
+            for (const auto group : nodeGroupReferences(node, authored.parameters))
+                references.push_back(group);
             continue;
         }
         if (node.typeId != kCompositionSourceNodeType)

@@ -43,7 +43,8 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
             (plot != nullptr && (plot->body == nullptr || plot->body->timeDependent)) ||
             // #598: so is a warp by a function.
             (warpFunction != nullptr &&
-             (warpFunction->body == nullptr || warpFunction->body->timeDependent)) ||
+             (warpFunction->body == nullptr || warpFunction->body->timeDependent ||
+              (warpFunction->bodyY != nullptr && warpFunction->bodyY->timeDependent))) ||
             // #347: the level of the audio at this time.
             std::holds_alternative<CompiledValueAudioAmplitude>(operation.kernel) ||
             // #349: the statistics of the picture at this time.

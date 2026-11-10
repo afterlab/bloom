@@ -25,8 +25,11 @@ OperationResult CreateGroupDefinition::apply(document::Draft& draft) const {
         if (node == nullptr || !usesGroupReference(node->typeId))
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                              "The node does not name a group");
-        const auto binding =
-            std::ranges::find(node->parameters, kNodeGroupReferenceRole, &ParameterBinding::role);
+        const auto roles = groupReferenceRoles(node->typeId);
+        if (std::ranges::find(roles, std::string_view(role_)) == roles.end())
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "The node does not name a group in " + role_);
+        const auto binding = std::ranges::find(node->parameters, role_, &ParameterBinding::role);
         if (binding == node->parameters.end())
             return OperationResult::rejected(OperationIssueCode::MissingReference,
                                              "The Node Group has no group parameter");

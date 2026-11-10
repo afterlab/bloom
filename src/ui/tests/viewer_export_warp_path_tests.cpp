@@ -1,6 +1,7 @@
 // #598: Warp Path travels the routes an artist actually uses. A Path node keyed from a small
 // circle to a large one feeds Warp Path (Wave, in a turned and slanted space), which feeds a Path
-// Shape Source; the real Viewer preview path shows it at several times, a RAM preview fills the range
+// Shape Source; the same again with Warp Path (Function) reading a sine group for x and a cosine
+// group for y in place of the Wave; the real Viewer preview path shows it at several times, a RAM preview fills the range
 // cold at Half and replays it warm with no new work, and the real export route renders the same
 // frames as a still, a PNG range and a movie. Each Viewer frame equals the exported frame (RGB within
 // one code, exact alpha), the picture moves with the keys, and the key that holds holds. A second
@@ -15,6 +16,10 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/group_definition_operations.hpp>
+#include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/value_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -98,8 +103,9 @@ class Expectations final {
 };
 
 bool gRequireDevice = false;
-// The CPU route's Viewer frames, kept for the GPU route to be compared to.
-std::array<std::vector<std::uint8_t>, 4> gCpuViewer;
+// The CPU route's Viewer frames, kept for the GPU route to be compared to: Warp Path, then Warp
+// Path (Function).
+std::array<std::array<std::vector<std::uint8_t>, 4>, 2> gCpuViewer;
 
 // The preview service counters this test reads (zero on the CPU route, which has no service).
 struct RouteCounters final {
@@ -197,6 +203,8 @@ struct Pixels final {
 struct Route final {
     const char* name;
     bool gpu;
+    // #598: Warp Path (Function) with a group for each axis in place of Warp Path's Wave.
+    bool function = false;
 };
 
 // One authored composition shared by the Viewer session and the export route: a Path node keyed at
@@ -237,7 +245,56 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
     return document::PathValue::fromContour(contour);
 }
 
-[[nodiscard]] std::optional<Authored> author(Expectations& checks) {
+[[nodiscard]] std::optional<document::ParameterId> parameterIn(const Authored& authored,
+                                                              const document::CompositionId id,
+                                                              const document::NodeId node,
+                                                              const std::string_view role) {
+    const auto* composition = authored.scripting->snapshot().project().findComposition(id);
+    const auto* record = composition ? composition->graph().findNode(node) : nullptr;
+    if (record != nullptr)
+        for (const auto& binding : record->parameters)
+            if (binding.role == role)
+                return binding.parameterId;
+    return std::nullopt;
+}
+
+// A new group made from Warp Path (Function)'s chooser for `role`, holding one Math node, `operation`
+// of the group's argument, as its answer: the authoring an artist does in Properties and the group.
+[[nodiscard]] bool addFunctionGroup(Authored& authored, const document::NodeId warp,
+                                    const std::string_view role,
+                                    const core::primitives::ScalarPrimitive operation) {
+    const auto created = edit<commands::CreateGroupDefinition>(
+        authored, authored.composition, std::string(role), warp, std::string(role));
+    const auto group = created.outputId<document::CompositionId>(commands::kCreateGroupDefinitionOutput);
+    const auto input =
+        created.outputId<document::NodeId>(commands::kCreateGroupDefinitionInputNodeOutput);
+    const auto output =
+        created.outputId<document::NodeId>(commands::kCreateGroupDefinitionOutputNodeOutput);
+    if (!group || !input || !output)
+        return false;
+    const auto math = edit<commands::AddNode>(authored, *group,
+                                              std::string(document::kScalarMathNodeType),
+                                              document::Vec2d{240, 0})
+                          .outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!math)
+        return false;
+    const auto operationParameter = parameterIn(authored, *group, *math, "operation");
+    return operationParameter &&
+           edit<commands::SetParameterSource>(
+               authored, *group, *operationParameter,
+               document::ConstantValueSource{document::scalarOperationStoredValue(operation)})
+               .succeeded() &&
+           edit<commands::ConnectPorts>(authored, *group, document::OutputPortRef{*input, "scalar1"},
+                                        document::NodeInputRef{*math, "a"})
+               .succeeded() &&
+           edit<commands::ConnectPorts>(
+               authored, *group,
+               document::OutputPortRef{*math, std::string(document::kResultPortName)},
+               document::NodeInputRef{*output, "scalar1"})
+               .succeeded();
+}
+
+[[nodiscard]] std::optional<Authored> author(Expectations& checks, const bool function) {
     const auto format = document::CompositionFormat::create(kWidth, kHeight);
     checks.expect(format.has_value(), "the composition format is valid");
     if (!format.has_value()) {
@@ -267,14 +324,23 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
                                               std::string(document::kPathValueNodeType),
                                               document::Vec2d{0, 0})
                           .outputId<document::NodeId>(commands::kAddNodeOutput);
-    const auto warp = edit<commands::AddNode>(authored, authored.composition,
-                                              std::string(document::kWarpPathNodeType),
-                                              document::Vec2d{200, 0})
-                              .outputId<document::NodeId>(commands::kAddNodeOutput);
+    const auto warp =
+        edit<commands::AddNode>(authored, authored.composition,
+                                std::string(function ? document::kWarpPathFunctionNodeType
+                                                     : document::kWarpPathNodeType),
+                                document::Vec2d{200, 0})
+            .outputId<document::NodeId>(commands::kAddNodeOutput);
     checks.expect(shape && path && warp, "the Path, Warp Path and Shape nodes are authored");
     if (!shape || !path || !warp) {
         return std::nullopt;
     }
+    // (x + sin y, y + cos x): a sine group moves x, a cosine group moves y.
+    if (function)
+        checks.expect(addFunctionGroup(authored, *warp, document::kNodeGroupReferenceRole,
+                                       core::primitives::ScalarPrimitive::Sine) &&
+                          addFunctionGroup(authored, *warp, document::kWarpPathFunctionYGroupRole,
+                                           core::primitives::ScalarPrimitive::Cosine),
+                      "the two function groups are made and named by the node");
     checks.expect(edit<commands::ConnectPorts>(
                       authored, authored.composition,
                       document::OutputPortRef{*path, std::string(document::kValuePortName)},
@@ -297,7 +363,8 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
                               .succeeded(),
                           "a Warp Path operand is set");
     };
-    setValue(*warp, "function", std::int64_t{0}); // Wave
+    if (!function)
+        setValue(*warp, "function", std::int64_t{0}); // Wave
     setValue(*warp, "amount", 3.0);
     setValue(*warp, "size", 14.0);
     // The wave runs in a space that is turned, slanted and stretched.
@@ -336,7 +403,8 @@ struct PreviewRig final {
 void exerciseRoute(Expectations& checks, const Route& route, const std::filesystem::path& workDir,
                    [[maybe_unused]] const std::filesystem::path& loader) {
     const std::string prefix = std::string(route.name) + ": ";
-    auto authored = author(checks);
+    auto authored = author(checks, route.function);
+    auto& cpuViewer = gCpuViewer.at(route.function ? 1 : 0);
     if (!authored.has_value()) {
         return;
     }
@@ -449,10 +517,10 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     // CPU against GPU: the CPU route runs first and keeps its frames.
     for (std::size_t index = 0; index < kFrames.size(); ++index) {
         if (!route.gpu) {
-            gCpuViewer.at(index) = shown.at(index).rgba;
-        } else if (!gCpuViewer.at(index).empty()) {
+            cpuViewer.at(index) = shown.at(index).rgba;
+        } else if (!cpuViewer.at(index).empty()) {
             Pixels cpu = shown.at(index);
-            cpu.rgba = gCpuViewer.at(index);
+            cpu.rgba = cpuViewer.at(index);
             checks.expect(framesMatch(cpu, shown.at(index)),
                           prefix + "Viewer frame " + std::to_string(kFrames.at(index)) +
                               " matches the CPU route (RGB within one code, exact alpha)");
@@ -656,6 +724,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     Expectations checks;
     const std::filesystem::path workDir = temporary.path().toStdString();
     exerciseRoute(checks, {"cpu", false}, workDir, loader);
+    exerciseRoute(checks, {"cpu-function", false, true}, workDir, loader);
 
 #if defined(BLOOM_UI_WARP_ROUTES_GPU)
     if (loader.empty()) {
@@ -663,6 +732,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(!gRequireDevice, "--require-device needs --loader");
     } else {
         exerciseRoute(checks, {"gpu", true}, workDir, loader);
+        exerciseRoute(checks, {"gpu-function", true, true}, workDir, loader);
     }
 #else
     std::cout << "NotRun: gpu route: this build has no Vulkan support\n";

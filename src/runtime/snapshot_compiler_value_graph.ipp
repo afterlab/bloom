@@ -454,8 +454,14 @@ lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition
 // a diagnostic on the consumer when the group cannot be a function.
 [[nodiscard]] std::shared_ptr<const runtime::CompiledFunctionBody>
 lowerFunctionBody(const document::NodeRecord& node) {
-    const auto body = expansion_.functionBodies.find(node.id);
-    const auto build = functionBuilds_.find(node.id);
+    return lowerFunctionBody(node, node.id);
+}
+
+// The body the expansion holds under `key` (the consumer's id, or its second body's key).
+[[nodiscard]] std::shared_ptr<const runtime::CompiledFunctionBody>
+lowerFunctionBody(const document::NodeRecord& node, const document::NodeId key) {
+    const auto body = expansion_.functionBodies.find(key);
+    const auto build = functionBuilds_.find(key);
     if (body == expansion_.functionBodies.end() || build == functionBuilds_.end())
         return nullptr;
     auto compiled = std::make_shared<runtime::CompiledFunctionBody>();
@@ -923,6 +929,13 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             // #598: the operands in the order Warp Path (Function) declares them.
             runtime::CompiledValueWarpFunction warp;
             warp.body = std::move(compiled);
+            // The optional second group moves y by g(x / size); unset, it stays null.
+            const auto second = document::secondFunctionBodyKey(node.id);
+            if (expansion_.functionBodies.contains(second)) {
+                warp.bodyY = lowerFunctionBody(node, second);
+                if (warp.bodyY == nullptr)
+                    return std::nullopt;
+            }
             for (const char* role : {"path", "amount", "size", "tolerance", "position", "anchor",
                                      "scale", "rotation", "skew", "skewAxis"}) {
                 auto operand = operandOf(role);

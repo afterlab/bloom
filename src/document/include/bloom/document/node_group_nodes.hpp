@@ -21,6 +21,7 @@
 
 #include <array>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -59,6 +60,9 @@ inline constexpr std::uint32_t kNodeGroupNodeSchemaVersion = 1;
 // The parameter on an instance (and on Function Plot) that names the definition.
 inline constexpr std::string_view kNodeGroupReferenceRole = "group";
 inline constexpr std::string_view kNodeGroupReferenceSchemaKey = "bloom.node-group.group";
+// Warp Path (Function)'s optional second group, `g`: y moves by amount * g(x / size). Unset (0), y
+// stays where it is, so the node is the one-function warp it always was.
+inline constexpr std::string_view kWarpPathFunctionYGroupRole = "groupY";
 
 // One typed slot of the fixed catalogue. The same slot name means the same socket on Group Input
 // (an output), Group Output (an input) and Node Group (an input and an output), which is how the
@@ -105,10 +109,23 @@ inline constexpr std::string_view kFunctionOutputSlot = "scalar1";
 // Whether `definition` is exactly the generated shape of its type (the registry's shape check).
 [[nodiscard]] bool hasValidNodeGroupShape(const NodeDefinition& definition);
 
-// The definition a node references: the constant value of its `group` parameter, or nothing when
-// the node has none, or it is not constant, or it is not positive.
-[[nodiscard]] std::optional<CompositionId> nodeGroupReference(const NodeRecord& node,
-                                                              const ParameterStore& parameters);
+// The roles of a node type that name a group: `group` on every type that uses a group reference,
+// then Warp Path (Function)'s `groupY`. Empty for every other type.
+[[nodiscard]] std::span<const std::string_view> groupReferenceRoles(std::string_view typeId) noexcept;
+
+// The definition a node references: the constant value of its `role` parameter (`group` unless
+// named), or nothing when the node has none, or it is not constant, or it is not positive.
+[[nodiscard]] std::optional<CompositionId>
+nodeGroupReference(const NodeRecord& node, const ParameterStore& parameters,
+                   std::string_view role = kNodeGroupReferenceRole);
+
+// Every definition a node references, one per role that names one.
+[[nodiscard]] std::vector<CompositionId> nodeGroupReferences(const NodeRecord& node,
+                                                             const ParameterStore& parameters);
+
+// The key under which an expansion holds a function consumer's second body (Warp Path (Function)'s
+// `groupY`). Never the id of a node: it has the derived-id bit set and the expansion reserves it.
+[[nodiscard]] NodeId secondFunctionBodyKey(NodeId consumer) noexcept;
 
 // Whether the composition is a group definition: it holds a Group Output node.
 [[nodiscard]] bool isNodeGroupDefinition(const Composition& composition) noexcept;
@@ -122,6 +139,8 @@ struct NodeGroupBody final {
     // Every node of the body that answers `scalar1`: the closure of what Group Output's scalar1
     // reads, Group Output included. The compiler lowers exactly these into the body's own program.
     std::vector<NodeId> nodes;
+    // The function consumer that reads the body (the map's key for its first body).
+    NodeId consumer;
 };
 
 // #509: the one inner input a value slot of an instance's group feeds -- the node and parameter the
@@ -142,7 +161,8 @@ struct NodeGroupExpansion final {
     // The composition with every resolvable instance replaced by the nodes of its definition. Empty
     // when the composition holds no instance, so the caller keeps reading the original.
     std::optional<Composition> composition;
-    // A function consumer's body, by the consumer's node id.
+    // A function consumer's body, by the consumer's node id; its second body, if it reads one, by
+    // secondFunctionBodyKey(consumer).
     std::unordered_map<NodeId, NodeGroupBody> functionBodies;
     // Why an instance stayed unexpanded: it names no group, or one that is missing or has no
     // Group Input and Group Output, or nesting went past the depth bound.

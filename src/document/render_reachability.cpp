@@ -435,14 +435,17 @@ RenderReachability RenderReachability::compute(const Composition& composition,
         // #342: a Node Group reads the group it names. An unset group names nothing; one that is
         // not a constant may name any.
         if (usesGroupReference(node->typeId)) {
-            if (const auto target = nodeGroupReference(*node, composition.parameters()))
-                result.nested_.insert(*target);
-            else if (const auto binding = std::ranges::find(node->parameters, kNodeGroupReferenceRole,
-                                                            &ParameterBinding::role);
-                     binding != node->parameters.end()) {
-                const auto* parameter = composition.parameters().find(binding->parameterId);
-                if (parameter == nullptr || !std::holds_alternative<ConstantValueSource>(parameter->source))
-                    result.nestedUnknown_ = true;
+            for (const auto role : groupReferenceRoles(node->typeId)) {
+                if (const auto target = nodeGroupReference(*node, composition.parameters(), role))
+                    result.nested_.insert(*target);
+                else if (const auto binding =
+                             std::ranges::find(node->parameters, role, &ParameterBinding::role);
+                         binding != node->parameters.end()) {
+                    const auto* parameter = composition.parameters().find(binding->parameterId);
+                    if (parameter == nullptr ||
+                        !std::holds_alternative<ConstantValueSource>(parameter->source))
+                        result.nestedUnknown_ = true;
+                }
             }
         }
     }

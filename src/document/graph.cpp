@@ -490,19 +490,21 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         // #342: which group an instance reads is a choice, never a driven value, and a group
         // cannot contain an instance of itself.
         if (usesGroupReference(node.typeId)) {
+            const auto groupRoles = groupReferenceRoles(node.typeId);
             for (const auto& binding : node.parameters) {
-                if (binding.role != kNodeGroupReferenceRole)
+                if (std::ranges::find(groupRoles, binding.role) == groupRoles.end())
                     continue;
                 const auto* parameter = parameters.find(binding.parameterId);
                 if (parameter != nullptr &&
                     !std::holds_alternative<ConstantValueSource>(parameter->source))
-                    result.add(ValidationCode::InvalidValue, path + ".group",
+                    result.add(ValidationCode::InvalidValue, path + "." + binding.role,
                                "The group a Node Group names must be a constant");
             }
-            if (const auto group = nodeGroupReference(node, parameters);
-                group && owner.isValid() && group->value() == owner.value())
-                result.add(ValidationCode::CompositionNestingCycle, path + ".group",
-                           "A group cannot contain itself");
+            for (const auto role : groupRoles)
+                if (const auto group = nodeGroupReference(node, parameters, role);
+                    group && owner.isValid() && group->value() == owner.value())
+                    result.add(ValidationCode::CompositionNestingCycle,
+                               path + "." + std::string(role), "A group cannot contain itself");
         }
         if (node.typeId == kCompositionSourceNodeType) {
             for (const auto& binding : node.parameters) {

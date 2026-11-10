@@ -160,16 +160,27 @@ void PropertiesEditor::configureRegistryRows() {
                         document::CompositionId::fromRaw(selector->currentData().toULongLong()));
                 });
             }
-            // #342: a Node Group names the group it reads, opens it, or makes a new one.
-            if (document::usesGroupReference(node->typeId)) {
-                auto* label = kit::makePropertyRowLabel(tr("Group"), section->body());
+            // #342: a Node Group names the group it reads, opens it, or makes a new one. #598: Warp
+            // Path (Function) has a second chooser, for the group that moves y.
+            for (const auto role : document::groupReferenceRoles(node->typeId)) {
+                const bool second = role != document::kNodeGroupReferenceRole;
+                const auto suffix = second ? QStringLiteral("Y") : QString{};
+                const auto text = second ? tr("Y Group") : tr("Group");
+                auto* label = kit::makePropertyRowLabel(text, section->body());
                 auto* selector = new kit::KDropdown(section->body());
-                selector->setObjectName("propertiesNodeGroup");
+                selector->setObjectName(QStringLiteral("propertiesNodeGroup") + suffix);
+                selector->setProperty("groupRole", QString::fromLatin1(role.data(),
+                                                                       static_cast<int>(role.size())));
+                if (node->typeId == document::kWarpPathFunctionNodeType)
+                    selector->setToolTip(second ? tr("The function that moves y: y + Amount × "
+                                                     "g(x / Size). None leaves y.")
+                                                : tr("The function that moves x: x + Amount × "
+                                                     "f(y / Size)."));
                 auto* open = new kit::KButton(tr("Open"), section->body());
-                open->setObjectName("propertiesOpenNodeGroup");
+                open->setObjectName(QStringLiteral("propertiesOpenNodeGroup") + suffix);
                 open->setControlSize(kit::KButton::ControlSize::Compact);
                 auto* create = new kit::KButton(tr("New"), section->body());
-                create->setObjectName("propertiesNewNodeGroup");
+                create->setObjectName(QStringLiteral("propertiesNewNodeGroup") + suffix);
                 create->setControlSize(kit::KButton::ControlSize::Compact);
                 // The chooser takes the row's width; the two actions stay the size of their words.
                 selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -178,11 +189,11 @@ void PropertiesEditor::configureRegistryRows() {
                 }
                 auto* row = new kit::KPropertyRow(label, nullptr, {selector, open, create},
                                                   section->body());
-                row->setProperty("rowLabel", tr("Group"));
+                row->setProperty("rowLabel", text);
                 section->bodyLayout()->addWidget(row);
                 const auto nodeId = node->id;
                 for (const auto& binding : node->parameters)
-                    if (binding.role == document::kNodeGroupReferenceRole) {
+                    if (binding.role == role) {
                         const auto parameterId = binding.parameterId;
                         connect(selector, &kit::KDropdown::activated, this,
                                 [this, selector, parameterId](int index) {
@@ -200,7 +211,7 @@ void PropertiesEditor::configureRegistryRows() {
                     (void)session_.setComposition(
                         document::CompositionId::fromRaw(selector->currentData().toULongLong()));
                 });
-                connect(create, &kit::KButton::clicked, this, [this, nodeId] {
+                connect(create, &kit::KButton::clicked, this, [this, nodeId, role] {
                     std::size_t groups = 0;
                     for (const auto& composition : session_.snapshot().project().compositions())
                         groups += document::isNodeGroupDefinition(composition) ? 1U : 0U;
@@ -208,7 +219,7 @@ void PropertiesEditor::configureRegistryRows() {
                                                       session_.snapshot().revision());
                     transaction.emplace<commands::CreateGroupDefinition>(
                         session_.compositionId(), tr("Group %1").arg(groups + 1).toStdString(),
-                        nodeId);
+                        nodeId, std::string(role));
                     (void)session_.executeTransaction(std::move(transaction));
                 });
             }
@@ -401,8 +412,9 @@ void PropertiesEditor::configureRegistryRows() {
                 if (handcrafted ||
                     (node->typeId == document::kCompositionSourceNodeType &&
                      declared.role == "composition") ||
-                    (document::usesGroupReference(node->typeId) &&
-                     declared.role == document::kNodeGroupReferenceRole) ||
+                    std::ranges::find(document::groupReferenceRoles(node->typeId),
+                                      std::string_view(declared.role)) !=
+                        document::groupReferenceRoles(node->typeId).end() ||
                     // #493, #498: the curves are drawn and edited by the curve graph.
                     (node->typeId == document::kCurvesNodeType &&
                      document::isGradeCurveSchemaKey(declared.schemaKey)))
@@ -477,17 +489,23 @@ void PropertiesEditor::configureRegistryRows() {
         if (auto* open = findChild<kit::KButton*>("propertiesOpenComposition"))
             open->setEnabled(session_.snapshot().project().findComposition(target) != nullptr);
     }
-    if (auto* selector = findChild<kit::KDropdown*>("propertiesNodeGroup");
-        selector && node && session_.composition()) {
+    for (const auto& suffix : {QString{}, QStringLiteral("Y")}) {
+        auto* selector = findChild<kit::KDropdown*>(QStringLiteral("propertiesNodeGroup") + suffix);
+        if (selector == nullptr || node == nullptr || session_.composition() == nullptr)
+            continue;
         const QSignalBlocker blocker(selector);
-        const auto binding = std::ranges::find(node->parameters, document::kNodeGroupReferenceRole,
-                                               &document::ParameterBinding::role);
-        const auto target = binding == node->parameters.end()
-                                ? document::CompositionId{}
-                                : document::nodeGroupReference(*node, session_.composition()->parameters())
-                                      .value_or(document::CompositionId{});
+        const auto role = selector->property("groupRole").toString().toStdString();
+        const auto binding =
+            std::ranges::find(node->parameters, role, &document::ParameterBinding::role);
+        const auto target =
+            binding == node->parameters.end()
+                ? document::CompositionId{}
+                : document::nodeGroupReference(*node, session_.composition()->parameters(), role)
+                      .value_or(document::CompositionId{});
         selector->clearItems();
-        selector->addItem(tr("Choose Group"), QVariant::fromValue(qlonglong{0}));
+        // An unset second group is a choice of its own: y stays where it is.
+        selector->addItem(suffix.isEmpty() ? tr("Choose Group") : tr("None"),
+                          QVariant::fromValue(qlonglong{0}));
         for (const auto& composition : session_.snapshot().project().compositions()) {
             if (composition.id() == session_.compositionId() ||
                 !document::isNodeGroupDefinition(composition) ||
@@ -505,9 +523,9 @@ void PropertiesEditor::configureRegistryRows() {
         selector->setCurrentIndex(index);
         const bool locked = session_.composition()->nodeLocked(node->id);
         selector->setEnabled(!locked);
-        if (auto* open = findChild<kit::KButton*>("propertiesOpenNodeGroup"))
+        if (auto* open = findChild<kit::KButton*>(QStringLiteral("propertiesOpenNodeGroup") + suffix))
             open->setEnabled(session_.snapshot().project().findComposition(target) != nullptr);
-        if (auto* create = findChild<kit::KButton*>("propertiesNewNodeGroup"))
+        if (auto* create = findChild<kit::KButton*>(QStringLiteral("propertiesNewNodeGroup") + suffix))
             create->setEnabled(!locked);
     }
     if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {

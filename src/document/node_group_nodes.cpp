@@ -119,8 +119,9 @@ namespace {
     return definition;
 }
 
-// #598 Warp Path (Function): the group is read as `f`, and a point (x, y) of the warp's space goes to
-// (x + amount * f(y / size), y). Its operands are Warp Path's, in the same order, less the function
+// #598 Warp Path (Function): the group is read as `f` and the optional second group as `g`, and a
+// point (x, y) of the warp's space goes to (x + amount * f(y / size), y + amount * g(x / size)); with
+// no second group, y stays. Its operands are Warp Path's, in the same order, less the function
 // selector and the phase, so a set of value nodes that drives one drives the other.
 [[nodiscard]] NodeDefinition warpPathFunctionDefinition() {
     NodeDefinition definition{{std::string(kWarpPathFunctionNodeType), kNodeGroupNodeSchemaVersion},
@@ -131,9 +132,10 @@ namespace {
                               std::nullopt,
                               NodeCardinality::Many,
                               NodeCategory::Values};
-    definition.parameters.push_back({std::string(kNodeGroupReferenceRole),
-                                     std::string(kNodeGroupReferenceSchemaKey),
-                                     ParameterValueKind::Integer, true, false, std::int64_t{0}});
+    for (const auto role : {kNodeGroupReferenceRole, kWarpPathFunctionYGroupRole})
+        definition.parameters.push_back({std::string(role),
+                                         std::string(kNodeGroupReferenceSchemaKey),
+                                         ParameterValueKind::Integer, true, false, std::int64_t{0}});
     const auto operand = [&](const std::string_view role, const SocketValueKind kind,
                              const std::string_view key, ParameterValue value) {
         definition.inputs.push_back({std::string(role), kind, false});
@@ -278,27 +280,50 @@ class Expander final {
         if (found == nullptr)
             return;
         const NodeRecord instance = *found;
-        const auto reference = nodeGroupReference(instance, work_.parameters());
-        if (!reference) {
-            result_.unresolved.emplace(instanceId, "The Node Group names no group");
-            return;
+        // A Node Group and every function consumer name their group in `group`; Warp Path
+        // (Function) may name a second one in `groupY`, whose body the expansion holds under its
+        // own key (reserved, so no derived node takes it). An unset second group is no function:
+        // that axis stays.
+        const auto roles = groupReferenceRoles(instance.typeId);
+        if (roles.size() > 1)
+            usedNodes_.insert(secondFunctionBodyKey(instanceId).value());
+        for (const auto role : roles) {
+            const bool first = role == kNodeGroupReferenceRole;
+            const NodeId key = first ? instanceId : secondFunctionBodyKey(instanceId);
+            const auto reference = nodeGroupReference(instance, work_.parameters(), role);
+            if (!reference) {
+                if (!first)
+                    continue;
+                result_.unresolved.emplace(instanceId, "The Node Group names no group");
+                return;
+            }
+            if (!expandDefinition(instance, *reference, key) && first)
+                return;
         }
-        const auto* definition = project_.findComposition(*reference);
+    }
+
+    // Brings the definition's nodes in under ids derived from `key`, and splices them in place of a
+    // Node Group or holds them as the body `key` names. False, with the reason under `key`, when the
+    // definition cannot be expanded.
+    [[nodiscard]] bool expandDefinition(const NodeRecord& instance, const CompositionId reference,
+                                        const NodeId key) {
+        const auto* definition = project_.findComposition(reference);
         if (definition == nullptr || !isNodeGroupDefinition(*definition)) {
-            result_.unresolved.emplace(instanceId, "The group this Node Group names is missing");
-            return;
+            result_.unresolved.emplace(key, "The group this Node Group names is missing");
+            return false;
         }
         const auto* input = findGroupInput(*definition);
         const auto* output = findGroupOutput(*definition);
         if (input == nullptr || output == nullptr) {
-            result_.unresolved.emplace(instanceId, "The group has no Group Input and Group Output");
-            return;
+            result_.unresolved.emplace(key, "The group has no Group Input and Group Output");
+            return false;
         }
         if (work_.graph().nodes().size() + definition->graph().nodes().size() >
             kMaximumExpandedNodes) {
-            result_.unresolved.emplace(instanceId, "The expanded groups hold too many nodes");
-            return;
+            result_.unresolved.emplace(key, "The expanded groups hold too many nodes");
+            return false;
         }
+        const NodeId instanceId = key;
 
         std::unordered_map<NodeId, NodeId> mapped;
         for (const auto& node : definition->graph().nodes())
@@ -353,7 +378,9 @@ class Expander final {
         if (instance.typeId == kNodeGroupNodeType)
             spliceInstance(instance, boundaryInput, boundaryOutput);
         else
-            result_.functionBodies.emplace(instanceId, NodeGroupBody{boundaryInput, boundaryOutput, {}});
+            result_.functionBodies.emplace(
+                key, NodeGroupBody{boundaryInput, boundaryOutput, {}, instance.id});
+        return true;
     }
 
     // A function answers on scalar1 alone. Cut everything else off Group Output (its pixel inputs,
@@ -548,10 +575,34 @@ bool hasValidNodeGroupShape(const NodeDefinition& definition) {
     return definition == generatedDefinition(typeId);
 }
 
+std::span<const std::string_view> groupReferenceRoles(const std::string_view typeId) noexcept {
+    static constexpr std::array<std::string_view, 2> kRoles{kNodeGroupReferenceRole,
+                                                            kWarpPathFunctionYGroupRole};
+    if (typeId == kWarpPathFunctionNodeType)
+        return kRoles;
+    if (usesGroupReference(typeId))
+        return std::span<const std::string_view>(kRoles).first(1);
+    return {};
+}
+
+std::vector<CompositionId> nodeGroupReferences(const NodeRecord& node,
+                                               const ParameterStore& parameters) {
+    std::vector<CompositionId> references;
+    for (const auto role : groupReferenceRoles(node.typeId))
+        if (const auto reference = nodeGroupReference(node, parameters, role))
+            references.push_back(*reference);
+    return references;
+}
+
+NodeId secondFunctionBodyKey(const NodeId consumer) noexcept {
+    // Derived like a node of the consumer's bodies; the expansion reserves it before deriving any.
+    return NodeId::fromRaw(mixIds(consumer.value(), 0x67726F757059ULL));
+}
+
 std::optional<CompositionId> nodeGroupReference(const NodeRecord& node,
-                                                const ParameterStore& parameters) {
-    const auto binding = std::ranges::find(node.parameters, kNodeGroupReferenceRole,
-                                           &ParameterBinding::role);
+                                                const ParameterStore& parameters,
+                                                const std::string_view role) {
+    const auto binding = std::ranges::find(node.parameters, role, &ParameterBinding::role);
     if (binding == node.parameters.end())
         return std::nullopt;
     const auto* record = parameters.find(binding->parameterId);

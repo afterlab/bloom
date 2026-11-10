@@ -99,8 +99,8 @@
     }
 
     // #590: a function consumer lowers its group's body, so after the body's last node.
-    for (const auto& [consumer, body] : expansion_.functionBodies)
-        orderBefore(body.output, consumer);
+    for (const auto& [key, body] : expansion_.functionBodies)
+        orderBefore(body.output, body.consumer);
 
     auto laterId = [](const document::NodeId left, const document::NodeId right) {
         return left.value() > right.value();

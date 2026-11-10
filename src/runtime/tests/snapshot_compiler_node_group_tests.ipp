@@ -1383,13 +1383,33 @@ constexpr auto kWarpFunctionShape = document::NodeId::fromRaw(6602);
     return group;
 }
 
+// The second group, g(x) = cos(x): with it, (x, y) goes to (x + amount sin(y / size), y + amount cos(x /
+// size)), the issue's (x + sin y, y + cos x) on one node.
+constexpr auto kCosineComposition = document::CompositionId::fromRaw(13);
+
+[[nodiscard]] document::Composition makeCosineGroup() {
+    using namespace document;
+    using core::primitives::ScalarPrimitive;
+    auto group = makeStackedComposition(kCosineComposition, "Cosine", 8400);
+    std::uint64_t next = 8500;
+    addDefaultedNode(group, NodeId::fromRaw(8601), kGroupInputNodeType, next);
+    addDefaultedNode(group, NodeId::fromRaw(8602), kGroupOutputNodeType, next);
+    addDefaultedNode(group, NodeId::fromRaw(8603), kScalarMathNodeType, next,
+                     {{"operation", scalarOperationStoredValue(ScalarPrimitive::Cosine)}});
+    connectDriver(group, NodeId::fromRaw(8603), "a", NodeId::fromRaw(8601), "scalar1");
+    connectDriver(group, NodeId::fromRaw(8602), "scalar1", NodeId::fromRaw(8603));
+    return group;
+}
+
 [[nodiscard]] document::Project makeWarpFunctionProject(const document::PathValue& path,
                                                         const document::CompositionId group,
                                                         const double amount, const double size,
-                                                        const double tolerance) {
+                                                        const double tolerance,
+                                                        const document::CompositionId groupY = {}) {
     using namespace document;
     auto project = makeProject(singleLayerOptions());
-    require(project.addComposition(makeSineGroup()) && project.addComposition(makeReciprocalGroup()),
+    require(project.addComposition(makeSineGroup()) && project.addComposition(makeReciprocalGroup()) &&
+                project.addComposition(makeCosineGroup()),
             "the warp groups are added");
     auto* composition = project.findComposition(kCompositionId);
     std::uint64_t next = 7300;
@@ -1403,6 +1423,7 @@ constexpr auto kWarpFunctionShape = document::NodeId::fromRaw(6602);
             "the shape feeds the layer");
     addDefaultedNode(*composition, kWarpFunctionNode, kWarpPathFunctionNodeType, next,
                      {{"group", static_cast<std::int64_t>(group.value())},
+                      {"groupY", static_cast<std::int64_t>(groupY.value())},
                       {"path", path},
                       {"amount", amount},
                       {"size", size},
@@ -1508,6 +1529,79 @@ void testWarpPathFunction(Expectations& expectations) {
                                                     }),
                             "a group with no answer at a point stops the warp with a diagnostic on the node");
     }
+
+    // #598 both axes on one node: Group f = sin moves x by y, Y Group g = cos moves y by x, so a point
+    // (x0, y0) goes to (x0 + a sin(y0 / s), y0 + a cos(x0 / s)). Each contour is the vertical line
+    // x = x0, so a drawn point (px, py) came from y0 = py - a cos(x0 / s) and must sit at
+    // px = x0 + a sin(y0 / s): exactly at the anchors, within the tolerance along the curves.
+    const auto both = compile(makeWarpFunctionProject(grid, kSineComposition, amount, size, tolerance,
+                                                      kCosineComposition),
+                              registry);
+    expectations.expect(both.plan != nullptr, "a Warp Path (Function) with a Y Group compiles");
+    if (both.plan) {
+        const runtime::CompiledValueOperation* bothOperation = nullptr;
+        for (const auto& operation : both.plan->valueOperations())
+            if (const auto* kernel = std::get_if<runtime::CompiledValueWarpFunction>(&operation.kernel)) {
+                bothOperation = &operation;
+                expectations.expect(kernel->body != nullptr && kernel->bodyY != nullptr,
+                                    "the warp holds both bodies");
+            }
+        const auto evaluated = runtime::evaluateValueGraph(
+            both.plan->valueOperations(), both.plan->valueOutputCount(),
+            core::RationalTime::fromInteger(0), both.plan->format().frameRate());
+        expectations.expect(evaluated.diagnostics.empty(), "the two-function warp evaluates cleanly");
+        const auto* moved = bothOperation == nullptr
+                                ? nullptr
+                                : std::get_if<runtime::CompiledPathValue>(
+                                      &evaluated.outputs.at(bothOperation->firstOutput.value()));
+        expectations.expect(moved != nullptr && moved->value->contours.size() == 4,
+                            "four lines in, four contours out of the two-function warp");
+        if (moved != nullptr && moved->value->contours.size() == 4) {
+            bool anchorsExact = true, yMoved = true;
+            double worstBoth = 0.0;
+            for (std::size_t index = 0; index < 4; ++index) {
+                const double x0 = xs[index];
+                const double lift = amount * std::cos(x0 / size);
+                const auto& contour = moved->value->contours[index];
+                const auto error = [&](const Vec2d q) {
+                    const double y0 = q.y - lift;
+                    return std::abs(q.x - (x0 + amount * std::sin(y0 / size)));
+                };
+                for (const auto& anchor : contour.anchors)
+                    anchorsExact = anchorsExact && error(anchor.point) < 1e-9;
+                yMoved = yMoved && std::abs(contour.anchors.front().point.y - (-80.0 + lift)) < 1e-9 &&
+                         std::abs(contour.anchors.back().point.y - (80.0 + lift)) < 1e-9;
+                for (std::size_t at = 0; at + 1 < contour.anchors.size(); ++at) {
+                    const auto& a = contour.anchors[at];
+                    const auto& b = contour.anchors[at + 1];
+                    const Vec2d p0 = a.point, p1 = a.outHandle.value_or(a.point),
+                                p2 = b.inHandle.value_or(b.point), p3 = b.point;
+                    for (int step = 0; step <= 16; ++step) {
+                        const double t = step / 16.0, u = 1.0 - t;
+                        const Vec2d q{u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+                                      u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y};
+                        worstBoth = std::max(worstBoth, error(q));
+                    }
+                }
+            }
+            expectations.expect(anchorsExact,
+                                "every anchor is (x0 + a sin(y0 / s), y0 + a cos(x0 / s)) of its line's point");
+            expectations.expect(yMoved, "the Y Group lifts each line by a cos(x0 / s), ends included");
+            expectations.expect(worstBoth <= 0.2, "the two-function curves follow the analytic warp (worst " +
+                                                      std::to_string(worstBoth) + " px)");
+        }
+    }
+    // A Y Group that names a missing group does not compile, and says which group it could not read.
+    const auto missingY = compile(makeWarpFunctionProject(grid, kSineComposition, amount, size, tolerance,
+                                                          CompositionId::fromRaw(99)),
+                                  registry);
+    expectations.expect(missingY.plan == nullptr &&
+                            std::ranges::any_of(missingY.diagnostics,
+                                                [](const auto& diagnostic) {
+                                                    return diagnostic.summary ==
+                                                           "Function cannot read its second group";
+                                                }),
+                        "a missing Y Group stops the compile with its own diagnostic");
 
     // The node needs a group: with none named it does not compile.
     const auto none = compile(makeWarpFunctionProject(grid, CompositionId::fromRaw(0), amount, size, tolerance),

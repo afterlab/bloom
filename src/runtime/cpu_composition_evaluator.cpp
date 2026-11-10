@@ -1678,15 +1678,19 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             }
         });
         const CompiledFunctionBody* body = nullptr;
+        const CompiledFunctionBody* second = nullptr;
         if (const auto* function = std::get_if<CompiledValueFunction>(&kernel))
             body = function->body.get();
         else if (const auto* plot = std::get_if<CompiledValueFunctionPlot>(&kernel))
             body = plot->body.get();
-        else if (const auto* warpFunction = std::get_if<CompiledValueWarpFunction>(&kernel))
+        else if (const auto* warpFunction = std::get_if<CompiledValueWarpFunction>(&kernel)) {
             body = warpFunction->body.get();
-        if (body != nullptr)
-            for (const auto& inner : body->operations)
-                self(self, inner.kernel);
+            second = warpFunction->bodyY.get();
+        }
+        for (const auto* each : {body, second})
+            if (each != nullptr)
+                for (const auto& inner : each->operations)
+                    self(self, inner.kernel);
     };
     for (const auto& operation : plan->valueOperations()) {
         if (cancellation.isCancellationRequested()) {

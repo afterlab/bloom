@@ -1037,22 +1037,42 @@ void Evaluator::evaluateWarpFunction(const runtime::CompiledValueOperation& oper
     const auto matrix = runtime::pathwarp::Matrix::make(*position, *anchor, *scale, *rotation,
                                                         *skew, *skewAxis);
     runtime::FunctionEvaluator body(*kernel.body, time_, rate_, curves_, memoization_.cancellation);
+    // The second group, when named: y moves by amount * g(x / size), read at the point's own x.
+    std::optional<runtime::FunctionEvaluator> bodyY;
+    if (kernel.bodyY != nullptr)
+        bodyY.emplace(*kernel.bodyY, time_, rate_, curves_, memoization_.cancellation);
     std::string firstFailure;
     const double amountValue = *amount;
     const double sizeValue = *size;
+    const auto read = [&](runtime::FunctionEvaluator& function,
+                          const double argument) -> std::optional<double> {
+        const auto answer = function.at(argument);
+        if (!answer.has_value() || !std::isfinite(*answer)) {
+            if (firstFailure.empty())
+                firstFailure = function.diagnostics().empty()
+                                   ? "The group's answer is not a number."
+                                   : function.diagnostics().front().detail;
+            function.clearDiagnostics();
+            return std::nullopt;
+        }
+        function.clearDiagnostics();
+        return *answer;
+    };
     const runtime::pathwarp::PointMap map =
         [&](const document::Vec2d point) -> std::optional<document::Vec2d> {
         const auto local = matrix.inverse(point);
-        const auto answer = body.at(local.y / sizeValue);
-        if (!answer.has_value() || !std::isfinite(*answer)) {
-            if (firstFailure.empty())
-                firstFailure = body.diagnostics().empty() ? "The group's answer is not a number."
-                                                          : body.diagnostics().front().detail;
-            body.clearDiagnostics();
+        const auto across = read(body, local.y / sizeValue);
+        if (!across.has_value())
             return std::nullopt;
+        double along = 0.0;
+        if (bodyY.has_value()) {
+            const auto answer = read(*bodyY, local.x / sizeValue);
+            if (!answer.has_value())
+                return std::nullopt;
+            along = *answer;
         }
-        body.clearDiagnostics();
-        return matrix.forward({local.x + amountValue * *answer, local.y});
+        return matrix.forward({local.x + amountValue * *across,
+                               bodyY.has_value() ? local.y + amountValue * along : local.y});
     };
     auto warped = runtime::pathwarp::warpPath(path, map, *tolerance, memoization_.cancellation);
     switch (warped.status) {

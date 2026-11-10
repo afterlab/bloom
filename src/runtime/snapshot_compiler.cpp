@@ -404,10 +404,12 @@ class CompilePass final {
                 continue;
             }
             reachableNodes.emplace(nodeId, node);
-            // #590: a function consumer reads its group's body, so the body is reached with it.
-            if (const auto body = expansion_.functionBodies.find(nodeId);
-                body != expansion_.functionBodies.end())
-                pending.push_back(body->second.output);
+            // #590: a function consumer reads its group's body, so the body is reached with it;
+            // #598: and its second body, when it names one.
+            for (const auto key : {nodeId, document::secondFunctionBodyKey(nodeId)})
+                if (const auto body = expansion_.functionBodies.find(key);
+                    body != expansion_.functionBodies.end() && body->second.consumer == nodeId)
+                    pending.push_back(body->second.output);
             if (const auto boundary = layerOutputs_.find(nodeId); boundary != layerOutputs_.end())
                 reachLayerRelations(*boundary->second, pending, reachableEdges);
             // #502: the Adjustment's output is the stack below its entry, which its target Merge
@@ -651,6 +653,22 @@ class CompilePass final {
                            reason == expansion_.unresolved.end()
                                ? "The group this node names could not be expanded."
                                : reason->second + ".");
+            }
+            // #598: a second group that is named must be read too; an unset one is no function.
+            if (definition->lowering == runtime::NodeLoweringKind::ValueFunction &&
+                document::groupReferenceRoles(node->typeId).size() > 1) {
+                const auto key = document::secondFunctionBodyKey(node->id);
+                const auto role = document::groupReferenceRoles(node->typeId)[1];
+                if (document::nodeGroupReference(*node, composition_->parameters(), role) &&
+                    !expansion_.functionBodies.contains(key)) {
+                    const auto reason = expansion_.unresolved.find(key);
+                    addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
+                               subject(node->id, "parameter." + std::string(role)),
+                               "Function cannot read its second group",
+                               reason == expansion_.unresolved.end()
+                                   ? "The second group this node names could not be expanded."
+                                   : reason->second + ".");
+                }
             }
             if (definition->lowering == runtime::NodeLoweringKind::Unsupported &&
                 !(isMuted(node->id) && hasImageOutput(*definition))) {

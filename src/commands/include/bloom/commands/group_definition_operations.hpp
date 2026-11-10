@@ -20,12 +20,14 @@ inline constexpr std::string_view kCreateGroupDefinitionOutputNodeOutput = "grou
 
 // Adds a group definition holding a Group Input and a Group Output, sized like the composition it is
 // made from. When `instance` names a Node Group in that composition, the new group becomes the one
-// it reads, in the same step.
+// it reads, in the same step: in its `group` parameter, or in `role` when that names another group
+// reference of the node (Warp Path (Function)'s `groupY`).
 class CreateGroupDefinition final : public Operation {
   public:
     CreateGroupDefinition(document::CompositionId from, std::string name,
-                          std::optional<document::NodeId> instance = std::nullopt)
-        : from_(from), name_(std::move(name)), instance_(instance) {}
+                          std::optional<document::NodeId> instance = std::nullopt,
+                          std::string role = "group")
+        : from_(from), name_(std::move(name)), instance_(instance), role_(std::move(role)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
@@ -33,6 +35,7 @@ class CreateGroupDefinition final : public Operation {
     document::CompositionId from_;
     std::string name_;
     std::optional<document::NodeId> instance_;
+    std::string role_;
 };
 
 } // namespace bloom::commands

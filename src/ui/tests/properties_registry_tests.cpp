@@ -1700,6 +1700,15 @@ void groupAndPlotRows() {
             expect((properties.findChild<ui::kit::KDropdown*>("propertiesNodeGroup") != nullptr) ==
                        document::usesGroupReference(type),
                    "exactly the nodes that read a group offer the group chooser");
+            // #598: Warp Path (Function) alone offers a second chooser, for the group that moves y,
+            // whose first choice is None.
+            auto* second = properties.findChild<ui::kit::KDropdown*>("propertiesNodeGroupY");
+            expect((second != nullptr) == (type == document::kWarpPathFunctionNodeType),
+                   "only Warp Path (Function) offers the Y Group chooser");
+            if (second != nullptr)
+                expect(second->count() >= 1 && second->itemText(0) == "None" &&
+                           second->currentIndex() == 0,
+                       "an unset Y Group reads None");
             for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel"))
                 if (label->isVisibleTo(&properties))
                     expect(label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
