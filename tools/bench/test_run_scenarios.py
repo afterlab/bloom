@@ -57,6 +57,45 @@ class ClientAgainstServer(unittest.TestCase):
                                              "composition": builder.composition,
                                              "parameter": nodes[noise]["parameters"]["evolution"]})
                 self.assertIn('"keyframe"', json.dumps(keys), "the evolution is keyed")
+                # Every role a scenario keys is animatable, or an operand socket of a kind the
+                # runner drives from a keyed value node: no scenario keys a parameter its schema
+                # refuses to animate.
+                import scenario_spec as spec  # noqa: PLC0415
+                for name, scenario in spec.SCENARIOS.items():
+                    for where, node_type, role in spec.keyed_roles(scenario):
+                        metadata = builder.parameter_ranges(node_type)
+                        self.assertIn(role, metadata, f"{name} {where}: {node_type} has {role}")
+                        if metadata[role]["animatable"]:
+                            continue
+                        self.assertIn(role, builder.input_ports(node_type),
+                                      f"{name} {where}: {node_type}.{role} is a socket")
+                        self.assertIn(metadata[role]["valueKind"], suite.Builder.VALUE_NODES,
+                                      f"{name} {where}: {node_type}.{role} has a value node")
+                # Trim Path's end is an operand whose schema is not animated: the chain drives it
+                # from a keyed Scalar value node.
+                line = {"closed": False, "anchors": [{"point": [0, 0]}, {"point": [400, 0]}]}
+                builder.generator(
+                    {"name": "Trim", "generator": ["bloom.shape-source", {"kind": 6}],
+                     "pathChain": {"keys": [[0, line]],
+                                   "steps": [{"type": "bloom.trim-path",
+                                              "values": {"start": 0.0, "end": 100.0},
+                                              "keys": {"end": [[0, 20.0], [23, 100.0]]}}]}},
+                    builder.output_merge())
+                nodes = {r["id"]: r for r in client.call(
+                    "query", {"kind": "nodes", "composition": builder.composition})["records"]}
+                scalars = [r for r in nodes.values() if r["typeId"] == "bloom.value-scalar"]
+                self.assertEqual(len(scalars), 1, "one keyed Scalar drives the trim's end")
+                keys = client.call("query", {"kind": "keyframes",
+                                             "composition": builder.composition,
+                                             "parameter": scalars[0]["parameters"]["value"]})
+                self.assertIn('"keyframe"', json.dumps(keys), "the Scalar is keyed")
+                trim = next(r for r in nodes.values() if r["typeId"] == "bloom.trim-path")
+                end = next(r for r in client.call(
+                    "query", {"kind": "parameters", "composition": builder.composition})["records"]
+                           if r["id"] == trim["parameters"]["end"])
+                self.assertEqual((end["source"], end.get("nodeId"), end.get("port")),
+                                 ("driver", scalars[0]["id"], "value"),
+                                 "the trim's end reads the keyed Scalar")
                 with self.assertRaises(suite.McpError):
                     builder.transact("bloom.composition.delete", composition=999999)
                 with self.assertRaises(suite.McpError):

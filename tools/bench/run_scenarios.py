@@ -347,6 +347,7 @@ class Builder:
         self.directory = directory
         self.assets = {}
         self.ranges = {}
+        self.inputs = {}
         self.layers = {}  # layer name -> {"source": node, "output": node}
         self.mattes = {}  # matte name -> the node whose `mask` output it is (#383)
         self.passes = {}  # pass name -> (source node, port) a depth input reads (#483)
@@ -388,20 +389,58 @@ class Builder:
                               node=node, role=role, **{argument: value})
 
     def set_keys(self, node, keys):
-        """Keys `node`'s parameters: {role: [[frame, value], ...]}."""
+        """Keys `node`'s parameters: {role: [[frame, value], ...]}. A role whose schema cannot be
+        animated but that is an operand socket (most value-graph operands: a path step's amount, a
+        plot's range) is driven instead by a keyed value node of its kind, which is how an artist
+        animates it; a role that is neither is an error, never a silently static value."""
+        if not keys:
+            return
+        node_type = self.node_record(node)["typeId"]
+        metadata = self.parameter_ranges(node_type)
         for role, frames in keys.items():
+            if role not in metadata:
+                raise RuntimeError(f"{node_type} has no parameter {role}")
+            if not metadata[role].get("animatable"):
+                self.drive_keys(node, node_type, role, metadata[role]["valueKind"], frames)
+                continue
             parameter = self.parameter_id(node, role)
             for frame, value in frames:
                 self.transact("bloom.animation.set-keyframe-at-time-for-parameter",
                               composition=self.composition, parameter=parameter, time=frame,
                               value=value)
 
-    def parameter_id(self, node, role):
+    VALUE_NODES = {"scalar": "bloom.value-scalar", "vector2": "bloom.value-vector2",
+                   "integer": "bloom.value-integer"}
+
+    def drive_keys(self, node, node_type, role, kind, frames):
+        """Drives `role` of `node` from a new value node keyed with `frames`."""
+        if role not in self.input_ports(node_type) or kind not in self.VALUE_NODES:
+            raise RuntimeError(f"{node_type}.{role} can be neither keyed nor driven")
+        driver = self.transact("bloom.node.add", composition=self.composition,
+                               nodeType=self.VALUE_NODES[kind])["node"]
+        self.set_keys(driver, {"value": frames})
+        self.transact("bloom.node.connect", composition=self.composition, sourceNode=driver,
+                      sourcePort="value", targetNode=node, port=role)
+
+    def input_ports(self, node_type):
+        if node_type not in self.inputs:
+            record = self.client.call("query", {"kind": "node-types",
+                                                "nodeType": node_type})["record"]
+            self.inputs[node_type] = {p["port"] for p in record["inputs"]}
+        return self.inputs[node_type]
+
+    def node_record(self, node):
         nodes = self.client.call("query", {"kind": "nodes",
                                            "composition": self.composition})["records"]
         for record in nodes:
             if record["id"] == node:
-                return record["parameters"][role]
+                return record
+        raise RuntimeError(f"no node {node}")
+
+    def parameter_id(self, node, role):
+        record = self.node_record(node)
+        if role in record["parameters"]:
+            return record["parameters"][role]
         raise RuntimeError(f"node {node} has no {role}")
 
     def asset(self, fmt):

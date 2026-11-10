@@ -30,6 +30,11 @@ area, and its layers from the bottom up. A layer is one of:
   "size", "steps": [...]} adds a text layer and drives it from a Text Outline of that text read by
   each step in turn, #509).
 
+Every "keys" entry names a role of its node. A role whose schema can be animated is keyed; a
+value-graph operand whose schema cannot be (a path step's amount, a plot's range) is driven through its
+socket by a keyed value node of its kind, the way an artist animates it. A role that is neither fails
+the build of the scenario (keyed_roles below lists them for the runner's test).
+
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
 "maskCombine": {name: [mode, first, second]} a Mask Combine of two of them, "matteMasks":
@@ -240,6 +245,42 @@ def keyed_alpha(scenario):
                                          found) or qualified
             qualified = _keyed_chain(layer["name"], layer.get("effects") or (), qualified, found)
         below = below or qualified
+    return found
+
+
+def _effect_keys(where, effects, found):
+    for effect in effects or ():
+        if len(effect) > 2 and isinstance(effect[2], dict):
+            found.extend((where, effect[0], role) for role in effect[2].get("keys") or {})
+
+
+def _layer_keys(layer, found):
+    name = layer.get("name", "?")
+    if "generator" in layer:
+        found.extend((name, layer["generator"][0], role) for role in layer.get("keys") or {})
+    _effect_keys(name, layer.get("effects"), found)
+    _effect_keys(name, layer.get("adjustment"), found)
+    for entry in layer.get("merge") or ():
+        _layer_keys(entry, found)
+    audio = layer.get("audio") or {}
+    _effect_keys(name, audio.get("effects"), found)
+    _effect_keys(name, audio.get("plots"), found)
+    for qualifier in (layer.get("qualifiers") or {}).values():
+        found.extend((name, "bloom.hsl-qualifier", role) for role in qualifier.get("keys") or {})
+    for field, node_type in (("plotNode", "bloom.function-plot"), ("axesNode", "bloom.axes")):
+        found.extend((name, node_type, role)
+                     for role in (layer.get(field) or {}).get("keys") or {})
+    for step in (layer.get("pathChain") or {}).get("steps") or ():
+        found.extend((name, step["type"], role) for role in step.get("keys") or {})
+
+
+def keyed_roles(scenario):
+    """Every node parameter a scenario keys, as (layer, node type, role). The runner keys a role
+    whose schema can be animated and drives one that cannot from a keyed value node through its
+    operand socket; test_run_scenarios.py checks every listed role is one or the other."""
+    found = []
+    for layer in scenario["layers"]:
+        _layer_keys(layer, found)
     return found
 
 # The synthetic scene's object names (blender_scene.py).
