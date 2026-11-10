@@ -112,7 +112,9 @@ class KSwitch;
 class KRadioGroup;
 class KSlider;
 } // namespace kit
-enum class PropertiesRowControl : std::uint8_t { Automatic, SegmentedEnum, Stepper };
+// SegmentedEnum is the icon-only alignment bar; Radio (#528) is a labelled segmented choice for a
+// short closed set that is better seen than picked from a list (Inner Glow's Edge or Center).
+enum class PropertiesRowControl : std::uint8_t { Automatic, SegmentedEnum, Radio, Stepper };
 enum class PropertiesRowVisibility : std::uint8_t { Visible, Hidden };
 [[nodiscard]] PropertiesRowVisibility
 propertiesRowVisibility(std::string_view role, std::string_view schemaKey,

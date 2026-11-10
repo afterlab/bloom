@@ -10,6 +10,7 @@
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/layer_masks.hpp>
@@ -625,6 +626,8 @@ QString imageSourceColourNote(const CompositionSession& session, const document:
 PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
     if (schemaKey == document::kTextAlignmentParameterSchemaKey)
         return PropertiesRowControl::SegmentedEnum;
+    if (schemaKey == document::kInnerGlowSourceSchemaKey)
+        return PropertiesRowControl::Radio;
     if (schemaKey == document::kTextSizeParameterSchemaKey ||
         schemaKey == document::kTextLineHeightParameterSchemaKey ||
         schemaKey == document::kTextLetterSpacingParameterSchemaKey)

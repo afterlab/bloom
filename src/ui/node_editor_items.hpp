@@ -10,6 +10,7 @@
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/grading_controls.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
@@ -35,6 +36,7 @@
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -730,6 +732,9 @@ class NodeItem final : public QGraphicsObject {
         // The closed enumeration a selector offers, or null for an ordinary operand. A selector's
         // stored value is its item data, so reading one back never depends on a spelling.
         kit::KDropdown* selector = nullptr;
+        // #528: a short closed choice shown as labelled segments (Inner Glow's Edge or Center),
+        // the same radio Properties draws; its stored value is the option's index.
+        kit::KRadioGroup* radio = nullptr;
         // #487: a channel pattern chosen from the input's channels (Copy, Select Channels, the
         // Composition Output's layers).
         ChannelChecklistField* checklist = nullptr;
@@ -1352,6 +1357,21 @@ class NodeItem final : public QGraphicsObject {
                                    declared->schemaKey == "bloom.video.asset" ||
                                    declared->schemaKey == "bloom.audio.asset" ||
                                    declared->schemaKey == "bloom.ocio-file.lut";
+        if (declared->schemaKey == document::kInnerGlowSourceSchemaKey) {
+            row.radio = new kit::KRadioGroup;
+            row.radio->setObjectName(QStringLiteral("nodeOperandRadio"));
+            row.radio->setAccessibleName(label);
+            for (const auto& item : selectorItems(declared->schemaKey))
+                row.radio->addOption(item.first);
+            row.radio->resize(row.radio->sizeHint());
+            prepareField(row.radio);
+            registerControlRole(row.radio, role);
+            connect(row.radio, &kit::KRadioGroup::currentIndexChanged, this,
+                    [commit](int) { commit(); });
+            valueRows_.push_back({label, row.radio, nullptr, {}});
+            operandRows_.push_back(row);
+            return true;
+        }
         if (const auto items = selectorItems(declared->schemaKey);
             probeSelector || colorSpaceSelector || assetSelector ||
             !items.isEmpty()) {
@@ -1546,6 +1566,13 @@ class NodeItem final : public QGraphicsObject {
             return;
         }
         const auto value = [&]() -> std::optional<document::ParameterValue> {
+            if (row.radio != nullptr) {
+                const auto items = selectorItems(document::kInnerGlowSourceSchemaKey);
+                const auto index = row.radio->currentIndex();
+                return index >= 0 && index < items.size()
+                           ? std::optional(document::ParameterValue{items[index].second})
+                           : std::nullopt;
+            }
             if (row.selector != nullptr) {
                 const auto stored = row.selector->itemData(row.selector->currentIndex());
                 const auto* composition = session_->composition();
@@ -1714,11 +1741,19 @@ class NodeItem final : public QGraphicsObject {
             applyTip(row.text);
             applyTip(row.toggle);
             applyTip(row.selector);
+            applyTip(row.radio);
             if (value == nullptr) {
                 // An ANIMATED operand has no constant to read; its row shows the value sampled at
                 // the session time, exactly as a Properties row does (task FIX1, item G). A DRIVEN
                 // one shows nothing, because its widget is hidden anyway.
                 refreshAnimatedOperandRow(row);
+                continue;
+            }
+            if (row.radio != nullptr) {
+                if (const auto* stored = std::get_if<std::int64_t>(value)) {
+                    const QSignalBlocker blocker(row.radio);
+                    row.radio->setCurrentIndex(static_cast<int>(*stored));
+                }
                 continue;
             }
             if (row.selector != nullptr) {

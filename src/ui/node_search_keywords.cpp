@@ -103,6 +103,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     // Light & Shadow
     {"bloom.light-wrap", "LightWrap"},
     {"bloom.drop-shadow", "DropShadow|Shadow"},
+    {"bloom.inner-shadow", "InnerShadow|Inset Shadow|Inner Shadow"},
+    {"bloom.inner-glow", "InnerGlow|Inside Glow|Inner Glow"},
     {"bloom.depth-fog", "Fog|Fog 3D"},
     {"bloom.lens-flare", "Flare|Optical Flares"},
     // Stylize
@@ -182,6 +184,13 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kAlphaContourNodeType)
         return QStringLiteral("outline stroke border edge rim contour alpha matte silhouette "
                               "trace outer inner glowing outline neon");
+    // #528.
+    if (typeId == document::kInnerShadowNodeType)
+        return QStringLiteral("inset shadow inside edge depth recessed bevel emboss title button "
+                              "ui choke offset blur matte alpha");
+    if (typeId == document::kInnerGlowNodeType)
+        return QStringLiteral("inside glow edge light rim bevel title button ui choke size "
+                              "centre center matte alpha luminous");
     // #518.
     if (typeId == document::kToneMapNodeType)
         return QStringLiteral("soft clip highlight compression roll off shoulder knee hdr limiter "

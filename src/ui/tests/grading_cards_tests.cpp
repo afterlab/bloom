@@ -69,6 +69,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/gradient_editor.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
@@ -135,6 +136,20 @@ std::optional<double> stored(ui::CompositionSession& session, const document::No
             const auto* parameter = composition->parameters().find(binding.parameterId);
             const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
             const auto* value = constant ? std::get_if<double>(&constant->value) : nullptr;
+            return value ? std::optional(*value) : std::nullopt;
+        }
+    return std::nullopt;
+}
+
+std::optional<std::int64_t> storedInteger(ui::CompositionSession& session,
+                                          const document::NodeId node, const std::string& role) {
+    const auto* composition = session.composition();
+    const auto* record = composition->graph().findNode(node);
+    for (const auto& binding : record->parameters)
+        if (binding.role == role) {
+            const auto* parameter = composition->parameters().find(binding.parameterId);
+            const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
+            const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
             return value ? std::optional(*value) : std::nullopt;
         }
     return std::nullopt;
@@ -2151,9 +2166,10 @@ void denoiseCard() {
 }
 
 void nodeControlCards() {
-    const std::array<std::pair<std::string_view, const char*>, 17> cards{{
+    const std::array<std::pair<std::string_view, const char*>, 18> cards{{
         {"bloom.four-color-gradient", "four-color-gradient"},
         {"bloom.drop-shadow", "drop-shadow"},
+        {"bloom.inner-shadow", "inner-shadow"},
         {"bloom.glow", "glow"},
         {"bloom.transform-2d", "transform-2d"},
         {"bloom.layer-output", "layer-output"},
@@ -2216,6 +2232,106 @@ void nodeControlCards() {
         QApplication::processEvents();
         expect(std::abs(card->angleRows().front()->valueRow()->field()->value() - *after) < 1e-6,
                "the direction's number follows the dial");
+    }
+    // #528: Inner Shadow's card draws the direction dial and the colour swatch; turning the dial and
+    // picking a colour each edit the document through one command, and undo puts each back.
+    {
+        CardFixture fixture("bloom.inner-shadow");
+        auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(
+                                        fixture.item->cardWidget())
+                                  : nullptr;
+        if (card == nullptr || card->angleRows().empty())
+            return expect(false, "Inner Shadow draws its direction dial");
+        expect(!card->showsRole("direction") && card->socketY("direction").has_value() &&
+                   card->showsRole("distance") && card->showsRole("choke"),
+               "the dial's row keeps the direction's socket; the distance and choke keep their rows");
+        auto& dial = *card->angleRows().front()->dial();
+        const auto before = stored(fixture.session, fixture.node, "direction");
+        const auto commands = fixture.stack.size();
+        const auto centre = dial.discRect().center();
+        const double reach = dial.discRect().width() * 0.4;
+        mouse(dial, QEvent::MouseButtonPress, centre + QPointF(0.0, -reach));
+        mouse(dial, QEvent::MouseMove, centre + QPointF(reach, 0.0));
+        mouse(dial, QEvent::MouseButtonRelease, centre + QPointF(reach, 0.0));
+        const auto after = stored(fixture.session, fixture.node, "direction");
+        expect(before && after && std::abs(*after - (*before + 90.0)) < 1e-6 &&
+                   fixture.stack.size() == commands + 1,
+               "turning the Inner Shadow dial a quarter turn adds 90 degrees as one command");
+        expect(fixture.session.undo() && stored(fixture.session, fixture.node, "direction") == before,
+               "one undo puts the direction back");
+        const auto chipFor = [&](CardFixture& card) -> ui::kit::KColorChip* {
+            for (auto* widget : card.editor->graphScene()->nodeControlsForRoleForTest(
+                     card.node, QStringLiteral("color")))
+                if (auto* found = qobject_cast<ui::kit::KColorChip*>(widget))
+                    return found;
+            return nullptr;
+        };
+        auto* chip = chipFor(fixture);
+        expect(chip != nullptr, "the Inner Shadow card carries the shadow colour's swatch");
+        if (chip != nullptr) {
+            const auto colourOf = [&]() -> std::optional<core::Color4d> {
+                const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, "color");
+                const auto* parameter =
+                    id ? fixture.session.composition()->parameters().find(*id) : nullptr;
+                const auto* constant =
+                    parameter ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                              : nullptr;
+                const auto* value = constant ? std::get_if<core::Color4d>(&constant->value) : nullptr;
+                return value ? std::optional(*value) : std::nullopt;
+            };
+            QElapsedTimer converter;
+            converter.start();
+            while (!fixture.session.colorConverterReady() && converter.elapsed() < 5'000)
+                QApplication::processEvents(QEventLoop::AllEvents, 20);
+            const auto colourBefore = colourOf();
+            chip->setColor(ui::kit::KColor::fromRgba(0.2F, 0.4F, 0.6F, 1.0F));
+            QApplication::processEvents();
+            const auto colourAfter = colourOf();
+            expect(colourBefore && colourAfter && colourAfter->blue > 0.1 &&
+                       colourAfter->blue != colourBefore->blue && fixture.session.canUndo(),
+                   "picking a colour on the swatch sets the shadow colour through a command");
+            expect(fixture.session.undo() && colourOf() == colourBefore,
+                   "one undo puts the colour back");
+        }
+        capture(fixture, QStringLiteral("inner-shadow-dial"));
+    }
+    // #528: Inner Glow's card carries the Edge or Center choice, the swatch and the sliders.
+    {
+        CardFixture fixture("bloom.inner-glow");
+        expect(fixture.item != nullptr, "Inner Glow draws its card");
+        if (fixture.item != nullptr) {
+            ui::kit::KColorChip* chip = nullptr;
+            for (auto* widget : fixture.editor->graphScene()->nodeControlsForRoleForTest(
+                     fixture.node, QStringLiteral("color")))
+                if (auto* found = qobject_cast<ui::kit::KColorChip*>(widget))
+                    chip = found;
+            expect(chip != nullptr, "the Inner Glow card carries the glow colour's swatch");
+            ui::kit::KRadioGroup* radio = nullptr;
+            for (auto* widget : fixture.editor->graphScene()->nodeControlsForRoleForTest(
+                     fixture.node, QStringLiteral("source")))
+                if (auto* found = qobject_cast<ui::kit::KRadioGroup*>(widget))
+                    radio = found;
+            expect(radio != nullptr && radio->count() == 2 && radio->currentIndex() == 0,
+                   "the Inner Glow card has the Edge or Center radio, on Edge");
+            if (radio != nullptr) {
+                const auto commands = fixture.stack.size();
+                radio->setCurrentIndex(1);
+                QApplication::processEvents();
+                expect(storedInteger(fixture.session, fixture.node, "source") == 1 &&
+                           fixture.stack.size() == commands + 1,
+                       "choosing Center on the card sets the source as one command");
+                expect(fixture.session.undo() && (QApplication::processEvents(), radio->currentIndex() == 0),
+                       "one undo puts the card's radio back on Edge");
+            }
+            capture(fixture, QStringLiteral("inner-glow-edge"));
+            expect(fixture.session.setNodeParameterValue(fixture.node, "source", std::int64_t{1},
+                                                         QStringLiteral("Set")),
+                   "the source is set through a command");
+            QApplication::processEvents();
+            expect(radio != nullptr && radio->currentIndex() == 1,
+                   "the card's radio follows a source set elsewhere");
+            capture(fixture, QStringLiteral("inner-glow-center"));
+        }
     }
     {
         CardFixture fixture("bloom.luma-key");

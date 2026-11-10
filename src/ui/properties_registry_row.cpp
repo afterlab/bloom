@@ -8,6 +8,7 @@
 #include "row_inline_controls.hpp"
 #include "font_picker.hpp"
 #include "value_presentation.hpp"
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/parameter_activity.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
@@ -224,6 +225,11 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     if (schemaKey.starts_with(document::kFrameRateHoldNodeType))
         if (const auto* hold = document::motionParameterSpec(schemaKey); hold != nullptr)
             return QCoreApplication::translate("PropertiesRow", std::string(hold->label).c_str());
+    // #528 Inner Shadow's blur and Inner Glow's source read as the artist names them.
+    if (schemaKey == document::kInnerShadowSoftnessSchemaKey)
+        return QCoreApplication::translate("PropertiesRow", "Blur");
+    if (schemaKey == document::kInnerGlowSourceSchemaKey)
+        return QCoreApplication::translate("PropertiesRow", "Source");
     // #486 Chromatic Aberration.
     if (schemaKey == document::kChromaticAberrationAmountSchemaKey)
         return QCoreApplication::translate("PropertiesRow", "Amount");
@@ -429,15 +435,20 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         properties::bindValueEdit(session_, *slider_, [this] { return parameter_; });
         layout->addWidget(slider_);
         connect(slider_, &kit::KSlider::valueChanged, this, [this] { commit(); });
-    } else if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum) {
+    } else if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum ||
+               propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::Radio) {
+        const bool labelled = propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::Radio;
         segments_ = new kit::KRadioGroup(controls);
-        segments_->setObjectName("propertiesRegistryEnum");
+        segments_->setObjectName(labelled ? "propertiesRegistryRadio" : "propertiesRegistryEnum");
         segments_->setAccessibleName(label);
-        segments_->setIconsOnly(true);
+        segments_->setIconsOnly(!labelled);
         const std::array icons{kit::IconId::AlignLeft, kit::IconId::AlignCenter,
                                kit::IconId::AlignRight};
         for (int index = 0; index < items.size(); ++index)
-            segments_->addOption(items[index].first, icons[static_cast<std::size_t>(index)]);
+            if (labelled)
+                segments_->addOption(items[index].first);
+            else
+                segments_->addOption(items[index].first, icons[static_cast<std::size_t>(index)]);
         segments_->setFixedSize(segments_->sizeHint());
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });

@@ -646,8 +646,9 @@ void testSearchKeyboardAndMenus() {
                   "Optical Flow Motion Blur", "Sharpen", "Spin Blur", "Vector Motion Blur",
                   "Z Defocus", "Zoom Blur"},
                  "Blur & Sharpen holds the blurs and motion blur");
-        hasGroup("Light & Shadow", {"Depth Fog", "Drop Shadow", "Glow", "Glowing paths", "Lens Flare",
-                  "Light Rays", "Light Wrap"},
+        hasGroup("Light & Shadow",
+                 {"Depth Fog", "Drop Shadow", "Glow", "Glowing paths", "Inner Glow", "Inner Shadow",
+                  "Lens Flare", "Light Rays", "Light Wrap"},
                  "Light & Shadow holds the light effects");
         hasGroup("Stylize", {"Alpha Contour", "Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
         hasGroup("Color Correction",

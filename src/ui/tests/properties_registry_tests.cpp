@@ -1169,6 +1169,13 @@ void recipeRows() {
                     "length", "chromatic", "dirtAmount", "rollOff"},
                    "glowOnly"},
           Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"},
+          // #528: the shadow's and the glow's values and their Only switches.
+          Expected{"bloom.inner-shadow",
+                   {"color", "opacity", "direction", "distance", "softness", "choke"},
+                   "shadowOnly"},
+          Expected{"bloom.inner-glow",
+                   {"color", "opacity", "intensity", "size", "choke", "source"},
+                   "glowOnly"},
           // #516: two values and no switch.
           Expected{"bloom.edge-extend", {"distance", "amount"}, nullptr},
           // #509: a band's width, softness, offset, colour and composite choice; no switch.
@@ -1763,6 +1770,130 @@ void tileMirrorRows() {
                 auto* found = row(properties, role);
                 expect(found == nullptr || !found->isVisibleTo(&properties),
                        "a linked size and an unclamped output hide the rows they do not read");
+            }
+        }
+    }
+}
+
+// #528 Inner Shadow and Inner Glow in Properties: every value a visible row in plain words, labels and
+// values shown whole, nothing wider than the panel, at the widths of a wide, a normal and a narrow
+// panel. Inner Glow's Source is a labelled Edge/Center radio that edits the node through a command and
+// undoes; Inner Shadow's direction is the dial on its card (its row), not a number to type. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is
+// written at each width (suffixed with the device pixel ratio), one per source of Inner Glow.
+void innerRows() {
+    struct Case final {
+        const char* type;
+        std::int64_t source;
+        const char* name;
+        std::vector<std::pair<std::string, std::string>> rows;
+        bool dial;
+    };
+    const std::vector<Case> cases{
+        {"bloom.inner-shadow", 0, "inner-shadow",
+         {{"color", "Color"}, {"opacity", "Opacity"}, {"distance", "Distance"},
+          {"softness", "Blur"}, {"choke", "Choke"}, {"shadowOnly", "Shadow Only"}},
+         true},
+        {"bloom.inner-glow", 0, "inner-glow-edge",
+         {{"color", "Color"}, {"opacity", "Opacity"}, {"intensity", "Intensity"}, {"size", "Size"},
+          {"choke", "Choke"}, {"source", "Source"}, {"glowOnly", "Glow Only"}},
+         false},
+        {"bloom.inner-glow", 1, "inner-glow-center",
+         {{"color", "Color"}, {"opacity", "Opacity"}, {"intensity", "Intensity"}, {"size", "Size"},
+          {"choke", "Choke"}, {"source", "Source"}, {"glowOnly", "Glow Only"}},
+         false}};
+    for (const auto& item : cases) {
+        auto project = document::makeNewProject("Inner", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, item.type);
+        session.selectNode(node);
+        if (item.source != 0) {
+            // The radio itself is set, so the edit goes through the widget and its command.
+            properties.resize(900, 900);
+            properties.show();
+            QCoreApplication::processEvents();
+            auto* sourceRow = row(properties, "source");
+            auto* radio = sourceRow ? sourceRow->findChild<ui::kit::KRadioGroup*>() : nullptr;
+            expect(radio != nullptr && radio->count() == 2 && radio->currentIndex() == 0 &&
+                       radio->optionText(0) == QStringLiteral("Edge") &&
+                       radio->optionText(1) == QStringLiteral("Center"),
+                   "Inner Glow's Source is an Edge/Center radio that starts on Edge");
+            if (radio != nullptr) {
+                const auto commands = stack.size();
+                radio->setCurrentIndex(1);
+                QCoreApplication::processEvents();
+                const auto* record = [&]() -> const document::ParameterRecord* {
+                    for (const auto& binding : session.composition()->graph().findNode(node)->parameters)
+                        if (binding.role == "source")
+                            return session.composition()->parameters().find(binding.parameterId);
+                    return nullptr;
+                }();
+                const auto* constant =
+                    record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+                expect(constant != nullptr &&
+                           std::get_if<std::int64_t>(&constant->value) != nullptr &&
+                           *std::get_if<std::int64_t>(&constant->value) == 1 &&
+                           stack.size() == commands + 1 && radio->currentIndex() == 1,
+                       "clicking Center sets Source to Center as one command");
+                expect(session.undo() && (QCoreApplication::processEvents(), radio->currentIndex() == 0),
+                       "one undo puts Source back on Edge and the radio follows");
+                radio->setCurrentIndex(1);
+                QCoreApplication::processEvents();
+            }
+        }
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1000);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& [role, name] : item.rows) {
+                auto* found = row(properties, role.c_str());
+                if (found == nullptr || !found->isVisibleTo(&properties))
+                    std::cerr << item.name << " at " << width << ": row " << role << " is not shown\n";
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "an Inner node presents every value");
+                if (found == nullptr)
+                    continue;
+                expect(found->property("rowLabel").toString() == QString::fromStdString(name),
+                       "an Inner node names a row in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == QString::fromStdString(name) &&
+                        candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                if (shown == nullptr)
+                    std::cerr << item.name << " at " << width << ": no visible label " << name << "\n";
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "an Inner node shows a row label whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) &&
+                                   !field->isDisplayRounded(),
+                               "an Inner node shows a value whole");
+            }
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "an Inner node's rows never exceed the panel's width");
+            auto* controls = properties.findChild<ui::NodeControlsCardWidget*>();
+            std::size_t dials = 0;
+            if (controls != nullptr)
+                for (auto* angle : controls->angleRows())
+                    dials += angle->isVisibleTo(&properties) ? 1U : 0U;
+            expect(dials == (item.dial ? 1U : 0U),
+                   "an Inner node shows the dial of its angle, and no other");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QLatin1Char('/') +
+                                            QString::fromLatin1(item.name) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the " << item.name << " Properties capture\n";
             }
         }
     }
@@ -2884,6 +3015,7 @@ int main(int argc, char** argv) try {
     extensionPropertiesRows();
     warpRows();
     tileMirrorRows();
+    innerRows();
     audioEffectRows();
     groupAndPlotRows();
     resamplePathRowOrder();

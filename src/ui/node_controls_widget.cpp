@@ -497,6 +497,9 @@ struct Controls final {
     if (typeId == "bloom.drop-shadow") {
         // Clockwise from up, as the shadow is cast.
         controls.angles.push_back(angle("direction", "bloom.drop-shadow.direction", false, false));
+    } else if (typeId == document::kInnerShadowNodeType) {
+        // #528: clockwise from up, as Drop Shadow's; the colour is the card's swatch row.
+        controls.angles.push_back(angle("direction", "bloom.inner-shadow.direction", false, false));
     } else if (typeId == "bloom.glow") {
         // The octaves' colours with the gradient on: the tightest octave the start, the widest
         // the end.
