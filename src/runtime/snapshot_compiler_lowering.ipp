@@ -1113,6 +1113,8 @@ struct StatisticsLowering final {
     }
     auto nested = request_;
     nested.channelInspection = runtime::ChannelInspection{edge->source.nodeId, edge->source.port, {}};
+    // #645: a statistic measures the picture as exported, never the Viewer's dimmed one.
+    nested.isolation.clear();
     nested.statisticsTap = node.id;
     nested.statisticsStack.push_back(node.id);
     auto compiled = CompilePass(registry_, nested, cancellation_, nullptr).run();

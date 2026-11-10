@@ -1751,8 +1751,17 @@ struct CompiledLayerOutput {
     // the larger scale, as the group's reader (with the same content scale) expects. A power of
     // two. Appended 1: no existing plan changes meaning.
     double outputScale = 1.0;
+    // #645: the factor on the layer's resolved opacity while the Viewer isolates a group the layer
+    // is outside of (kViewerIsolationOpacity); 1 in every plan an export or render compiles.
+    // detail::resolveLayerOpacity applies it on the CPU reference and the GPU route alike. Appended
+    // 1: no existing plan changes meaning.
+    double isolationOpacity = 1.0;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
+
+// #645: how strongly the Viewer draws what is outside the group it is inside: 30% of each layer's
+// own opacity. Fixed, not a preference (docs/user-guide/viewer.md, "Drilling into groups").
+inline constexpr double kViewerIsolationOpacity = 0.3;
 
 // Plan v3: an invalid layerId denotes a plain image with Normal blending.
 // #339: a plain image entry (no layer) may instead name its blend mode explicitly; the compositing

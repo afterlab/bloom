@@ -124,6 +124,18 @@ resolveParameter(const CompiledScalarParameter& parameter, const CompiledComposi
                                      sample.segmentStart};
 }
 
+// A layer's opacity as it is drawn: its own resolved opacity times the Viewer's isolation factor
+// (#645, CompiledLayerOutput::isolationOpacity, 1 outside the Viewer). Every route that composites a
+// layer reads its opacity through here, so the CPU reference and the GPU route dim alike.
+[[nodiscard]] inline std::optional<ResolvedParameter<double>>
+resolveLayerOpacity(const CompiledLayerOutput& layer, const CompiledCompositionPlan& plan,
+                    const ResolvedEvaluation& resolved) noexcept {
+    auto opacity = resolveParameter(layer.opacity, plan, resolved);
+    if (opacity)
+        opacity->value *= layer.isolationOpacity;
+    return opacity;
+}
+
 // Task DRIVE-1. The fourth member of this family, for the parameter kinds that cannot interpolate
 // -- a String, an Integer (every enum-backed one included) and a Boolean. They have no curve table
 // to index, so unlike their three animatable siblings they answer only the two questions that are

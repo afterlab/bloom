@@ -50,6 +50,11 @@ struct PreviewRequestIdentity final {
     bool showLook = true;
     // ADR 0026 Viewer channel inspection (a session display choice; absent for the composition).
     std::optional<ChannelInspection> channelInspection = std::nullopt;
+    // #645 Viewer isolation: the groups the Viewer is inside, outermost first, whose outside it
+    // draws dimmed (SnapshotCompileRequest::isolation). A session display choice like the channel
+    // inspection: empty for the composition as exported, and part of the frame's identity, so a
+    // dimmed frame is never served outside the group or an undimmed one inside it.
+    std::vector<document::LayerId> isolation{};
 
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
@@ -343,15 +348,18 @@ class PreparedPreviewFrame final {
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     // `channelInspection` is the Viewer inspection the frame's plan was compiled for (ADR 0026,
     // #364): the plan does not record it, so the stage that compiled it supplies it.
+    // `isolation` likewise is the Viewer isolation the plan was compiled for (#645).
     create(std::uint64_t requestGeneration,
            std::shared_ptr<const ReferenceDisplayFrame> displayFrame,
            PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
-           std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
+           std::optional<ChannelInspection> channelInspection = std::nullopt,
+           std::vector<document::LayerId> isolation = {}) noexcept;
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createQualified(std::uint64_t requestGeneration,
                     std::shared_ptr<const QualifiedDisplayFrame> displayFrame,
                     PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto,
-                    std::optional<ChannelInspection> channelInspection = std::nullopt) noexcept;
+                    std::optional<ChannelInspection> channelInspection = std::nullopt,
+                    std::vector<document::LayerId> isolation = {}) noexcept;
     // Re-stamps a retained display-only frame with the generation of the request it now answers.
     [[nodiscard]] static std::optional<PreparedPreviewFrame>
     createDisplayOnly(std::uint64_t requestGeneration,

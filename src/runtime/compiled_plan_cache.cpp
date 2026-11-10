@@ -43,7 +43,8 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
     const auto sameInput = [&request, revision, fontEpoch](const Entry& entry) {
         return entry.compositionId == request.compositionId && entry.revision == revision &&
                &entry.snapshot.project() == &request.snapshot.project() &&
-               entry.channelInspection == request.channelInspection && entry.fontEpoch == fontEpoch;
+               entry.channelInspection == request.channelInspection &&
+               entry.isolation == request.isolation && entry.fontEpoch == fontEpoch;
     };
     if (!request.parameterOverrides.empty()) {
         // An overridden request's plan is not the revision's plan; it is this one gesture frame's.
@@ -85,6 +86,7 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
                                             .revision = revision,
                                             .result = result,
                                             .channelInspection = request.channelInspection,
+                                            .isolation = request.isolation,
                                             .fontEpoch = fontEpoch});
     if (entries_.size() > capacity_) {
         // Erase rather than resize: Snapshot is not default-constructible.

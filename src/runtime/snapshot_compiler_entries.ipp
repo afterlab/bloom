@@ -142,6 +142,9 @@ lowerLayerBoundary(const document::LayerOutputBoundary& boundary, const document
         result.contentScale = content->second;
     if (const auto output = artwork_.outputScales.find(boundary.layerId); output != artwork_.outputScales.end())
         result.outputScale = output->second;
+    // #645: outside the group the Viewer isolates, the layer draws dimmed.
+    if (isolationDimmed_.contains(boundary.layerId))
+        result.isolationOpacity = runtime::kViewerIsolationOpacity;
     return result;
 }
 
@@ -431,6 +434,9 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
     if (layer == nullptr)
         return true;
     const auto duration = composition_->duration();
+    // #645: an entry the Viewer dims covers 30%, never the whole frame.
+    if (isolationDimmed_.contains(layer->layerId))
+        return false;
     if (!layer->masks.empty() || layer->trackMatte || layer->parent ||
         core::RationalTime{} < layer->inPoint || layer->endPoint(duration) < duration)
         return false;

@@ -294,7 +294,7 @@ class UnclippedPictures final {
         const auto anchor = resolveParameter(layer.anchor, plan_, resolved);
         const auto scale = resolveParameter(layer.scale, plan_, resolved);
         const auto rotation = resolveParameter(layer.rotation, plan_, resolved);
-        const auto opacity = resolveParameter(layer.opacity, plan_, resolved);
+        const auto opacity = resolveLayerOpacity(layer, plan_, resolved);
         if (!position || !anchor || !scale || !rotation || !opacity)
             return;
         const auto& content = *contentMatrices_[index];

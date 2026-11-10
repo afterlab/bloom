@@ -3445,7 +3445,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 const auto& inputVector = vectors[layer->input.value()];
                 if (inputVector) {
                     const auto& input = *inputVector;
-                    const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
+                    const auto opacity = detail::resolveLayerOpacity(*layer, *plan, resolved);
                     // #642: a content scale maps its larger input back (vector sources have no
                     // pixel aspect of their own); an output scale draws into a larger group.
                     const auto own = layer->contentScale != 1.0
@@ -3454,7 +3454,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     vectors[index] = VectorChain{input.source, own.times(input.matrix),
                                                  opacity ? input.opacity * opacity->value : 0};
                 } else if (const auto opacity =
-                               detail::resolveParameter(layer->opacity, *plan, resolved)) {
+                               detail::resolveLayerOpacity(*layer, *plan, resolved)) {
                     const auto inputIndex = layer->input.value();
                     const auto& inner = rasterChains[inputIndex];
                     rasterChains[index] =
@@ -3782,6 +3782,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.scale);
                             parameter(step.rotation);
                             parameter(step.opacity);
+                            // #645: the Viewer's isolation dims the layer's opacity.
+                            if (step.isolationOpacity != 1.0) {
+                                key.add(std::string("isolationOpacity"));
+                                key.add(step.isolationOpacity);
+                            }
                             // #448: the footage pixel aspect scales the layer's content, so a
                             // changed interpretation must not reuse the previous aspect's image.
                             key.add(step.sourcePixelAspect);
@@ -4922,7 +4927,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto rotation =
                                 detail::resolveParameter(layer.rotation, *plan, resolved);
                             const auto opacity =
-                                detail::resolveParameter(layer.opacity, *plan, resolved);
+                                detail::resolveLayerOpacity(layer, *plan, resolved);
                             if (!position.has_value() || !anchor.has_value() ||
                                 !scale.has_value() || !rotation.has_value() ||
                                 !opacity.has_value()) {

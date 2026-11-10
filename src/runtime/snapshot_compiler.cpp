@@ -20,6 +20,7 @@
 #include "snapshot_compiler_support.hpp"
 #include <bloom/runtime/layer_time_projection.hpp>
 
+#include <bloom/document/drill_levels.hpp>
 #include <bloom/document/parameter_activity.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
@@ -176,6 +177,10 @@ class CompilePass final {
                        "The requested composition does not exist in this document snapshot.");
             return finishWithoutPlan();
         }
+        // #645: the layers the Viewer's isolation dims, named on the composition as authored (the
+        // expansions below keep every authored layer's id).
+        for (const auto layer : document::drillIsolationDimmed(*composition_, request_.isolation))
+            isolationDimmed_.insert(layer);
         // #342: every Node Group is replaced by the nodes of the group it names, so the rest of
         // the pass (and every route that reads the plan) sees ordinary nodes.
         expansion_ = document::expandNodeGroups(request_.snapshot.project(), *composition_);
@@ -1411,6 +1416,8 @@ class CompilePass final {
     std::map<std::pair<document::NodeId, document::LayerSlotId>, runtime::OperationIndex>
         adjustmentComposites_;
     std::unordered_set<document::LayerId> matteSources_;
+    // #645: the layers outside the Viewer's isolated group (SnapshotCompileRequest::isolation).
+    std::unordered_set<document::LayerId> isolationDimmed_;
     bool anySolo_ = false;
     bool hasAdjustments_ = false;
     runtime::CompiledPlanCache* planCache_ = nullptr;

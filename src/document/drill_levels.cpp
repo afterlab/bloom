@@ -409,6 +409,24 @@ DrillLevelCheck checkDrillLevel(const Composition& composition,
     return {};
 }
 
+std::vector<LayerId> drillIsolationDimmed(const Composition& composition,
+                                          const std::span<const LayerId> chain,
+                                          const NodeDefinitionRegistry& registry) {
+    std::vector<LayerId> dimmed;
+    if (chain.empty() || validDrillPrefix(composition, chain, registry) != chain.size())
+        return dimmed;
+    auto merge = composition.graph().outputMergeId();
+    for (const auto entered : chain) {
+        if (!merge)
+            return {};
+        for (const auto child : drillChildren(composition, *merge, registry))
+            if (child != entered)
+                dimmed.push_back(child);
+        merge = layerContentMerge(composition, entered, registry);
+    }
+    return dimmed;
+}
+
 std::size_t validDrillPrefix(const Composition& composition, const std::span<const LayerId> chain,
                              const NodeDefinitionRegistry& registry) {
     for (std::size_t length = chain.size(); length > 0; --length)

@@ -102,6 +102,10 @@ struct SnapshotCompileRequest {
     std::vector<SnapshotParameterOverride> parameterOverrides{};
     // ADR 0026: a viewer-only plan whose output shows these channels raw (see channel_inspection).
     std::optional<ChannelInspection> channelInspection{};
+    // #645 isolation: a viewer-only plan while the Viewer is inside these groups (outermost first;
+    // document::drillIsolationDimmed names the layers outside them), each of which then draws at
+    // kViewerIsolationOpacity of its own opacity. Empty for every export, render and query.
+    std::vector<document::LayerId> isolation{};
     // #349: the statistics plan of this Image Statistics node. The compiler sets it, with
     // `channelInspection` on the picture the node reads, to compile that picture followed by the
     // node's reduction (docs/architecture/image-statistics.md). `statisticsStack` holds the

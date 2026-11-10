@@ -138,7 +138,7 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
         const auto anchor = resolveParameter(layer->anchor, plan, layerResolved);
         const auto scale = resolveParameter(layer->scale, plan, layerResolved);
         const auto rotation = resolveParameter(layer->rotation, plan, layerResolved);
-        const auto opacity = resolveParameter(layer->opacity, plan, layerResolved);
+        const auto opacity = resolveLayerOpacity(*layer, plan, layerResolved);
         const auto blend = resolveParameter(*layer, layerResolved);
         if (!position || !anchor || !scale || !rotation || !opacity || !blend) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,

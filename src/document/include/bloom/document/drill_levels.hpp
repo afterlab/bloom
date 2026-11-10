@@ -138,6 +138,14 @@ checkDrillLevel(const Composition& composition, std::span<const LayerId> chain,
                 std::optional<LayerId> points,
                 const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
 
+// The layers the Viewer draws dimmed while it is inside `chain` (isolation): at every level from
+// the top, each child other than the group entered next. Matte sources are left alone (the layer
+// they matte is dimmed, or is inside the entered group and must not be), and nothing inside the
+// last entered group is dimmed. Empty for the top level or a chain that does not resolve.
+[[nodiscard]] std::vector<LayerId>
+drillIsolationDimmed(const Composition& composition, std::span<const LayerId> chain,
+                     const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
+
 // The longest prefix of `chain` that is still a valid chain of groups.
 [[nodiscard]] std::size_t
 validDrillPrefix(const Composition& composition, std::span<const LayerId> chain,

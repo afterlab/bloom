@@ -941,7 +941,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto anchor = detail::resolveParameter(layer->anchor, *plan, resolved);
             const auto scale = detail::resolveParameter(layer->scale, *plan, resolved);
             const auto rotation = detail::resolveParameter(layer->rotation, *plan, resolved);
-            const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
+            const auto opacity = detail::resolveLayerOpacity(*layer, *plan, resolved);
             if (!position || !anchor || !scale || !rotation || !opacity) {
                 return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                             "Layer parameters are not evaluable");

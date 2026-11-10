@@ -81,6 +81,8 @@ class CompiledPlanCache final {
         document::Revision revision;
         SnapshotCompileResult result;
         std::optional<ChannelInspection> channelInspection{};
+        // #645: a plan the Viewer's isolation dims is not the exported plan.
+        std::vector<document::LayerId> isolation{};
         std::uint64_t fontEpoch = 0;
     };
 
