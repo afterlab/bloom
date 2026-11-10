@@ -1,7 +1,10 @@
 // #599 Line Shape Source ends as Viewer point handles. A selected Line draws a handle at each end;
 // dragging one edits `lineStart` or `lineEnd` at the playhead through the session's value edit, so
 // a keyed end gets a key at the playhead and a constant end is set, as one undoable command. The
-// ends are source coordinates, so the layer's transform carries them to the composition.
+// ends are source coordinates, so the layer's transform carries them to the composition. A Line
+// pivots on its content centre, the midpoint of its ends, so the anchor takes up half an end's move
+// to keep the other end still; for a keyed end that compensation is keyed too (a key at the
+// playhead, the anchor pinned at the end's other key times), so a drag changes only that frame.
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/document/shape.hpp>
@@ -14,6 +17,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -134,6 +138,26 @@ bool ViewerEditor::lineHandlePress(QMouseEvent* event) {
     const auto endBase = liveEnd(session_, id);
     if (!endBase || !session_.beginValueEdits(edited, tr("Move Line End")))
         return false;
+    // A keyed end moves the pivot only at the playhead: the anchor takes up the move there and is
+    // pinned to its present value at every other key time of the end, so the other frames of the
+    // line, and the other end at this frame, stay where they were.
+    if (anchorBase) {
+        const auto* parameter = session_.composition()->parameters().find(id);
+        const auto* source = parameter != nullptr
+                                 ? std::get_if<document::AnimationCurveSource>(&parameter->source)
+                                 : nullptr;
+        const auto* curve = source != nullptr
+                                ? session_.composition()->animationCurves().findVec2(source->curveId)
+                                : nullptr;
+        if (curve != nullptr) {
+            std::vector<core::RationalTime> times;
+            for (const auto& component : curve->components)
+                for (const auto& key : component.keyframes)
+                    if (std::ranges::find(times, key.time) == times.end())
+                        times.push_back(key.time);
+            session_.holdKeysDuringValueEdits(target->anchor, std::move(times));
+        }
+    }
     lineDrag_ = LineHandleDrag{target->node, id, *toComposition, *endBase, anchorBase};
     event->accept();
     setFocus(Qt::MouseFocusReason);

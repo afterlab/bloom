@@ -719,6 +719,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool beginValueEdits(const std::vector<document::ParameterId>& parameters,
                                        const QString& commandLabel);
     [[nodiscard]] bool updateValueEdits(const std::vector<document::ParameterValue>& values);
+    // A linked parameter of a beginValueEdits() gesture that follows the first one (a Line end's
+    // layer anchor) is keyed at these times with its present value when the gesture commits, so
+    // the key the gesture writes at the playhead is the only frame it changes. Vec2 parameters.
+    void holdKeysDuringValueEdits(document::ParameterId linked,
+                                  std::vector<core::RationalTime> times);
     // #494: several parameters set in one transaction and one undo step (a Grade wheel's reset).
     [[nodiscard]] bool setParameterValues(
         std::vector<std::pair<document::ParameterId, document::ParameterValue>> values,
@@ -1180,6 +1185,9 @@ class CompositionSession final : public QObject {
             document::ParameterId parameter;
             document::ParameterValue base;
             document::ParameterValue value;
+            // Key times (of the parameter's own clock) the commit pins to the parameter's present
+            // value before the edit's key lands, so a key at the playhead leaves them as they were.
+            std::vector<core::RationalTime> holdKeys{};
         };
         std::vector<LinkedEdit> linked{};
         QString label{};

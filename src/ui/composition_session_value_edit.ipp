@@ -202,6 +202,15 @@ bool CompositionSession::updateValueEdits(const std::vector<document::ParameterV
     return true;
 }
 
+void CompositionSession::holdKeysDuringValueEdits(const document::ParameterId linked,
+                                                  std::vector<core::RationalTime> times) {
+    if (!valueEdit_)
+        return;
+    for (auto& edit : valueEdit_->linked)
+        if (edit.parameter == linked)
+            edit.holdKeys = std::move(times);
+}
+
 bool CompositionSession::setParameterValues(
     std::vector<std::pair<document::ParameterId, document::ParameterValue>> values,
     const QString& commandLabel) {
@@ -361,10 +370,42 @@ bool CompositionSession::commitValueEdit() {
         if (result && edit.anchor && edit.anchor->base != edit.anchor->value)
             result = appendParameterEdit(transaction, edit.anchor->parameter, edit.time,
                                          edit.anchor->value);
-        for (const auto& linked : edit.linked)
-            if (result && linked.value != linked.base)
-                result = appendParameterEdit(transaction, linked.parameter, edit.time,
-                                             linked.value);
+        for (const auto& linked : edit.linked) {
+            if (!result || linked.value == linked.base)
+                continue;
+            const auto* held = composition()->parameters().find(linked.parameter);
+            const auto* base = std::get_if<document::Vec2d>(&linked.base);
+            const auto* value = std::get_if<document::Vec2d>(&linked.value);
+            if (linked.holdKeys.empty() || held == nullptr || base == nullptr || value == nullptr) {
+                result = appendParameterEdit(transaction, linked.parameter, edit.time, linked.value);
+                continue;
+            }
+            // Pin the held key times to what the parameter is now, then key the playhead.
+            const auto at = keyTimeOf(linked.parameter, edit.time);
+            const auto* source = std::get_if<document::AnimationCurveSource>(&held->source);
+            const auto* curve = source ? composition()->animationCurves().findVec2(source->curveId)
+                                       : nullptr;
+            for (const auto time : linked.holdKeys) {
+                if (time == at)
+                    continue;
+                if (curve != nullptr &&
+                    std::ranges::any_of(curve->components, [&](const auto& component) {
+                        return std::ranges::any_of(component.keyframes, [&](const auto& key) {
+                            return key.time == time;
+                        });
+                    }))
+                    continue;
+                document::Vec2d pinned = *base;
+                if (source != nullptr)
+                    if (const auto sampled = sampleParameterValue(*held, time))
+                        if (const auto* vec = std::get_if<document::Vec2d>(&*sampled))
+                            pinned = *vec;
+                transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
+                    compositionId_, linked.parameter, time, pinned);
+            }
+            transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
+                compositionId_, linked.parameter, at, *value);
+        }
         // #543: the gradient's stop links follow their stops in the same step.
         if (result && edit.stopLinks && edit.value != edit.base)
             transaction.emplace<commands::RemapGradientStopLinks>(

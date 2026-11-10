@@ -312,6 +312,49 @@ void testKeyedEnds() {
     expect(scene.keyTimes("lineEnd").size() == 2, "one undo removes the key the drag wrote");
 }
 
+// Dragging a keyed end at one time changes only that end at that time: on the frame at the other
+// key the whole line is where it was, and at the dragged time the other end stays put.
+void testKeyedDragLeavesOtherFrames() {
+    Scene scene;
+    Harness harness(scene);
+    if (!harness.mapping)
+        return;
+    const auto second = [](const std::int64_t value) {
+        return core::RationalTime::fromInteger(value);
+    };
+    static_cast<void>(scene.session.setCurrentTime(second(0)));
+    expect(scene.session.toggleKeyframeForParameter(scene.parameter("lineEnd")), "key lineEnd at 0 s");
+    expect(scene.session.setCurrentTime(second(1)), "go to 1 s");
+    expect(scene.session.toggleKeyframeForParameter(scene.parameter("lineEnd")), "key lineEnd at 1 s");
+    harness.settle();
+    // The frame positions of both ends at 0 s, before the drag.
+    static_cast<void>(scene.session.setCurrentTime(second(0)));
+    const auto startAtZero = harness.comp(scene.end("lineStart"));
+    const auto endAtZero = harness.comp(scene.end("lineEnd"));
+    expect(scene.session.setCurrentTime(second(1)), "back to 1 s");
+    harness.settle();
+    const auto startAtOne = harness.comp(scene.end("lineStart"));
+    const auto before = scene.stack.size();
+    const auto target = harness.at({100.0, -40.0});
+    const auto wanted = harness.mapping->toComposition(target);
+    harness.drag(harness.at(scene.end("lineEnd")), target);
+    expect(scene.stack.size() == before + 1, "the keyed drag is one command");
+    expect(nearPoint(harness.comp(scene.end("lineEnd")), wanted, 0.6),
+           "the dragged end is under the pointer at 1 s");
+    expect(nearPoint(harness.comp(scene.end("lineStart")), startAtOne, 0.01),
+           "the other end does not move on the frame at 1 s");
+    static_cast<void>(scene.session.setCurrentTime(second(0)));
+    expect(nearPoint(harness.comp(scene.end("lineStart")), startAtZero, 0.001) &&
+               nearPoint(harness.comp(scene.end("lineEnd")), endAtZero, 0.001),
+           "frame 0 is unchanged by a drag at 1 s");
+    static_cast<void>(scene.session.undo());
+    harness.settle();
+    expect(scene.keyTimes("lineEnd").size() == 2 && scene.keyTimes("lineEnd")[1] == second(1),
+           "one undo removes the end's key");
+    expect(near(scene.vec(document::kAnchorParameterRole), {0.0, 0.0}, 0.0),
+           "one undo also restores the anchor");
+}
+
 void testDrivenEndTakesNoDrag() {
     Scene scene;
     commands::Transaction add("Add vector", scene.session.snapshot().revision());
@@ -360,6 +403,7 @@ int main(int argc, char** argv) {
     try {
         testConstantEnds();
         testKeyedEnds();
+        testKeyedDragLeavesOtherFrames();
         testDrivenEndTakesNoDrag();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
