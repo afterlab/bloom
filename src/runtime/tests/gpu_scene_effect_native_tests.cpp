@@ -2377,6 +2377,126 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
     }
 }
 
+// #528 Inner Shadow and Inner Glow: what the recipe-case parity above does not show. Half render
+// scale against the CPU oracle at that scale, the output's data window equal to the input's (the CPU
+// window of the input alone, and the GPU image's), a cancelled scene that publishes no image and
+// retires every submission, a scene beyond the byte budget refused with nothing pinned, and the same
+// executor running the scene afterwards with CPU parity and no unretired submission.
+void runInnerLifecycle(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::recipe_test::Recipe;
+    using bloom::recipe_test::RecipeValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::uint64_t id = 96000;
+    for (const auto recipe : {Recipe::InnerShadow, Recipe::InnerGlow}) {
+        const bool glow = recipe == Recipe::InnerGlow;
+        RecipeValues values;
+        values.centred = true;
+        values.tint = {3.0, 1.5, 0.5, 1.0};
+        values.choke = 0.25;
+        const std::string name = std::string("inner native (") + (glow ? "glow" : "shadow") + "): ";
+        const auto plan = bloom::recipe_test::recipePlan(recipe, values, id).plan;
+        const auto inputPlan =
+            bloom::recipe_test::recipePlan(recipe, values, id, bloom::recipe_test::Published::Input).plan;
+        id += 100;
+        for (const bool half : {false, true}) {
+            cache.clear();
+            const std::string where = name + (half ? "half scale: " : "full scale: ");
+            auto request = requestFor(*plan);
+            if (half) {
+                const auto extent = bloom::render::ImageExtent::create(
+                    bloom::recipe_test::kRecipeWidth / 2, bloom::recipe_test::kRecipeHeight / 2);
+                request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+            }
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            auto inputRequest = oracleRequest;
+            inputRequest.output = inputPlan->output();
+            const auto input = evaluator.evaluate(inputPlan, inputRequest, {});
+            const auto prepared = builder.build(plan, request);
+            expectations.expect(oracle.frame() && input.frame() && prepared,
+                                where + "CPU oracle, the input alone and the production scene prepare");
+            if (!oracle.frame() || !input.frame() || !prepared)
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), where + "executor creates");
+            if (!executor)
+                continue;
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            std::string detail;
+            expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                                where + "CPU parity (2e-6, exact alpha): " + detail);
+            const auto& inputWindow = input.frame()->processImage().descriptor()->dataWindow();
+            expectations.expect(oracle.frame()->processImage().descriptor()->dataWindow() == inputWindow &&
+                                    cold.dataWindow == inputWindow,
+                                where + "the output's data window is the input's on the CPU and the device");
+            expectations.expect(!executor.executor->hasUnretiredSubmission() &&
+                                    !executor.executor->ownerDrainRequired(),
+                                where + "every submission retired after the frame");
+            const auto before = executor.executor->counters();
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    warm.pixels == cold.pixels &&
+                                    executor.executor->counters().ocioEffectDispatches ==
+                                        before.ocioEffectDispatches,
+                                where + "warm RAM reuse has identical pixels and zero dispatches");
+            if (half)
+                continue;
+            // A scene beyond the byte budget is refused before any dispatch, nothing stays pinned,
+            // and the executor runs the scene afterwards.
+            cache.clear();
+            auto budgeted = GpuSceneExecutor::create(device, cache);
+            if (!budgeted)
+                continue;
+            const auto refused = budgeted.executor->begin(prepared.scene, 256);
+            expectations.expect(refused.code == GpuSceneExecutorDiagnosticCode::OverBudget &&
+                                    budgeted.executor->image() == nullptr &&
+                                    budgeted.executor->counters().budgetRefusals == 1 &&
+                                    budgeted.executor->counters().currentLiveImageBytes == 0,
+                                where + "a scene beyond the byte budget is refused and pins nothing");
+            const auto after = runScene(*budgeted.executor, prepared.scene);
+            expectations.expect(after.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    parity(after.pixels, oracle.frame()->processImage().pixels(), detail),
+                                where + "the executor runs the scene after a budget refusal");
+            // A cancelled scene publishes no image, retires every submission and pins nothing.
+            cache.clear();
+            auto cancelled = GpuSceneExecutor::create(device, cache);
+            if (!cancelled)
+                continue;
+            expectations.expect(cancelled.executor->begin(prepared.scene, kSceneBudget).code ==
+                                    GpuSceneExecutorDiagnosticCode::None,
+                                where + "the scene to cancel begins");
+            static_cast<void>(cancelled.executor->poll());
+            cancelled.executor->cancel();
+            GpuSceneExecutorPollResult terminal = GpuSceneExecutorPollResult::Pending;
+            for (std::uint64_t i = 0; i < 1000000 && terminal == GpuSceneExecutorPollResult::Pending; ++i)
+                terminal = cancelled.executor->poll();
+            expectations.expect(terminal == GpuSceneExecutorPollResult::Failure &&
+                                    cancelled.executor->diagnostic().code ==
+                                        GpuSceneExecutorDiagnosticCode::Cancelled &&
+                                    cancelled.executor->image() == nullptr &&
+                                    cancelled.executor->takeImage() == nullptr,
+                                where + "a cancelled scene ends Cancelled and publishes no image");
+            for (std::uint64_t i = 0;
+                 i < 1000000 && (cancelled.executor->hasUnretiredSubmission() ||
+                                 cancelled.executor->ownerDrainRequired());
+                 ++i)
+                static_cast<void>(cancelled.executor->poll());
+            expectations.expect(!cancelled.executor->hasUnretiredSubmission() &&
+                                    !cancelled.executor->ownerDrainRequired() &&
+                                    cancelled.executor->counters().scenesCancelled == 1 &&
+                                    cancelled.executor->counters().currentLiveImageBytes == 0,
+                                where + "a cancelled scene retires every submission and pins nothing");
+            const auto reused = runScene(*cancelled.executor, prepared.scene);
+            expectations.expect(reused.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                    parity(reused.pixels, oracle.frame()->processImage().pixels(), detail),
+                                where + "the executor runs the scene after a cancellation");
+        }
+    }
+}
+
 // #525 Fields: every field operation (an Image field through the atlas of its slot), sub-samples
 // and a mask's exact distance against the CPU oracle. The kernel is Bloom's own binary32 arithmetic
 // on both sides, so the device may differ only where its sqrt rounds differently and a value then
@@ -4466,6 +4586,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runChannelSelects(expectations, device, cache);
     runPixelMaths(expectations, device, cache);
     runRecipes(expectations, device, cache);
+    runInnerLifecycle(expectations, device, cache);
     runFields(expectations, device, cache);
     runDepthEffects(expectations, device, cache);
     runLensFlares(expectations, device, cache);

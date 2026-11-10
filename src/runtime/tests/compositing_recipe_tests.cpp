@@ -810,6 +810,9 @@ void testInner() {
                         else if (std::abs(a[0] - b[0]) > 1e-4)
                             changed = true;
                     }
+                expect(lit.x0 == source.x0 && lit.y0 == source.y0 && lit.width == source.width &&
+                           lit.height == source.height,
+                       where + "the output's data window is the input's");
                 expect(alphaKept, where + "the output alpha equals the input alpha");
                 expect(nothingOutside, where + "no colour lies outside the input's alpha");
                 expect(changed, where + "the paint changes the colour inside the alpha");
@@ -1099,16 +1102,16 @@ void testAlphaContour() {
 
 // A cancelled frame publishes nothing; cancellation arriving inside the chain (while the softened
 // coverage runs) stops it; an exhausted pixel budget refuses the frame.
-void testCancellationAndBudget() {
+void testCancellationAndBudget(const Recipe recipe, const std::string& name) {
     const runtime::CpuCompositionEvaluator evaluator;
-    const auto plan = recipe_test::recipePlan(Recipe::Glow, {});
+    const auto plan = recipe_test::recipePlan(recipe, {});
     runtime::TaskScheduler scheduler;
     const runtime::TaskOwner owner{runtime::TaskOwnerKind::PanelRequest,
-                                   runtime::TaskOwnerId::fromRaw(3390)};
+                                   runtime::TaskOwnerId::fromRaw(3390 + static_cast<std::uint64_t>(recipe))};
     std::promise<bool> outcome;
     auto future = outcome.get_future();
     const auto task = scheduler.submit<void>(
-        runtime::TaskRequest("Recipe cancellation", owner), [&](runtime::TaskContext& context) {
+        runtime::TaskRequest(name + " cancellation", owner), [&](runtime::TaskContext& context) {
             std::atomic_bool cancelled{false};
             const auto result =
                 evaluator.evaluate(plan.plan, request(plan.plan->output()), context.cancellation(),
@@ -1124,12 +1127,12 @@ void testCancellationAndBudget() {
             return runtime::TaskResult<void>::cancelled();
         });
     expect(task.accepted() && future.get(),
-           "cancellation inside a recipe chain publishes no frame");
+           "cancellation inside a " + name + " chain publishes no frame");
     auto small = request(plan.plan->output());
     small.pixelStorageByteLimit = 4096;
     const auto refused = evaluator.evaluate(plan.plan, small, {});
     expect(!refused.frame() && refused.status() != runtime::EvaluationStatus::Cancelled,
-           "a recipe beyond the pixel budget is refused, never partially published");
+           "a " + name + " beyond the pixel budget is refused, never partially published");
 }
 
 // #506 Physical conserves light: with a white tint and intensity <= 1 the glow carries exactly
@@ -1376,7 +1379,9 @@ int main() {
         testPhysicalEnergy();
         testCacheAndRoi();
         testAnimation();
-        testCancellationAndBudget();
+        testCancellationAndBudget(Recipe::Glow, "Glow");
+        testCancellationAndBudget(Recipe::InnerShadow, "Inner Shadow");
+        testCancellationAndBudget(Recipe::InnerGlow, "Inner Glow");
         testRecipeCancellationAndBudget(Recipe::EdgeExtend, {}, "Edge Extend", 3391);
         testStreakCacheRoiAndCancellation();
     } catch (const std::exception& error) {
