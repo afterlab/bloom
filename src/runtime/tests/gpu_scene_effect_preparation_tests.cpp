@@ -455,10 +455,21 @@ void testRealCst(Expectations& expectations, const std::string& from, const std:
         const auto* ocio = findOcioCommand(*textPrepared.scene);
         expectations.expect(ocio != nullptr, "a text-fed CST emits a GPU OCIO command");
         if (ocio != nullptr) {
-            expectations.expect(
-                std::holds_alternative<bloom::runtime::GpuSceneCoverageSolidCommand>(
-                    textPrepared.scene->commands()[ocio->input]),
-                "the text leaf was materialized as an accepted coverage GPU command");
+            // A text leaf read as an image is the CPU leaf's own form: the glyph coverage over its
+            // own bitmap window, then one identity-linear translation into the effect's window
+            // (a83f5f7db). The effect therefore reads the translation, whose input is the accepted
+            // coverage GPU command.
+            const auto& inputCommand = textPrepared.scene->commands()[ocio->input];
+            const auto* translation =
+                std::get_if<bloom::runtime::GpuSceneTranslationCommand>(&inputCommand);
+            expectations.expect(translation != nullptr,
+                                "the text leaf lands in place through the leaf translation");
+            if (translation != nullptr) {
+                expectations.expect(
+                    std::holds_alternative<bloom::runtime::GpuSceneCoverageSolidCommand>(
+                        textPrepared.scene->commands()[translation->input]),
+                    "the text leaf was materialized as an accepted coverage GPU command");
+            }
         }
     }
 }

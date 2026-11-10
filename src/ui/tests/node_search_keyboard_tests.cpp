@@ -620,10 +620,10 @@ void testSearchKeyboardAndMenus() {
                   "Optical Flow Motion Blur", "Sharpen", "Spin Blur", "Vector Motion Blur",
                   "Z Defocus", "Zoom Blur"},
                  "Blur & Sharpen holds the blurs and motion blur");
-        hasGroup("Light & Shadow", {"Depth Fog", "Drop Shadow", "Glow", "Lens Flare", "Light Rays",
-                  "Light Wrap"},
+        hasGroup("Light & Shadow", {"Depth Fog", "Drop Shadow", "Glow", "Glowing paths", "Lens Flare",
+                  "Light Rays", "Light Wrap"},
                  "Light & Shadow holds the light effects");
-        hasGroup("Stylize", {"Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
+        hasGroup("Stylize", {"Alpha Contour", "Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
         hasGroup("Color Correction",
                  {"Auto Exposure", "Color Matrix", "Colorize", "Curves", "Exposure", "Grade",
                   "Hue/Saturation", "Invert", "Levels", "Multiply", "Offset", "Tone Map"},
@@ -635,7 +635,8 @@ void testSearchKeyboardAndMenus() {
             "Text & Paths",
             {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle",
              "Function Plot", "Axes", "Axis Tick", "Transform Path", "Trim Path", "Offset Path",
-             "Boolean Paths", "Merge Paths", "Round Corners", "Path Stroke"},
+             "Boolean Paths", "Merge Paths", "Round Corners", "Path Stroke", "Mask Path",
+             "Text Outline", "Stroke the Selected Text", "Stroke the Selected Layer's Masks"},
             "Text & Paths holds Text and the shape presets");
         hasGroup("Utilities",
                  {"Combine XY", "Combine XYZ", "Group Input", "Group Output", "Node Group", "Reroute",
