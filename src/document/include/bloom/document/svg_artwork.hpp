@@ -277,12 +277,20 @@ struct VectorArtworkComposedLayer final {
     std::vector<LayerId> leaves;
 };
 
-// #642: the most a layer's artwork is oversampled, and the longest edge (in composition pixels at
-// full resolution) the oversampled composition frame may reach. A 3840 x 2160 composition is drawn
-// at up to 2x, a 1920 x 1080 one at up to 4x, anything up to 1024 pixels on its longer side at up
-// to 8x.
-inline constexpr double kVectorArtworkMaxOversample = 8.0;
-inline constexpr double kVectorArtworkMaxOversampledEdge = 8192.0;
+// #642: the most a layer's artwork (or a group holding it) is oversampled, and the pixel budget of
+// one oversampled picture. Only the part of the picture the frame can show is drawn (the window
+// clip of runtime::detail::visibleSupportWindows, through the layer's transform, its parents, the
+// groups above it and the margins of the effects between), so its memory follows the output's size,
+// not the content's scale. The band is halved only while the compile-time estimate of that window
+// over the whole animation (estimatedOversampledPixels in svg_artwork_expansion.cpp) is above
+// kVectorArtworkMaxOversampledPixels, 8192 x 4096 full-resolution pixels (512 MiB of float RGBA):
+// a layer scaled 8x in a 3840 x 2160 composition draws about one frame of pixels at 8x, while a
+// whole-frame artwork keyed from 1x to 8x would need sixty-four frames at its first key and is drawn
+// at 2x, with `limited` naming the budget. Where the window cannot be clipped (a content pivot,
+// whose matrix follows its content's bounds; a node between with no bounded support) the estimate
+// is the whole picture.
+inline constexpr double kVectorArtworkMaxOversample = 64.0;
+inline constexpr double kVectorArtworkMaxOversampledPixels = 8192.0 * 4096.0;
 
 // #642: a layer that pivots on its content, has masks or its own timing, or reads the artwork
 // through effects (a blur, a glow, a drop shadow, colour nodes) is drawn as a scaled
@@ -299,16 +307,37 @@ inline constexpr double kVectorArtworkMaxOversampledEdge = 8192.0;
 // `scale` times the pixels.
 //
 // `scale` is the band of the layer's largest output scale over its whole animation: the smallest
-// power of two at least the product, over the layer and its parents, of the largest |scale| any of
-// their keys (or their handles and easing) reaches, and at least 2 when any of them turns. It is
-// part of the plan, so an animated transform renders every frame from one plan and one oversampled
-// picture of the artwork; only an edit that moves the band compiles a different picture. It is at
-// most kVectorArtworkMaxOversample and kVectorArtworkMaxOversampledEdge over the composition's
-// longer side, and is halved while a scaled length would leave its parameter's domain; `limited`
-// says why when it is below the band.
+// power of two at least the product of the largest |scale| any key (or handle and easing) reaches,
+// over the layer and its parents, the Layer nodes that resample its picture on the way to its
+// Merge and their parents, and every group above it (VectorArtworkOversampledGroup), and at least 2
+// when any of them turns. It is part of the plan, so an animated transform renders every frame from
+// one plan and one oversampled picture of the artwork; only an edit that moves the band compiles a
+// different picture. It is at most kVectorArtworkMaxOversample, is halved while the estimate of its
+// drawn window is above kVectorArtworkMaxOversampledPixels, and is halved while a scaled length
+// would leave its parameter's domain; `limited` says why when it is below the band.
 struct VectorArtworkOversampledLayer final {
     LayerId carrier;
     std::vector<LayerId> leaves;
+    double scale = 1.0;
+    std::string limited;
+};
+
+// #642: a group above a Vector Artwork layer that scales its picture (a Merge whose picture a
+// scaled or turned layer resamples: a group layer, a Layer node, or nested groups). A Merge ends
+// vector provenance, so its picture is drawn at `scale` (a power of two) about the composition's
+// origin, as a scaled pre-composition would be: every entry's layer of the Merge (`entries`;
+// an entry with no layer yet gets one at its defaults, which is the identity) draws its picture
+// `scale` times larger into it (CompiledLayerOutput::outputScale) and publishes the bounds it would
+// have published at 1; the lengths of the nodes between an entry's layer and its slot, and between
+// the Merge and `reader`, are multiplied by `scale`; and `reader`, the layer that resamples the
+// group's picture, maps it back with a content scale (CompiledLayerOutput::contentScale). The
+// entries' own content (their sources, masks, timing and the nodes before their layer) is unchanged.
+// `scale` is the band of the largest product of the layers above the Merge, budgeted as an
+// oversampled layer's is; `limited` says why when it is below that band.
+struct VectorArtworkOversampledGroup final {
+    NodeId merge;
+    LayerId reader;
+    std::vector<LayerId> entries;
     double scale = 1.0;
     std::string limited;
 };
@@ -328,12 +357,25 @@ struct VectorArtworkExpansion final {
     std::unordered_map<LayerId, VectorArtworkComposedLayer> composed;
     // The layers whose artwork is drawn at their output scale, by the holding layer.
     std::unordered_map<LayerId, VectorArtworkOversampledLayer> oversampled;
-    // Every parameter an oversampled layer's expansion multiplied, and by what, so a preview
-    // override of one is multiplied the same way.
+    // The groups above an artwork drawn at their output scale, by their Merge.
+    std::unordered_map<NodeId, VectorArtworkOversampledGroup> groups;
+    // Every layer that resamples a larger picture back (CompiledLayerOutput::contentScale): the
+    // oversampled holding layers and the groups' readers.
+    std::unordered_map<LayerId, double> contentScales;
+    // Every layer that draws its picture larger into an oversampled group
+    // (CompiledLayerOutput::outputScale).
+    std::unordered_map<LayerId, double> outputScales;
+    // Every parameter an oversampled layer's or group's expansion multiplied, and by what, so a
+    // preview override of one is multiplied the same way.
     std::unordered_map<ParameterId, double> scaledParameters;
     // Why an expanded node's layer resamples its artwork's picture at the composition's scale, by
     // the node's id. A layer that neither scales up nor turns needs neither and is in none of them.
     std::unordered_map<NodeId, std::string> resampled;
+    // Why a group above an artwork's layer that scales its picture is not drawn at its output scale
+    // (an Adjustment entry, a Layer node shared with another Merge, a node's Mask as an entry's
+    // matte, a node between not known to scale), by the Merge. The artwork is then drawn at the
+    // scale up to that group, and the group's layer resamples its picture.
+    std::unordered_map<NodeId, std::string> groupsResampled;
     bool cancelled = false;
 };
 
