@@ -650,7 +650,7 @@ void testSearchKeyboardAndMenus() {
                  {"Depth Fog", "Drop Shadow", "Glow", "Glowing paths", "Inner Glow", "Inner Shadow",
                   "Lens Flare", "Light Rays", "Light Wrap"},
                  "Light & Shadow holds the light effects");
-        hasGroup("Stylize", {"Alpha Contour", "Codec Degrade", "Film Grain", "Vignette"}, "Stylize holds the finishing looks");
+        hasGroup("Stylize", {"Alpha Contour", "Codec Degrade", "Film Grain", "Quantize", "Vignette"}, "Stylize holds the finishing looks");
         hasGroup("Color Correction",
                  {"Auto Exposure", "Color Matrix", "Colorize", "Curves", "Exposure", "Grade",
                   "Hue/Saturation", "Invert", "Levels", "Multiply", "Offset", "Tone Map"},

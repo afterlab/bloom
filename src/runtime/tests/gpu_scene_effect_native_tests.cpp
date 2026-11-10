@@ -1607,6 +1607,38 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         }
         return bloom::runtime::ImageEffectKernel{bloom::color_tool_test::hslQualifier(id, settings)};
     };
+    // #519 Quantize: 0 a hard per-channel threshold, 1 a soft inverted luma threshold, 2 a linked
+    // posterize of five levels, 3 an unlinked posterize with alpha levels, 4 256 levels. The boundary
+    // colours below put a channel exactly at the level or at a half-way step and one ulp either side.
+    const auto quantize = [](const std::uint64_t id, const int variant) {
+        bloom::color_tool_test::QuantizeSettings settings;
+        if (variant == 0) {
+            settings.basis = bloom::document::kQuantizeBasisPerChannel;
+            settings.level = 0.5;
+        } else if (variant == 1) {
+            settings.level = 0.4;
+            settings.softness = 0.3;
+            settings.invert = true;
+        } else if (variant == 2) {
+            settings.mode = bloom::document::kQuantizePosterize;
+            settings.levels = 5.0;
+        } else if (variant == 3) {
+            settings.mode = bloom::document::kQuantizePosterize;
+            settings.link = false;
+            settings.red = 2.0;
+            settings.green = 5.0;
+            settings.blue = 256.0;
+            settings.alpha = true;
+            settings.alphaLevels = 4.0;
+        } else {
+            settings.mode = bloom::document::kQuantizePosterize;
+            settings.levels = 256.0;
+        }
+        // The list is built once per colour while each kernel gets its own plan, so each variant owns
+        // parameter identities clear of every plan's range.
+        return bloom::runtime::ImageEffectKernel{bloom::color_tool_test::quantize(
+            id + 900000 + static_cast<std::uint64_t>(variant) * 10, settings)};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1628,7 +1660,12 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             v->center.source = bloom::document::Vec2d{-3.0, 2.0};
         // #518: a moved ceiling changes the program's data in every variant.
         if (auto* t = std::get_if<bloom::runtime::ColorToolKernel>(&kernel)) {
-            if (t->operation == bloom::runtime::ColorToolOperation::HslQualifier) {
+            if (t->operation == bloom::runtime::ColorToolOperation::Quantize) {
+                // The level, the master levels and the red levels, whichever the variant reads.
+                t->values[0].source = 0.75;
+                t->values[2].source = 6.0;
+                t->values[3].source = 3.0;
+            } else if (t->operation == bloom::runtime::ColorToolOperation::HslQualifier) {
                 t->values[1].source = 120.0;
             } else if (t->operation == bloom::runtime::ColorToolOperation::ColorMatrix) {
                 t->choices[0] = 0;
@@ -1649,8 +1686,21 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         }
     };
     std::uint64_t id = 9500;
-    for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
-                             Color4d{0.3, 0.6, 0.2, 0.25}}) {
+    // Straight colours with a channel exactly at the threshold level 0.5 and at a half-way step of five
+    // levels (0.125), and one ulp either side: only Quantize reads them (a Quantize kernel also runs
+    // over the three colours every grade runs over).
+    const auto ulpUp = [](const double v) {
+        return static_cast<double>(std::nextafter(static_cast<float>(v), 1.0F));
+    };
+    const auto ulpDown = [](const double v) {
+        return static_cast<double>(std::nextafter(static_cast<float>(v), 0.0F));
+    };
+    const std::array<Color4d, 5> colours{
+        Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0}, Color4d{0.3, 0.6, 0.2, 0.25},
+        Color4d{0.5, ulpUp(0.5), ulpDown(0.5), 1.0}, Color4d{0.125, ulpUp(0.125), ulpDown(0.125), 1.0}};
+    for (std::size_t colourIndex = 0; colourIndex < colours.size(); ++colourIndex) {
+        const auto color = colours[colourIndex];
+        const bool boundary = colourIndex >= 3;
         for (const auto& kernel :
              {levels(id + 50, false),  levels(id + 50, true),     curves(id + 50, false),
               curves(id + 50, true),   hueCurves(id + 50, false), hueCurves(id + 50, true),
@@ -1671,7 +1721,14 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
               colorMatrix(id + 50, 2), colorMatrix(id + 50, 3),   colorMatrix(id + 50, 4),
               colorMatrix(id + 50, 5), colorMatrix(id + 50, 6),   colorMatrix(id + 50, 7),
               colorMatrix(id + 50, 8), colorMatrix(id + 50, 9), hslQualifier(id + 50, 0),
-              hslQualifier(id + 50, 1), hslQualifier(id + 50, 2)}) {
+              hslQualifier(id + 50, 1), hslQualifier(id + 50, 2), quantize(id + 50, 0),
+              quantize(id + 50, 1),    quantize(id + 50, 2),      quantize(id + 50, 3),
+              quantize(id + 50, 4)}) {
+            const auto* tool = std::get_if<bloom::runtime::ColorToolKernel>(&kernel);
+            const bool isQuantize =
+                tool != nullptr && tool->operation == bloom::runtime::ColorToolOperation::Quantize;
+            if (boundary && !isQuantize)
+                continue;
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

@@ -91,4 +91,34 @@ struct HslQualifierSettings final {
     return kernel;
 }
 
+// #519 Quantize: every value of the node; a kernel built from these is what the lowering builds.
+struct QuantizeSettings final {
+    std::int64_t mode = document::kQuantizeThreshold;
+    std::int64_t basis = document::kQuantizeBasisLuma;
+    bool invert = false;
+    bool link = true;
+    bool alpha = false;
+    double level = 0.5;
+    double softness = 0.0;
+    double levels = 8.0;
+    double red = 8.0;
+    double green = 8.0;
+    double blue = 8.0;
+    double alphaLevels = 8.0;
+};
+
+[[nodiscard]] inline ColorToolKernel quantize(const std::uint64_t idBase,
+                                              const QuantizeSettings& settings) {
+    ColorToolKernel kernel;
+    kernel.operation = ColorToolOperation::Quantize;
+    kernel.choices = {settings.mode, settings.basis, settings.invert ? 1 : 0,
+                      (settings.link ? 1 : 0) | (settings.alpha ? 2 : 0)};
+    const std::array<double, 7> values{settings.level, settings.softness, settings.levels,
+                                       settings.red,   settings.green,    settings.blue,
+                                       settings.alphaLevels};
+    for (std::size_t index = 0; index < values.size(); ++index)
+        kernel.values[index] = scalar(idBase + 60 + index, values[index]);
+    return kernel;
+}
+
 } // namespace bloom::color_tool_test

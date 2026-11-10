@@ -634,6 +634,12 @@ target_link_libraries(bloom_runtime_color_tool_test PRIVATE bloom_runtime_evalua
 bloom_enable_warnings(bloom_runtime_color_tool_test)
 bloom_enable_strict_floating_point(bloom_runtime_color_tool_test)
 bloom_add_test(NAME bloom.runtime.color-tool COMMAND bloom_runtime_color_tool_test LABELS unit runtime render)
+add_executable(bloom_runtime_quantize_test quantize_tests.cpp)
+target_include_directories(bloom_runtime_quantize_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_quantize_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_quantize_test)
+bloom_enable_strict_floating_point(bloom_runtime_quantize_test)
+bloom_add_test(NAME bloom.runtime.quantize COMMAND bloom_runtime_quantize_test LABELS unit runtime render)
 
 # #486 Sharpen: the pixel against an independent reading, the promises, the plan's two operations,
 # region of interest, proxy, identity, the pixel budget and cancellation.

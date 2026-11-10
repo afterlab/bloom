@@ -186,6 +186,28 @@ struct Scenario final {
     out["inner-glow-center"] = {"bloom.checker-source", {}, "bloom.inner-glow",
                                 {{"size", 30.0}, {"source", std::int64_t{1}}, {"intensity", 1.5}},
                                 "size", 8.0, 80.0};
+    // #519 Quantize over a four-colour gradient (smooth, so every level shows): a luma threshold, a soft
+    // per-channel threshold and a linked and an unlinked posterize, each with a value keyed.
+    out["quantize-threshold"] = {"bloom.four-color-gradient", {}, "bloom.quantize",
+                                 {{"mode", std::int64_t{0}}, {"level", 0.5}},
+                                 "level", 0.2, 0.8};
+    out["quantize-threshold-soft"] = {"bloom.four-color-gradient", {}, "bloom.quantize",
+                                      {{"mode", std::int64_t{0}},
+                                       {"basis", std::int64_t{1}},
+                                       {"softness", 0.3},
+                                       {"invert", true}},
+                                      "level", 0.8, 0.3};
+    out["quantize-posterize"] = {"bloom.four-color-gradient", {}, "bloom.quantize",
+                                 {{"mode", std::int64_t{1}}},
+                                 "levels", 3.0, 9.0};
+    out["quantize-posterize-channels"] = {"bloom.four-color-gradient", {}, "bloom.quantize",
+                                          {{"mode", std::int64_t{1}},
+                                           {"linkLevels", false},
+                                           {"greenLevels", 4.0},
+                                           {"blueLevels", 16.0},
+                                           {"posterizeAlpha", true},
+                                           {"alphaLevels", 5.0}},
+                                          "redLevels", 2.0, 8.0};
     return out;
 }
 

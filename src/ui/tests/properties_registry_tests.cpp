@@ -1775,6 +1775,103 @@ void tileMirrorRows() {
     }
 }
 
+// #519 Quantize in Properties: each mode shows the values it reads, in plain words with every label and
+// value shown whole and nothing wider than the panel, at the widths of a wide, a normal and a narrow
+// panel; the threshold is the card's range row on a luma strip and only the mode that reads it shows it.
+// Unlinking the levels shows the three channels' rows and hides the master. With
+// BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device pixel
+// ratio), one per mode.
+void quantizeRows() {
+    struct Case final {
+        std::int64_t mode;
+        bool link;
+        bool alpha;
+        const char* name;
+        std::vector<std::pair<std::string, std::string>> rows;
+        std::vector<std::string> absent;
+        bool range;
+    };
+    const std::vector<Case> cases{
+        {0, true, false, "threshold",
+         {{"mode", "Mode"}, {"basis", "Threshold on"}, {"invert", "Invert"}},
+         {"levels", "linkLevels", "redLevels", "greenLevels", "blueLevels", "posterizeAlpha",
+          "alphaLevels"},
+         true},
+        {1, true, false, "posterize",
+         {{"mode", "Mode"}, {"levels", "Levels"}, {"linkLevels", "Link levels"},
+          {"posterizeAlpha", "Posterize alpha"}},
+         {"basis", "invert", "redLevels", "greenLevels", "blueLevels", "alphaLevels"},
+         false},
+        {1, false, true, "posterize-unlinked",
+         {{"mode", "Mode"}, {"linkLevels", "Link levels"}, {"redLevels", "Red levels"},
+          {"greenLevels", "Green levels"}, {"blueLevels", "Blue levels"},
+          {"posterizeAlpha", "Posterize alpha"}, {"alphaLevels", "Alpha levels"}},
+         {"basis", "invert", "levels"},
+         false}};
+    for (const auto& item : cases) {
+        auto project = document::makeNewProject("Quantize", "Main", core::RationalTime::fromInteger(10));
+        document::Document document(std::move(project.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, project.initialCompositionId);
+        ui::PropertiesEditor properties(session);
+        const auto node = addNode(session, document::kQuantizeNodeType);
+        session.selectNode(node);
+        expect(session.setNodeParameterValue(node, "mode", item.mode, QStringLiteral("Set")) &&
+                   session.setNodeParameterValue(node, "linkLevels", item.link, QStringLiteral("Set")) &&
+                   session.setNodeParameterValue(node, "posterizeAlpha", item.alpha, QStringLiteral("Set")),
+               "the mode and switches are set through commands");
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                   ? QStringLiteral("dpr1")
+                                   : QStringLiteral("dpr15");
+        for (const int width : {2000, 900, 420}) {
+            properties.resize(width, 1100);
+            properties.show();
+            QCoreApplication::processEvents();
+            for (const auto& [role, name] : item.rows) {
+                auto* found = row(properties, role.c_str());
+                expect(found != nullptr && found->isVisibleTo(&properties),
+                       "a Quantize mode presents every value it reads");
+                if (found == nullptr)
+                    continue;
+                expect(found->property("rowLabel").toString() == QString::fromStdString(name),
+                       "a Quantize row is named in plain words");
+                QLabel* shown = nullptr;
+                for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                    if (candidate->text() == QString::fromStdString(name) &&
+                        candidate->isVisibleTo(&properties))
+                        shown = candidate;
+                expect(shown != nullptr &&
+                           shown->width() >= shown->fontMetrics().horizontalAdvance(shown->text()),
+                       "a Quantize row label is shown whole");
+                for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                    if (field->isVisibleTo(&properties))
+                        expect(!field->paintedText().contains(QChar(0x2026)) && !field->isDisplayRounded(),
+                               "a Quantize value is shown whole");
+            }
+            for (const auto& role : item.absent) {
+                auto* found = row(properties, role.c_str());
+                expect(found == nullptr || !found->isVisibleTo(&properties),
+                       "a Quantize mode shows no row for a value it does not read");
+            }
+            auto* range = properties.findChild<QWidget*>("rangeRow.level");
+            expect((range != nullptr && range->isVisibleTo(&properties)) == item.range,
+                   "the threshold range is shown by the mode that reads it only");
+            if (auto* scroll = properties.findChild<QScrollArea*>())
+                expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                       "Quantize's rows never exceed the panel's width");
+            if (!directory.isEmpty()) {
+                QDir().mkpath(directory);
+                if (!properties.grab().save(directory + QStringLiteral("/quantize-") +
+                                            QString::fromLatin1(item.name) +
+                                            QStringLiteral("-properties-") + QString::number(width) +
+                                            QLatin1Char('-') + suffix + QStringLiteral(".png")))
+                    std::cerr << "could not write the Quantize Properties capture\n";
+            }
+        }
+    }
+}
+
 // #528 Inner Shadow and Inner Glow in Properties: every value a visible row in plain words, labels and
 // values shown whole, nothing wider than the panel, at the widths of a wide, a normal and a narrow
 // panel. Inner Glow's Source is a labelled Edge/Center radio that edits the node through a command and
@@ -3015,6 +3112,7 @@ int main(int argc, char** argv) try {
     extensionPropertiesRows();
     warpRows();
     tileMirrorRows();
+    quantizeRows();
     innerRows();
     audioEffectRows();
     groupAndPlotRows();

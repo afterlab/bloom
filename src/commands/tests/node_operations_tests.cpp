@@ -1176,6 +1176,44 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *cmElement,
                                ConstantValueSource{101.0});
 
+    // #519 Quantize: its level, softness, levels and switches edit within their domains and refuse
+    // outside them (a threshold level 0 to 16, levels 2 to 256, a mode of two).
+    const auto quantize = addRecipe("bloom.quantize");
+    const auto qMode = quantize.outputId<ParameterId>("parameter.mode");
+    const auto qBasis = quantize.outputId<ParameterId>("parameter.basis");
+    const auto qLevel = quantize.outputId<ParameterId>("parameter.level");
+    const auto qSoftness = quantize.outputId<ParameterId>("parameter.softness");
+    const auto qInvert = quantize.outputId<ParameterId>("parameter.invert");
+    const auto qLevels = quantize.outputId<ParameterId>("parameter.levels");
+    const auto qLink = quantize.outputId<ParameterId>("parameter.linkLevels");
+    const auto qRed = quantize.outputId<ParameterId>("parameter.redLevels");
+    const auto qAlpha = quantize.outputId<ParameterId>("parameter.posterizeAlpha");
+    if (!qMode || !qBasis || !qLevel || !qSoftness || !qInvert || !qLevels || !qLink || !qRed || !qAlpha)
+        throw std::logic_error("Quantize exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *qMode, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *qBasis, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *qLevel, ConstantValueSource{0.75});
+    (void)exercise<SetParameterSource>(test, fixture, *qSoftness, ConstantValueSource{0.25});
+    (void)exercise<SetParameterSource>(test, fixture, *qInvert, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *qLevels, ConstantValueSource{256.0});
+    (void)exercise<SetParameterSource>(test, fixture, *qLink, ConstantValueSource{false});
+    (void)exercise<SetParameterSource>(test, fixture, *qRed, ConstantValueSource{2.0});
+    (void)exercise<SetParameterSource>(test, fixture, *qAlpha, ConstantValueSource{true});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qMode,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qBasis,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qLevel,
+                               ConstantValueSource{-0.1});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qSoftness,
+                               ConstantValueSource{16.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qLevels,
+                               ConstantValueSource{1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qLevels,
+                               ConstantValueSource{257.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *qRed,
+                               ConstantValueSource{0.0});
+
     // #348 Corner Pin, ST Map and Displace: their corners, amounts and choices edit within their
     // domains and refuse outside them.
     const auto pin = addRecipe("bloom.corner-pin");

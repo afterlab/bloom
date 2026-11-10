@@ -29,6 +29,17 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/light_rays_nodes.hpp>
+#include <bloom/document/depth_effect_nodes.hpp>
+#include <bloom/document/lens_flare_definition.hpp>
+#include <bloom/document/film_grain_definition.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -3188,10 +3199,72 @@ void warpPathRefusal() {
            "warp refusal: a size above 0 clears the badge and the readout");
 }
 
+// #519 Quantize: the card shows the threshold as a span on a luma strip (its centre the level, its width
+// the softness) in Threshold mode only, and dragging either handle writes the level and softness as one
+// command that one undo restores; in Posterize the strip is gone and the card paints inside itself with
+// no label cut short. With BLOOM_GRAMMAR_ARTIFACT_DIR set, the card is written in each mode.
+void quantizeCards() {
+    CardFixture fixture(document::kQuantizeNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    if (card == nullptr || card->rangeRows().empty())
+        return expect(false, "Quantize draws its threshold range");
+    QApplication::processEvents();
+    auto* row = card->rangeRows().front();
+    auto& range = *row->selector();
+    expect(range.lumaStrip() && row->isVisible(), "the threshold is a span on a luma strip");
+    expect(row->lowRow()->name() != row->highRow()->name() && !card->showsRole("level") &&
+               !card->showsRole("softness"),
+           "the level and softness are the range row's, with their own labels");
+    expect(paintsInsideCard(*fixture.item), "Quantize's threshold card paints inside itself");
+    if (!cardContentFits(*fixture.item, "bloom.quantize"))
+        ++failures;
+    capture(fixture, QStringLiteral("quantize-threshold"));
+    const auto level = stored(fixture.session, fixture.node, "level");
+    const auto softness = stored(fixture.session, fixture.node, "softness");
+    expect(level && softness && *level == 0.5 && *softness == 0.0,
+           "a new Quantize writes no value of its own");
+    // The default is a hard step at 0.5: both handles sit at the level. Dragging the upper handle right
+    // opens a quarter of the track of softness and moves the centre half of that.
+    const auto commands = fixture.stack.size();
+    const auto handle = range.handleRect(ui::kit::KRangeSelector::Handle::Upper).center();
+    const double quarter = range.trackRect().width() * 0.25;
+    mouse(range, QEvent::MouseButtonPress, handle);
+    mouse(range, QEvent::MouseMove, handle + QPointF(quarter, 0.0));
+    mouse(range, QEvent::MouseButtonRelease, handle + QPointF(quarter, 0.0));
+    const auto movedLevel = stored(fixture.session, fixture.node, "level");
+    const auto movedSoftness = stored(fixture.session, fixture.node, "softness");
+    expect(movedLevel && movedSoftness && std::abs(*movedSoftness - 0.25) < 0.03 &&
+               std::abs(*movedLevel - 0.625) < 0.03 && fixture.stack.size() == commands + 1,
+           "dragging a handle writes the level and the softness as one command");
+    QApplication::processEvents();
+    capture(fixture, QStringLiteral("quantize-threshold-soft"));
+    expect(fixture.session.undo() && stored(fixture.session, fixture.node, "level") == level &&
+               stored(fixture.session, fixture.node, "softness") == softness,
+           "one undo restores the threshold");
+    expect(fixture.session.setNodeParameterValue(fixture.node, "mode", std::int64_t{1},
+                                                 QStringLiteral("Set")),
+           "the mode is set through a command");
+    QApplication::processEvents();
+    expect(!row->isVisible(), "the threshold strip goes while posterizing");
+    expect(paintsInsideCard(*fixture.item), "Quantize's posterize card paints inside itself");
+    if (!cardContentFits(*fixture.item, "bloom.quantize"))
+        ++failures;
+    capture(fixture, QStringLiteral("quantize-posterize"));
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
     warpPathRefusal();
+    // BLOOM_GRADING_CARDS_ONLY=quantize runs only the Quantize card (the whole run writes every card).
+    if (qEnvironmentVariable("BLOOM_GRADING_CARDS_ONLY") == QStringLiteral("quantize")) {
+        quantizeCards();
+        if (failures != 0)
+            return 1;
+        std::cout << "PASS: Quantize card\n";
+        return 0;
+    }
     everyCard();
     sliderVariant();
     exposureCard();
@@ -3211,6 +3284,7 @@ int main(int argc, char** argv) {
     chromaticAberrationCard();
     cornerPinCard();
     tileMirrorCards();
+    quantizeCards();
     testCardCard();
     testCardExpectedReadout();
     lightRaysCard();

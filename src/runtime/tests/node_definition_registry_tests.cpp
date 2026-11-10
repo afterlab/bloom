@@ -167,8 +167,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Paths, Merge Paths and Round Corners; #509 adds Path Stroke; #518 adds Tone Map; #517 adds
     // Color Matrix; #523 adds HSL Qualifier; #516 adds Edge Extend; #509 adds Mask Path, Text
     // Outline and Alpha Contour; #524 adds Four-Color Gradient; #514 adds Denoise & Smooth; #637
-    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow.
-    expectations.expect(registry.definitions().size() == 249,
+    // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow; #519 adds Quantize.
+    expectations.expect(registry.definitions().size() == 250,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -324,7 +324,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                     "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain",
                     "bloom.sharpen", "bloom.denoise", "bloom.codec-degrade", "bloom.auto-exposure"},
                    document::NodeCategory::Filters);
-    expectCategory({"bloom.tone-map", "bloom.color-matrix"}, document::NodeCategory::Grade);
+    expectCategory({"bloom.tone-map", "bloom.color-matrix", "bloom.quantize"}, document::NodeCategory::Grade);
     expectCategory({"bloom.hsl-qualifier"}, document::NodeCategory::Compositing);
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
@@ -1300,7 +1300,7 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 33>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 34>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
@@ -1311,13 +1311,13 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                                          "bloom.spin-blur", "bloom.zoom-blur", "bloom.vector-motion-blur",
                                          "bloom.sharpen", "bloom.denoise", "bloom.codec-degrade",
                                          "bloom.auto-exposure", "bloom.image-math", "bloom.image-map-range",
-                                         "bloom.image-clamp", "bloom.tone-map", "bloom.color-matrix"},
+                                         "bloom.image-clamp", "bloom.tone-map", "bloom.color-matrix", "bloom.quantize"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 33,
+    expectations.expect(shaped && named && masked == 34,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);

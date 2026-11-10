@@ -1675,6 +1675,41 @@ displayProofRunner(const bool customView) {
                              "signed values, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #519 Quantize: a hard luma threshold, a soft inverted per-channel threshold, a linked posterize
+    // and an unlinked posterize that also snaps alpha, over the HDR, signed, partial-alpha gradient.
+    add(
+        "node.bloom.quantize", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime quantize tests",
+        [runGrades] {
+            const auto make = [](const bloom::color_tool_test::QuantizeSettings settings) {
+                return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+                    return bloom::color_tool_test::quantize(idBase, settings);
+                };
+            };
+            bloom::color_tool_test::QuantizeSettings hardLuma;
+            hardLuma.level = 0.4;
+            bloom::color_tool_test::QuantizeSettings softChannel;
+            softChannel.basis = bloom::document::kQuantizeBasisPerChannel;
+            softChannel.level = 0.6;
+            softChannel.softness = 0.5;
+            softChannel.invert = true;
+            bloom::color_tool_test::QuantizeSettings linked;
+            linked.mode = bloom::document::kQuantizePosterize;
+            linked.levels = 4.0;
+            bloom::color_tool_test::QuantizeSettings unlinked;
+            unlinked.mode = bloom::document::kQuantizePosterize;
+            unlinked.link = false;
+            unlinked.red = 2.0;
+            unlinked.green = 7.0;
+            unlinked.blue = 256.0;
+            unlinked.alpha = true;
+            unlinked.alphaLevels = 3.0;
+            return runGrades({make(hardLuma), make(softChannel), make(linked), make(unlinked)}, 519000,
+                             "production Quantize node: a hard luma threshold, a soft inverted "
+                             "per-channel threshold, a linked posterize and an unlinked posterize "
+                             "with alpha levels over HDR and signed values, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from
     // a channel and luma, and a custom Black & White mix; #541 a repeating Gradient Map through a
     // bound multi-stop gradient (unsorted stops, a hard edge, HDR and signed colours).

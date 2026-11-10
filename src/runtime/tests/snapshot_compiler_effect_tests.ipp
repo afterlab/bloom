@@ -1830,6 +1830,163 @@ void testColorMatrixLowering(Expectations& expectations) {
         "Color Matrix lowers its choices and sixteen elements with their identities");
 }
 
+// #519 Quantize lowers to one color tool kernel with its mode, basis, invert and the packed link and
+// alpha switches, and the scalars the mode reads in the kernel's order (with their identities); a
+// scalar the mode does not read is a fixed constant with no identity, so a keyed value of the other
+// mode neither varies the picture with time nor reaches the kernel. A muted node passes its Image
+// through.
+void testQuantizeLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(993);
+    const auto* definition = builtInNodeDefinitions().find(kQuantizeNodeType, 1);
+    require(definition != nullptr, "the Quantize definition exists");
+    struct Lowered final {
+        std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
+        const runtime::ColorToolKernel* kernel = nullptr;
+        std::map<std::string, ParameterId> ids;
+        bool timeDependent = false;
+        bool passedThrough = false;
+    };
+    const auto lower = [&](const std::map<std::string, ParameterValue>& values,
+                           const std::string_view keyedRole = {}, const bool muted = false) {
+        Lowered out;
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::vector<ParameterBinding> bindings;
+        std::uint64_t next = 3000;
+        for (const auto& parameter : definition->parameters) {
+            const auto found = values.find(parameter.role);
+            const auto id = ParameterId::fromRaw(next++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey,
+                         ConstantValueSource{found == values.end() ? parameter.defaultValue
+                                                                   : found->second}}),
+                    "Quantize parameter is valid");
+            out.ids[parameter.role] = id;
+            bindings.push_back({parameter.role, id});
+        }
+        if (!keyedRole.empty()) {
+            constexpr auto curveId = AnimationCurveId::fromRaw(3100);
+            ScalarAnimationCurve curve{curveId, {}};
+            curve.keyframes = {{KeyframeId::fromRaw(3101), core::RationalTime::fromInteger(0), 3.0,
+                                KeyframeInterpolation::Linear},
+                               {KeyframeId::fromRaw(3102), core::RationalTime::fromInteger(1), 9.0,
+                                KeyframeInterpolation::Linear}};
+            require(composition->animationCurves().insert(std::move(curve)), "the curve is publishable");
+            require(composition->parameters().setSource(out.ids.at(std::string(keyedRole)),
+                                                        AnimationCurveSource{curveId}),
+                    "the value animates");
+        }
+        require(graph.addNode({effectId, std::string(kQuantizeNodeType), std::move(bindings), 1}),
+                "Quantize node is accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{effectId, "input"}}),
+                "source feeds Quantize");
+        require(graph.addEdge({EdgeId::fromRaw(993), {effectId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "Quantize feeds Layer");
+        if (muted)
+            composition->nodeLayout()[effectId].muted = true;
+        expectations.expect(project.validate().ok(), "Quantize graph is valid document truth");
+        auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "Quantize graph compiles");
+        out.plan = result.plan;
+        if (!out.plan)
+            return out;
+        std::size_t index = 0;
+        for (; index < out.plan->operations().size(); ++index) {
+            const auto* item = std::get_if<runtime::CompiledImageEffect>(&out.plan->operations()[index]);
+            if (item && item->sourceNodeId == effectId) {
+                out.kernel = std::get_if<runtime::ColorToolKernel>(&item->kernel);
+                out.timeDependent =
+                    out.plan->operationTimeDependent(runtime::OperationIndex::fromRaw(index));
+                break;
+            }
+        }
+        out.passedThrough = out.kernel == nullptr;
+        return out;
+    };
+    const auto number = [](const runtime::ColorToolKernel& kernel, const std::size_t slot) {
+        const auto* source = std::get_if<double>(&kernel.values[slot].source);
+        return source != nullptr ? *source : -1.0;
+    };
+    // The defaults: a luma threshold at 0.5, hard, not inverted, links on, alpha off.
+    {
+        const auto base = lower({});
+        require(base.kernel != nullptr, "Quantize lowers to a color tool kernel");
+        expectations.expect(
+            base.kernel->operation == runtime::ColorToolOperation::Quantize &&
+                base.kernel->choices[0] == kQuantizeThreshold &&
+                base.kernel->choices[1] == kQuantizeBasisLuma && base.kernel->choices[2] == 0 &&
+                base.kernel->choices[3] == 1 && number(*base.kernel, 0) == 0.5 &&
+                number(*base.kernel, 1) == 0.0 && base.kernel->values[0].id == base.ids.at("level") &&
+                base.kernel->values[1].id == base.ids.at("softness") &&
+                !base.kernel->values[2].id.isValid() && !base.kernel->values[3].id.isValid(),
+            "Quantize's defaults lower the threshold's level and softness with their identities and "
+            "fix the posterize values");
+    }
+    // A posterize: linked reads the master, unlinked the three channels, alpha its own levels.
+    {
+        const auto linked = lower({{"mode", std::int64_t{kQuantizePosterize}}, {"levels", 5.0}});
+        require(linked.kernel != nullptr, "a linked posterize lowers");
+        expectations.expect(linked.kernel->choices[0] == kQuantizePosterize &&
+                                linked.kernel->choices[3] == 1 && number(*linked.kernel, 2) == 5.0 &&
+                                linked.kernel->values[2].id == linked.ids.at("levels") &&
+                                !linked.kernel->values[3].id.isValid() &&
+                                !linked.kernel->values[0].id.isValid(),
+                            "a linked posterize lowers the master levels and no channel's");
+        const auto unlinked = lower({{"mode", std::int64_t{kQuantizePosterize}},
+                                     {"linkLevels", false},
+                                     {"redLevels", 2.0},
+                                     {"greenLevels", 3.0},
+                                     {"blueLevels", 4.0},
+                                     {"posterizeAlpha", true},
+                                     {"alphaLevels", 6.0}});
+        require(unlinked.kernel != nullptr, "an unlinked posterize lowers");
+        expectations.expect(unlinked.kernel->choices[3] == 2 && number(*unlinked.kernel, 3) == 2.0 &&
+                                number(*unlinked.kernel, 4) == 3.0 && number(*unlinked.kernel, 5) == 4.0 &&
+                                number(*unlinked.kernel, 6) == 6.0 &&
+                                unlinked.kernel->values[3].id == unlinked.ids.at("redLevels") &&
+                                unlinked.kernel->values[6].id == unlinked.ids.at("alphaLevels") &&
+                                !unlinked.kernel->values[2].id.isValid(),
+                            "an unlinked posterize with alpha lowers the channels' and alpha's levels");
+        const auto inverted = lower({{"invert", true}, {"basis", std::int64_t{kQuantizeBasisPerChannel}}});
+        expectations.expect(inverted.kernel != nullptr && inverted.kernel->choices[1] == 1 &&
+                                inverted.kernel->choices[2] == 1,
+                            "a per-channel inverted threshold lowers its basis and invert switch");
+    }
+    // Time dependence: a keyed value the mode reads varies with time, one it does not read does not.
+    expectations.expect(lower({}, "level").timeDependent, "a keyed level varies with time");
+    expectations.expect(lower({}, "softness").timeDependent, "a keyed softness varies with time");
+    expectations.expect(!lower({}, "levels").timeDependent,
+                        "a keyed master levels value does not vary a threshold");
+    expectations.expect(!lower({}, "redLevels").timeDependent,
+                        "a keyed channel levels value does not vary a threshold");
+    const std::map<std::string, ParameterValue> posterize{{"mode", std::int64_t{kQuantizePosterize}}};
+    expectations.expect(lower(posterize, "levels").timeDependent, "a keyed master levels value varies a linked posterize");
+    expectations.expect(!lower(posterize, "level").timeDependent,
+                        "a keyed threshold level does not vary a posterize");
+    expectations.expect(!lower(posterize, "redLevels").timeDependent,
+                        "a keyed channel levels value does not vary a linked posterize");
+    expectations.expect(!lower(posterize, "alphaLevels").timeDependent,
+                        "a keyed alpha levels value does not vary a posterize without alpha");
+    auto unlinkedAlpha = posterize;
+    unlinkedAlpha["linkLevels"] = false;
+    unlinkedAlpha["posterizeAlpha"] = true;
+    expectations.expect(lower(unlinkedAlpha, "blueLevels").timeDependent &&
+                            lower(unlinkedAlpha, "alphaLevels").timeDependent &&
+                            !lower(unlinkedAlpha, "levels").timeDependent,
+                        "an unlinked posterize with alpha reads the channels' and alpha's levels, not the master");
+    // Muted: the Image passes through.
+    expectations.expect(lower({}, {}, true).passedThrough, "a muted Quantize passes its Image through");
+}
+
 // #523: an Image qualified by HSL Qualifier feeds Image Mix's mask. It lowers to a ColorTool kernel
 // with the qualifier's choices and nine operands with their identities; muted it is an empty Mask.
 void testHslQualifierLowering(Expectations& expectations) {
