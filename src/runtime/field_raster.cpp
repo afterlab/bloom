@@ -824,7 +824,9 @@ render::OcioGpuProgramResult buildMaskDistanceProgram(const std::int64_t reach, 
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     // The bounded search finds the CPU's exact minimum (docs/architecture/fields.md): every
     // candidate beyond reach + 1 texels already exceeds the cap. Integer squared distances below
-    // 2^24 are exact in binary32 on both routes.
+    // 2^24 are exact in binary32 on both routes. A device's sqrt is not required to be correctly
+    // rounded, so the root is corrected to the nearest binary32 with an exact fused residual: with
+    // r = M 2^(e-23), the root r is the nearest one exactly when -M <= (r*r - x) 2^(46-2e) <= M-1.
     static const std::string text =
         "layout(set = 0, binding = 0, std430) readonly buffer BloomMaskDistanceData { vec4 "
         "values[]; } bloom_mask_distance_data;\n"
@@ -832,6 +834,21 @@ render::OcioGpuProgramResult buildMaskDistanceProgram(const std::int64_t reach, 
         " ivec2 size = imageSize(bloom_ocio_input);\n"
         " if (c.x < 0 || c.y < 0 || c.x >= size.x || c.y >= size.y) { return vec4(0.0); }\n"
         " return imageLoad(bloom_ocio_input, c);\n"
+        "}\n"
+        "float bloom_mask_distance_sqrt(float x) {\n"
+        " if (!(x > 0.0)) { return 0.0; }\n"
+        " precise float r = sqrt(x);\n"
+        " for (int i = 0; i < 3; ++i) {\n"
+        "  uint bits = floatBitsToUint(r);\n"
+        "  int e = int((bits >> 23u) & 255u) - 127;\n"
+        "  precise float m = float((bits & 0x7fffffu) | 0x800000u);\n"
+        "  precise float q = fma(r, r, -x);\n"
+        "  precise float n = q * ldexp(1.0, 46 - 2 * e);\n"
+        "  if (n > m - 1.0) { r = uintBitsToFloat(bits - 1u); }\n"
+        "  else if (n < -m) { r = uintBitsToFloat(bits + 1u); }\n"
+        "  else { break; }\n"
+        " }\n"
+        " return r;\n"
         "}\n"
         "vec4 bloom_mask_distance(ivec2 c) {\n"
         " vec4 k = bloom_mask_distance_data.values[0];\n"
@@ -860,7 +877,7 @@ render::OcioGpuProgramResult buildMaskDistanceProgram(const std::int64_t reach, 
         " }\n"
         " toInside = min(toInside, cap);\n"
         " toOutside = min(toOutside, cap);\n"
-        " precise float sd = toInside > 0.0 ? sqrt(toInside) - 0.5 : 0.5 - sqrt(toOutside);\n"
+        " precise float sd = toInside > 0.0 ? bloom_mask_distance_sqrt(toInside) - 0.5 : 0.5 - bloom_mask_distance_sqrt(toOutside);\n"
         " return vec4(sd, sd, sd, 1.0);\n"
         "}\n";
     const std::array<float, 4> data{static_cast<float>(reach),
