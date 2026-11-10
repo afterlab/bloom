@@ -6,7 +6,8 @@
     const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
     const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
     const auto* shapePath = detail::resolvedShapePath(shape, resolved);
-    if (!size || !fill || !stroke || !width || !fillSwitch || !strokeSwitch || !shapePath ||
+    const auto line = detail::resolvedShapeLine(shape, *plan, resolved);
+    if (!size || !fill || !stroke || !width || !fillSwitch || !strokeSwitch || !shapePath || !line ||
         !std::isfinite(size->value.x) || !std::isfinite(size->value.y) || size->value.x < 0 ||
         size->value.y < 0 || !std::isfinite(width->value) || width->value < 0) {
         operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
@@ -24,7 +25,7 @@
                                       "Shape color is invalid", {}, operationSubject);
         return;
     }
-    const auto paths = detail::shapeRenderPaths(shape, size->value, *shapePath);
+    const auto paths = detail::shapeRenderPaths(shape, size->value, *line, *shapePath);
     const auto cancelled = [&] { return cancellation.isCancellationRequested(); };
     const auto raster = render::PathRaster::create(
         std::span<const render::Path>(paths),

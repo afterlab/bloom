@@ -326,8 +326,8 @@ struct ShapeFixtureValues final {
     shape.cornerRadius = values.cornerRadius;
     shape.points = values.points;
     shape.innerRatio = values.innerRatio;
-    shape.lineStart = {0.0, 0.0};
-    shape.lineEnd = {values.size.x, values.size.y};
+    shape.lineStart = {{}, bloom::document::Vec2d{0.0, 0.0}};
+    shape.lineEnd = {{}, bloom::document::Vec2d{values.size.x, values.size.y}};
     shape.fillEnabled = values.fillEnabled;
     shape.fillColor = {bloom::document::ParameterId::fromRaw(idBase + 63), values.fillColor};
     shape.strokeEnabled = values.strokeEnabled;

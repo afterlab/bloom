@@ -1571,7 +1571,8 @@ struct CompiledShape {
     double cornerRadius = 0;
     std::int64_t points = 5;
     double innerRatio = 0.5;
-    document::Vec2d lineStart, lineEnd;
+    // #599: a Line shape's ends, animatable and drivable like `size`.
+    CompiledVec2Parameter lineStart, lineEnd;
     document::PathValue path;
     bool fillEnabled = true;
     CompiledColorParameter fillColor;

@@ -138,8 +138,8 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
         value.fillEnabled = false;
         value.strokeEnabled = true;
         value.strokeWidth = CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), 1.5};
-        value.lineStart = Vec2d{0.0, 0.0};
-        value.lineEnd = Vec2d{6.0, 5.0};
+        value.lineStart = CompiledVec2Parameter{ParameterId::fromRaw(idBase + 5), Vec2d{0.0, 0.0}};
+        value.lineEnd = CompiledVec2Parameter{ParameterId::fromRaw(idBase + 6), Vec2d{6.0, 5.0}};
     } else if (kind == ShapeKind::Path) {
         value.path.editableContour().closed = true;
         value.path.editableContour().anchors = {

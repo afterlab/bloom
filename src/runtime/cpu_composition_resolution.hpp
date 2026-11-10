@@ -185,6 +185,29 @@ resolvedShapePath(const CompiledShape& shape, const ResolvedEvaluation& resolved
     return value == nullptr ? nullptr : value->value.get();
 }
 
+// #599: a Line shape's two ends at this frame, each the authored constant, a keyed value or a Vec2
+// driver's value. Both routes read them here so they cannot disagree. Another kind never reads its
+// ends, so they resolve to the origin without touching the curves or drivers (a malformed end on a
+// kind that ignores it is not an error). Answers nothing when a Line end cannot be resolved or is
+// not finite.
+struct ResolvedShapeLine final {
+    document::Vec2d start;
+    document::Vec2d end;
+};
+
+[[nodiscard]] inline std::optional<ResolvedShapeLine>
+resolvedShapeLine(const CompiledShape& shape, const CompiledCompositionPlan& plan,
+                  const ResolvedEvaluation& resolved) noexcept {
+    if (shape.kind != document::ShapeKind::Line)
+        return ResolvedShapeLine{};
+    const auto start = resolveParameter(shape.lineStart, plan, resolved);
+    const auto end = resolveParameter(shape.lineEnd, plan, resolved);
+    if (!start || !end || !std::isfinite(start->value.x) || !std::isfinite(start->value.y) ||
+        !std::isfinite(end->value.x) || !std::isfinite(end->value.y))
+        return std::nullopt;
+    return ResolvedShapeLine{start->value, end->value};
+}
+
 template <typename Value>
 [[nodiscard]] EvaluationSubject parameterSubject(EvaluationSubject subject,
                                                  const ResolvedParameter<Value>& parameter,

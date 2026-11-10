@@ -7,6 +7,8 @@
 
 #include <bloom/render/path_raster.hpp>
 
+#include "cpu_composition_resolution.hpp"
+
 #include <cstdint>
 #include <vector>
 
@@ -16,6 +18,7 @@ namespace bloom::runtime::detail {
 // frame); the empty path answers one empty render path, so every kind answers at least one.
 [[nodiscard]] inline std::vector<render::Path> shapeRenderPaths(const CompiledShape& shape,
                                                                 const document::Vec2d size,
+                                                                const ResolvedShapeLine& line,
                                                                 const document::PathValue& path) {
     const auto w = size.x, h = size.y;
     std::vector<render::Path> paths;
@@ -38,8 +41,7 @@ namespace bloom::runtime::detail {
             render::starPath(w, h, static_cast<std::uint32_t>(shape.points), shape.innerRatio));
         break;
     case document::ShapeKind::Line:
-        paths.push_back(render::linePath({shape.lineStart.x, shape.lineStart.y},
-                                         {shape.lineEnd.x, shape.lineEnd.y}));
+        paths.push_back(render::linePath({line.start.x, line.start.y}, {line.end.x, line.end.y}));
         break;
     case document::ShapeKind::Path:
         paths.reserve(path.contours.size());

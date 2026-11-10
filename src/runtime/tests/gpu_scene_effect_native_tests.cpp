@@ -780,8 +780,8 @@ void runDiscrete(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
         shape.strokeEnabled = true;
         shape.strokeColor = {ParameterId::fromRaw(id + 4), Color4d{-0.25, 1.75, 0.5, 0.625}};
         shape.strokeWidth = {ParameterId::fromRaw(id + 5), 1.5};
-        shape.lineStart = {0, 0};
-        shape.lineEnd = {6, 3};
+        shape.lineStart = {{}, bloom::document::Vec2d{0, 0}};
+        shape.lineEnd = {{}, bloom::document::Vec2d{6, 3}};
         definition.operations[0] = shape;
         std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
         definition.operations.resize(2);
@@ -959,8 +959,8 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
                     shape.strokeColor = {ParameterId::fromRaw(id + 4),
                                          Color4d{-0.25, 1.75, 0.5, 0.625}};
                     shape.strokeWidth = {ParameterId::fromRaw(id + 5), 1.5};
-                    shape.lineStart = {0, 0};
-                    shape.lineEnd = {6, 3};
+                    shape.lineStart = {{}, bloom::document::Vec2d{0, 0}};
+                    shape.lineEnd = {{}, bloom::document::Vec2d{6, 3}};
                     definition.operations[0] = shape;
                 }
                 const auto plan =

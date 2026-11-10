@@ -374,6 +374,11 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.path.driven", "a keyed path value driving Shape Source through its Path socket",
         GpuCoverageDisposition::Required, "tests/integration gpu path value native tests"});
+    // #599: a Line whose ends are keyed or driven resolves them per frame into the same coverage
+    // producer as a constant line, so the axis is Required through the same route.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.shape.line.animated", "keyed or driven Line Shape Source ends",
+        GpuCoverageDisposition::Required, "tests/integration gpu shape line ends native tests"});
     // ADR 0028 masks and mattes.
     out.push_back(GpuFeatureCoverageEntry{
         "feature.mask.layer",

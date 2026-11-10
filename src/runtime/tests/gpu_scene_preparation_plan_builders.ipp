@@ -121,8 +121,8 @@ shapePlan(const CompositionFormat compositionFormat, const LayerValues values,
     shape.cornerRadius = shapeValues.cornerRadius;
     shape.points = shapeValues.points;
     shape.innerRatio = shapeValues.innerRatio;
-    shape.lineStart = {0.0, 0.0};
-    shape.lineEnd = {shapeValues.size.x, shapeValues.size.y};
+    shape.lineStart = {{}, bloom::document::Vec2d{0.0, 0.0}};
+    shape.lineEnd = {{}, bloom::document::Vec2d{shapeValues.size.x, shapeValues.size.y}};
     shape.fillEnabled = shapeValues.fillEnabled;
     shape.fillColor = {bloom::document::ParameterId::fromRaw(idBase + 63), shapeValues.fillColor};
     shape.strokeEnabled = shapeValues.strokeEnabled;

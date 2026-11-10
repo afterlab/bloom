@@ -20,9 +20,10 @@ if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     const auto fillSwitch = detail::resolvedFillEnabled(*shape, sourceResolved);
     const auto strokeSwitch = detail::resolvedStrokeEnabled(*shape, sourceResolved);
     const auto* shapePath = detail::resolvedShapePath(*shape, sourceResolved);
-    if (!size || !fill || !color || !width || !fillSwitch || !strokeSwitch || !shapePath)
+    const auto line = detail::resolvedShapeLine(*shape, *plan, sourceResolved);
+    if (!size || !fill || !color || !width || !fillSwitch || !strokeSwitch || !shapePath || !line)
         return;
-    paths = detail::shapeRenderPaths(*shape, size->value, *shapePath);
+    paths = detail::shapeRenderPaths(*shape, size->value, *line, *shapePath);
     vectorHasFill = *fillSwitch && shape->kind != document::ShapeKind::Line;
     vectorHasStroke = *strokeSwitch && width->value > 0;
     stroke = {vectorHasStroke ? width->value : 0,

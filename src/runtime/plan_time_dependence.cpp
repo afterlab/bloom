@@ -121,8 +121,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledChecker>)
                     return parameter(step.colorA) || parameter(step.colorB);
                 else if constexpr (std::is_same_v<Step, CompiledShape>)
-                    return parameter(step.size) || parameter(step.fillColor) ||
-                           parameter(step.strokeColor) || parameter(step.strokeWidth) ||
+                    return parameter(step.size) ||
+                           (step.kind == document::ShapeKind::Line &&
+                            (parameter(step.lineStart) || parameter(step.lineEnd))) ||
+                           parameter(step.fillColor) || parameter(step.strokeColor) || parameter(step.strokeWidth) ||
                            driven(step.drivenFillEnabled) || driven(step.drivenStrokeEnabled) ||
                            (step.kind == document::ShapeKind::Path && driven(step.drivenPath));
                 else if constexpr (std::is_same_v<Step, CompiledCompositionSource> ||

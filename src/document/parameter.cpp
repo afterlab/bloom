@@ -766,7 +766,8 @@ constantMatchesSchema(const std::string_view schemaKey,
 namespace bloom::document {
 
 bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == "bloom.shape.size" || schemaKey == kPositionParameterSchemaKey ||
+    return schemaKey == "bloom.shape.size" || schemaKey == "bloom.shape.line-start" ||
+           schemaKey == "bloom.shape.line-end" || schemaKey == kPositionParameterSchemaKey ||
            schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey ||
            schemaKey == kGradientStartParameterSchemaKey ||
            schemaKey == kGradientEndParameterSchemaKey ||

@@ -3185,8 +3185,8 @@ lowerShape(const document::NodeRecord& node) {
     const auto* radius = parameterConstant<double>(findParameterBinding(node, "cornerRadius"));
     const auto* points = parameterConstant<std::int64_t>(findParameterBinding(node, "points"));
     const auto* ratio = parameterConstant<double>(findParameterBinding(node, "innerRatio"));
-    const auto* start = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineStart"));
-    const auto* end = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineEnd"));
+    const auto start = compiledVec2Parameter(findParameterBinding(node, "lineStart"));
+    const auto end = compiledVec2Parameter(findParameterBinding(node, "lineEnd"));
     // #589: the path is an authored constant, or a Path output read per frame.
     const auto* pathBinding = findParameterBinding(node, "path");
     const auto drivenPath = drivenOutput(pathBinding, runtime::SocketValueKind::Path);

@@ -25,8 +25,8 @@ NodeDefinition shapeDefinition() {
     add("cornerRadius", "corner-radius", ParameterValueKind::Float64, 0.0);
     add("points", "points", ParameterValueKind::Integer, std::int64_t{5});
     add("innerRatio", "inner-ratio", ParameterValueKind::Float64, 0.5);
-    add("lineStart", "line-start", ParameterValueKind::Vec2d, Vec2d{});
-    add("lineEnd", "line-end", ParameterValueKind::Vec2d, Vec2d{320, 0});
+    add("lineStart", "line-start", ParameterValueKind::Vec2d, Vec2d{}, true);
+    add("lineEnd", "line-end", ParameterValueKind::Vec2d, Vec2d{320, 0}, true);
     add("path", "path", ParameterValueKind::Path, PathValue{});
     add("fillEnabled", "fill-enabled", ParameterValueKind::Boolean, true);
     add("fillColor", "fill-color", ParameterValueKind::Color4d, core::Color4d{1, 1, 1, 1}, true);

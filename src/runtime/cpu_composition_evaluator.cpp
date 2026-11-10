@@ -848,13 +848,25 @@ enum class ScalarDomain : std::uint8_t {
                        plan.operationAssetsValid(OperationIndex::fromRaw(index));
             },
             [&plan, index, &failure](const CompiledShape& shape) {
-                const auto* curve = std::get_if<Vec2CurveIndex>(&shape.size.source);
                 const auto valid = [&](std::string_view key,
                                        const document::ParameterValue& value) {
                     return document::shapeConstantMatchesSchema(key, value);
                 };
-                return shape.size.id.isValid() &&
-                       (!curve || curve->value() < plan.vec2Curves().size()) &&
+                // A Vec2 operand of the shape: a valid id and, by source, an in-range curve or a
+                // constant that matches its schema (a driven operand reads the value graph).
+                const auto vec2Valid = [&](const CompiledVec2Parameter& parameter,
+                                           std::string_view key) {
+                    if (key.empty() && !parameter.id.isValid())
+                        return false;
+                    if (const auto* curve = std::get_if<Vec2CurveIndex>(&parameter.source))
+                        return curve->value() < plan.vec2Curves().size();
+                    if (const auto* constant = std::get_if<document::Vec2d>(&parameter.source))
+                        return key.empty() || valid(key, *constant);
+                    return true;
+                };
+                return vec2Valid(shape.size, {}) &&
+                       vec2Valid(shape.lineStart, "bloom.shape.line-start") &&
+                       vec2Valid(shape.lineEnd, "bloom.shape.line-end") &&
                        hasValidColorCurveReference(shape.fillColor, plan, index, failure) &&
                        hasValidColorCurveReference(shape.strokeColor, plan, index, failure) &&
                        hasValidScalarCurveReference(shape.strokeWidth, plan, index, failure) &&
@@ -862,8 +874,7 @@ enum class ScalarDomain : std::uint8_t {
                        valid("bloom.shape.corner-radius", shape.cornerRadius) &&
                        valid("bloom.shape.points", shape.points) &&
                        valid("bloom.shape.inner-ratio", shape.innerRatio) &&
-                       valid("bloom.shape.line-start", shape.lineStart) &&
-                       valid("bloom.shape.line-end", shape.lineEnd) && shape.path.isValid() &&
+                       shape.path.isValid() &&
                        (!shape.drivenPath || shape.path == document::PathValue{}) &&
                        valid("bloom.shape.stroke-align",
                              static_cast<std::int64_t>(shape.strokeAlign)) &&
@@ -1449,6 +1460,8 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                 [&](const CompiledShape& shape) {
                     static_cast<void>(
                         registerVec2(shape.size, "size", operationSubject) &&
+                        registerVec2(shape.lineStart, "lineStart", operationSubject) &&
+                        registerVec2(shape.lineEnd, "lineEnd", operationSubject) &&
                         registerColor(shape.fillColor, "fillColor", operationSubject) &&
                         registerColor(shape.strokeColor, "strokeColor", operationSubject) &&
                         registerScalar(shape.strokeWidth, "strokeWidth", ScalarDomain::Unbounded,
@@ -3530,8 +3543,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(step.cornerRadius);
                             key.add(step.points);
                             key.add(step.innerRatio);
-                            key.add(step.lineStart);
-                            key.add(step.lineEnd);
+                            // #599: the ends this frame resolves to (a keyed or driven end
+                            // keys by value); another kind never reads them.
+                            const auto frameLine = detail::resolvedShapeLine(step, *plan, resolved);
+                            key.add(frameLine.has_value());
+                            key.add(frameLine ? frameLine->start : document::Vec2d{});
+                            key.add(frameLine ? frameLine->end : document::Vec2d{});
                             // #589: the path this frame resolves to, so a driven shape cannot serve
                             // the image of an earlier frame's path. A malformed driver keys as
                             // such.

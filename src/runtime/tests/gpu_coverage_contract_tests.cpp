@@ -557,6 +557,34 @@ displayProofRunner(const bool customView) {
             definition.valueOutputCount = 1;
             return runBuilder(publish(std::move(definition)));
         });
+    // #599: both ends of a Line read keyed curves, resolved per frame into the same coverage producer.
+    add("feature.shape.line.animated", GpuCoverageFixtureCriterion::Prepared,
+        "tests/integration gpu shape line ends native tests", [] {
+            auto source = shape(ShapeKind::Line, 107800);
+            const auto key = [](const std::uint64_t id, const std::int64_t frame,
+                                const double value) {
+                return bloom::runtime::CompiledScalarKeyframe{
+                    bloom::document::KeyframeId::fromRaw(id),
+                    *bloom::core::RationalTime::create(frame, 24), value,
+                    bloom::runtime::CompiledKeyframeInterpolation::Linear};
+            };
+            const auto curve = [&](const std::uint64_t id, const double from, const double to,
+                                   const double otherFrom, const double otherTo) {
+                bloom::runtime::CompiledVec2Curve out;
+                out.id = bloom::document::AnimationCurveId::fromRaw(id);
+                out.components[0] = {key(id + 1, 0, from), key(id + 2, 24, to)};
+                out.components[1] = {key(id + 3, 0, otherFrom), key(id + 4, 24, otherTo)};
+                return out;
+            };
+            source.lineStart = bloom::runtime::CompiledVec2Parameter{
+                source.lineStart.id, bloom::runtime::Vec2CurveIndex::fromRaw(0)};
+            source.lineEnd = bloom::runtime::CompiledVec2Parameter{
+                source.lineEnd.id, bloom::runtime::Vec2CurveIndex::fromRaw(1)};
+            auto definition = withSource(source, 107800)->copyDefinition();
+            definition.vec2Curves = {curve(107810, 0.0, 1.0, 0.0, 1.0),
+                                     curve(107820, 6.0, 2.0, 5.0, 4.0)};
+            return runBuilder(publish(std::move(definition)));
+        });
     // A layer over a raster merge result is a raster input, so the production builder must emit the
     // accepted GpuAffine command for each transform axis (scale, rotation, anchor).
     add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::Prepared,

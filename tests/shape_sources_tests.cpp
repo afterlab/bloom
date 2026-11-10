@@ -1,10 +1,14 @@
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -157,6 +161,134 @@ void animation() {
                alpha(shape.evaluate(core::RationalTime::fromInteger(1)), 1, 1) == 1,
            "animated size changes pixels");
 }
+
+bool sameImage(const runtime::EvaluationResult& a, const runtime::EvaluationResult& b) {
+    if (!a.frame() || !b.frame())
+        return false;
+    const auto left = a.frame()->processImage().pixels();
+    const auto right = b.frame()->processImage().pixels();
+    return left.size_bytes() == right.size_bytes() &&
+           std::memcmp(left.data(), right.data(), left.size_bytes()) == 0;
+}
+bool shapeEvaluated(const runtime::EvaluationResult& result, const document::NodeId node) {
+    if (!result.frame())
+        return true;
+    const auto& evaluated = result.frame()->operationCacheStatistics().evaluatedNodes;
+    return std::ranges::find(evaluated, node) != evaluated.end();
+}
+// #599: a Line's two ends are animatable and drivable like `size`.
+void keyEnd(Fixture& fixture, const std::string& role, const std::int64_t second,
+            const document::Vec2d value, const bool create) {
+    commands::Transaction animate("Key line end", fixture.document.snapshot().revision());
+    if (create)
+        animate.emplace<commands::CreateAnimationForParameter>(
+            fixture.initial.initialCompositionId, fixture.parameters.at(role),
+            core::RationalTime{});
+    animate.emplace<commands::SetKeyframeAtTimeForParameter>(
+        fixture.initial.initialCompositionId, fixture.parameters.at(role),
+        core::RationalTime::fromInteger(second), value);
+    expect(fixture.commands.execute(std::move(animate)).changed(), "line end keys through commands");
+}
+void lineEndsAnimate() {
+    Fixture line(document::ShapeKind::Line);
+    auto plan = line.compile();
+    expect(!plan->operationTimeDependent(runtime::OperationIndex::fromRaw(0)),
+           "constant line ends are time independent");
+    const auto still = line.evaluate();
+    // The two ends are keyed: (0,0)-(4,0) at 0 s, (0,0)-(0,4) at 1 s.
+    keyEnd(line, "lineEnd", 0, document::Vec2d{4, 0}, true);
+    keyEnd(line, "lineEnd", 1, document::Vec2d{0, 4}, false);
+    keyEnd(line, "lineStart", 0, document::Vec2d{0, 0}, true);
+    keyEnd(line, "lineStart", 1, document::Vec2d{0, 0}, false);
+    plan = line.compile();
+    expect(plan->operationTimeDependent(runtime::OperationIndex::fromRaw(0)),
+           "a plan reading a keyed line end is time dependent");
+    const auto first = line.evaluate();
+    const auto half = line.evaluate(*core::RationalTime::create(1, 2));
+    const auto last = line.evaluate(core::RationalTime::fromInteger(1));
+    expect(sameImage(first, still), "the keyed line at its first key is the constant line");
+    expect(!sameImage(first, half) && !sameImage(half, last) && !sameImage(first, last),
+           "the keyed line moves between its keys");
+    // The value read at 0.5 s is the interpolated end: a constant line at (0,0)-(2,2) is the same
+    // picture, on the CPU reference and through the cache.
+    Fixture constant(document::ShapeKind::Line);
+    constant.set("lineEnd", document::Vec2d{2, 2});
+    expect(sameImage(half, constant.evaluate()), "the keyed end is read at the frame's time");
+    // Cache identity: the resolved ends are in the geometry key. Re-reading a frame reuses it, a
+    // frame the keys changed re-evaluates, and an edit of a key invalidates exactly its frames.
+    expect(!shapeEvaluated(line.evaluate(*core::RationalTime::create(1, 2)), line.node),
+           "a frame whose ends are unchanged reuses the cached image");
+    expect(shapeEvaluated(line.evaluate(core::RationalTime::fromInteger(1)), line.node) ||
+               sameImage(last, line.evaluate(core::RationalTime::fromInteger(1))),
+           "the last frame renders");
+    keyEnd(line, "lineEnd", 1, document::Vec2d{0, 3}, false);
+    const auto edited = line.evaluate(core::RationalTime::fromInteger(1));
+    expect(shapeEvaluated(edited, line.node) && !sameImage(edited, last),
+           "an edited key re-evaluates the frame it changes");
+    expect(!shapeEvaluated(line.evaluate(), line.node) &&
+               sameImage(line.evaluate(), first),
+           "an edit at 1 s leaves 0 s cached");
+    // A held key: equal neighbouring keys do not change the picture or the identity.
+    Fixture held(document::ShapeKind::Line);
+    keyEnd(held, "lineEnd", 0, document::Vec2d{3, 1}, true);
+    keyEnd(held, "lineEnd", 1, document::Vec2d{3, 1}, false);
+    const auto h0 = held.evaluate();
+    const auto h1 = held.evaluate(core::RationalTime::fromInteger(1));
+    expect(sameImage(h0, h1), "a held line end draws the same picture at both keys");
+    // The CPU reference keys a time-dependent operation by its time as well as its resolved values
+    // (as it does for `size`), so a held end reuses at the same frame; the GPU geometry key holds
+    // across frames (tests/integration/gpu_shape_line_ends_native_tests.cpp).
+    expect(!shapeEvaluated(held.evaluate(core::RationalTime::fromInteger(1)), held.node),
+           "a held line end reuses the cached image at a frame it has rendered");
+}
+void lineEndsDriven() {
+    Fixture line(document::ShapeKind::Line);
+    commands::Transaction add("Add vector", line.document.snapshot().revision());
+    add.emplace<commands::AddNode>(line.initial.initialCompositionId,
+                                   std::string(document::kVector2ValueNodeType),
+                                   document::Vec2d{0, 0});
+    const auto added = line.commands.execute(std::move(add));
+    const auto producer = added.outputId<document::NodeId>(commands::kAddNodeOutput);
+    expect(added.changed() && producer.has_value(), "a Vector2 value node is added");
+    if (!producer)
+        return;
+    const auto connect = [&](const std::string& socket) {
+        commands::Transaction wire("Drive line end", line.document.snapshot().revision());
+        wire.emplace<commands::ConnectPorts>(
+            line.initial.initialCompositionId,
+            document::OutputPortRef{*producer, std::string(document::kValuePortName)},
+            document::NodeInputRef{line.node, socket});
+        return line.commands.execute(std::move(wire)).changed();
+    };
+    expect(connect("lineEnd"), "a Vector2 value drives lineEnd");
+    const auto valueParameter = [&] {
+        const auto snapshot = line.document.snapshot();
+        const auto* composition = snapshot.project().findComposition(line.initial.initialCompositionId);
+        for (const auto& binding : composition->graph().findNode(*producer)->parameters)
+            if (binding.role == document::kValueParameterRole)
+                return binding.parameterId;
+        throw std::runtime_error("Vector2 value parameter is missing");
+    }();
+    const auto setValue = [&](const document::Vec2d value) {
+        commands::Transaction edit("Set vector", line.document.snapshot().revision());
+        edit.emplace<commands::SetParameterSource>(line.initial.initialCompositionId, valueParameter,
+                                                   document::ConstantValueSource{value});
+        return line.commands.execute(std::move(edit)).changed();
+    };
+    expect(setValue(document::Vec2d{2, 2}), "the driver value is edited");
+    const auto driven = line.evaluate();
+    // A different driver value moves the end, the picture and re-evaluates the shape.
+    expect(setValue(document::Vec2d{0, 4}), "the driver value changes");
+    const auto moved = line.evaluate();
+    expect(!sameImage(driven, moved) && shapeEvaluated(moved, line.node),
+           "a driven end change re-evaluates the shape");
+    expect(!shapeEvaluated(line.evaluate(), line.node) && sameImage(line.evaluate(), moved),
+           "an unchanged driven end reuses the cached image");
+    // A driven lineEnd equals the same constant end.
+    Fixture constant(document::ShapeKind::Line);
+    constant.set("lineEnd", document::Vec2d{0, 4});
+    expect(sameImage(moved, constant.evaluate()), "a driven end draws as the same constant end");
+}
 void creationAndPathOverrides() {
     auto initial = document::makeNewProject("Creation", "Main", core::RationalTime::fromInteger(2),
                                             testFormat());
@@ -243,6 +375,8 @@ int main() {
         transformedStroke();
         pixelsAndBounds();
         animation();
+        lineEndsAnimate();
+        lineEndsDriven();
         creationAndPathOverrides();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

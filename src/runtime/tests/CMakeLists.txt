@@ -956,6 +956,25 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_path_value_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
+# #599: keyed and driven Line ends on the production GPU route against the CPU reference, with cache
+# identity, invalidation, cancellation and budget. Skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_gpu_shape_line_ends_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_shape_line_ends_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_shape_line_ends_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_shape_line_ends_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_gpu_shape_line_ends_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_shape_line_ends_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_shape_line_ends_native
+    COMMAND bloom_runtime_gpu_shape_line_ends_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_shape_line_ends_native
+    PROPERTIES SKIP_RETURN_CODE 77)
+
 # #343: imported SVG artwork at real sizes: dense files in a few frames of executor memory, the
 # phase claiming that live set and growing retained coverage from the host root, against the CPU
 # reference. Skips (exit 77) only the GPU half.
