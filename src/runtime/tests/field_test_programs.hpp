@@ -417,14 +417,26 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
 // over the 16 x 12 test composition, a Camera Shake behind both camera sockets and a flow image
 // connected, mirroring snapshot_compiler_fields.ipp's lowerRollingShutter (the snapshot compiler
 // test holds the two to the same instruction sequence). Slot 0 is the picture, slot 1 the flow.
-[[nodiscard]] inline FieldProgram rollingShutterProgram(const std::uint64_t idBase) {
+//
+// `direction` is the node's read direction (0 Top to Bottom, 1 Bottom to Top, 2 Left to Right, 3 Right
+// to Left) and `edges` its edge mode (0 Extend, 1 Transparent), as the lowering builds each.
+[[nodiscard]] inline FieldProgram rollingShutterProgram(const std::uint64_t idBase,
+                                                        const std::int64_t direction = 0,
+                                                        const std::int64_t edges = 0) {
     Builder b(idBase);
+    // The phase in every lane: the row (y, lane 1) or the column (x, lane 0), scaled by 1 / extent
+    // with the direction's sign, over the 16 x 12 composition.
+    const std::int64_t lane = direction >= 2 ? 0 : 1;
+    const double scale = direction == 0   ? -1.0 / 12.0
+                         : direction == 1 ? 1.0 / 12.0
+                         : direction == 2 ? 1.0 / 16.0
+                                          : -1.0 / 16.0;
     constexpr double kRadians = 0.017453292519943295;
     const auto math = [&](const std::int64_t operation, const int x, const int y) {
         return b.add(FieldOp::Math, {x, y}, {operation}, {0.1, 0.0});
     };
     const auto c = b.add(FieldOp::Coordinate);
-    const auto phase = b.add(FieldOp::Swizzle, {c}, {1, 1, 1, 1}, {-1.0 / 12.0, -1.0 / 12.0, -1.0 / 12.0, -1.0 / 12.0});
+    const auto phase = b.add(FieldOp::Swizzle, {c}, {lane, lane, lane, lane}, {scale, scale, scale, scale});
     const auto amountOnce = b.add(FieldOp::Constant, {}, {}, {1.0, 0.0, 0.0, 0.0});
     const auto amount = b.add(FieldOp::Swizzle, {amountOnce}, {0, 0, 0, 0}, {1.0, 1.0, 1.0, 1.0});
     const auto a = b.add(FieldOp::Constant, {}, {}, {3.0, 1.0, 0.5, 0.0});
@@ -451,11 +463,11 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const auto flow = b.add(FieldOp::Image, {c}, {0, 0, 1, 0, 0, 1});
     b.last().slot = 1;
     const auto flowUp = b.add(FieldOp::Swizzle, {flow}, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
-    const auto frames = b.add(FieldOp::Swizzle, {c}, {1, 1, 1, 1}, {-0.5 / 12.0, -0.5 / 12.0, -0.5 / 12.0, -0.5 / 12.0});
+    const auto frames = b.add(FieldOp::Swizzle, {c}, {lane, lane, lane, lane}, {0.5 * scale, 0.5 * scale, 0.5 * scale, 0.5 * scale});
     const auto times = math(2, frames, amount);
     const auto shift = math(2, flowUp, times);
     const auto where = math(1, where0, shift);
-    const auto read = b.add(FieldOp::Image, {where}, {0, 0, 3, 4, 0, 1});
+    const auto read = b.add(FieldOp::Image, {where}, {0, edges, 3, 4, 0, 1});
     b.last().slot = 0;
     auto program = b.finish(read, FieldResultKind::Premultiplied);
     // The lowering packs virtual registers into the sixteen physical ones by last use; so does this.

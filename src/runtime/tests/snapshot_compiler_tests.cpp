@@ -2214,6 +2214,7 @@ int main() {
         testLightRaysPixels(expectations);
         testRollingShutterLowering(expectations);
         testRollingShutterPixels(expectations);
+        testRollingShutterDirectionsAndEdges(expectations);
         testSharpenLowering(expectations);
         testTestCardLowering(expectations);
         testFourColorGradientLowering(expectations);

@@ -728,6 +728,93 @@ void testEdgeExtend() {
     }
 }
 
+// #639 Edge Extend at a reduced render scale: the distance is in composition pixels, so at half
+// scale a distance of 4 reaches as far as 2 proxy pixels. The independent reference runs over the
+// proxy's own input with half the distance; the full distance must not match (the check bites).
+void testEdgeExtendRenderScale() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto halfExtent = render::ImageExtent::create(recipe_test::kRecipeWidth / 2,
+                                                        recipe_test::kRecipeHeight / 2);
+    if (!halfExtent)
+        throw std::logic_error("the proxy extent is valid");
+    const runtime::EvaluationResolution half = runtime::ProxyResolution{*halfExtent.value()};
+    for (const double distance : {4.0, 6.0}) {
+        RecipeValues values;
+        values.extendDistance = distance;
+        const auto source = evaluatedAt(evaluator, values, false, half);
+        const auto got = evaluatedAt(evaluator, values, true, half);
+        const auto scaledReference = edgeExtendReference(source, distance * 0.5, values.extendAmount);
+        const auto unscaledReference = edgeExtendReference(source, distance, values.extendAmount);
+        double worstScaled = 0.0;
+        double worstUnscaled = 0.0;
+        for (std::int64_t y = 0; y < recipe_test::kRecipeHeight / 2; ++y)
+            for (std::int64_t x = 0; x < recipe_test::kRecipeWidth / 2; ++x)
+                for (std::size_t c = 0; c < 4; ++c) {
+                    worstScaled = std::max(
+                        worstScaled, std::abs(got.at(x, y)[c] - scaledReference.at(x, y)[c]));
+                    worstUnscaled = std::max(
+                        worstUnscaled, std::abs(got.at(x, y)[c] - unscaledReference.at(x, y)[c]));
+                }
+        const std::string where = "Edge Extend distance " + std::to_string(distance) + " at half scale: ";
+        expect(worstScaled <= 1e-4, where + "the reach is half the distance in proxy pixels (worst " +
+                                        std::to_string(worstScaled) + ")");
+        expect(worstUnscaled > 1e-3,
+               where + "the reference with the unscaled distance differs, so the check bites");
+    }
+}
+
+// The cancellation and budget of one recipe's chain: a pre-cancelled token and a cancel arriving
+// inside the chain both return Cancelled with no frame; a budget smaller than the output or than the
+// chain's working set refuses with the budget diagnostic and publishes nothing.
+void testRecipeCancellationAndBudget(const Recipe recipe, const RecipeValues& values,
+                                     const std::string& name, const std::uint64_t ownerId) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto plan = recipe_test::recipePlan(recipe, values);
+    runtime::TaskScheduler scheduler;
+    const runtime::TaskOwner owner{runtime::TaskOwnerKind::PanelRequest,
+                                   runtime::TaskOwnerId::fromRaw(ownerId)};
+    for (const bool before : {true, false}) {
+        std::promise<bool> outcome;
+        auto future = outcome.get_future();
+        const auto task = scheduler.submit<void>(
+            runtime::TaskRequest(name + " cancellation", owner), [&](runtime::TaskContext& context) {
+                std::atomic_bool cancelled{false};
+                if (before)
+                    static_cast<void>(scheduler.cancelOwner(owner));
+                const auto result = evaluator.evaluate(
+                    plan.plan, request(plan.plan->output()), context.cancellation(),
+                    [&](const runtime::EvaluationProgress& progress) {
+                        if (!before && progress.operation &&
+                            progress.operation->value() > plan.input.value() + 2 &&
+                            !cancelled.exchange(true))
+                            static_cast<void>(scheduler.cancelOwner(owner));
+                    });
+                outcome.set_value(result.status() == runtime::EvaluationStatus::Cancelled &&
+                                  !result.frame());
+                return runtime::TaskResult<void>::cancelled();
+            });
+        expect(task.accepted() && future.get(),
+               name + ": " + (before ? "a pre-cancelled token" : "a cancel inside the chain") +
+                   " returns Cancelled with no frame");
+    }
+    // The composition is 24 x 20 pixels of 16 bytes: 7680 bytes an image.
+    for (const std::size_t limit : {std::size_t{4096}, std::size_t{2} * 7680}) {
+        auto small = request(plan.plan->output());
+        small.pixelStorageByteLimit = limit;
+        const auto refused = evaluator.evaluate(plan.plan, small, {});
+        const bool budget = std::ranges::any_of(refused.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == runtime::EvaluationDiagnosticCode::PixelStorageBudgetExceeded;
+        });
+        expect(!refused.frame() && refused.status() != runtime::EvaluationStatus::Cancelled && budget,
+               name + ": a budget of " + std::to_string(limit) +
+                   " bytes is refused with the pixel storage budget diagnostic and no frame");
+    }
+    auto roomy = request(plan.plan->output());
+    const auto fine = evaluator.evaluate(plan.plan, roomy, {});
+    expect(fine.frame() != nullptr && fine.diagnostics().empty(),
+           name + ": the same plan under the ordinary budget evaluates");
+}
+
 // #509 Alpha Contour's known answers: width 0 leaves the input exactly; deep inside the coverage
 // (beyond the band) Over is exactly the input; Contour only is transparent far from the edge and
 // carries the colour on it; a negative offset moves the band inside; at half scale the band keeps
@@ -1057,6 +1144,7 @@ int main() {
         values.extendAmount = 0.6;
         testReference(Recipe::EdgeExtend, values, "Edge Extend (a part of the way, fractional reach)");
         testEdgeExtend();
+        testEdgeExtendRenderScale();
         // #509 Alpha Contour: over, under and alone, outward and inward, soft and hard, a hairline
         // thinner than a pixel, and an HDR colour.
         values = {};
@@ -1080,6 +1168,7 @@ int main() {
         testCacheAndRoi();
         testAnimation();
         testCancellationAndBudget();
+        testRecipeCancellationAndBudget(Recipe::EdgeExtend, {}, "Edge Extend", 3391);
         testStreakCacheRoiAndCancellation();
     } catch (const std::exception& error) {
         std::cerr << "compositing recipe tests threw: " << error.what() << '\n';

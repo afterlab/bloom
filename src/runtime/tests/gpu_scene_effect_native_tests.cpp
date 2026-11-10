@@ -2048,6 +2048,8 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         std::uint64_t changedOcioDispatches; // the re-run neighbourhood/Levels programs
         const char* name;
         AlphaGate alphaGate = AlphaGate::Exact;
+        // Evaluate at half the composition's size (a reduced render scale).
+        bool halfScale = false;
     };
     std::vector<Case> cases;
     {
@@ -2148,6 +2150,12 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         RecipeValues farChanged = far;
         farChanged.extendAmount = 0.3;
         cases.push_back({Recipe::EdgeExtend, far, farChanged, 0, "edge extend, fractional reach"});
+        // #639: at a reduced render scale (half the size) the distance is half as many proxy
+        // pixels; the device is held to the CPU oracle at the same gate.
+        cases.push_back({Recipe::EdgeExtend, {}, changed, 0, "edge extend, half render scale",
+                         AlphaGate::Exact, true});
+        cases.push_back({Recipe::EdgeExtend, far, farChanged, 0,
+                         "edge extend, fractional reach, half render scale", AlphaGate::Exact, true});
     }
     {
         // #514 Denoise & Smooth Median over an HDR gradient whose coverage ramps (a soft alpha edge
@@ -2215,7 +2223,15 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         const auto plan = bloom::recipe_test::recipePlan(item.recipe, item.values, id).plan;
         const auto changedPlan = bloom::recipe_test::recipePlan(item.recipe, item.changed, id).plan;
         id += 100;
-        const auto request = requestFor(*plan);
+        auto request = requestFor(*plan);
+        if (item.halfScale) {
+            const auto half = bloom::render::ImageExtent::create(bloom::recipe_test::kRecipeWidth / 2,
+                                                                 bloom::recipe_test::kRecipeHeight / 2);
+            expectations.expect(half.hasValue(), name + "the half-scale extent is valid");
+            if (!half)
+                continue;
+            request.resolution = bloom::runtime::ProxyResolution{*half.value()};
+        }
         auto oracleRequest = request;
         oracleRequest.bypassOperationCache = true;
         const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
@@ -2344,6 +2360,19 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                          bloom::runtime::FieldRasterKernel{
                              bloom::field_test_programs::rollingShutterProgram(id), 1U});
     id += 100;
+    // #568: the other three read directions with Extend, and every direction with Transparent edges
+    // (the cases above are Top to Bottom, Extend): the programs the lowering builds for each.
+    for (const std::int64_t direction : {0, 1, 2, 3})
+        for (const std::int64_t edges : {0, 1}) {
+            if (direction == 0 && edges == 0)
+                continue;
+            kernels.emplace_back(
+                "rolling shutter direction " + std::to_string(direction) +
+                    (edges == 0 ? " extend" : " transparent"),
+                bloom::runtime::FieldRasterKernel{
+                    bloom::field_test_programs::rollingShutterProgram(id, direction, edges), 1U});
+            id += 100;
+        }
     // #587 Test Card: every card, the programs its lowering builds, CPU and device compared.
     for (std::int64_t card = 0; card < 16; ++card) {
         kernels.emplace_back("test card " + std::to_string(card),
