@@ -40,6 +40,7 @@ target_sources(
         matte_nodes.cpp
         layer_source.cpp
         merge_entries.cpp
+        drill_levels.cpp
         channel_nodes.cpp
         image_preview.cpp
         layer_stack.cpp
