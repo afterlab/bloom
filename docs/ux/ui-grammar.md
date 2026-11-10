@@ -483,6 +483,16 @@ layers and none is selected), disabled and muted. They elide down to `DropdownWi
 View, Select and Add menus collapse into the "…" overflow. The composition commands live in the
 application's Composition menu only.
 
+The breadcrumb (`viewerBreadcrumb`, #645) follows the selected layer while the Viewer is inside a
+group and is suppressed at the top level. It is a `kit::KBreadcrumb`: Ghost crumbs (no plate at
+rest, the hover plate under the pointer, the one focus border) separated by `CaretRight` chevrons in
+`Muted` ink, the composition first and each entered group after it, then the shape whose points are
+edited and a muted "· Points". The current (last) crumb is `Foreground`; the crumbs that go back
+are `Muted` until hovered. Narrow, the middle crumbs fold into one "…" (outermost middle first, the
+"…" going to the innermost crumb it stands for), then the first and last crumbs elide their own
+text; the tooltip and accessible description always hold the whole path. It is one Tab stop: Left,
+Right, Home and End move the focused crumb, Enter or Space activates it.
+
 The pin control (`viewerPinButton`, #536) is a checkable `KIconButton` with the Phosphor
 `push-pin` glyph and an instant popup (`viewerPinMenu`) of three exclusive items: Follow Active
 Composition (`viewerFollowAction`), Pin to Composition (`viewerPinCompositionAction`) and Pin to

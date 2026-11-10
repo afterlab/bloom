@@ -197,6 +197,13 @@ visible Viewer, the window makes no displayed qualification claim.
 | `Home` / `End` | Go to start / end |
 | Drop Assets items onto the Viewer | Makes a layer of each, on top, starting at the playhead and centered in the composition, as one undoable step; Alt sequences them end to end (see "Layer drops" under Timeline) |
 | Drop files onto the Viewer | Imports them (the import progress modal), then makes layers of them the same way as one more undoable step |
+| Double-click a group (#645) | Enters it and selects the child under the pointer; again on a child group goes one level deeper |
+| Double-click a path shape | Edits its points with the anchor tools (a small-group shape: the outline its parts share) |
+| Double-click a one-layer SVG | Offers Break Apart; Break Apart (one undo step) then enters the result |
+| Double-click empty space | Up one level, the group left selected |
+| `Enter` / `Return` (Select tool, no edit in flight) | Enters the selected group selecting its topmost child, or edits the selected shape's points; the Pen keeps `Enter` for finishing a path |
+| `Esc` inside a group | After anything in flight is confirmed and a RAM Preview fill is cancelled: leaves point editing, else goes up one group |
+| Breadcrumb crumb (click, or `Enter`/`Space` on the focused crumb) | Goes to that level, the group or shape left selected |
 
 The transport lives in the Viewer footer's centered time group: go to start, step back, play/pause,
 step forward, go to end, a loop toggle and the frame field (a frame index or a timecode, per the field's reading); RAM Preview is in the trailing group.
@@ -273,6 +280,16 @@ edit. The point is mapped through the displaying layer's transform and time, so 
 rotated, parented or retimed layer picks what is shown; a point outside the source reports "No
 object under the cursor". Properties also lists the manifest names as a searchable checklist, the
 selected names with remove buttons, and a field for a name or a raw `<ID>`.
+
+Drilling into groups (#645, [viewer.md](../user-guide/viewer.md#drilling-into-groups)). The
+Viewer's level is session state beside the selection: the entered groups, outermost first, and
+optionally a shape in point editing. It is never saved or part of undo, it follows a selection made
+in any other panel, and it is cleared when the composition changes. Inside a group a click picks
+among that group's direct children only, on a worker, from the displayed frame's evaluated geometry
+(outlines and fill rules, masks, track mattes, topmost first); a stale answer is dropped. Every layer
+off the entered chain draws at 30% of its own opacity in the Viewer only: the level is part of the
+Viewer's preview request and cache identity, applied as a factor on the layer's resolved opacity on
+the CPU reference and the GPU route alike, and never part of an export, render or query.
 
 Masks (ADR 0028). With a layer selected, the Rectangle, Ellipse and Pen tools add a mask to that
 layer instead of creating a shape layer: Rectangle draws four corner anchors, Ellipse four anchors

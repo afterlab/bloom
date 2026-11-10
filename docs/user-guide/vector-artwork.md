@@ -93,6 +93,20 @@ The picture does not change while the layer is not scaled up or turned. A layer 
 rotated draws sharp as one layer; broken apart it is a group that is resampled like any group, so
 it can look softer when scaled up. Break Apart when you need the parts, not before.
 
+### Editing the parts in the Viewer
+
+An SVG imported as editable shapes is a group in the Viewer: a click selects all of it. Double-click
+it to enter it and select the part under the pointer, double-click again to go into a group inside
+it, and double-click a shape to edit its points. Escape goes back out one level. Inside a group the
+rest of the picture is dimmed and cannot be picked, and the Viewer header shows the groups you are
+in as a breadcrumb. A double-click on a one-layer SVG offers Break Apart first. The
+[Viewer guide](viewer.md#drilling-into-groups) has the whole set of gestures.
+
+A shape the importer built from a few layers (a gradient fill, a dashed or a gradient stroke) is
+one shape when you drill in: a click on its fill or its drawn stroke picks it, a gap between dashes
+does not, and a double-click edits the one outline its parts share. With the points of a keyed Path
+node, each drag is one whole-path key at the playhead.
+
 ### From MCP, Python and the command line
 
 `bloom.layer.add-svg` takes `mode`: `"layer"` (the default when omitted) or `"shapes"`; anything
