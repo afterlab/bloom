@@ -7,6 +7,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
 
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -18,6 +19,8 @@ class Project;
 }
 
 namespace bloom::commands {
+
+struct SvgAssetSources;
 
 using LayerDropItem = std::variant<document::AssetId, document::CompositionId>;
 
@@ -53,6 +56,11 @@ class AddDroppedLayers final : public Operation {
     AddDroppedLayers(document::CompositionId composition, std::vector<LayerDropItem> items,
                      LayerDropPlacement placement)
         : composition_(composition), items_(std::move(items)), placement_(placement) {}
+    // #646: the source and mode of the SVG assets among the items (an imported SVG becomes its
+    // artwork, never an image layer). Without a prepared source for one, applying prepares it from
+    // the project's file or stored copy; every interface route prepares them earlier, off the
+    // thread that applies.
+    AddDroppedLayers& withSvgSources(SvgAssetSources sources);
     [[nodiscard]] std::string_view typeId() const noexcept override {
         return "bloom.layer.add-dropped";
     }
@@ -66,6 +74,13 @@ class AddDroppedLayers final : public Operation {
     document::CompositionId composition_;
     std::vector<LayerDropItem> items_;
     LayerDropPlacement placement_;
+    std::shared_ptr<const SvgAssetSources> svg_;
 };
+
+// Moves a layer just added to `composition` to where a drop with `placement` puts it: its stack
+// position, and its start (end to end is not meaningful for one layer). Used by the SVG import so
+// its artwork lands as footage does.
+[[nodiscard]] OperationResult placeDroppedLayer(document::Draft& draft, document::CompositionId composition,
+                                                document::LayerId layer, const LayerDropPlacement& placement);
 
 } // namespace bloom::commands

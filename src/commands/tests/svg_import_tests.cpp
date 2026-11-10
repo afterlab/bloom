@@ -1,6 +1,10 @@
 #include "command_test_support.hpp"
 
+#include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/data_block_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/svg_artwork.hpp>
@@ -688,6 +692,280 @@ void breakApartReadsOnlyThePreparedCopy(TestContext& test) {
     std::filesystem::remove(text);
 }
 
+// ---- #646: adding an imported SVG asset to a composition again ----
+
+SvgAssetSources readSources(const document::Project& project, const document::AssetId asset,
+                            const std::filesystem::path& directory, const SvgImportMode mode,
+                            std::string* refusal = nullptr, bool* held = nullptr) {
+    SvgAssetSources sources;
+    sources.mode = mode;
+    sources.projectDirectory = directory;
+    auto prepared = prepareSvgAssetSource(project, asset, directory);
+    if (prepared.source)
+        sources.sources.emplace(asset, std::move(prepared.source));
+    if (refusal)
+        *refusal = prepared.refusal;
+    if (held)
+        *held = prepared.heldCopy;
+    return sources;
+}
+
+CommandResult readd(Session& session, const document::AssetId asset, const SvgAssetSources& sources,
+                    LayerDropPlacement placement = {}) {
+    Transaction transaction("Add Layer", session.document.snapshot().revision());
+    transaction.emplace<AddDroppedLayers>(session.composition, std::vector<LayerDropItem>{asset}, placement)
+        .withSvgSources(sources);
+    return session.stack.execute(std::move(transaction));
+}
+
+void reAddingAnImportedSvg(TestContext& test) {
+    for (const auto mode : {SvgImportMode::Layer, SvgImportMode::Shapes}) {
+        const std::string label = mode == SvgImportMode::Layer ? "one layer: " : "shapes: ";
+        const auto path = writeFile(mode == SvgImportMode::Layer ? "readd-layer" : "readd-shapes", kLayerArtwork);
+        Session session;
+        const auto imported = session.import(path, mode);
+        test.expect(imported.succeeded(), label + "the first import works");
+        const auto asset = outputOf<document::AssetId>(imported, "asset");
+        test.expect(asset.has_value(), label + "the import records the file");
+        if (!asset)
+            continue;
+        const auto assetsBefore = session.project().assets().size();
+        const auto blocksBefore = session.project().typedDataBlocks().size();
+        const auto before = signature(session.document, session.composition);
+        const auto nodesBefore = session.main().graph().nodes().size();
+        const auto layersBefore = session.main().graph().layerOutputs().size();
+
+        const auto sources = readSources(session.project(), *asset, path.parent_path(), mode);
+        const auto result = readd(session, *asset, sources);
+        test.expect(result.succeeded(), label + "an imported SVG asset adds again");
+        test.expect(session.project().assets().size() == assetsBefore, label + "no second Assets record");
+        test.expect(session.project().typedDataBlocks().size() == blocksBefore,
+                    label + "no second data block (the held copy is shared by digest)");
+        test.expect(countNodes(session.main(), "bloom.image-source") == 0,
+                    label + "it is artwork, never an image layer");
+        if (mode == SvgImportMode::Layer)
+            test.expect(countNodes(session.main(), document::kVectorArtworkNodeType) == 2 &&
+                            session.main().graph().layerOutputs().size() == layersBefore + 1,
+                        label + "one more layer holding one more Vector Artwork node");
+        else
+            test.expect(session.main().graph().nodes().size() > nodesBefore &&
+                            countNodes(session.main(), document::kPathValueNodeType) ==
+                                2 * (countNodes(session.main(), document::kPathValueNodeType) / 2),
+                        label + "the shapes are built again");
+        test.expect(result.outputId<LayerId>("layer").has_value(), label + "the add names its layer");
+        test.expect(session.project().validate().ok(), label + "the project validates");
+        test.expect(session.stack.undo().changed() && signature(session.document, session.composition) == before &&
+                        session.project().assets().size() == assetsBefore,
+                    label + "one undo removes the whole re-add");
+        test.expect(session.stack.redo().changed() && session.main().graph().nodes().size() > nodesBefore,
+                    label + "redo brings it back");
+        std::filesystem::remove(path);
+    }
+}
+
+void reAddingUsesTheHeldCopyOrRefusesByName(TestContext& test) {
+    // One layer: the project holds the bytes, so the file can be gone.
+    {
+        const auto path = writeFile("readd-held", kLayerArtwork);
+        Session session;
+        const auto imported = session.import(path, SvgImportMode::Layer);
+        const auto asset = outputOf<document::AssetId>(imported, "asset");
+        test.expect(asset.has_value(), "held: the import records the file");
+        if (!asset)
+            return;
+        std::filesystem::remove(path);
+        for (const auto mode : {SvgImportMode::Layer, SvgImportMode::Shapes}) {
+            bool held = false;
+            const auto sources = readSources(session.project(), *asset, path.parent_path(), mode, nullptr, &held);
+            test.expect(held && sources.sources.contains(*asset), "held: the file is gone, the stored copy is read");
+            const auto blocks = session.project().typedDataBlocks().size();
+            const auto assets = session.project().assets().size();
+            test.expect(readd(session, *asset, sources).succeeded(), "held: the add works from the stored copy");
+            test.expect(session.project().typedDataBlocks().size() == blocks && session.project().assets().size() == assets,
+                        "held: no second block or record");
+            (void)session.stack.undo();
+        }
+    }
+    // Editable shapes keep no copy: the file is all there is.
+    {
+        const auto path = writeFile("readd-missing", kLayerArtwork);
+        Session session;
+        const auto imported = session.import(path, SvgImportMode::Shapes);
+        const auto asset = outputOf<document::AssetId>(imported, "asset");
+        test.expect(asset.has_value(), "missing: the import records the file");
+        if (!asset)
+            return;
+        const auto name = session.project().findAsset(*asset)->name;
+        const auto before = signature(session.document, session.composition);
+        const auto revision = session.document.snapshot().revision();
+        std::filesystem::remove(path);
+        std::string refusal;
+        const auto sources = readSources(session.project(), *asset, path.parent_path(), SvgImportMode::Shapes, &refusal);
+        test.expect(!sources.sources.contains(*asset) && refusal.find(name) != std::string::npos &&
+                        refusal.find("missing") != std::string::npos,
+                    "missing: neither the file nor a copy is refused, naming the asset: " + refusal);
+        // Applying with the refusal recorded, and with nothing prepared at all, refuses and adds nothing.
+        auto refused = sources;
+        refused.refusals.emplace(*asset, refusal);
+        const auto first = readd(session, *asset, refused);
+        test.expect(!first.succeeded() && !first.operationFailures.empty() &&
+                        first.operationFailures.front().issue.message.find(name) != std::string::npos,
+                    "missing: the add is refused by the asset's name");
+        SvgAssetSources unprepared;
+        unprepared.projectDirectory = path.parent_path();
+        const auto second = readd(session, *asset, unprepared);
+        test.expect(!second.succeeded(), "missing: an add with nothing prepared and no file is refused too");
+        test.expect(signature(session.document, session.composition) == before &&
+                        session.document.snapshot().revision() == revision,
+                    "missing: nothing was added and the document did not change");
+    }
+    // A file changed since the import, with no stored copy: refused, naming Reload.
+    {
+        const auto path = writeFile("readd-changed", kLayerArtwork);
+        Session session;
+        const auto imported = session.import(path, SvgImportMode::Shapes);
+        const auto asset = outputOf<document::AssetId>(imported, "asset");
+        test.expect(asset.has_value(), "changed: the import records the file");
+        if (!asset)
+            return;
+        std::ofstream(path, std::ios::binary) << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5"/></svg>)svg";
+        std::string refusal;
+        const auto sources = readSources(session.project(), *asset, path.parent_path(), SvgImportMode::Shapes, &refusal);
+        test.expect(!sources.sources.contains(*asset) && refusal.find("changed") != std::string::npos &&
+                        refusal.find("Reload") != std::string::npos,
+                    "changed: a file that no longer has the recorded SHA-256 is refused, naming Reload: " + refusal);
+        std::filesystem::remove(path);
+    }
+}
+
+void anImageLayerRefusesAnSvgAsset(TestContext& test) {
+    const auto path = writeFile("readd-refuse", kLayerArtwork);
+    Session session;
+    const auto imported = session.import(path, SvgImportMode::Layer);
+    const auto asset = outputOf<document::AssetId>(imported, "asset");
+    test.expect(asset.has_value(), "refuse: the import records the file");
+    if (!asset)
+        return;
+    const auto before = signature(session.document, session.composition);
+    Transaction layer("Add Image", session.document.snapshot().revision());
+    layer.emplace<AddImageLayer>(session.composition, *asset);
+    const auto layerResult = session.stack.execute(std::move(layer));
+    test.expect(!layerResult.succeeded() && !layerResult.operationFailures.empty() &&
+                    layerResult.operationFailures.front().issue.message.find("SVG") != std::string::npos,
+                "bloom.layer.add-image refuses an SVG asset, naming it as an SVG");
+    Transaction node("Add Image Node", session.document.snapshot().revision());
+    node.emplace<AddImageNode>(session.composition, *asset, document::Vec2d{});
+    const auto nodeResult = session.stack.execute(std::move(node));
+    test.expect(!nodeResult.succeeded() && !nodeResult.operationFailures.empty() &&
+                    nodeResult.operationFailures.front().issue.message.find("SVG") != std::string::npos,
+                "bloom.node.add-image refuses an SVG asset, naming it as an SVG");
+    test.expect(signature(session.document, session.composition) == before, "neither added anything");
+    std::filesystem::remove(path);
+}
+
+void reAddingPlacesTheLayerLikeFootage(TestContext& test) {
+    const auto path = writeFile("readd-place", kLayerArtwork);
+    Session session;
+    const auto imported = session.import(path, SvgImportMode::Layer);
+    const auto asset = outputOf<document::AssetId>(imported, "asset");
+    test.expect(asset.has_value(), "place: the import records the file");
+    if (!asset)
+        return;
+    const auto sources = readSources(session.project(), *asset, path.parent_path(), SvgImportMode::Layer);
+    LayerDropPlacement bottom;
+    bottom.stack = LayerDropPlacement::Stack::Bottom;
+    bottom.start = core::RationalTime::fromInteger(1);
+    const auto result = readd(session, *asset, sources, bottom);
+    test.expect(result.succeeded(), "place: the add works at the bottom of the stack");
+    const auto layerId = result.outputId<LayerId>("layer");
+    test.expect(layerId.has_value(), "place: it names its layer");
+    if (!layerId)
+        return;
+    const auto entries = session.main().graph().layerStack().entries();
+    test.expect(!entries.empty() && entries.back().layerId == *layerId, "place: the stack position is the drop's");
+    const auto* layer = session.main().graph().findLayer(*layerId);
+    test.expect(layer != nullptr && layer->inPoint == core::RationalTime::fromInteger(1),
+                "place: the layer starts where it was dropped");
+    std::filesystem::remove(path);
+}
+
+void reAddingInTheNodeEditorAndANewComposition(TestContext& test) {
+    for (const auto mode : {SvgImportMode::Layer, SvgImportMode::Shapes}) {
+        const std::string label = mode == SvgImportMode::Layer ? "node editor, one layer: " : "node editor, shapes: ";
+        const auto path = writeFile(mode == SvgImportMode::Layer ? "readd-node-layer" : "readd-node-shapes", kLayerArtwork);
+        Session session;
+        const auto imported = session.import(path, mode);
+        const auto asset = outputOf<document::AssetId>(imported, "asset");
+        test.expect(asset.has_value(), label + "the import records the file");
+        if (!asset)
+            continue;
+        const auto sources = readSources(session.project(), *asset, path.parent_path(), mode);
+        const auto assets = session.project().assets().size();
+        const auto blocks = session.project().typedDataBlocks().size();
+        const auto before = signature(session.document, session.composition);
+        const auto layersBefore = session.main().graph().layerOutputs().size();
+        Transaction transaction("Add Image Source", session.document.snapshot().revision());
+        transaction.emplace<AddAssetSourceNode>(session.composition, *asset, document::Vec2d{900.0, 700.0})
+            .withSvgSources(sources);
+        const auto result = session.stack.execute(std::move(transaction));
+        test.expect(result.succeeded(), label + "the asset becomes nodes");
+        test.expect(countNodes(session.main(), "bloom.image-source") == 0, label + "never an image node");
+        test.expect(session.project().assets().size() == assets && session.project().typedDataBlocks().size() == blocks,
+                    label + "no second record or block");
+        const auto node = result.outputId<NodeId>("node");
+        const auto* record = node ? session.main().graph().findNode(*node) : nullptr;
+        test.expect(record != nullptr, label + "it names its node");
+        if (record != nullptr) {
+            const auto layout = session.main().nodeLayout().find(*node);
+            test.expect(layout != session.main().nodeLayout().end() && layout->second.position.x == 900.0 &&
+                            layout->second.position.y == 700.0,
+                        label + "the node sits at the drop point");
+            test.expect(record->typeId == (mode == SvgImportMode::Layer ? document::kVectorArtworkNodeType
+                                                                        : document::kLayerStackNodeType),
+                        label + "a Vector Artwork node, or the artwork's root group");
+        }
+        test.expect(session.main().graph().layerOutputs().size() >= layersBefore, label + "nothing was removed");
+        test.expect(session.project().validate().ok(), label + "the project validates");
+        test.expect(session.stack.undo().changed() && signature(session.document, session.composition) == before,
+                    label + "one undo removes it");
+        std::filesystem::remove(path);
+    }
+    {
+        // New Composition from Selection / bloom.composition.add-from-assets.
+        const auto path = writeFile("readd-newcomp", kLayerArtwork);
+        Session session;
+        const auto imported = session.import(path, SvgImportMode::Layer);
+        const auto asset = outputOf<document::AssetId>(imported, "asset");
+        test.expect(asset.has_value(), "new composition: the import records the file");
+        if (!asset)
+            return;
+        const auto sources = readSources(session.project(), *asset, path.parent_path(), SvgImportMode::Layer);
+        const auto compositions = session.project().compositions().size();
+        const auto assets = session.project().assets().size();
+        Transaction transaction("New Composition from Selection", session.document.snapshot().revision());
+        transaction.emplace<AddCompositionFromFootage>(std::vector<document::AssetId>{*asset}, session.composition,
+                                                       "Made", std::nullopt)
+            .withSvgSources(sources);
+        const auto result = session.stack.execute(std::move(transaction));
+        test.expect(result.succeeded(), "new composition: an SVG asset makes a composition");
+        const auto made = result.outputId<CompositionId>(kAddCompositionOutput);
+        const auto* composition = made ? session.project().findComposition(*made) : nullptr;
+        test.expect(composition != nullptr && session.project().compositions().size() == compositions + 1 &&
+                        session.project().assets().size() == assets,
+                    "new composition: no second record");
+        if (composition != nullptr) {
+            test.expect(countNodes(*composition, document::kVectorArtworkNodeType) == 1 &&
+                            countNodes(*composition, "bloom.image-source") == 0,
+                        "new composition: its layer is the artwork, not an image layer");
+            test.expect(composition->format().width() == 200 && composition->format().height() == 100,
+                        "new composition: sized from the SVG");
+        }
+        test.expect(session.stack.undo().changed() && session.project().compositions().size() == compositions,
+                    "new composition: one undo removes it");
+        std::filesystem::remove(path);
+    }
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -705,5 +983,10 @@ int main() {
     bloom::commands::test::preparedSourcesReadNothingLater(test);
     bloom::commands::test::breakApartTurnsTheLayerIntoShapes(test);
     bloom::commands::test::breakApartReadsOnlyThePreparedCopy(test);
+    bloom::commands::test::reAddingAnImportedSvg(test);
+    bloom::commands::test::reAddingUsesTheHeldCopyOrRefusesByName(test);
+    bloom::commands::test::anImageLayerRefusesAnSvgAsset(test);
+    bloom::commands::test::reAddingPlacesTheLayerLikeFootage(test);
+    bloom::commands::test::reAddingInTheNodeEditorAndANewComposition(test);
     return test.failures() == 0 ? 0 : 1;
 }

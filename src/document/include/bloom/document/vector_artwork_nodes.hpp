@@ -14,6 +14,7 @@
 #include <bloom/document/project.hpp>
 
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace bloom::document {
@@ -58,6 +59,19 @@ inline constexpr SchemaVersion kVectorArtworkBlockSchemaVersion{1, 0};
 // digest. Nothing when the file was never recorded or its record was removed.
 [[nodiscard]] const AssetRecord* vectorArtworkSourceAsset(const Project& project,
                                                           const DataBlockRecord& block);
+// #646: an Assets record of an SVG file (an image asset whose locator ends in ".svg", any case).
+// It has no decoded picture; adding it to a composition builds the artwork through the SVG import.
+[[nodiscard]] bool isSvgSourceAsset(const AssetRecord& asset) noexcept;
+// #646: a project made before an SVG could be added again may hold an Image Source whose asset is an
+// SVG record. It has no picture to decode, so the layer draws nothing. The named warning for such
+// a node, or nothing for any other node: "'logo.svg' is an SVG source, not footage: add it again
+// from Assets to rebuild the artwork". The document is not rewritten.
+[[nodiscard]] std::optional<std::string> svgFootageWarning(const Project& project, const Composition& composition,
+                                                           const NodeRecord& node);
+// The same for a layer: the warning of the image source its content reads, through the nodes
+// between (a blur, a colour node, a reroute).
+[[nodiscard]] std::optional<std::string> layerSvgFootageWarning(const Project& project, const Composition& composition,
+                                                                LayerId layer);
 // The SVG block of the project that holds bytes with this SHA-256, so a second import of the
 // same file shares one copy.
 [[nodiscard]] const DataBlockRecord* findVectorArtworkBlock(const Project& project,

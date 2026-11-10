@@ -17,6 +17,8 @@
 //   cancels, refuses an unreadable SVG by name, and says which layers keep the resampled picture.
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/composition_settings_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
@@ -2381,8 +2383,71 @@ void breakApartOfAScaledLayerIsTheResampledPicture() {
 
 } // namespace
 
+
+// ---- #646: an imported SVG asset added to a composition again ----
+
+// A second composition of the same size and the SVG asset added to it again, as a drop does.
+document::CompositionId addAgain(Fixture& original, const commands::SvgImportMode mode,
+                                 const std::filesystem::path& directory, const bool expectHeldCopy) {
+    const auto made = original.run<commands::AddCompositionWithSettings>(commands::compositionSettingsOf(original.composition()));
+    const auto second = *made.outputId<document::CompositionId>(commands::kAddCompositionOutput);
+    const auto& assets = original.document.snapshot().project().assets();
+    expect(assets.size() == 1, "re-add: the import recorded one asset");
+    const auto asset = assets.front().id;
+    auto prepared = commands::prepareSvgAssetSource(original.document.snapshot().project(), asset, directory);
+    expect(prepared.source != nullptr && prepared.heldCopy == expectHeldCopy,
+           std::string("re-add: the SVG is read from ") + (expectHeldCopy ? "the project's stored copy" : "its file"));
+    commands::SvgAssetSources sources;
+    sources.mode = mode;
+    sources.projectDirectory = directory;
+    if (prepared.source)
+        sources.sources.emplace(asset, std::move(prepared.source));
+    commands::Transaction transaction("Add Layer", original.document.snapshot().revision());
+    transaction.emplace<commands::AddDroppedLayers>(second, std::vector<commands::LayerDropItem>{asset},
+                                                    commands::LayerDropPlacement{})
+        .withSvgSources(std::move(sources));
+    const auto result = original.stack.execute(std::move(transaction));
+    expect(result.succeeded(), "re-add: the SVG asset adds again");
+    expect(original.document.snapshot().project().assets().size() == 1, "re-add: still one Assets record");
+    return second;
+}
+
+void reAddedAssetIsTheOriginalImport() {
+    for (const auto mode : {commands::SvgImportMode::Layer, commands::SvgImportMode::Shapes}) {
+        for (const auto& [name, svg] : {std::pair{std::string("composite"), kComposite}, std::pair{std::string("icon"), kIcon}}) {
+            const auto file = writeSvg("readd-" + name, svg);
+            Fixture original(file, mode, 512, 288);
+            const auto second = addAgain(original, mode, file.parent_path(), false);
+            for (const std::int64_t index : {0, 2}) {
+                const auto label = name + (mode == commands::SvgImportMode::Layer ? " one layer" : " shapes") +
+                                   " frame " + std::to_string(index);
+                const auto one = renderProject(original.document, original.main, frame(index), "original " + label);
+                const auto again = renderProject(original.document, second, frame(index), "re-added " + label);
+                if (!one || !again)
+                    continue;
+                const auto worst = difference(*one, *again);
+                expect(worst <= kGate, label + ": the re-added asset is the original import, whole frame at 512 x 288 (worst " +
+                                           std::to_string(worst) + ")");
+                expect(coverage(*again) > 100.0, label + ": the re-added artwork draws");
+            }
+            if (mode == commands::SvgImportMode::Layer) {
+                // The file is gone: the stored copy draws the same frame.
+                std::filesystem::remove(file);
+                const auto third = addAgain(original, mode, file.parent_path(), true);
+                const auto one = renderProject(original.document, original.main, frame(1), "original, file gone");
+                const auto again = renderProject(original.document, third, frame(1), "re-added from the stored copy");
+                expect(one && again && difference(*one, *again) <= kGate && coverage(*again) > 100.0,
+                       name + ": added again with its file deleted, the stored copy draws the original's frame");
+            } else {
+                std::filesystem::remove(file);
+            }
+        }
+    }
+}
+
 int main() {
     try {
+        reAddedAssetIsTheOriginalImport();
         breakApartKeepsThePictureAndTheAnimation();
         breakApartOfAScaledLayerIsTheResampledPicture();
         layerComposesThroughTheExpansionRoot();

@@ -16,15 +16,18 @@
 // Both modes build from one description (bloom/document/svg_artwork.hpp) and report the same named
 // warnings. See docs/architecture/vector-artwork.md.
 
+#include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/commands/operation.hpp>
 #include <bloom/commands/result.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/parameter.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +44,7 @@ struct FontCatalogue;
 namespace bloom::document {
 class Composition;
 class Project;
+struct AssetRecord;
 struct NodeRecord;
 } // namespace bloom::document
 
@@ -137,7 +141,21 @@ class AddSvgArtwork final : public Operation {
         preparationFailure_ = std::move(reason);
         return *this;
     }
+    // #646: the Assets record the artwork comes from, when the caller already has one (an SVG asset
+    // added to a composition again). The import reuses it and never records a second one; a
+    // one-layer import names it as its data block's source.
+    AddSvgArtwork& withSourceAsset(document::AssetId asset) {
+        sourceAsset_ = asset;
+        return *this;
+    }
+    // #646: the new layer goes where a drop of footage would put it (stack position, start, end to
+    // end) instead of on top at the start.
+    AddSvgArtwork& withPlacement(LayerDropPlacement placement) {
+        placement_ = placement;
+        return *this;
+    }
     [[nodiscard]] SvgImportMode mode() const noexcept { return mode_; }
+    [[nodiscard]] bool placed() const noexcept { return placement_.has_value(); }
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.layer.add-svg"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
@@ -155,6 +173,77 @@ class AddSvgArtwork final : public Operation {
     std::filesystem::path projectDirectory_;
     std::shared_ptr<const platform::FontCatalogue> fonts_;
     std::optional<std::string> preparationFailure_;
+    document::AssetId sourceAsset_{};
+    std::optional<LayerDropPlacement> placement_;
+};
+
+// ---- #646: adding an imported SVG asset to a composition again ----
+//
+// An SVG asset is the record of a file, not footage: it has no picture to decode. Every way of
+// adding one to a composition builds the artwork through the SVG import instead, in the chosen
+// mode, on the existing record.
+
+// What an add-to-composition operation needs for the SVG assets it adds: the import mode (asked
+// once per batch) and each asset's source, read where file I/O is allowed (a worker, an operation
+// factory), so applying reads nothing.
+struct SvgAssetSources final {
+    SvgImportMode mode = kDefaultSvgImportMode;
+    std::map<document::AssetId, std::shared_ptr<const PreparedSvgSource>> sources;
+    // An asset that could not be prepared where the caller tried: applying refuses with this text
+    // (naming the asset) and reads nothing.
+    std::map<document::AssetId, std::string> refusals;
+    // For an asset in `sources`' absence: the operation then prepares it when it applies (a caller
+    // with no earlier thread to do it on). The project folder its relative locator resolves from.
+    std::filesystem::path projectDirectory;
+};
+
+struct SvgAssetPreparation final {
+    std::shared_ptr<const PreparedSvgSource> source;
+    // Empty on success. Otherwise names the asset and what is wrong with it.
+    std::string refusal;
+    // The project's stored copy was used (the file is missing or changed).
+    bool heldCopy = false;
+    bool cancelled = false;
+};
+
+// The asset's file as the project recorded it, or the project's stored copy of it. The file is
+// used when it is there and still has the recorded SHA-256. Otherwise the stored copy of the
+// recorded bytes (a one-layer import keeps them) is used. With neither, the result refuses by name:
+// the file is missing (relink it), or it changed and nothing holds the recorded bytes (Reload).
+// File I/O: never on the UI thread.
+[[nodiscard]] SvgAssetPreparation prepareSvgAssetSource(const document::Project& project, document::AssetId asset,
+                                                       const std::filesystem::path& projectDirectory,
+                                                       const std::function<bool()>& cancel = {},
+                                                       const std::function<void(SvgPreparePhase)>& phase = {});
+
+// The name an artwork made from `asset` gets: the record's file name without ".svg".
+[[nodiscard]] std::string svgAssetArtworkName(const document::AssetRecord& asset);
+
+// Adds the artwork of an SVG asset on top of `composition`, as AddSvgArtwork does, with the mode and
+// source in `sources`. Outputs as AddSvgArtwork's. `placement`, when given, is where the layer goes.
+[[nodiscard]] OperationResult addSvgAssetArtwork(document::Draft& draft, document::CompositionId composition,
+                                                 document::AssetId asset, const SvgAssetSources& sources,
+                                                 const std::optional<LayerDropPlacement>& placement = std::nullopt);
+
+// The node editor's route: the artwork of an SVG asset as unconnected nodes at `position` (one
+// Vector Artwork node, or the artwork's root Merge and the nodes under it laid out from there),
+// reusing the asset's record. Outputs "node" (the Vector Artwork node or the root Merge).
+class AddSvgAssetNodes final : public Operation {
+  public:
+    AddSvgAssetNodes(document::CompositionId composition, document::AssetId asset, document::Vec2d position,
+                     SvgAssetSources sources = {})
+        : composition_(composition), asset_(asset), position_(position), sources_(std::move(sources)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.node.add-svg-asset"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::AssetId asset_;
+    document::Vec2d position_;
+    SvgAssetSources sources_;
 };
 
 // #642: "Break Apart". Turns the Vector Artwork a layer holds into the editable shapes the other
@@ -197,6 +286,29 @@ class BreakApartSvgArtwork final : public Operation {
     std::shared_ptr<const PreparedSvgSource> prepared_;
     std::shared_ptr<const platform::FontCatalogue> fonts_;
 };
+
+// Break Apart for several layers at once: every layer's artwork is broken apart in one operation, so
+// one undo step gives all of them back. Applies each in order; one that cannot rejects the lot.
+// Outputs as BreakApartSvgArtwork's, once per layer ("layer", "merge" in layer order).
+class BreakApartSvgArtworks final : public Operation {
+  public:
+    BreakApartSvgArtworks(document::CompositionId composition, std::vector<std::unique_ptr<BreakApartSvgArtwork>> each)
+        : composition_(composition), each_(std::move(each)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.layer.break-apart-svg"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    std::vector<std::unique_ptr<BreakApartSvgArtwork>> each_;
+};
+
+// Whether breaking `layer` apart can look softer than it does as one layer: it, or a layer it is
+// parented to, is scaled past 100% or turned (constant, keyed or driven). One layer draws sharp at
+// any scale; the editable shapes are resampled like any group. Used to name it in the job log.
+[[nodiscard]] bool breakApartMayResample(const document::Composition& composition, document::LayerId layer);
 
 // The Vector Artwork node that draws `layer`'s picture: the one its content input reads, through
 // the nodes between. Null when the layer holds none.

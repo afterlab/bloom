@@ -6,6 +6,7 @@
 #include <bloom/commands/operation.hpp>
 #include <bloom/document/ids.hpp>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@
 #include <vector>
 
 namespace bloom::commands {
+struct SvgAssetSources;
 
 struct ProjectItems final {
     std::vector<document::AssetId> assets;
@@ -56,6 +58,9 @@ class AddCompositionFromFootage final : public Operation {
                               std::optional<document::AssetFolderId> folder = {})
         : assets_(std::move(assets)), template_(templateComposition),
           fallbackName_(std::move(fallbackName)), folder_(folder) {}
+    // #646: the source and mode of the SVG assets among the footage (each becomes its artwork, never
+    // an image layer). Unset, applying prepares them from the project's file or stored copy.
+    AddCompositionFromFootage& withSvgSources(SvgAssetSources sources);
     [[nodiscard]] std::string_view typeId() const noexcept override {
         return "bloom.composition.add-from-assets";
     }
@@ -66,6 +71,7 @@ class AddCompositionFromFootage final : public Operation {
     std::optional<document::CompositionId> template_;
     std::string fallbackName_;
     std::optional<document::AssetFolderId> folder_;
+    std::shared_ptr<const SvgAssetSources> svg_;
 };
 
 } // namespace bloom::commands

@@ -1,4 +1,5 @@
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 
 #include "node_operation_support.hpp"
 
@@ -796,6 +797,12 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
         : asset->kind == document::AssetKind::Sequence
             ? asset->manifest.pattern
             : asset->locator.path.substr(asset->locator.path.find_last_of('/') + 1);
+    // #646: an imported SVG has no picture to decode; its artwork comes from the SVG import.
+    if (document::isSvgSourceAsset(*asset))
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "'" + name + "' is an SVG, not footage: add it from Assets (Add to Composition), bloom.layer.add-from-assets "
+            "or bloom.layer.add-svg so it is built as artwork");
     const bool video = asset->kind == document::AssetKind::Video;
     if (!video && asset->kind != document::AssetKind::Image &&
         asset->kind != document::AssetKind::Sequence)

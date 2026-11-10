@@ -1,6 +1,8 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -231,6 +233,11 @@ CompositionSettings compositionSettingsForAsset(const document::AssetRecord& ass
     return base;
 }
 
+AddCompositionFromAssets& AddCompositionFromAssets::withSvgSources(SvgAssetSources sources) {
+    svg_ = std::make_shared<const SvgAssetSources>(std::move(sources));
+    return *this;
+}
+
 std::string_view AddCompositionFromAssets::typeId() const noexcept {
     return "bloom.composition.add-from-assets";
 }
@@ -259,12 +266,15 @@ OperationResult AddCompositionFromAssets::apply(document::Draft& draft) const {
                                                  " does not exist in the project");
         if (asset->kind == document::AssetKind::Lut || asset->kind == document::AssetKind::Font)
             continue;
-        auto layer = asset->kind == document::AssetKind::Audio
-                         ? AddAudioLayer(composition, *it).apply(draft)
+        const SvgAssetSources none;
+        auto layer = asset->kind == document::AssetKind::Audio ? AddAudioLayer(composition, *it).apply(draft)
+                     : document::isSvgSourceAsset(*asset)
+                         ? addSvgAssetArtwork(draft, composition, *it, svg_ ? *svg_ : none)
                          : AddImageLayer(composition, *it).apply(draft);
         if (layer.status != OperationStatus::Applied)
             return layer;
         result.outputs.insert(result.outputs.end(), layer.outputs.begin(), layer.outputs.end());
+        result.issues.insert(result.issues.end(), layer.issues.begin(), layer.issues.end());
     }
     return result;
 }

@@ -21,6 +21,7 @@
 #include <bloom/document/ids.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -32,6 +33,7 @@ struct AssetRecord;
 } // namespace bloom::document
 
 namespace bloom::commands {
+struct SvgAssetSources;
 
 struct CompositionSettings final {
     std::string name;
@@ -137,6 +139,9 @@ class AddCompositionFromAssets final : public Operation {
     AddCompositionFromAssets(CompositionSettings settings, std::vector<document::AssetId> assets,
                              std::optional<document::AssetFolderId> folder = {})
         : settings_(std::move(settings)), assets_(std::move(assets)), folder_(folder) {}
+    // #646: the source and mode of the SVG assets among `assets` (each becomes its artwork, never an
+    // image layer). Unset, applying prepares them from the project's file or stored copy.
+    AddCompositionFromAssets& withSvgSources(SvgAssetSources sources);
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
@@ -144,6 +149,7 @@ class AddCompositionFromAssets final : public Operation {
     CompositionSettings settings_;
     std::vector<document::AssetId> assets_;
     std::optional<document::AssetFolderId> folder_;
+    std::shared_ptr<const SvgAssetSources> svg_;
 };
 
 } // namespace bloom::commands

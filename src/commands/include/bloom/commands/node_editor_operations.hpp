@@ -4,7 +4,11 @@
 // step. They are Qt-free so scripts, MCP and the editor issue the same command.
 #include <bloom/commands/operations.hpp>
 
+#include <memory>
+
 namespace bloom::commands {
+struct SvgAssetSources;
+
 // Read-only Add-surface preflight over one immutable snapshot. A successful result is only an
 // invitation to submit; AddEditorNode::apply remains the authoritative command path.
 [[nodiscard]] OperationResult checkAddEditorNodeEligibility(
@@ -116,6 +120,9 @@ class AddAssetSourceNode final : public Operation {
     AddAssetSourceNode(document::CompositionId composition, document::AssetId asset,
                        document::Vec2d position)
         : composition_(composition), asset_(asset), position_(position) {}
+    // #646: the source and mode of an imported SVG asset (it becomes its artwork's nodes, never an
+    // image node). Unset, applying prepares the SVG from the project's file or stored copy.
+    AddAssetSourceNode& withSvgSources(SvgAssetSources sources);
     [[nodiscard]] std::string_view typeId() const noexcept override {
         return "bloom.node.add-asset-source";
     }
@@ -128,5 +135,6 @@ class AddAssetSourceNode final : public Operation {
     document::CompositionId composition_;
     document::AssetId asset_;
     document::Vec2d position_;
+    std::shared_ptr<const SvgAssetSources> svg_;
 };
 } // namespace bloom::commands

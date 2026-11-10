@@ -4,6 +4,8 @@
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -327,6 +329,12 @@ OperationResult AddImageNode::apply(document::Draft& draft) const {
                                          "Image asset " + std::to_string(asset_.value()) +
                                              " does not exist in the project");
     const auto* asset = draft.project().findAsset(asset_);
+    if (asset != nullptr && document::isSvgSourceAsset(*asset))
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "'" + (asset->name.empty() ? asset->locator.path : asset->name) +
+                "' is an SVG, not footage: add it with bloom.node.add-asset-source (or drop it on the node "
+                "editor) so it is built as artwork");
     auto added = AddNode(composition_,
                          asset && asset->kind == document::AssetKind::Video ? "bloom.video-source"
                                                                             : "bloom.image-source",
@@ -400,6 +408,11 @@ OperationResult AddAudioNode::apply(document::Draft& draft) const {
                                      "Audio node asset parameter is missing");
 }
 
+AddAssetSourceNode& AddAssetSourceNode::withSvgSources(SvgAssetSources sources) {
+    svg_ = std::make_shared<const SvgAssetSources>(std::move(sources));
+    return *this;
+}
+
 OperationResult AddAssetSourceNode::apply(document::Draft& draft) const {
     const auto* asset = draft.project().findAsset(asset_);
     if (asset == nullptr)
@@ -410,6 +423,10 @@ OperationResult AddAssetSourceNode::apply(document::Draft& draft) const {
     case document::AssetKind::Audio:
         return AddAudioNode(composition_, asset_, position_).apply(draft);
     case document::AssetKind::Image:
+        // #646: an imported SVG becomes its artwork's nodes.
+        if (document::isSvgSourceAsset(*asset))
+            return AddSvgAssetNodes(composition_, asset_, position_, svg_ ? *svg_ : SvgAssetSources{}).apply(draft);
+        return AddImageNode(composition_, asset_, position_).apply(draft);
     case document::AssetKind::Sequence:
     case document::AssetKind::Video:
         return AddImageNode(composition_, asset_, position_).apply(draft);

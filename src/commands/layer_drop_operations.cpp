@@ -5,10 +5,13 @@
 #include <bloom/commands/layer_timing_gesture.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 
 #include <algorithm>
+#include <span>
 
 namespace bloom::commands {
 namespace {
@@ -45,6 +48,110 @@ bool droppableAsLayer(const document::Project& project, const document::Composit
             asset->kind == document::AssetKind::Video || asset->kind == document::AssetKind::Audio);
 }
 
+namespace {
+// The slot new layers go directly above (nullopt: below every layer).
+std::optional<OperationResult> resolveAnchor(const document::Composition& composition,
+                                             const LayerDropPlacement& placement,
+                                             std::optional<document::LayerSlotId>& anchor) {
+    const auto entries = composition.graph().layerStack().entries();
+    switch (placement.stack) {
+    case LayerDropPlacement::Stack::Top:
+        if (!entries.empty())
+            anchor = entries.front().slotId;
+        break;
+    case LayerDropPlacement::Stack::Before: {
+        auto before = placement.before;
+        if (!before.isValid() && placement.beforeLayer.isValid()) {
+            const auto slot = std::ranges::find(entries, placement.beforeLayer,
+                                                &document::LayerStackEntry::layerId);
+            if (slot != entries.end())
+                before = slot->slotId;
+        }
+        if (composition.graph().layerStack().find(before) == nullptr)
+            return OperationResult::rejected(OperationIssueCode::MissingReference,
+                                             "The layer to insert above no longer exists");
+        anchor = before;
+        break;
+    }
+    case LayerDropPlacement::Stack::Bottom:
+        break;
+    }
+    return std::nullopt;
+}
+
+// Moves the new layer above `anchor` and to `start`, the way a Timeline body drag does: start, in
+// and out together, on frames, keeping at least one frame inside the composition. `end` receives
+// the layer's out point (where a sequenced next layer starts).
+OperationResult placeLayer(document::Draft& draft, const document::CompositionId compositionId,
+                           const document::LayerId layerId,
+                           const std::optional<document::LayerSlotId> anchor,
+                           const core::RationalTime start, core::RationalTime& end) {
+    const auto* composition = draft.project().findComposition(compositionId);
+    const auto* layer = composition ? composition->graph().findLayer(layerId) : nullptr;
+    const auto stack = composition ? composition->graph().layerStack().entries()
+                                   : std::span<const document::LayerStackEntry>{};
+    const auto slot = std::ranges::find(stack, layerId, &document::LayerStackEntry::layerId);
+    if (layer == nullptr || slot == stack.end())
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The new layer is not in the layer stack");
+    auto moved = MoveLayerBefore(compositionId, slot->slotId, anchor).apply(draft);
+    if (moved.status == OperationStatus::Rejected)
+        return moved;
+    composition = draft.project().findComposition(compositionId);
+    layer = composition->graph().findLayer(layerId);
+    const auto duration = composition->duration();
+    const auto proposal =
+        proposeLayerTiming({.start = layer->timing.startTime,
+                            .in = layer->inPoint,
+                            .out = layer->endPoint(duration),
+                            .speed = layer->timing.speed,
+                            .rate = composition->format().frameRate(),
+                            .duration = duration,
+                            .extentStart = std::nullopt,
+                            .extentEnd = std::nullopt,
+                            .handle = 0,
+                            .alt = false,
+                            .deltaSeconds = start.toSeconds() - layer->inPoint.toSeconds()});
+    if (!proposal)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "The layer cannot start there");
+    auto timed = SetLayerTiming(compositionId, layerId, proposal->start, proposal->in,
+                                proposal->out, proposal->speed)
+                     .apply(draft);
+    if (timed.status == OperationStatus::Rejected)
+        return timed;
+    end = proposal->out;
+    return OperationResult::applied();
+}
+} // namespace
+
+OperationResult placeDroppedLayer(document::Draft& draft, const document::CompositionId composition,
+                                  const document::LayerId layer, const LayerDropPlacement& placement) {
+    const auto* target = draft.project().findComposition(composition);
+    if (target == nullptr)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Composition " + std::to_string(composition.value()) + " does not exist");
+    // The new layer is already in the stack (on top, usually): the anchor is worked out without it.
+    std::optional<document::LayerSlotId> anchor;
+    if (placement.stack == LayerDropPlacement::Stack::Top) {
+        for (const auto& entry : target->graph().layerStack().entries())
+            if (entry.layerId != layer) {
+                anchor = entry.slotId;
+                break;
+            }
+    } else if (auto failure = resolveAnchor(*target, placement, anchor)) {
+        return std::move(*failure);
+    }
+    core::RationalTime end;
+    return placeLayer(draft, composition, layer, anchor, frameStart(*target, placement.start), end);
+}
+
+AddDroppedLayers& AddDroppedLayers::withSvgSources(SvgAssetSources sources) {
+    svg_ = std::make_shared<const SvgAssetSources>(std::move(sources));
+    return *this;
+}
+
 OperationResult AddDroppedLayers::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
     if (composition == nullptr)
@@ -58,32 +165,12 @@ OperationResult AddDroppedLayers::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                              "This item cannot be a layer here");
     // The new layers go directly above `anchor` (nullopt: below every layer), in item order.
-    const auto entries = composition->graph().layerStack().entries();
     std::optional<document::LayerSlotId> anchor;
-    switch (placement_.stack) {
-    case LayerDropPlacement::Stack::Top:
-        if (!entries.empty())
-            anchor = entries.front().slotId;
-        break;
-    case LayerDropPlacement::Stack::Before: {
-        auto before = placement_.before;
-        if (!before.isValid() && placement_.beforeLayer.isValid()) {
-            const auto slot = std::ranges::find(entries, placement_.beforeLayer,
-                                                &document::LayerStackEntry::layerId);
-            if (slot != entries.end())
-                before = slot->slotId;
-        }
-        if (composition->graph().layerStack().find(before) == nullptr)
-            return OperationResult::rejected(OperationIssueCode::MissingReference,
-                                             "The layer to insert above no longer exists");
-        anchor = before;
-        break;
-    }
-    case LayerDropPlacement::Stack::Bottom:
-        break;
-    }
+    if (auto failure = resolveAnchor(*composition, placement_, anchor))
+        return std::move(*failure);
     auto start = frameStart(*composition, placement_.start);
     std::vector<OperationOutput> outputs;
+    std::vector<OperationIssue> issues;
     for (const auto& item : items_) {
         OperationResult added;
         if (const auto* nested = std::get_if<document::CompositionId>(&item))
@@ -91,51 +178,30 @@ OperationResult AddDroppedLayers::apply(document::Draft& draft) const {
         else if (const auto id = std::get<document::AssetId>(item);
                  draft.project().findAsset(id)->kind == document::AssetKind::Audio)
             added = AddAudioLayer(composition_, id).apply(draft);
-        else
+        else if (document::isSvgSourceAsset(*draft.project().findAsset(id))) {
+            // #646: an imported SVG is not footage; its artwork is built through the SVG import.
+            const SvgAssetSources none;
+            added = addSvgAssetArtwork(draft, composition_, id, svg_ ? *svg_ : none);
+        } else
             added = AddImageLayer(composition_, id).apply(draft);
         if (added.status == OperationStatus::Rejected)
             return added;
+        issues.insert(issues.end(), added.issues.begin(), added.issues.end());
         const auto layerId = outputLayer(added);
-        composition = draft.project().findComposition(composition_);
-        const auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
-        const auto stack = composition->graph().layerStack().entries();
-        const auto slot = std::ranges::find(stack, *layerId, &document::LayerStackEntry::layerId);
-        if (layer == nullptr || slot == stack.end())
+        if (!layerId)
             return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                              "The new layer is not in the layer stack");
-        auto moved = MoveLayerBefore(composition_, slot->slotId, anchor).apply(draft);
-        if (moved.status == OperationStatus::Rejected)
-            return moved;
-        // Move the layer to its start the way a Timeline body drag does: start, in and out
-        // together, on frames, keeping at least one frame inside the composition.
-        composition = draft.project().findComposition(composition_);
-        layer = composition->graph().findLayer(*layerId);
-        const auto duration = composition->duration();
-        const auto proposal =
-            proposeLayerTiming({.start = layer->timing.startTime,
-                                .in = layer->inPoint,
-                                .out = layer->endPoint(duration),
-                                .speed = layer->timing.speed,
-                                .rate = composition->format().frameRate(),
-                                .duration = duration,
-                                .extentStart = std::nullopt,
-                                .extentEnd = std::nullopt,
-                                .handle = 0,
-                                .alt = false,
-                                .deltaSeconds = start.toSeconds() - layer->inPoint.toSeconds()});
-        if (!proposal)
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "The layer cannot start there");
-        auto timed = SetLayerTiming(composition_, *layerId, proposal->start, proposal->in,
-                                    proposal->out, proposal->speed)
-                         .apply(draft);
-        if (timed.status == OperationStatus::Rejected)
-            return timed;
+        core::RationalTime end;
+        auto placed = placeLayer(draft, composition_, *layerId, anchor, start, end);
+        if (placed.status == OperationStatus::Rejected)
+            return placed;
         if (placement_.sequence)
-            start = proposal->out;
+            start = end;
         outputs.push_back({"layer", *layerId});
     }
-    return OperationResult::applied(std::move(outputs));
+    auto result = OperationResult::applied(std::move(outputs));
+    result.issues = std::move(issues);
+    return result;
 }
 
 } // namespace bloom::commands

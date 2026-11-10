@@ -5,8 +5,11 @@
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_drop_operations.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/data_block.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/svg_artwork.hpp>
@@ -14,6 +17,7 @@
 #include <bloom/platform/font_catalog.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -62,7 +66,14 @@ class DraftTarget final : public document::SvgArtworkTarget {
 // recorded with the same path and digest is reused.
 std::optional<document::AssetId> recordSource(document::Draft& draft, const media::SvgScene& scene,
                                               const std::filesystem::path& projectDirectory,
-                                              document::SvgArtworkNotes& notes) {
+                                              document::SvgArtworkNotes& notes,
+                                              const document::AssetId existingAsset = {}) {
+    // #646: the artwork of an asset already in the project reuses that record.
+    if (existingAsset.isValid()) {
+        if (draft.project().findAsset(existingAsset) == nullptr)
+            throw Failure{"Asset " + std::to_string(existingAsset.value()) + " does not exist in the project"};
+        return existingAsset;
+    }
     if (scene.sourcePath.empty() || !scene.hasSourceDigest)
         return std::nullopt;
     document::AssetRecord asset;
@@ -119,23 +130,35 @@ void appendNotes(OperationResult& result, const document::SvgArtworkNotes& notes
 OperationResult writeEditable(document::Draft& draft, document::Composition& composition,
                               const document::CompositionId compositionId, const media::SvgScene& scene,
                               const document::SvgArtworkDescription& description, const std::string& name,
-                              const std::filesystem::path& projectDirectory) {
+                              const std::filesystem::path& projectDirectory,
+                              const document::AssetId existingAsset,
+                              const std::optional<document::Vec2d> detachedAt = std::nullopt) {
     try {
         DraftTarget target(draft, compositionId);
         document::SvgArtworkWriter writer(composition, target, description);
         auto& graph = composition.graph();
         const auto top = graph.layerStack().nodeId();
         const auto rootMerge = writer.addRoot();
-        const auto rootSlot = writer.addSlot(top, rootMerge);
-        const auto rootLayer = writer.addEntry(top, rootSlot, document::svgArtworkName(name, "SVG"));
+        // #646: the node editor's route leaves the root group unconnected, at the drop point.
+        const auto rootSlot = detachedAt ? document::LayerSlotId{} : writer.addSlot(top, rootMerge);
+        const auto rootLayer = detachedAt ? document::LayerId{}
+                                          : writer.addEntry(top, rootSlot, document::svgArtworkName(name, "SVG"));
         document::SvgArtworkNotes notes;
-        const auto sourceAsset = recordSource(draft, scene, projectDirectory, notes);
+        const auto sourceAsset = recordSource(draft, scene, projectDirectory, notes, existingAsset);
         notes.append(description.notes);
         writer.writeSteps();
         writer.writeFrames();
         if (graph.findNode(rootMerge) == nullptr)
             throw Failure{"The SVG root could not be created"};
         std::vector<OperationOutput> outputs{{"layer", rootLayer}, {"slot", rootSlot}, {"merge", rootMerge}};
+        if (detachedAt) {
+            // The cards were laid out from the origin; move them (not the frames, which hold ids)
+            // so the root card sits at the drop point.
+            for (const auto id : writer.nodeIds())
+                if (const auto found = composition.nodeLayout().find(id); found != composition.nodeLayout().end())
+                    found->second.position.y += detachedAt->y;
+            outputs = {{"node", rootMerge}, {"merge", rootMerge}};
+        }
         if (sourceAsset)
             outputs.push_back({"asset", *sourceAsset});
         auto result = OperationResult::applied(std::move(outputs));
@@ -156,11 +179,13 @@ OperationResult writeEditable(document::Draft& draft, document::Composition& com
 OperationResult writeLayer(document::Draft& draft, document::Composition& composition,
                            const document::CompositionId compositionId, const PreparedSvgSource& source,
                            const document::SvgArtworkDescription& description, const std::string& name,
-                           const bool fit, const std::filesystem::path& projectDirectory) {
+                           const bool fit, const std::filesystem::path& projectDirectory,
+                           const document::AssetId existingAsset,
+                           const std::optional<document::Vec2d> detachedAt = std::nullopt) {
     try {
         auto& project = draft.project();
         document::SvgArtworkNotes notes;
-        const auto sourceAsset = recordSource(draft, *source.scene, projectDirectory, notes);
+        const auto sourceAsset = recordSource(draft, *source.scene, projectDirectory, notes, existingAsset);
         notes.append(description.notes);
 
         document::DataBlockRecordId blockId;
@@ -189,7 +214,11 @@ OperationResult writeLayer(document::Draft& draft, document::Composition& compos
             block.schemaVersion = document::kVectorArtworkBlockSchemaVersion;
             block.mediaType = std::string(document::kVectorArtworkBlockMediaType);
             try {
-                block.provenance.source = assetLocatorFor(source.path, projectDirectory);
+                // The block names the record it was read from by that record's own locator.
+                if (const auto* record = existingAsset.isValid() ? project.findAsset(existingAsset) : nullptr)
+                    block.provenance.source = record->locator;
+                else
+                    block.provenance.source = assetLocatorFor(source.path, projectDirectory);
             } catch (const std::exception&) {
                 block.provenance.source = document::DataBlockProducer{"bloom.svg-import", "1", {}};
             }
@@ -206,15 +235,20 @@ OperationResult writeLayer(document::Draft& draft, document::Composition& compos
                                {{std::string(document::kVectorArtworkBlockParameterRole),
                                  document::ParameterValue{static_cast<std::int64_t>(blockId.value())}},
                                 {std::string(document::kVectorArtworkFitParameterRole), document::ParameterValue{fit}}},
-                               {document::svgArtworkLayoutOrigin(composition), 0.0},
+                               detachedAt ? *detachedAt : document::Vec2d{document::svgArtworkLayoutOrigin(composition), 0.0},
                                false});
         DraftTarget target(draft, compositionId);
         document::SvgArtworkWriter writer(composition, target, layer);
         const auto top = composition.graph().layerStack().nodeId();
         const auto node = writer.addRoot();
-        const auto slot = writer.addSlot(top, node);
-        const auto entry = writer.addEntry(top, slot, document::svgArtworkName(name, "SVG"));
-        std::vector<OperationOutput> outputs{{"layer", entry}, {"slot", slot}, {"node", node}, {"dataBlock", blockId}};
+        std::vector<OperationOutput> outputs;
+        if (detachedAt) {
+            outputs = {{"node", node}, {"dataBlock", blockId}};
+        } else {
+            const auto slot = writer.addSlot(top, node);
+            const auto entry = writer.addEntry(top, slot, document::svgArtworkName(name, "SVG"));
+            outputs = {{"layer", entry}, {"slot", slot}, {"node", node}, {"dataBlock", blockId}};
+        }
         if (sourceAsset)
             outputs.push_back({"asset", *sourceAsset});
         auto result = OperationResult::applied(std::move(outputs));
@@ -405,12 +439,27 @@ OperationResult AddSvgArtwork::apply(document::Draft& draft) const {
     options.fonts = fonts;
     const auto description = document::buildSvgArtwork(*scene, options);
     auto result = mode_ == SvgImportMode::Layer
-                      ? writeLayer(draft, *composition, composition_, *source, description, name, fit_, projectDirectory_)
-                      : writeEditable(draft, *composition, composition_, *scene, description, name, projectDirectory_);
+                      ? writeLayer(draft, *composition, composition_, *source, description, name, fit_, projectDirectory_,
+                                   sourceAsset_)
+                      : writeEditable(draft, *composition, composition_, *scene, description, name, projectDirectory_,
+                                      sourceAsset_);
     if (result.status == OperationStatus::Applied) {
         // The placement is by construction; one validation of the whole composition at the end.
         if (const auto failure = detail::validateGraph(*composition, document::builtInNodeDefinitions()))
             return *failure;
+        if (placement_) {
+            // Where a drop of footage would have put it (the layer is on top at the start until now).
+            std::optional<document::LayerId> layerId;
+            for (const auto& output : result.outputs)
+                if (output.name == "layer")
+                    if (const auto* id = std::get_if<document::LayerId>(&output.id))
+                        layerId = *id;
+            if (!layerId)
+                return OperationResult::rejected(OperationIssueCode::InvalidTarget, "The new layer was not made");
+            auto placed = placeDroppedLayer(draft, composition_, *layerId, *placement_);
+            if (placed.status == OperationStatus::Rejected)
+                return placed;
+        }
     }
     return result;
 }
@@ -569,6 +618,240 @@ OperationResult BreakApartSvgArtwork::apply(document::Draft& draft) const {
     } catch (const document::SvgArtworkWriteError& failure) {
         return OperationResult::rejected(OperationIssueCode::InvalidValue, failure.what());
     }
+}
+
+OperationResult BreakApartSvgArtworks::apply(document::Draft& draft) const {
+    std::vector<OperationOutput> outputs;
+    std::vector<OperationIssue> issues;
+    for (const auto& one : each_) {
+        auto result = one->apply(draft);
+        if (result.status == OperationStatus::Rejected)
+            return result;
+        outputs.insert(outputs.end(), result.outputs.begin(), result.outputs.end());
+        issues.insert(issues.end(), result.issues.begin(), result.issues.end());
+    }
+    auto result = OperationResult::applied(std::move(outputs));
+    result.issues = std::move(issues);
+    return result;
+}
+
+bool breakApartMayResample(const document::Composition& composition, const document::LayerId start) {
+    const auto& graph = composition.graph();
+    const auto& parameters = composition.parameters();
+    const auto moves = [&](const document::LayerOutputBoundary& layer) {
+        for (const auto role : {document::kScaleParameterRole, document::kRotationParameterRole}) {
+            const auto* binding = document::layerParameterBinding(graph, layer, role);
+            const auto* parameter = binding ? parameters.find(binding->parameterId) : nullptr;
+            if (parameter == nullptr)
+                continue;
+            const bool scale = role == document::kScaleParameterRole;
+            // A constant, or any key of an animation; a driven value could be anything.
+            if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+                if (scale) {
+                    if (const auto* value = std::get_if<document::Vec2d>(&constant->value))
+                        if (value->x > 1.0 + 1e-9 || value->y > 1.0 + 1e-9)
+                            return true;
+                } else if (const auto* degrees = std::get_if<double>(&constant->value)) {
+                    if (std::abs(*degrees) > 1e-9)
+                        return true;
+                }
+            } else if (const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+                const auto& curves = composition.animationCurves();
+                if (scale) {
+                    if (const auto* curve = curves.findVec2(animated->curveId))
+                        for (const auto& component : curve->components)
+                            for (const auto& key : component.keyframes)
+                                if (key.value > 1.0 + 1e-9)
+                                    return true;
+                } else if (const auto* curve = curves.findScalar(animated->curveId)) {
+                    for (const auto& key : curve->keyframes)
+                        if (std::abs(key.value) > 1e-9)
+                            return true;
+                }
+            } else {
+                return true;
+            }
+        }
+        return false;
+    };
+    std::optional<document::LayerId> current = start;
+    for (std::size_t depth = 0; current && depth <= graph.layerOutputs().size(); ++depth) {
+        const auto* layer = graph.findLayer(*current);
+        if (layer == nullptr)
+            return false;
+        if (moves(*layer))
+            return true;
+        current = layer->parent;
+    }
+    return false;
+}
+
+// ---- #646: an imported SVG asset added to a composition again ----
+
+namespace {
+// The file an SVG asset's locator names. An external locator holds its absolute file URI; a
+// project-relative one resolves from the project's folder.
+std::filesystem::path assetFilePath(const document::AssetRecord& asset, const std::filesystem::path& projectDirectory) {
+    const auto& path = asset.locator.path;
+    if (path.empty())
+        return {};
+    if (path.find(':') != std::string::npos)
+        return core::absolutePathFromFileUri(path).value_or(std::filesystem::path{});
+    if (path.front() == '/' || path.find('\\') != std::string::npos)
+        return {};
+    return projectDirectory / std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
+}
+std::string svgAssetLabel(const document::AssetRecord& asset) {
+    if (!asset.name.empty())
+        return asset.name;
+    const auto slash = asset.locator.path.find_last_of('/');
+    return slash == std::string::npos ? asset.locator.path : asset.locator.path.substr(slash + 1);
+}
+} // namespace
+
+std::string svgAssetArtworkName(const document::AssetRecord& asset) {
+    auto name = svgAssetLabel(asset);
+    if (name.size() > 4) {
+        std::string tail = name.substr(name.size() - 4);
+        std::ranges::transform(tail, tail.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (tail == ".svg")
+            name.resize(name.size() - 4);
+    }
+    return document::svgArtworkName(std::move(name), "SVG");
+}
+
+SvgAssetPreparation prepareSvgAssetSource(const document::Project& project, const document::AssetId assetId,
+                                          const std::filesystem::path& projectDirectory,
+                                          const std::function<bool()>& cancel,
+                                          const std::function<void(SvgPreparePhase)>& phase) {
+    SvgAssetPreparation out;
+    const auto* asset = project.findAsset(assetId);
+    if (asset == nullptr) {
+        out.refusal = "Asset " + std::to_string(assetId.value()) + " does not exist in the project";
+        return out;
+    }
+    const auto label = svgAssetLabel(*asset);
+    if (!document::isSvgSourceAsset(*asset)) {
+        out.refusal = "'" + label + "' is not an SVG asset";
+        return out;
+    }
+    const core::Sha256Digest unrecorded;
+    const bool recorded = asset->contentDigest != unrecorded;
+    const auto path = assetFilePath(*asset, projectDirectory);
+    std::error_code ignored;
+    const bool onDisk = !path.empty() && std::filesystem::is_regular_file(path, ignored);
+    bool changed = false;
+    std::string unreadable;
+    if (onDisk) {
+        auto read = prepareSvgSource(path, cancel, phase);
+        if (read.cancelled()) {
+            out.cancelled = true;
+            out.refusal = "Cancelled.";
+            return out;
+        }
+        if (read.source && (!recorded || read.source->digest == asset->contentDigest)) {
+            out.source = std::move(read.source);
+            return out;
+        }
+        changed = read.source != nullptr;
+        unreadable = read.diagnostic;
+    }
+    // The file is missing, changed or unreadable: the stored copy of the recorded bytes, when the
+    // project has one (a one-layer import keeps it).
+    if (recorded)
+        if (const auto* block = document::findVectorArtworkBlock(project, asset->contentDigest);
+            block != nullptr && std::holds_alternative<document::OpaqueExtensionPayload>(block->payload)) {
+            const auto& payload = std::get<document::OpaqueExtensionPayload>(block->payload);
+            auto bytes = std::make_shared<const std::vector<std::byte>>(payload.bytes().begin(), payload.bytes().end());
+            auto read = prepareSvgSource(std::move(bytes), path, cancel, phase);
+            if (read.cancelled()) {
+                out.cancelled = true;
+                out.refusal = "Cancelled.";
+                return out;
+            }
+            if (read.source) {
+                out.source = std::move(read.source);
+                out.heldCopy = true;
+                return out;
+            }
+        }
+    if (!onDisk)
+        out.refusal = "The SVG '" + label + "' is missing and the project holds no copy of it; relink it in Assets";
+    else if (changed)
+        out.refusal = "The SVG '" + label +
+                      "' has changed on disk since it was imported and the project holds no copy of the original; "
+                      "use Reload Footage in Assets, then add it again";
+    else
+        out.refusal = "The SVG '" + label + "' could not be read: " + unreadable;
+    return out;
+}
+
+namespace {
+// The source of an SVG asset for an operation that applies: the prepared one, else prepared here
+// (a caller with no earlier thread to do it on).
+std::shared_ptr<const PreparedSvgSource> sourceFor(const document::Project& project, const document::AssetId asset,
+                                                   const SvgAssetSources& sources, std::string& refusal) {
+    if (const auto found = sources.sources.find(asset); found != sources.sources.end() && found->second)
+        return found->second;
+    if (const auto failed = sources.refusals.find(asset); failed != sources.refusals.end()) {
+        refusal = failed->second;
+        return nullptr;
+    }
+    auto prepared = prepareSvgAssetSource(project, asset, sources.projectDirectory);
+    refusal = prepared.refusal;
+    return prepared.source;
+}
+} // namespace
+
+OperationResult addSvgAssetArtwork(document::Draft& draft, const document::CompositionId composition,
+                                   const document::AssetId asset, const SvgAssetSources& sources,
+                                   const std::optional<LayerDropPlacement>& placement) {
+    const auto* record = draft.project().findAsset(asset);
+    if (record == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Asset " + std::to_string(asset.value()) + " does not exist in the project");
+    std::string refusal;
+    const auto source = sourceFor(draft.project(), asset, sources, refusal);
+    if (!source)
+        return OperationResult::rejected(OperationIssueCode::MissingReference, refusal);
+    AddSvgArtwork artwork(composition, source, svgAssetArtworkName(*record), sources.mode, true);
+    artwork.withSourceAsset(asset).withProjectDirectory(sources.projectDirectory);
+    if (placement)
+        artwork.withPlacement(*placement);
+    return artwork.apply(draft);
+}
+
+OperationResult AddSvgAssetNodes::apply(document::Draft& draft) const {
+    auto& project = draft.project();
+    auto* composition = project.findComposition(composition_);
+    if (composition == nullptr)
+        return detail::missingComposition(composition_);
+    const auto* record = project.findAsset(asset_);
+    if (record == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Asset " + std::to_string(asset_.value()) + " does not exist in the project");
+    std::string refusal;
+    const auto source = sourceFor(project, asset_, sources_, refusal);
+    if (!source)
+        return OperationResult::rejected(OperationIssueCode::MissingReference, refusal);
+    const auto name = svgAssetArtworkName(*record);
+    document::SvgArtworkOptions options;
+    options.width = composition->format().width();
+    options.height = composition->format().height();
+    options.fit = true;
+    options.name = name;
+    options.layoutOriginX = position_.x;
+    options.fonts = source->fonts;
+    const auto description = document::buildSvgArtwork(*source->scene, options);
+    auto result = sources_.mode == SvgImportMode::Layer
+                      ? writeLayer(draft, *composition, composition_, *source, description, name, true,
+                                   sources_.projectDirectory, asset_, position_)
+                      : writeEditable(draft, *composition, composition_, *source->scene, description, name,
+                                      sources_.projectDirectory, asset_, position_);
+    if (result.status == OperationStatus::Applied)
+        if (const auto failure = detail::validateGraph(*composition, document::builtInNodeDefinitions()))
+            return *failure;
+    return result;
 }
 
 } // namespace bloom::commands

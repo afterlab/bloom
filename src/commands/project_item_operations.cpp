@@ -3,6 +3,7 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/project.hpp>
 
 #include <string>
@@ -79,6 +80,11 @@ OperationResult DeleteProjectItems::apply(document::Draft& draft) const {
     return OperationResult::applied();
 }
 
+AddCompositionFromFootage& AddCompositionFromFootage::withSvgSources(SvgAssetSources sources) {
+    svg_ = std::make_shared<const SvgAssetSources>(std::move(sources));
+    return *this;
+}
+
 OperationResult AddCompositionFromFootage::apply(document::Draft& draft) const {
     const auto& project = draft.project();
     std::vector<document::AssetId> footage;
@@ -118,7 +124,10 @@ OperationResult AddCompositionFromFootage::apply(document::Draft& draft) const {
         }
     auto settings = compositionSettingsForAsset(*first, base);
     settings.timecode = {};
-    return AddCompositionFromAssets(std::move(settings), std::move(footage), folder_).apply(draft);
+    AddCompositionFromAssets add(std::move(settings), std::move(footage), folder_);
+    if (svg_)
+        add.withSvgSources(*svg_);
+    return add.apply(draft);
 }
 
 } // namespace bloom::commands
