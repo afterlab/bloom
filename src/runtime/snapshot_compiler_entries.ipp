@@ -122,6 +122,20 @@ lowerLayerBoundary(const document::LayerOutputBoundary& boundary, const document
                                         *time,
                                         sourcePixelAspect};
     result.framePivot = boundary.pivot == LayerPivot::Frame;
+    // #642: a Vector Artwork layer whose transform its artwork's geometry draws (svg_artwork.hpp).
+    if (const auto composed = artwork_.composed.find(boundary.layerId); composed != artwork_.composed.end()) {
+        const auto* carrier = graph.findLayer(composed->second.carrier);
+        const auto carrierIndex = carrier ? layerOperationOf(*carrier, indices) : std::nullopt;
+        if (!carrierIndex) {
+            addTopologyFailure(owner, "Vector Artwork layer's transform carrier was not lowered.");
+            return std::nullopt;
+        }
+        runtime::CompiledLayerOutput::ComposedArtwork artwork{*carrierIndex, {}};
+        for (const auto leaf : composed->second.leaves)
+            if (const auto found = entryLayerOps_.find(leaf); found != entryLayerOps_.end())
+                artwork.leaves.push_back(found->second);
+        result.composedArtwork = std::move(artwork);
+    }
     return result;
 }
 

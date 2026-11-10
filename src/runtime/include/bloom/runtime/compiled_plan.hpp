@@ -1722,6 +1722,19 @@ struct CompiledLayerOutput {
     // instead of the content bounds' centre, so a Merge entry's own layer at its defaults is the
     // identity whatever its content's bounds. Appended false: no existing plan changes meaning.
     bool framePivot = false;
+    // #642: a Vector Artwork layer whose transform is drawn through its artwork's geometry
+    // (document::VectorArtworkComposedLayer). The layer itself is the identity; `carrier` is the
+    // hidden layer that holds its transform and parents `leaves`, the artwork's drawn layers. Its
+    // pixels are its input's, as for any identity layer; its published bounds are the leaves'
+    // content bounds (the artwork's own space, since each leaf is the identity under the carrier)
+    // through the carrier's matrix, so the layer reports the box, polygon and anchor it would have
+    // had transforming the artwork's picture. Appended absent: no existing plan changes meaning.
+    struct ComposedArtwork final {
+        OperationIndex carrier;
+        std::vector<OperationIndex> leaves;
+        friend bool operator==(const ComposedArtwork&, const ComposedArtwork&) = default;
+    };
+    std::optional<ComposedArtwork> composedArtwork{};
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

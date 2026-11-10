@@ -244,6 +244,32 @@ struct VectorArtworkExpansionContext final {
     std::function<std::shared_ptr<const media::SvgScene>(const DataBlockRecord&)> scene;
     // Polled between nodes and while a block is parsed.
     std::function<bool()> cancelled;
+    // Draw the holding layer's transform through the artwork's geometry (see
+    // VectorArtworkComposedLayer) so the artwork stays sharp at any scale and rotation. Off, the
+    // layer resamples the artwork's picture as it resamples an editable import's root group.
+    bool composeLayerTransform = true;
+};
+
+// #642: how the holding layer's transform reaches the artwork's geometry. A Merge ends vector
+// provenance (layer-graph-model.md), so a layer that transformed the artwork's root Merge would
+// resample a picture drawn at the composition's scale: soft when scaled up or turned. Instead the
+// expansion moves the layer's transform (its position, anchor, scale and rotation parameters, by
+// their ids, and its parent) onto a hidden `carrier` Layer node that draws nothing, parents every
+// drawn layer of the artwork (`leaves`: shapes, text, gradients and matte sources, and any group
+// whose picture is filtered, such as a blurred group) to it, and leaves the holding layer itself at
+// the identity. Each shape and text is then covered through the composed matrix at the output
+// resolution, exactly as a parented shape layer is. The layer keeps its opacity, blend mode, track
+// matte, range, enabled and solo state; layers parented to it are parented to the carrier, which
+// moves exactly as the layer did. The layer's published bounds are its artwork's content bounds
+// through the carrier's matrix, so the Viewer's box and gestures see the layer as before.
+//
+// Only a layer the composition cannot change is composed: the node feeds it directly and nothing
+// else, it pivots on the frame, and it has no masks (drawn in its content space) and identity
+// timing (its content would run on another clock than its transform). Any other layer keeps the
+// resampled picture; `resampled` names why.
+struct VectorArtworkComposedLayer final {
+    LayerId carrier;
+    std::vector<LayerId> leaves;
 };
 
 struct VectorArtworkExpansion final {
@@ -257,6 +283,10 @@ struct VectorArtworkExpansion final {
     // Why a node stayed unexpanded: its block is missing or does not parse. It stays in the
     // composition, and the compiler refuses it by name.
     std::unordered_map<NodeId, std::string> unresolved;
+    // The layers whose transform is drawn through their artwork's geometry, by the holding layer.
+    std::unordered_map<LayerId, VectorArtworkComposedLayer> composed;
+    // Why an expanded node's layer resamples its artwork's picture instead, by the node's id.
+    std::unordered_map<NodeId, std::string> resampled;
     bool cancelled = false;
 };
 

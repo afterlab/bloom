@@ -2,6 +2,7 @@
 #include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "composed_artwork_bounds.hpp"
 #include "gpu_media_preparation.hpp"
 #include "gpu_scene_coverage.hpp"
 #include "gpu_scene_effect_emission.hpp"
@@ -1118,6 +1119,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
             }
             geometry.anchor = map({centre.x + anchor->value.x, centre.y + anchor->value.y});
+            // #642: a composed Vector Artwork layer reports its artwork's box through the carrier's
+            // matrix, exactly as on the CPU.
+            if (layer->composedArtwork) {
+                const auto carrierIndex = layer->composedArtwork->carrier.value();
+                if (carrierIndex >= operationCount || !layerMatrices[carrierIndex].has_value() ||
+                    !detail::publishComposedArtworkBounds(*layer, *plan, frameResolved, bounds,
+                                                          *layerMatrices[carrierIndex], geometry)) {
+                    return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                "Vector Artwork layer's transform carrier is unavailable");
+                }
+            }
             // #343: only what the frame can show (and its track matte lets through) is drawn, as on
             // the CPU reference; the drawn window is the lattice the command resamples over.
             const auto drawnWindow =

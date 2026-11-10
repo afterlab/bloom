@@ -3,6 +3,7 @@
 #include "channel_shuffle.hpp"
 #include "checker_image.hpp"
 #include "codec_degrade_image_effect.hpp"
+#include "composed_artwork_bounds.hpp"
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
@@ -5080,6 +5081,18 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             geometry.anchor =
                                 map({centre.x + anchor->value.x, centre.y + anchor->value.y});
+                            // #642: a composed Vector Artwork layer reports its artwork's box
+                            // through the carrier's matrix (its own is the identity).
+                            if (layer.composedArtwork &&
+                                !detail::publishComposedArtworkBounds(
+                                    layer, *plan, frameResolved, bounds,
+                                    layerMatrices[layer.composedArtwork->carrier.value()], geometry)) {
+                                operationFailure = diagnostic(
+                                    EvaluationDiagnosticCode::InvalidPlan,
+                                    "Vector Artwork layer's transform could not be resolved", {},
+                                    operationSubject);
+                                return;
+                            }
 
                             constexpr double limit = 16777214.0;
                             const double right = sourceWindow.extent().width();

@@ -107,6 +107,7 @@ target_sources(
         curve_compilation.cpp
         cryptomatte_matte_list.cpp
         snapshot_compiler.cpp
+        vector_artwork_scene_cache.cpp
         compositing_recipes.cpp
         depth_effect_recipes.cpp
         motion_blur_recipes.cpp
@@ -156,7 +157,8 @@ target_sources(
 
 target_compile_features(bloom_runtime_compiler PUBLIC cxx_std_20)
 target_link_libraries(bloom_runtime_compiler PUBLIC bloom_runtime bloom_runtime_fonts bloom_document
-                                                    bloom_render)
+                                                    bloom_render
+                                             PRIVATE bloom_svg_artwork bloom_media_vector)
 bloom_enable_warnings(bloom_runtime_compiler)
 
 add_library(bloom_runtime_evaluator STATIC)

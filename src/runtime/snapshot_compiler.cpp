@@ -2,6 +2,8 @@
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/function_body.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/runtime/system_font_index.hpp>
+#include <bloom/runtime/vector_artwork_scene_cache.hpp>
 
 #include "channel_static.hpp"
 #include "compositing_recipes.hpp"
@@ -52,6 +54,10 @@
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/svg_artwork.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
+#include <bloom/media/svg_scene.hpp>
+#include <bloom/platform/font_catalog.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/parameter.hpp>
@@ -178,6 +184,11 @@ class CompilePass final {
         for (const auto& [consumer, body] : expansion_.functionBodies)
             for (const auto id : body.nodes)
                 bodyOwner_.emplace(id, consumer);
+        // #642: every Vector Artwork node is replaced by the nodes of the editable import of its SVG,
+        // so the artwork renders through the ordinary, covered lowerings on every route.
+        if (!expandVectorArtwork()) {
+            return result(runtime::SnapshotCompileStatus::Cancelled);
+        }
         if (!indexSourceGraph() || !collectReachableGraph() || !indexReachableGraph() ||
             cancelled()) {
             return cancelled() ? result(runtime::SnapshotCompileStatus::Cancelled)
@@ -223,6 +234,65 @@ class CompilePass final {
     }
 
   private:
+    // #642: expands the composition's Vector Artwork nodes (document::expandVectorArtwork) with
+    // the scenes the process keeps by digest, and the installed fonts only when an artwork has text.
+    // False when cancelled.
+    [[nodiscard]] bool expandVectorArtwork() {
+        const auto& project = request_.snapshot.project();
+        if (std::ranges::none_of(composition_->graph().nodes(), [](const auto& node) {
+                return node.typeId == document::kVectorArtworkNodeType;
+            }))
+            return true;
+        auto& scenes = runtime::processVectorArtworkSceneCache();
+        const std::function<bool()> stop = [this] { return cancelled(); };
+        std::unordered_map<const document::DataBlockRecord*, runtime::VectorArtworkSceneCache::Lookup> parsed;
+        bool text = false;
+        for (const auto& node : composition_->graph().nodes()) {
+            if (node.typeId != document::kVectorArtworkNodeType)
+                continue;
+            const auto* block = document::vectorArtworkBlock(project, node, composition_->parameters());
+            if (block == nullptr || parsed.contains(block))
+                continue;
+            auto lookup = scenes.scene(*block, stop);
+            if (lookup.cancelled || cancelled())
+                return false;
+            text = text || (lookup.scene && lookup.scene->textCount > 0);
+            parsed.emplace(block, std::move(lookup));
+        }
+        document::VectorArtworkExpansionContext context;
+        if (text) {
+            auto& resolver = request_.fontResolver ? *request_.fontResolver : runtime::fonts::processFontResolver();
+            context.fonts = resolver.systemFonts().snapshotBlocking(stop);
+            if (cancelled())
+                return false;
+        }
+        if (!context.fonts) {
+            // No text, or no catalogue: nothing is matched against installed fonts.
+            auto none = std::make_shared<platform::FontCatalogue>();
+            none->status = platform::FontCatalogueStatus::Available;
+            context.fonts = std::move(none);
+        }
+        context.scene = [&](const document::DataBlockRecord& block) -> std::shared_ptr<const media::SvgScene> {
+            const auto found = parsed.find(&block);
+            return found == parsed.end() ? nullptr : found->second.scene;
+        };
+        context.cancelled = stop;
+        artwork_ = document::expandVectorArtwork(project, *composition_, context);
+        if (artwork_.cancelled || cancelled())
+            return false;
+        // A block that did not parse is named by its own diagnostic.
+        for (auto& [nodeId, reason] : artwork_.unresolved) {
+            const auto* node = composition_->graph().findNode(nodeId);
+            const auto* block = node ? document::vectorArtworkBlock(project, *node, composition_->parameters()) : nullptr;
+            if (const auto found = block ? parsed.find(block) : parsed.end();
+                found != parsed.end() && !found->second.scene && !found->second.diagnostic.empty())
+                reason = found->second.diagnostic;
+        }
+        if (artwork_.composition.has_value())
+            composition_ = &*artwork_.composition;
+        return true;
+    }
+
     [[nodiscard]] bool indexSourceGraph() {
         for (const auto& node : composition_->graph().nodes()) {
             if (cancelled()) {
@@ -656,11 +726,15 @@ class CompilePass final {
                                : reason->second + ".");
             }
             // #642: a Vector Artwork node is replaced by the nodes of its SVG before lowering. One
-            // that reaches here was not expanded.
-            if (definition->lowering == runtime::NodeLoweringKind::VectorArtwork)
+            // that reaches here could not be: its SVG is missing from the project or does not read.
+            if (definition->lowering == runtime::NodeLoweringKind::VectorArtwork) {
+                const auto reason = artwork_.unresolved.find(node->id);
                 addFailure(runtime::CompileDiagnosticCode::TopologyInvariant,
-                           subject(node->id, "parameter.artwork"), "Vector Artwork cannot be expanded",
-                           "The SVG this layer holds was not expanded into its shapes.");
+                           subject(node->id, "parameter.artwork"), "Vector Artwork cannot be drawn",
+                           reason == artwork_.unresolved.end()
+                               ? "The SVG this layer holds was not expanded into its shapes."
+                               : reason->second + ".");
+            }
             // #598: a second group that is named must be read too; an unset one is no function.
             if (definition->lowering == runtime::NodeLoweringKind::ValueFunction &&
                 document::groupReferenceRoles(node->typeId).size() > 1) {
@@ -1243,6 +1317,8 @@ class CompilePass final {
     runtime::detail::CompileCheckpointObserver* checkpointObserver_ = nullptr;
     const document::Composition* composition_ = nullptr;
     document::NodeGroupExpansion expansion_;
+    // #642: the composition with every Vector Artwork node expanded (composition_ points into it).
+    document::VectorArtworkExpansion artwork_;
     // #590: the node ids of each function body, by the consumer that reads it, and the value program
     // each body is lowered into while the value graph is compiled.
     std::unordered_map<document::NodeId, document::NodeId> bodyOwner_;

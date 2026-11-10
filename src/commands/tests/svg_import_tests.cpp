@@ -447,10 +447,28 @@ void bothModesNameTheSameWarnings(TestContext& test) {
     test.expect(countNodes(shapes.main(), document::kPathValueNodeType) == 4 &&
                     countNodes(shapes.main(), document::kVectorArtworkNodeType) == 0,
                 "as editable shapes is the breakdown it always was");
-    // The expansion of the one layer holds exactly the nodes the editable import made.
+    // The expansion of the one layer holds exactly the nodes the editable import made; the layer's
+    // transform drawn through the geometry (the default, #642) adds one carrier layer and nothing else.
     document::VectorArtworkExpansionContext context;
     context.fonts = noFonts();
+    const auto composed = document::expandVectorArtwork(layer.project(), layer.main(), context);
+    context.composeLayerTransform = false;
     const auto expansion = document::expandVectorArtwork(layer.project(), layer.main(), context);
+    if (composed.composition && expansion.composition) {
+        std::map<std::string, std::size_t> withCarrier, without;
+        for (const auto& node : composed.composition->graph().nodes())
+            ++withCarrier[node.typeId];
+        for (const auto& node : expansion.composition->graph().nodes())
+            ++without[node.typeId];
+        ++without[std::string(document::kLayerOutputNodeType)];
+        test.expect(composed.composed.size() == 1 && composed.resampled.empty() && withCarrier == without &&
+                        composed.composition->graph().layerOutputs().size() ==
+                            expansion.composition->graph().layerOutputs().size() + 1 &&
+                        composed.composition->graph().validate(composed.composition->parameters()).ok(),
+                    "the composed expansion adds one carrier layer to the same nodes and validates");
+    } else {
+        test.expect(false, "the layer expands with and without its transform composed");
+    }
     test.expect(expansion.composition && expansion.unresolved.empty() && expansion.roots.size() == 1,
                 "the layer expands");
     if (expansion.composition) {

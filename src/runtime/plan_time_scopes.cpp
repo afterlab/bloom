@@ -63,6 +63,13 @@ void forEachScopedInput(const CompiledOperation& operation, const std::uint32_t 
                   function(layer.input, layer.time ? contentClock : clock);
                   if (layer.parent)
                       function(*layer.parent, clock);
+                  // #642: a composed Vector Artwork layer reads its carrier's matrix and its
+                  // leaves' bounds (it is never retimed, so both are on its own clock).
+                  if (layer.composedArtwork) {
+                      function(layer.composedArtwork->carrier, clock);
+                      for (const auto leaf : layer.composedArtwork->leaves)
+                          function(leaf, layer.time ? contentClock : clock);
+                  }
               },
               [&](const CompiledMerge& merge) {
                   for (const auto& entry : merge.entries)
@@ -107,6 +114,12 @@ void remapInputs(CompiledOperation& operation, Function&& function) {
                          layer.input = function(layer.input, true);
                          if (layer.parent)
                              layer.parent = function(*layer.parent, false);
+                         if (layer.composedArtwork) {
+                             layer.composedArtwork->carrier =
+                                 function(layer.composedArtwork->carrier, false);
+                             for (auto& leaf : layer.composedArtwork->leaves)
+                                 leaf = function(leaf, true);
+                         }
                      },
                      [&](CompiledMerge& merge) {
                          for (auto& entry : merge.entries)
