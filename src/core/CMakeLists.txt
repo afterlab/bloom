@@ -168,6 +168,16 @@ if(BUILD_TESTING)
         LABELS unit
     )
 
+    add_executable(bloom_core_procedural_warp_field_test tests/procedural_warp_field_tests.cpp)
+    target_link_libraries(bloom_core_procedural_warp_field_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_procedural_warp_field_test)
+    bloom_enable_strict_floating_point(bloom_core_procedural_warp_field_test)
+    bloom_add_test(
+        NAME bloom.core.procedural_warp_field
+        COMMAND bloom_core_procedural_warp_field_test
+        LABELS unit
+    )
+
     add_executable(bloom_core_dither_pattern_test tests/dither_pattern_tests.cpp)
     target_link_libraries(bloom_core_dither_pattern_test PRIVATE bloom_core)
     bloom_enable_warnings(bloom_core_dither_pattern_test)

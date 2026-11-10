@@ -3335,6 +3335,310 @@ BFK_FN vec4 bfk_op_homography(BFK_CTX, int base, vec4 p) {
     return vec4(qx, qy, 0.0f, 0.0f);
 }
 
+// --- Procedural warp ------------------------------------------------------------------------------
+// One inverse map a mode at a time (docs/architecture/fields.md, "Procedural warp"): the position
+// of an output pixel p is moved to the position q to read the picture at. Block of four vec4
+// [mode, centre x, centre y, radius] [1 / radius, a0, a1, a2] [a3, a4, a5, a6] [a7, a8, a9, a10];
+// the host resolves every angle to turns, every reciprocal and every per-frame phase in binary64.
+// The result is [q x, q y, weight, 0]; the weight is 1 except for Magnify, whose magnified read
+// is blended over the plain one by it. Every mode writes q as p plus a move, so a mode at zero
+// strength is the identity exactly. A radial mode leaves p alone at and beyond its radius (tested
+// on the larger axis first, so a far position is never squared) and when its radius is not
+// positive. With d = p - centre, r = |d|, t = r / radius and the falloff weight
+// g = smooth01((1 - t) / falloff) (1 when the falloff is 0):
+//   0 Twirl          [a0 turns, a1 1 / falloff]: d turned by a0 g counter-clockwise (+y up), so a
+//                    positive angle turns the picture clockwise on screen.
+//   1 Bulge / Pinch  [a0 amount, a1 1 / falloff]: d scaled by sin(t / 4 turns)^(a0 g); a positive
+//                    amount reads nearer the centre (a bulge), a negative one further out (a pinch).
+//   2 Spherize       [a0 amount, a1 1 / index]: a refracting sphere cap. With h = sqrt(1 - t t),
+//                    theta = asin t and theta' = asin(t / index), m(t) = t - h tan(theta - theta')
+//                    is the radius light through the cap comes from; it rises from 0 to 1. A
+//                    positive amount reads t - a0 (t - m(t)); a negative one the inverse of that map
+//                    at |a0|, found by 20 halvings of [0, 1].
+//   3 Ripple         [a0 1 / falloff, a1 1 / wavelength, a2 amplitude, a3 phase turns,
+//                    a4 2 / wavelength]: d moved along itself by amplitude sin(r / wavelength -
+//                    phase) g, the move eased in over the first half wavelength from the centre.
+//   4 Wave           [a0, a1 the travel direction (unit, +y up), a2 1 / wavelength, a3 amplitude,
+//                    a4 phase turns, a5 wave (0 Sine, 1 Triangle, 2 Square, 3 Saw), a6 pinned edges
+//                    (1 left, 2 right, 4 top, 8 bottom), a7, a8 half the frame, a9 1 / wavelength]:
+//                    p read back along the travel direction turned a quarter counter-clockwise by
+//                    amplitude w(p . travel / wavelength - phase), w the wave in [-1, 1], times
+//                    smooth01(distance / wavelength) for each pinned edge of the frame.
+//   5 Polar          [a0 direction (0 rectangular to polar, 1 polar to rectangular), a1 amount,
+//                    a2 frame width, a3 frame height, a4 1 / width, a5 1 / height, a6 the polar
+//                    radius (half the shorter side), a7 height / polar radius]: angles clockwise from
+//                    up, the frame's left edge at the angle 0 and its top row at the pole; the move
+//                    to the converted position times the amount.
+//   6 Magnify        [a0 shape (0 circle, 1 square), a1 1 / magnification, a2 1 / feather]: inside
+//                    the shape (radius the size, the larger axis for a square) d divided by the
+//                    magnification, with the weight smooth01((size - distance) / feather) (1 with no
+//                    feather), 0 outside.
+// A position too far to square (beyond 1e15 on an axis) reads 1e20 in Polar, which no image reaches.
+
+BFK_FN BFK_P float bfk_warp_falloff(float t, float invFalloff) {
+    if (!(invFalloff > 0.0f))
+        return 1.0f;
+    BFK_P float u0 = 1.0f - t;
+    BFK_P float u = u0 * invFalloff;
+    BFK_P float g = bfk_smooth01(u);
+    return g;
+}
+
+// sqrt(1 - x x) for x in [0, 1], as (1 - x)(1 + x): 1 - x is exact near 1, so no cancellation.
+BFK_FN BFK_P float bfk_cosine_of(float x) {
+    BFK_P float below = 1.0f - x;
+    BFK_P float above = 1.0f + x;
+    BFK_P float c2 = below * above;
+    BFK_P float c = bfk_sqrt(c2);
+    return c;
+}
+
+// asin(x) in turns for x in [0, 1].
+BFK_FN BFK_P float bfk_asin_turns(float x) {
+    BFK_P float c = bfk_cosine_of(x);
+    BFK_P float a = bfk_atan2(x, c);
+    return a;
+}
+
+// The radius (a fraction of the cap's) that light through a sphere cap of index 1 / invIndex at
+// fraction t comes from.
+BFK_FN BFK_P float bfk_sphere_source(float t, float invIndex) {
+    BFK_P float h = bfk_cosine_of(t);
+    BFK_P float theta = bfk_asin_turns(t);
+    BFK_P float ti = t * invIndex;
+    BFK_P float refracted = bfk_asin_turns(ti);
+    BFK_P float delta = theta - refracted;
+    BFK_P float s = 0.0f;
+    BFK_P float c = 0.0f;
+    bfk_sincos(delta, s, c);
+    BFK_P float tangent = c > 0.0f ? bfk_div(s, c) : 0.0f;
+    BFK_P float lift = h * tangent;
+    BFK_P float m = t - lift;
+    return m;
+}
+
+// The wave of `kind` at u cycles, in [-1, 1], 0 at u = 0 and rising.
+BFK_FN BFK_P float bfk_wave(float u, int kind) {
+    if (kind == 1) {
+        BFK_P float a = u + 0.25f;
+        BFK_P float f = a - floor(a);
+        BFK_P float e = f - 0.5f;
+        BFK_P float m = abs(e);
+        BFK_P float w = fma(-4.0f, m, 1.0f);
+        return w;
+    }
+    if (kind == 2) {
+        BFK_P float f = u - floor(u);
+        return f < 0.5f ? 1.0f : -1.0f;
+    }
+    if (kind == 3) {
+        BFK_P float a = u + 0.5f;
+        BFK_P float f = a - floor(a);
+        BFK_P float w = fma(f, 2.0f, -1.0f);
+        return w;
+    }
+    BFK_P float s = 0.0f;
+    BFK_P float c = 0.0f;
+    bfk_sincos(u, s, c);
+    return s;
+}
+
+BFK_FN vec4 bfk_op_procedural_warp(BFK_CTX, int base, vec4 p) {
+    vec4 h0 = bfk_data(BFK_CTXA, base);
+    vec4 h1 = bfk_data(BFK_CTXA, base + 1);
+    vec4 h2 = bfk_data(BFK_CTXA, base + 2);
+    vec4 h3 = bfk_data(BFK_CTXA, base + 3);
+    int mode = int(h0.x);
+    vec4 same = vec4(p.x, p.y, 1.0f, 0.0f);
+    if (mode == 4) {
+        BFK_P float ax = p.x * h1.y;
+        BFK_P float along = fma(p.y, h1.z, ax);
+        BFK_P float u0 = along * h1.w;
+        BFK_P float u = u0 - h2.y;
+        BFK_P float w = bfk_wave(u, int(h2.z));
+        BFK_P float move = h2.x * w;
+        int pins = int(h2.w);
+        if ((pins & 1) != 0) {
+            BFK_P float e = p.x + h3.x;
+            BFK_P float k = e * h3.z;
+            BFK_P float g = bfk_smooth01(k);
+            move = move * g;
+        }
+        if ((pins & 2) != 0) {
+            BFK_P float e = h3.x - p.x;
+            BFK_P float k = e * h3.z;
+            BFK_P float g = bfk_smooth01(k);
+            move = move * g;
+        }
+        if ((pins & 4) != 0) {
+            BFK_P float e = h3.y - p.y;
+            BFK_P float k = e * h3.z;
+            BFK_P float g = bfk_smooth01(k);
+            move = move * g;
+        }
+        if ((pins & 8) != 0) {
+            BFK_P float e = p.y + h3.y;
+            BFK_P float k = e * h3.z;
+            BFK_P float g = bfk_smooth01(k);
+            move = move * g;
+        }
+        // The move is along the normal (-travel y, travel x); the pixel reads where it came from.
+        BFK_P float mx = move * h1.z;
+        BFK_P float my = move * h1.y;
+        BFK_P float qx = p.x + mx;
+        BFK_P float qy = p.y - my;
+        return vec4(qx, qy, 1.0f, 0.0f);
+    }
+    if (mode == 5) {
+        if (abs(p.x) > 1.0e15f || abs(p.y) > 1.0e15f)
+            return vec4(1.0e20f, 1.0e20f, 1.0f, 0.0f);
+        BFK_P float cx = p.x;
+        BFK_P float cy = p.y;
+        if (int(h1.y) == 0) {
+            BFK_P float turn = bfk_atan2(p.x, p.y);
+            BFK_P float a = turn < 0.0f ? turn + 1.0f : turn;
+            BFK_P float r = bfk_length(p.x, p.y);
+            BFK_P float halfW = h1.w * 0.5f;
+            BFK_P float halfH = h2.x * 0.5f;
+            BFK_P float sx = fma(a, h1.w, -halfW);
+            BFK_P float drop = r * h3.x;
+            BFK_P float sy = halfH - drop;
+            cx = sx;
+            cy = sy;
+        } else {
+            BFK_P float halfW = h1.w * 0.5f;
+            BFK_P float halfH = h2.x * 0.5f;
+            BFK_P float ex = p.x + halfW;
+            BFK_P float u = ex * h2.y;
+            BFK_P float ey = halfH - p.y;
+            BFK_P float v = ey * h2.z;
+            BFK_P float rr = v * h2.w;
+            BFK_P float s = 0.0f;
+            BFK_P float c = 0.0f;
+            bfk_sincos(u, s, c);
+            BFK_P float sx = rr * s;
+            BFK_P float sy = rr * c;
+            cx = sx;
+            cy = sy;
+        }
+        BFK_P float mx = cx - p.x;
+        BFK_P float my = cy - p.y;
+        BFK_P float qx = fma(mx, h1.z, p.x);
+        BFK_P float qy = fma(my, h1.z, p.y);
+        return vec4(qx, qy, 1.0f, 0.0f);
+    }
+    BFK_P float radius = h0.w;
+    if (!(radius > 0.0f))
+        return mode == 6 ? vec4(p.x, p.y, 0.0f, 0.0f) : same;
+    BFK_P float dx = p.x - h0.y;
+    BFK_P float dy = p.y - h0.z;
+    BFK_P float far = max(abs(dx), abs(dy));
+    if (!(far < radius))
+        return mode == 6 ? vec4(p.x, p.y, 0.0f, 0.0f) : same;
+    if (mode == 6) {
+        BFK_P float dist = int(h1.y) == 1 ? far : bfk_length(dx, dy);
+        if (!(dist < radius))
+            return vec4(p.x, p.y, 0.0f, 0.0f);
+        BFK_P float k = h1.z - 1.0f;
+        BFK_P float qx = fma(dx, k, p.x);
+        BFK_P float qy = fma(dy, k, p.y);
+        BFK_P float weight = 1.0f;
+        if (h1.w > 0.0f) {
+            BFK_P float inside = radius - dist;
+            BFK_P float u = inside * h1.w;
+            weight = bfk_smooth01(u);
+        }
+        return vec4(qx, qy, weight, 0.0f);
+    }
+    BFK_P float r = bfk_length(dx, dy);
+    if (!(r < radius))
+        return same;
+    BFK_P float t = r * h1.x;
+    if (mode == 0) {
+        BFK_P float g = bfk_warp_falloff(t, h1.z);
+        BFK_P float turns = h1.y * g;
+        BFK_P float s = 0.0f;
+        BFK_P float c = 0.0f;
+        bfk_sincos(turns, s, c);
+        BFK_P float ys = dy * s;
+        BFK_P float xr = fma(dx, c, -ys);
+        BFK_P float xs = dx * s;
+        BFK_P float yr = fma(dy, c, xs);
+        BFK_P float mx = xr - dx;
+        BFK_P float my = yr - dy;
+        BFK_P float qx = p.x + mx;
+        BFK_P float qy = p.y + my;
+        return vec4(qx, qy, 1.0f, 0.0f);
+    }
+    if (mode == 1) {
+        BFK_P float g = bfk_warp_falloff(t, h1.z);
+        BFK_P float e = h1.y * g;
+        BFK_P float quarter = t * 0.25f;
+        BFK_P float s = 0.0f;
+        BFK_P float c = 0.0f;
+        bfk_sincos(quarter, s, c);
+        BFK_P float factor = bfk_pow(s, e);
+        BFK_P float k = factor - 1.0f;
+        BFK_P float qx = fma(dx, k, p.x);
+        BFK_P float qy = fma(dy, k, p.y);
+        return vec4(qx, qy, 1.0f, 0.0f);
+    }
+    if (mode == 2) {
+        if (!(r > 0.0f))
+            return same;
+        BFK_P float amount = h1.y;
+        BFK_P float source = t;
+        if (amount >= 0.0f) {
+            BFK_P float m = bfk_sphere_source(t, h1.z);
+            BFK_P float lift = t - m;
+            BFK_P float drop = amount * lift;
+            source = t - drop;
+        } else {
+            BFK_P float strength = -amount;
+            BFK_P float lo = 0.0f;
+            BFK_P float hi = 1.0f;
+            for (int i = 0; i < 20; ++i) {
+                BFK_P float sum = lo + hi;
+                BFK_P float mid = sum * 0.5f;
+                BFK_P float m = bfk_sphere_source(mid, h1.z);
+                BFK_P float lift = mid - m;
+                BFK_P float drop = strength * lift;
+                BFK_P float at = mid - drop;
+                if (at < t)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+            BFK_P float sum = lo + hi;
+            source = sum * 0.5f;
+        }
+        BFK_P float ratio = bfk_div(source, t);
+        BFK_P float k = ratio - 1.0f;
+        BFK_P float qx = fma(dx, k, p.x);
+        BFK_P float qy = fma(dy, k, p.y);
+        return vec4(qx, qy, 1.0f, 0.0f);
+    }
+    if (mode == 3) {
+        if (!(r > 0.0f))
+            return same;
+        BFK_P float g = bfk_warp_falloff(t, h1.y);
+        BFK_P float u = fma(r, h1.z, -h2.x);
+        BFK_P float s = 0.0f;
+        BFK_P float c = 0.0f;
+        bfk_sincos(u, s, c);
+        BFK_P float ease0 = r * h2.y;
+        BFK_P float ease = bfk_smooth01(ease0);
+        BFK_P float wave = h1.w * s;
+        BFK_P float faded = wave * g;
+        BFK_P float move = faded * ease;
+        BFK_P float k = bfk_div(move, r);
+        BFK_P float qx = fma(dx, k, p.x);
+        BFK_P float qy = fma(dy, k, p.y);
+        return vec4(qx, qy, 1.0f, 0.0f);
+    }
+    return same;
+}
+
 // --- Plumbing -----------------------------------------------------------------------------------------
 
 BFK_FN BFK_P float bfk_lane(vec4 v, float selector) {
@@ -3485,6 +3789,7 @@ BFK_FN vec4 bfk_op_ramp(BFK_CTX, int base, vec4 a) {
 //   13 Swizzle  14 Combine (in0..in3 x; an absent input is the parameter's lane)  15 Offset [dx, dy]
 //   16 Derivative (in0..in3)  17 Cell Centre  18 Arrow (in0 p, in1 centre, in2 v)
 //   19 Streak (in0 p, in1 v)  20 Ramp  21 Lens Warp (in0 p)  22 Test Card (in0 p)  23 Light Rays (in0 p)  24 Homography (in0 p)
+//   25 Procedural Warp (in0 p)
 // Every register write is limited to [-1e30, 1e30], so no later operation can see an infinity.
 
 BFK_FN vec4 bfk_limit(vec4 v) {
@@ -3604,6 +3909,9 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             break;
         case 24:
             v = bfk_op_homography(BFK_CTXA, base, x0);
+            break;
+        case 25:
+            v = bfk_op_procedural_warp(BFK_CTXA, base, x0);
             break;
         default:
             v = zero;

@@ -421,6 +421,47 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         }
         return field::encodeHomography(p);
     }
+    case FieldOp::ProceduralWarp: {
+        // #510: choices [mode, wave, pinned edges (a mask), polar direction, shape, link, frame
+        // width, frame height]; scalars [radius, angle, falloff %, amount %, refraction,
+        // wavelength, amplitude, phase, speed, direction, interpolation %, magnification %,
+        // feather]; vector [centre]. A link scales Magnify's size (1), or its size and feather (2),
+        // by the magnification, so the magnified area keeps the picture's own share of the frame.
+        field::ProceduralWarpParameters p;
+        p.mode = static_cast<field::ProceduralWarpMode>(
+            std::clamp<std::int64_t>(choiceAt(in, 0), 0, field::kProceduralWarpModeCount));
+        p.wave = static_cast<field::ProceduralWarpWave>(std::clamp<std::int64_t>(choiceAt(in, 1), 0, 4));
+        p.pinnedEdges = static_cast<std::uint8_t>(std::clamp<std::int64_t>(choiceAt(in, 2), 0, 16));
+        p.polarToRect = choiceAt(in, 3) != 0;
+        p.squareShape = choiceAt(in, 4) != 0;
+        const auto link = choiceAt(in, 5);
+        p.frameWidth = static_cast<double>(choiceAt(in, 6, 1920));
+        p.frameHeight = static_cast<double>(choiceAt(in, 7, 1080));
+        p.radius = scalar(0, 300.0);
+        p.angleDegrees = scalar(1);
+        p.falloff = scalar(2, 100.0) / 100.0;
+        p.amount = scalar(3) / 100.0;
+        p.refraction = scalar(4, 1.5);
+        p.wavelength = scalar(5, 40.0);
+        p.amplitude = scalar(6);
+        p.phaseDegrees = scalar(7);
+        p.speed = scalar(8);
+        p.seconds = seconds;
+        p.directionDegrees = scalar(9, 90.0);
+        p.interpolation = scalar(10, 100.0) / 100.0;
+        p.magnification = scalar(11, 200.0) / 100.0;
+        p.feather = scalar(12);
+        if (p.mode == field::ProceduralWarpMode::Magnify && link >= 1) {
+            p.radius *= p.magnification;
+            if (link >= 2)
+                p.feather *= p.magnification;
+        }
+        // The centre is authored as an offset from the composition's centre with y down; a field
+        // position has y up.
+        p.centreX = vector(0).x;
+        p.centreY = -vector(0).y;
+        return field::encodeProceduralWarp(p);
+    }
     case FieldOp::Combine:
         return field::encodeConstant({scalar(0), scalar(1), scalar(2), scalar(3)});
     case FieldOp::Offset: {
@@ -455,7 +496,7 @@ std::optional<std::vector<float>> buildTable(const FieldProgram& program,
     OperandReader reader(values.first(values.size() - 1U));
     field::FieldProgramBuilder builder;
     for (const auto& instruction : program.instructions) {
-        if (instruction.op > static_cast<std::uint8_t>(FieldOp::Homography))
+        if (instruction.op > static_cast<std::uint8_t>(FieldOp::ProceduralWarp))
             return std::nullopt;
         const auto block = encode(instruction, reader, seconds, program.compositionSeconds);
         if (!block)

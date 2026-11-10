@@ -40,6 +40,10 @@
 //             tracked position], pixels y down, direction 0 hold still, 1 carry along;
 //             mode 0 Corner Pin: the data window of image slot `slot`, vectors the
 //             four corner offsets, top left first [pixels, y down]
+//   Procedural Warp (#510) choices [mode, wave, pinned edges mask, polar direction, shape, link,
+//             frame width, frame height]; scalars [radius, angle, falloff %, amount %,
+//             refraction, wavelength, amplitude, phase, speed, direction, interpolation %,
+//             magnification %, feather]; vectors [centre, y down]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
 #include "color_grade_image_effect.hpp"

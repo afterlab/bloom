@@ -741,6 +741,87 @@ HomographyParameters similarityHomography(const double offsetX, const double off
     return out;
 }
 
+std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParameters& p) {
+    const std::array values{p.centreX,     p.centreY,      p.radius,       p.angleDegrees,
+                            p.falloff,     p.amount,       p.refraction,   p.wavelength,
+                            p.amplitude,   p.phaseDegrees, p.speed,        p.seconds,
+                            p.directionDegrees, p.frameWidth, p.frameHeight, p.interpolation,
+                            p.magnification, p.feather};
+    for (const auto v : values)
+        if (!finite(v))
+            return std::nullopt;
+    const auto mode = static_cast<std::uint8_t>(p.mode);
+    if (mode >= kProceduralWarpModeCount || static_cast<std::uint8_t>(p.wave) > 3U ||
+        p.pinnedEdges > 15U || !(p.wavelength > 1.0e-6) || !(p.refraction >= 1.0) ||
+        !(p.magnification > 1.0e-6) || !(p.frameWidth >= 1.0) || !(p.frameHeight >= 1.0))
+        return std::nullopt;
+    const auto radius = std::max(p.radius, 0.0);
+    const auto inverseRadius = radius > 0.0 ? 1.0 / radius : 0.0;
+    const auto falloff = std::clamp(p.falloff, 0.0, 1.0);
+    const auto inverseFalloff = falloff > 0.0 ? 1.0 / falloff : 0.0;
+    // The phase in cycles at this time, reduced to [0, 1) here so the kernel's argument stays small.
+    const auto phase = fractional(p.phaseDegrees / 360.0 + p.speed * p.seconds);
+    std::array<double, 11> a{};
+    switch (p.mode) {
+    case ProceduralWarpMode::Twirl:
+        a[0] = p.angleDegrees / 360.0;
+        a[1] = inverseFalloff;
+        break;
+    case ProceduralWarpMode::BulgePinch:
+        a[0] = std::clamp(p.amount, -1.0, 1.0);
+        a[1] = inverseFalloff;
+        break;
+    case ProceduralWarpMode::Spherize:
+        a[0] = std::clamp(p.amount, -1.0, 1.0);
+        a[1] = 1.0 / p.refraction;
+        break;
+    case ProceduralWarpMode::Ripple:
+        a[0] = inverseFalloff;
+        a[1] = 1.0 / p.wavelength;
+        a[2] = p.amplitude;
+        a[3] = phase;
+        a[4] = 2.0 / p.wavelength;
+        break;
+    case ProceduralWarpMode::Wave: {
+        const auto direction = kTau * fractional(p.directionDegrees / 360.0);
+        a[0] = std::sin(direction);
+        a[1] = std::cos(direction);
+        a[2] = 1.0 / p.wavelength;
+        a[3] = p.amplitude;
+        a[4] = phase;
+        a[5] = static_cast<double>(p.wave);
+        a[6] = static_cast<double>(p.pinnedEdges);
+        a[7] = 0.5 * p.frameWidth;
+        a[8] = 0.5 * p.frameHeight;
+        a[9] = 1.0 / p.wavelength;
+        break;
+    }
+    case ProceduralWarpMode::Polar: {
+        const auto polarRadius = 0.5 * std::min(p.frameWidth, p.frameHeight);
+        a[0] = p.polarToRect ? 1.0 : 0.0;
+        a[1] = std::clamp(p.interpolation, 0.0, 1.0);
+        a[2] = p.frameWidth;
+        a[3] = p.frameHeight;
+        a[4] = 1.0 / p.frameWidth;
+        a[5] = 1.0 / p.frameHeight;
+        a[6] = polarRadius;
+        a[7] = p.frameHeight / polarRadius;
+        break;
+    }
+    case ProceduralWarpMode::Magnify:
+        a[0] = p.squareShape ? 1.0 : 0.0;
+        a[1] = 1.0 / p.magnification;
+        a[2] = p.feather > 0.0 ? 1.0 / p.feather : 0.0;
+        break;
+    }
+    std::vector<float> out;
+    push(out, static_cast<double>(mode), p.centreX, p.centreY, radius);
+    push(out, inverseRadius, a[0], a[1], a[2]);
+    push(out, a[3], a[4], a[5], a[6]);
+    push(out, a[7], a[8], a[9], a[10]);
+    return checked(std::move(out));
+}
+
 std::optional<std::vector<float>> encodeHomography(const HomographyParameters& p) {
     if (!finite(p.centreX) || !finite(p.centreY) || p.windowSlot >= static_cast<int>(kMaxFieldImages))
         return std::nullopt;
@@ -1124,6 +1205,8 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
         return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages) ? 2U : 0U;
     case FieldOp::Homography:
         return 6;
+    case FieldOp::ProceduralWarp:
+        return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kProceduralWarpModeCount) ? 4U : 0U;
     case FieldOp::Ramp:
         return 1U + kFieldRampEntries;
     }
@@ -1161,7 +1244,7 @@ bool validFieldTable(const std::span<const float> table) noexcept {
         const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
         const auto* b = a + 4;
         const auto op = a[0];
-        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::Homography) || op != std::floor(op))
+        if (!(op >= 0.0F) || op > static_cast<float>(FieldOp::ProceduralWarp) || op != std::floor(op))
             return false;
         if (!(a[1] >= 0.0F) || a[1] >= static_cast<float>(kFieldRegisterCount))
             return false;

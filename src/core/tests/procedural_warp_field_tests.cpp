@@ -1,0 +1,437 @@
+// #510 Procedural Warp: the field kernel's Procedural Warp instruction (field_kernel.glsl,
+// "Procedural warp") against an independent binary64 reading of each mode's documented inverse
+// map (docs/architecture/fields.md, "Procedural warp"), written from the specification with the
+// standard library's own sine, arc tangent, square root and power. The kernel evaluates the same
+// table on the CPU and on the GPU with the same binary32 operations, so this is the CPU reference's
+// own accuracy; the native harness holds the device to it.
+//
+// Also: each mode is the identity at zero strength, exactly; nothing is NaN at the centre, at a
+// radius of 0 or at a far position; the table validates and an unknown mode does not.
+
+#include "procedural_warp_reference.hpp"
+
+#include <bloom/core/field_program.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <iostream>
+#include <numbers>
+#include <optional>
+#include <source_location>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+namespace field = bloom::core::field;
+using field::FieldOp;
+using field::ProceduralWarpMode;
+using field::ProceduralWarpParameters;
+
+class Expectations final {
+  public:
+    void expect(const bool condition, const std::string_view message,
+                const std::source_location location = std::source_location::current()) {
+        if (condition)
+            return;
+        ++failures_;
+        std::cerr << location.file_name() << ':' << location.line() << ": " << message << '\n';
+    }
+    [[nodiscard]] int failures() const noexcept { return failures_; }
+
+  private:
+    int failures_ = 0;
+};
+
+using bloom::procedural_warp_reference::kPi;
+constexpr field::FieldImages kNoImages{};
+
+// r0 = coordinate, r1 = Procedural Warp(r0); the result is r1, a vector.
+std::optional<std::vector<float>> warpTable(const ProceduralWarpParameters& p) {
+    const auto block = field::encodeProceduralWarp(p);
+    if (!block)
+        return std::nullopt;
+    field::FieldProgramBuilder builder;
+    builder.emit(FieldOp::Coordinate, 0, field::kNoFieldInputs, {});
+    builder.emit(FieldOp::ProceduralWarp, 1, {0, -1, -1, -1}, *block);
+    return builder.finish(1, field::FieldResultKind::Vector, field::FieldOutputMode::Raw);
+}
+
+std::array<double, 3> kernelAt(const std::vector<float>& table, const double x, const double y) {
+    const auto v =
+        field::evaluateField(table, kNoImages, static_cast<float>(x), static_cast<float>(y));
+    return {static_cast<double>(v[0]), static_cast<double>(v[1]), static_cast<double>(v[2])};
+}
+
+using bloom::procedural_warp_reference::reference;
+
+// --- The checks ---------------------------------------------------------------------------------
+
+// The worst position error of the kernel against the reading over a grid of the 1920 x 1080 frame
+// and a ring of points close to the centre (and the centre itself); every value finite.
+struct Compare final {
+    double worst = 0.0;
+    double worstWeight = 0.0;
+    std::size_t compared = 0;
+    bool finite = true;
+};
+
+Compare compare(const ProceduralWarpParameters& p) {
+    Compare out;
+    const auto table = warpTable(p);
+    if (!table || !field::validFieldTable(*table)) {
+        out.finite = false;
+        return out;
+    }
+    std::vector<std::array<double, 2>> points;
+    for (int j = 0; j <= 54; ++j)
+        for (int i = 0; i <= 96; ++i)
+            points.push_back({-960.0 + 20.0 * i + 0.37, -540.0 + 20.0 * j + 0.61});
+    for (int k = 0; k < 64; ++k) {
+        const auto a = 2.0 * kPi * k / 64.0;
+        for (const double radius : {0.0, 1.0e-3, 0.5, 3.0, 17.0})
+            points.push_back({p.centreX + radius * std::cos(a), p.centreY + radius * std::sin(a)});
+    }
+    for (const auto& [x, y] : points) {
+        // The reading of the binary32 position the kernel sees.
+        const auto fx = static_cast<double>(static_cast<float>(x));
+        const auto fy = static_cast<double>(static_cast<float>(y));
+        const auto got = kernelAt(*table, fx, fy);
+        out.finite = out.finite && std::isfinite(got[0]) && std::isfinite(got[1]) &&
+                     std::isfinite(got[2]);
+        const auto want = reference(p, fx, fy);
+        if (want.step)
+            continue;
+        ++out.compared;
+        out.worst = std::max({out.worst, std::abs(got[0] - want.x), std::abs(got[1] - want.y)});
+        out.worstWeight = std::max(out.worstWeight, std::abs(got[2] - want.weight));
+    }
+    return out;
+}
+
+void expectMatches(Expectations& e, const ProceduralWarpParameters& p, const std::string& what,
+                   const double tolerance = 2.0e-3) {
+    const auto result = compare(p);
+    e.expect(result.finite, what + ": the table encodes and every value is finite");
+    e.expect(result.compared > 3000, what + ": the positions were compared");
+    e.expect(result.worst <= tolerance,
+             what + ": the kernel reads the documented position (worst " +
+                 std::to_string(result.worst) + " pixels)");
+    if (p.mode == ProceduralWarpMode::Magnify)
+        e.expect(result.worstWeight <= 1.0e-4,
+                 what + ": the Magnify weight is the documented one (worst " +
+                     std::to_string(result.worstWeight) + ")");
+}
+
+ProceduralWarpParameters base(const ProceduralWarpMode mode) {
+    ProceduralWarpParameters p;
+    p.mode = mode;
+    p.centreX = 83.0;
+    p.centreY = -41.0;
+    p.radius = 420.0;
+    return p;
+}
+
+void testTwirl(Expectations& e) {
+    for (const double angle : {90.0, -270.0, 1080.0})
+        for (const double falloff : {1.0, 0.4}) {
+            auto p = base(ProceduralWarpMode::Twirl);
+            p.angleDegrees = angle;
+            p.falloff = falloff;
+            // Three turns over 40% of the radius: the turn changes by a pixel's worth of position
+            // every 0.02 pixel of radius, so binary32's own radius sets the error.
+            expectMatches(e, p,
+                          "Twirl " + std::to_string(angle) + " falloff " + std::to_string(falloff),
+                          std::abs(angle) > 360.0 ? 5.0e-3 : 2.0e-3);
+        }
+    auto hard = base(ProceduralWarpMode::Twirl);
+    hard.angleDegrees = 45.0;
+    hard.falloff = 0.0;
+    expectMatches(e, hard, "Twirl with no falloff (a turned disc)");
+}
+
+void testBulgePinch(Expectations& e) {
+    for (const double amount : {1.0, 0.5, -0.5, -1.0})
+        for (const double falloff : {0.0, 1.0}) {
+            auto p = base(ProceduralWarpMode::BulgePinch);
+            p.amount = amount;
+            p.falloff = falloff;
+            // A full pinch reads the centre's ring from a ring 2 / pi of the radius out: its
+            // positions next to the centre are far from it, steep, and binary32 places them to a
+            // few thousandths of a pixel only.
+            expectMatches(e, p, "Bulge / Pinch " + std::to_string(amount) + " falloff " +
+                                    std::to_string(falloff),
+                          amount <= -1.0 ? 2.0e-2 : 2.0e-3);
+        }
+}
+
+void testSpherize(Expectations& e) {
+    for (const double amount : {1.0, 0.6, -0.6, -1.0})
+        for (const double index : {1.0, 1.5, 4.0}) {
+            auto p = base(ProceduralWarpMode::Spherize);
+            p.amount = amount;
+            p.refraction = index;
+            expectMatches(e, p, "Spherize " + std::to_string(amount) + " index " +
+                                    std::to_string(index));
+        }
+    // The two signs are inverses: the position a negative amount reads, read again by the
+    // positive one, is the pixel itself (to the bisection's precision).
+    auto forward = base(ProceduralWarpMode::Spherize);
+    forward.amount = 0.8;
+    auto inverse = forward;
+    inverse.amount = -0.8;
+    const auto a = warpTable(forward);
+    const auto b = warpTable(inverse);
+    double worst = 0.0;
+    if (a && b)
+        for (int k = 0; k < 200; ++k) {
+            const auto x = forward.centreX + 2.0 * (k - 100);
+            const auto y = forward.centreY + 1.3 * (k - 100);
+            const auto q = kernelAt(*b, x, y);
+            const auto back = kernelAt(*a, q[0], q[1]);
+            worst = std::max({worst, std::abs(back[0] - x), std::abs(back[1] - y)});
+        }
+    e.expect(a && b && worst < 5.0e-3,
+             "Spherize: a negative amount is the inverse of the positive one (worst " +
+                 std::to_string(worst) + " pixels)");
+}
+
+void testRipple(Expectations& e) {
+    for (const double falloff : {1.0, 0.0})
+        for (const double speed : {0.0, 0.75}) {
+            auto p = base(ProceduralWarpMode::Ripple);
+            p.wavelength = 37.0;
+            p.amplitude = 9.0;
+            p.phaseDegrees = 40.0;
+            p.speed = speed;
+            p.seconds = 1.6;
+            p.falloff = falloff;
+            expectMatches(e, p, "Ripple falloff " + std::to_string(falloff) + " speed " +
+                                    std::to_string(speed));
+        }
+}
+
+void testWave(Expectations& e) {
+    for (int kind = 0; kind < 4; ++kind)
+        for (const double direction : {90.0, 0.0, 225.0}) {
+            auto p = base(ProceduralWarpMode::Wave);
+            p.wave = static_cast<field::ProceduralWarpWave>(kind);
+            p.directionDegrees = direction;
+            p.wavelength = 120.0;
+            p.amplitude = 14.0;
+            p.phaseDegrees = 30.0;
+            p.speed = 0.5;
+            p.seconds = 0.84;
+            expectMatches(e, p, "Wave " + std::to_string(kind) + " direction " +
+                                    std::to_string(direction));
+        }
+    for (const std::uint8_t pins : {std::uint8_t{15}, std::uint8_t{1}, std::uint8_t{2},
+                                    std::uint8_t{4}, std::uint8_t{8}, std::uint8_t{3},
+                                    std::uint8_t{12}}) {
+        auto p = base(ProceduralWarpMode::Wave);
+        p.wavelength = 150.0;
+        p.amplitude = 20.0;
+        p.pinnedEdges = pins;
+        expectMatches(e, p, "Wave pinned " + std::to_string(pins));
+        // A pinned edge does not move.
+        const auto table = warpTable(p);
+        if (!table)
+            continue;
+        double edge = 0.0;
+        for (int k = -20; k <= 20; ++k) {
+            if ((pins & field::kWarpPinLeft) != 0) {
+                const auto q = kernelAt(*table, -960.0, 20.0 * k);
+                edge = std::max({edge, std::abs(q[0] + 960.0), std::abs(q[1] - 20.0 * k)});
+            }
+            if ((pins & field::kWarpPinTop) != 0) {
+                const auto q = kernelAt(*table, 40.0 * k, 540.0);
+                edge = std::max({edge, std::abs(q[0] - 40.0 * k), std::abs(q[1] - 540.0)});
+            }
+        }
+        e.expect(edge == 0.0, "Wave: a pinned edge does not move");
+    }
+}
+
+void testPolar(Expectations& e) {
+    for (const bool back : {false, true})
+        for (const double amount : {1.0, 0.35}) {
+            auto p = base(ProceduralWarpMode::Polar);
+            p.polarToRect = back;
+            p.interpolation = amount;
+            expectMatches(e, p, std::string(back ? "Polar to rectangular" : "Rectangular to polar") +
+                                    " amount " + std::to_string(amount),
+                          4.0e-3);
+        }
+    // The two directions are inverses inside the polar disc.
+    auto toPolar = base(ProceduralWarpMode::Polar);
+    auto toRect = toPolar;
+    toRect.polarToRect = true;
+    const auto a = warpTable(toPolar);
+    const auto b = warpTable(toRect);
+    double worst = 0.0;
+    if (a && b)
+        for (int k = 0; k < 300; ++k) {
+            // Inside the rectangle, away from its left and right edges (the polar seam).
+            const auto x = -900.0 + 6.0 * k;
+            const auto y = 500.0 - 3.3 * k;
+            const auto q = kernelAt(*b, x, y);
+            const auto back = kernelAt(*a, q[0], q[1]);
+            worst = std::max({worst, std::abs(back[0] - x), std::abs(back[1] - y)});
+        }
+    e.expect(a && b && worst < 2.0e-2,
+             "Polar: the two directions are inverses (worst " + std::to_string(worst) + " pixels)");
+}
+
+void testMagnify(Expectations& e) {
+    for (const bool square : {false, true})
+        for (const double feather : {0.0, 60.0}) {
+            auto p = base(ProceduralWarpMode::Magnify);
+            p.radius = 230.0;
+            p.magnification = 2.5;
+            p.squareShape = square;
+            p.feather = feather;
+            expectMatches(e, p, std::string("Magnify ") + (square ? "square" : "circle") +
+                                    " feather " + std::to_string(feather));
+        }
+}
+
+// Zero strength is the identity exactly: the move is added to the pixel's own position.
+void testIdentity(Expectations& e) {
+    std::vector<ProceduralWarpParameters> cases;
+    auto twirl = base(ProceduralWarpMode::Twirl);
+    twirl.angleDegrees = 0.0;
+    cases.push_back(twirl);
+    auto bulge = base(ProceduralWarpMode::BulgePinch);
+    bulge.amount = 0.0;
+    cases.push_back(bulge);
+    auto sphere = base(ProceduralWarpMode::Spherize);
+    sphere.amount = 0.0;
+    cases.push_back(sphere);
+    auto ripple = base(ProceduralWarpMode::Ripple);
+    ripple.amplitude = 0.0;
+    cases.push_back(ripple);
+    auto wave = base(ProceduralWarpMode::Wave);
+    wave.amplitude = 0.0;
+    cases.push_back(wave);
+    auto polar = base(ProceduralWarpMode::Polar);
+    polar.interpolation = 0.0;
+    cases.push_back(polar);
+    auto magnify = base(ProceduralWarpMode::Magnify);
+    magnify.magnification = 1.0;
+    cases.push_back(magnify);
+    for (const auto& p : cases) {
+        const auto table = warpTable(p);
+        bool same = table.has_value();
+        for (int j = -27; j <= 27 && same; ++j)
+            for (int i = -48; i <= 48 && same; ++i) {
+                const auto x = 20.0 * i + 0.37;
+                const auto y = 20.0 * j - 0.21;
+                const auto q = kernelAt(*table, static_cast<double>(static_cast<float>(x)),
+                                        static_cast<double>(static_cast<float>(y)));
+                same = q[0] == static_cast<double>(static_cast<float>(x)) &&
+                       q[1] == static_cast<double>(static_cast<float>(y));
+            }
+        e.expect(same, "mode " + std::to_string(static_cast<int>(p.mode)) +
+                           ": zero strength reads the pixel itself, exactly");
+    }
+}
+
+// The centre, a radius of 0 and far positions are finite.
+void testGuards(Expectations& e) {
+    for (std::uint8_t mode = 0; mode < field::kProceduralWarpModeCount; ++mode) {
+        auto p = base(static_cast<ProceduralWarpMode>(mode));
+        p.angleDegrees = 300.0;
+        p.amount = mode == 1 ? -1.0 : 1.0;
+        p.amplitude = 30.0;
+        for (const double radius : {420.0, 0.0}) {
+            p.radius = radius;
+            const auto table = warpTable(p);
+            e.expect(table.has_value(), "the table encodes");
+            if (!table)
+                continue;
+            bool finite = true;
+            for (const auto& [x, y] : std::array<std::array<double, 2>, 6>{
+                     {{p.centreX, p.centreY},
+                      {p.centreX + 1.0e-30, p.centreY},
+                      {1.0e30, -1.0e30},
+                      {-1.0e20, 3.0},
+                      {5.0e15, 5.0e15},
+                      {p.centreX + radius, p.centreY}}}) {
+                const auto q = kernelAt(*table, x, y);
+                finite = finite && std::isfinite(q[0]) && std::isfinite(q[1]) &&
+                         std::isfinite(q[2]);
+            }
+            e.expect(finite, "mode " + std::to_string(mode) + " radius " +
+                                 std::to_string(radius) +
+                                 ": the centre, the edge and far positions are finite");
+            if (radius == 0.0 && p.mode != ProceduralWarpMode::Wave &&
+                p.mode != ProceduralWarpMode::Polar) {
+                const auto q = kernelAt(*table, 12.5, -7.25);
+                e.expect(q[0] == 12.5 && q[1] == -7.25,
+                         "mode " + std::to_string(mode) + ": a radius of 0 changes nothing");
+            }
+        }
+    }
+}
+
+void testEncoding(Expectations& e) {
+    auto p = base(ProceduralWarpMode::Ripple);
+    e.expect(field::encodeProceduralWarp(p).has_value(), "a Ripple encodes");
+    const auto refuse = [&](ProceduralWarpParameters bad, const char* what) {
+        e.expect(!field::encodeProceduralWarp(bad).has_value(), what);
+    };
+    auto bad = p;
+    bad.wavelength = 0.0;
+    refuse(bad, "a wavelength of 0 is refused");
+    bad = p;
+    bad.refraction = 0.5;
+    refuse(bad, "an index below 1 is refused");
+    bad = p;
+    bad.magnification = 0.0;
+    refuse(bad, "a magnification of 0 is refused");
+    bad = p;
+    bad.centreX = std::nan("");
+    refuse(bad, "a value that is not finite is refused");
+    bad = p;
+    bad.mode = static_cast<ProceduralWarpMode>(field::kProceduralWarpModeCount);
+    refuse(bad, "an unknown mode is refused");
+    bad = p;
+    bad.frameWidth = 0.0;
+    refuse(bad, "a frame under a pixel is refused");
+    // A table whose block names an unknown mode does not validate.
+    auto table = warpTable(p);
+    e.expect(table && field::validFieldTable(*table), "a Procedural Warp table validates");
+    if (table) {
+        const auto parameterBase = field::kFieldTableCode + 2U * 2U;
+        (*table)[parameterBase * 4U] = static_cast<float>(field::kProceduralWarpModeCount);
+        e.expect(!field::validFieldTable(*table), "a table with an unknown mode does not validate");
+    }
+    e.expect(field::fieldOpName(FieldOp::ProceduralWarp) == "procedural-warp",
+             "the operation's coverage name");
+}
+
+} // namespace
+
+int main() {
+    Expectations e;
+    testTwirl(e);
+    testBulgePinch(e);
+    testSpherize(e);
+    testRipple(e);
+    testWave(e);
+    testPolar(e);
+    testMagnify(e);
+    testIdentity(e);
+    testGuards(e);
+    testEncoding(e);
+    if (e.failures() != 0) {
+        std::cerr << e.failures() << " failure(s)\n";
+        return 1;
+    }
+    std::cout << "procedural warp field: all checks passed\n";
+    return 0;
+}

@@ -72,6 +72,7 @@ enum class FieldOp : std::uint8_t {
     TestCard = 22,
     Rays = 23,
     Homography = 24,
+    ProceduralWarp = 25,
 };
 inline constexpr std::array kFieldOps{
     FieldOp::Coordinate, FieldOp::Constant, FieldOp::Noise,      FieldOp::Voronoi,
@@ -80,7 +81,7 @@ inline constexpr std::array kFieldOps{
     FieldOp::Transform,  FieldOp::Swizzle,  FieldOp::Combine,    FieldOp::Offset,
     FieldOp::Derivative, FieldOp::CellCentre, FieldOp::Arrow,    FieldOp::Streak,
     FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard,   FieldOp::Rays,
-    FieldOp::Homography};
+    FieldOp::Homography, FieldOp::ProceduralWarp};
 
 // Stable lower-case names (coverage ids, diagnostics). No default case: a new op is a -Wswitch
 // error until it is named.
@@ -136,6 +137,8 @@ inline constexpr std::array kFieldOps{
         return "rays";
     case FieldOp::Homography:
         return "homography";
+    case FieldOp::ProceduralWarp:
+        return "procedural-warp";
     }
     return {};
 }
@@ -446,6 +449,65 @@ struct HomographyParameters final {
                                                         double angleDegrees, double scale,
                                                         double pivotX, double pivotY);
 
+// #510 Procedural Warp: one inverse map a mode at a time, from the position of an output pixel to
+// the position to read the picture at (field_kernel.glsl, "Procedural warp"). Positions and lengths
+// are field pixels (+y up), angles degrees. The encoder resolves every angle to turns, every
+// reciprocal and the per-frame phase (phase plus speed times the clock time) in binary64. A mode is
+// added at the end: the kernel's table is keyed by the mode's value.
+enum class ProceduralWarpMode : std::uint8_t {
+    Twirl = 0,
+    BulgePinch = 1,
+    Spherize = 2,
+    Ripple = 3,
+    Wave = 4,
+    Polar = 5,
+    Magnify = 6,
+};
+inline constexpr std::uint8_t kProceduralWarpModeCount = 7;
+enum class ProceduralWarpWave : std::uint8_t { Sine, Triangle, Square, Saw };
+// The frame edges a Wave is pinned at (its move eases to nothing there).
+inline constexpr std::uint8_t kWarpPinLeft = 1;
+inline constexpr std::uint8_t kWarpPinRight = 2;
+inline constexpr std::uint8_t kWarpPinTop = 4;
+inline constexpr std::uint8_t kWarpPinBottom = 8;
+struct ProceduralWarpParameters final {
+    ProceduralWarpMode mode = ProceduralWarpMode::Twirl;
+    // The centre of a radial mode (Twirl, Bulge / Pinch, Spherize, Ripple, Magnify) and its radius;
+    // Magnify's radius is its size (half the side of a square).
+    double centreX = 0.0;
+    double centreY = 0.0;
+    double radius = 300.0;
+    // Twirl: the turn at the centre, clockwise on screen for a positive angle.
+    double angleDegrees = 0.0;
+    // The fraction of the radius over which Twirl, Bulge / Pinch and Ripple fade out at their edge.
+    double falloff = 1.0;
+    // Bulge / Pinch and Spherize, in [-1, 1].
+    double amount = 0.0;
+    // Spherize: the cap's index of refraction, at least 1.
+    double refraction = 1.5;
+    // Ripple and Wave.
+    double wavelength = 40.0;
+    double amplitude = 0.0;
+    double phaseDegrees = 0.0;
+    double speed = 0.0;   // cycles a second
+    double seconds = 0.0; // the clock time the phase advances with
+    // Wave: the direction it travels, clockwise from up; its shape; the pinned frame edges.
+    double directionDegrees = 90.0;
+    ProceduralWarpWave wave = ProceduralWarpWave::Sine;
+    std::uint8_t pinnedEdges = 0;
+    // Wave's pinned edges and Polar's rectangle: the composition frame.
+    double frameWidth = 1920.0;
+    double frameHeight = 1080.0;
+    // Polar: rectangular to polar (false) or back; the share of the move, in [0, 1].
+    bool polarToRect = false;
+    double interpolation = 1.0;
+    // Magnify: a circle or a square, the magnification (a ratio above 0) and the feather inside
+    // the edge.
+    bool squareShape = false;
+    double magnification = 2.0;
+    double feather = 0.0;
+};
+
 enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
 
 // A lane of a Swizzle: 0..3 a component of the input, 4 zero, 5 one.
@@ -510,6 +572,9 @@ class FieldProgramBuilder final {
 [[nodiscard]] std::optional<std::vector<float>> encodeRays(const RaysParameters&);
 // Null when a value is not finite; a map too large for binary32 encodes as the invalid map.
 [[nodiscard]] std::optional<std::vector<float>> encodeHomography(const HomographyParameters&);
+// Null when a value cannot be represented (non-finite, an unknown mode or wave, a wavelength or a
+// magnification not above 1e-6, an index below 1, a frame under one pixel).
+[[nodiscard]] std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParameters&);
 [[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);
