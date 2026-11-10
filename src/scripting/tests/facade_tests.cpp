@@ -17,8 +17,10 @@
 
 int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
-    if (registry.descriptors().size() != 150U ||
+    // #637 adds bloom.node.write-to-path.
+    if (registry.descriptors().size() != 151U ||
         registry.find("bloom.layer.set-timing") == nullptr ||
+        registry.find("bloom.node.write-to-path") == nullptr ||
         registry.find("bloom.layer.add-solid") == nullptr ||
         registry.find("bloom.project.set-name") == nullptr) {
         std::cerr << "operation registry inventory failed\n";
