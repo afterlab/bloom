@@ -34,6 +34,8 @@
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -500,11 +502,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     ui::PreviewPreparationSubmitter submitter;
     runtime::PreviewDisplayProvider expectedProvider = runtime::PreviewDisplayProvider::CpuOcio;
 
+    // The Viewer route's shader tools: their first frame compiles every program it needs.
+    std::shared_ptr<runtime::GpuOcioContextResolver> viewerTools;
 #if defined(BLOOM_UI_PATH_VALUE_ROUTES_GPU)
     std::unique_ptr<runtime::GpuPreviewDisplayService> service;
     if (route.gpu) {
         auto resolver = host::makePackagedGpuOcioResolver(
             QCoreApplication::applicationFilePath().toStdString());
+        viewerTools = resolver;
         auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
             *rig.compiler, rig.evaluator, rig.qualified,
             std::make_shared<runtime::GpuSceneCoverageCache>(), nullptr, resolver);
@@ -559,10 +564,13 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                           index == 0,
                       label + "the playhead moves");
         controller.requestRefresh();
+        const auto waitStarted = std::chrono::steady_clock::now();
         const auto before =
             index == 0 ? ui::PreparedPreviewFrameHandle{} : viewer.displayedFrameForTest();
-        // The first frame of a route may wait on the device's first preparation of every program
-        // the composition needs (the #509 features need many); later frames reuse them.
+        // The first frame of a route also prepares every program the composition needs (the #509
+        // features need 17, compiled by 16 runs of the shader tools): about a second on an idle
+        // machine and four with every core oversubscribed twice, well inside the wait. Its
+        // FIRST-FRAME line below says what it compiled and how long it waited.
         const bool ready = waitUntil(
             [&] {
                 const auto displayed = viewer.displayedFrameForTest();
@@ -571,7 +579,23 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                        displayed->provenance().provider == expectedProvider &&
                        viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
             },
-            index == 0 ? 120s : 30s);
+            30s);
+        // What the first frame waited on: the shader programs it compiled (each a run of the
+        // packaged shader tools on the frame's worker) and how long the wait was.
+        if (index == 0 && viewerTools != nullptr) {
+            const auto preparer = viewerTools->preparer();
+            const auto counters = preparer != nullptr ? preparer->counters()
+                                                      : runtime::GpuOcioPreparerCounters{};
+            std::cout << "FIRST-FRAME route=" << route.name << " ready=" << ready
+                      << " waitedMs="
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - waitStarted)
+                             .count()
+                      << " toolResolves=" << viewerTools->counters().resolves
+                      << " programs=" << counters.compiles
+                      << " shaderToolRuns=" << counters.shaderCompilerRuns
+                      << " compileFailures=" << counters.compileFailures << '\n';
+        }
         if (!ready) {
             const auto& state = controller.state();
             const auto displayed = viewer.displayedFrameForTest();
