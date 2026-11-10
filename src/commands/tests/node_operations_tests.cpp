@@ -1346,7 +1346,7 @@ void testRecipeCommands(TestContext& test) {
     (void)exercise<SetParameterSource>(test, fixture, *warpCentre,
                                        ConstantValueSource{Vec2d{-240.0, 80.5}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpMode,
-                               ConstantValueSource{std::int64_t{7}});
+                               ConstantValueSource{std::int64_t{12}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpRadius,
                                ConstantValueSource{-1.0});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpAmount,
@@ -1363,6 +1363,54 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{3}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpCentre,
                                ConstantValueSource{Vec2d{2.0e6, 0.0}});
+
+    // #510 the modes after Magnify: Drizzle is the last mode; Warp's style and bend, Split's
+    // distance, mirror and line, Turbulent's displacement, noise size and seed, and Drizzle's drops
+    // edit within their domains and refuse outside them.
+    const auto warpStyle = warp.outputId<ParameterId>("parameter.warpStyle");
+    const auto warpBend = warp.outputId<ParameterId>("parameter.bend");
+    const auto warpSplit = warp.outputId<ParameterId>("parameter.splitDistance");
+    const auto warpMirror = warp.outputId<ParameterId>("parameter.mirror");
+    const auto warpLineEnd = warp.outputId<ParameterId>("parameter.lineEnd");
+    const auto warpPullPoint = warp.outputId<ParameterId>("parameter.pullPoint");
+    const auto warpNoiseSize = warp.outputId<ParameterId>("parameter.noiseSize");
+    const auto warpSeed = warp.outputId<ParameterId>("parameter.seed");
+    const auto warpDrops = warp.outputId<ParameterId>("parameter.drops");
+    const auto warpPulse = warp.outputId<ParameterId>("parameter.pulseRadius");
+    if (!warpStyle || !warpBend || !warpSplit || !warpMirror || !warpLineEnd || !warpPullPoint ||
+        !warpNoiseSize || !warpSeed || !warpDrops || !warpPulse)
+        throw std::logic_error("Procedural Warp exposes the identities of its later modes");
+    (void)exercise<SetParameterSource>(test, fixture, *warpMode, ConstantValueSource{std::int64_t{11}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpStyle, ConstantValueSource{std::int64_t{12}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpBend, ConstantValueSource{-100.0});
+    (void)exercise<SetParameterSource>(test, fixture, *warpSplit, ConstantValueSource{260.0});
+    (void)exercise<SetParameterSource>(test, fixture, *warpMirror, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *warpLineEnd,
+                                       ConstantValueSource{Vec2d{120.0, -60.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpPullPoint,
+                                       ConstantValueSource{Vec2d{-120.0, 60.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpNoiseSize,
+                                       ConstantValueSource{Vec2d{40.0, 220.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpSeed,
+                                       ConstantValueSource{std::int64_t{16777215}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpDrops, ConstantValueSource{std::int64_t{64}});
+    (void)exercise<SetParameterSource>(test, fixture, *warpPulse, ConstantValueSource{180.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpStyle,
+                               ConstantValueSource{std::int64_t{13}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpBend,
+                               ConstantValueSource{100.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpSplit,
+                               ConstantValueSource{-1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpNoiseSize,
+                               ConstantValueSource{Vec2d{0.5, 100.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpSeed,
+                               ConstantValueSource{std::int64_t{16777216}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpDrops,
+                               ConstantValueSource{std::int64_t{65}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpDrops,
+                               ConstantValueSource{std::int64_t{0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpPulse,
+                               ConstantValueSource{-1.0});
 
     // #513 Stabilize: its choices and points edit within their domains and refuse outside them, and
     // a finished track is stored as one undo step: a Table block of the positions and the keys.

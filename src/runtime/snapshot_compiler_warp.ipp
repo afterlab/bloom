@@ -575,15 +575,18 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
 // values (parameter_activity.cpp names the same ones): another mode's value is a constant of the
 // program at its default, so it neither keys the plan nor compiles a curve. Magnify reads the input
 // twice, at the pixel and at the magnified position, and blends the two by the instruction's
-// weight (its feather). The canvas is the input, read whole (an inverse map may reach any of it);
-// the frame size Wave pins to and Polar converts about is the composition's. A muted node, a
-// radial mode with a constant radius of 0 and a mode whose strength is a constant zero are the
-// input itself.
+// weight (its feather); Split multiplies the one read by the weight (0 in its gap); Turbulent's
+// instruction carries the field Noise operation's two decorrelated streams itself. The canvas is the
+// input, read whole (an inverse map may reach any of it); the frame size Wave and Warp pin to and
+// Polar converts about is the composition's. A muted node and a mode that is a constant identity
+// (zero strength, a radius of 0) are the input itself.
 //
 // The instruction's operands (runtime/field_raster.hpp): choices [mode, wave, pinned edges mask,
-// polar direction, shape, link, frame width, frame height]; scalars [radius, angle, falloff,
-// amount, refraction, wavelength, amplitude, phase, speed, direction, interpolation,
-// magnification, feather]; vectors [centre].
+// polar direction, shape, link, frame width, frame height, style, mirror, drops, seed]; scalars
+// [radius, angle, falloff, amount, refraction, wavelength, amplitude, phase, speed, direction,
+// interpolation, magnification, feather, pull, pulse radius, pulse speed, bend, horizontal, vertical,
+// height, split distance, displacement, complexity, evolution]; vectors [centre or line start, pull
+// point or line end, noise size, noise offset].
 [[nodiscard]] static std::int64_t warpPinMask(const std::int64_t choice) {
     using core::field::kWarpPinBottom;
     using core::field::kWarpPinLeft;
@@ -604,6 +607,7 @@ lowerProceduralWarp(const document::NodeRecord& node,
                     std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
     using namespace document;
     constexpr std::int64_t kLerp = 9;
+    constexpr std::int64_t kMultiply = 2;
     const auto input = findInputOperation(node.id, "input", indices);
     if (!input) {
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
@@ -625,9 +629,17 @@ lowerProceduralWarp(const document::NodeRecord& node,
         *filter > kWarpFilterBicubic || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror)
         return fail();
     // The scalars in operand order, each the default of its row until the mode reads it.
-    constexpr std::array<std::string_view, 13> kRoles{
-        "radius",    "angle",     "falloff", "amount", "refraction",    "wavelength",   "amplitude",
-        "phase",     "speed",     "direction", "interpolation", "magnification", "feather"};
+    constexpr std::array<std::string_view, 24> kRoles{
+        "radius",       "angle",      "falloff",   "amount",         "refraction",
+        "wavelength",   "amplitude",  "phase",     "speed",          "direction",
+        "interpolation", "magnification", "feather", "pull",         "pulseRadius",
+        "pulseSpeed",   "bend",       "horizontalDistortion", "verticalDistortion", "height",
+        "splitDistance", "displacement", "complexity", "evolution"};
+    enum : std::size_t {
+        kRadius, kAngle, kFalloff, kAmount, kRefraction, kWavelength, kAmplitude, kPhase, kSpeed,
+        kDirection, kInterpolation, kMagnification, kFeather, kPull, kPulseRadius, kPulseSpeed,
+        kBend, kHorizontal, kVertical, kHeight, kSplitDistance, kDisplacement, kComplexity, kEvolution
+    };
     std::vector<runtime::CompiledScalarParameter> scalars;
     for (const auto role : kRoles) {
         double value = 0.0;
@@ -645,36 +657,63 @@ lowerProceduralWarp(const document::NodeRecord& node,
         }
         return true;
     };
-    std::vector<std::int64_t> choices(8, 0);
+    const auto point = [&](const std::string_view role)
+        -> std::optional<runtime::CompiledVec2Parameter> {
+        return compiledVec2Parameter(findParameterBinding(node, role));
+    };
+    std::vector<std::int64_t> choices(12, 0);
     choices[0] = *mode;
     const auto& format = composition_->format();
     choices[6] = static_cast<std::int64_t>(format.width());
     choices[7] = static_cast<std::int64_t>(format.height());
-    runtime::CompiledVec2Parameter centre{ParameterId{}, Vec2d{}};
-    bool radial = true;
-    // The value whose constant zero leaves the picture as it is.
-    std::size_t strength = 1;
-    double still = 0.0;
+    choices[10] = 12;
+    choices[11] = 1;
+    // [centre or line start, pull point or line end, noise size]; unread slots are zero.
+    std::vector<runtime::CompiledVec2Parameter> vectors;
+    const auto none = runtime::CompiledVec2Parameter{ParameterId{}, Vec2d{}};
+    const auto constantIs = [](const runtime::CompiledScalarParameter& value, const double what) {
+        const auto* number = std::get_if<double>(&value.source);
+        return number != nullptr && *number == what;
+    };
     bool ok = true;
+    bool identity = false;
+    bool waves = false;
     switch (*mode) {
-    case kProceduralWarpTwirl:
-        ok = read({0, 1, 2});
-        strength = 1;
+    case kProceduralWarpTwirl: {
+        ok = read({kRadius, kAngle, kFalloff});
+        auto centre = point("center");
+        ok = ok && centre;
+        if (ok)
+            vectors = {*centre};
+        identity = ok && (constantIs(scalars[kAngle], 0.0) || constantIs(scalars[kRadius], 0.0));
         break;
+    }
     case kProceduralWarpBulgePinch:
-        ok = read({0, 2, 3});
-        strength = 3;
+    case kProceduralWarpSpherize: {
+        const bool bulge = *mode == kProceduralWarpBulgePinch;
+        ok = bulge ? read({kRadius, kFalloff, kAmount}) : read({kRadius, kAmount, kRefraction});
+        auto centre = point("center");
+        ok = ok && centre;
+        if (ok)
+            vectors = {*centre};
+        identity = ok && (constantIs(scalars[kAmount], 0.0) || constantIs(scalars[kRadius], 0.0));
         break;
-    case kProceduralWarpSpherize:
-        ok = read({0, 3, 4});
-        strength = 3;
+    }
+    case kProceduralWarpRipple: {
+        ok = read({kRadius, kFalloff, kWavelength, kAmplitude, kPhase, kSpeed, kPulseRadius,
+                   kPulseSpeed});
+        auto centre = point("center");
+        ok = ok && centre;
+        if (ok)
+            vectors = {*centre};
+        identity = ok && (constantIs(scalars[kAmplitude], 0.0) || constantIs(scalars[kRadius], 0.0));
+        // A speed that is not a constant zero advances the phase with the clock, a pulse speed the
+        // wavefront.
+        waves = !constantIs(scalars[kSpeed], 0.0) || !constantIs(scalars[kPulseSpeed], 0.0);
         break;
-    case kProceduralWarpRipple:
-        ok = read({0, 2, 5, 6, 7, 8});
-        strength = 6;
-        break;
+    }
     case kProceduralWarpWave: {
-        ok = read({5, 6, 7, 8, 9});
+        ok = read({kWavelength, kAmplitude, kPhase, kSpeed, kDirection});
         const auto shape = constant("waveShape");
         const auto pins = constant("pinning");
         ok = ok && shape && pins && *shape >= 0 && *shape <= 3 && *pins >= kWarpPinNone &&
@@ -683,64 +722,115 @@ lowerProceduralWarp(const document::NodeRecord& node,
             choices[1] = *shape;
             choices[2] = warpPinMask(*pins);
         }
-        radial = false;
-        strength = 6;
+        identity = ok && constantIs(scalars[kAmplitude], 0.0);
+        waves = !constantIs(scalars[kSpeed], 0.0);
         break;
     }
     case kProceduralWarpPolar: {
-        ok = read({10});
+        ok = read({kInterpolation});
         const auto direction = constant("polarDirection");
         ok = ok && direction && *direction >= kPolarRectToPolar && *direction <= kPolarPolarToRect;
         if (ok)
             choices[3] = *direction;
-        radial = false;
-        strength = 10;
+        identity = ok && constantIs(scalars[kInterpolation], 0.0);
         break;
     }
-    default: {
-        ok = read({0, 11, 12});
+    case kProceduralWarpMagnify: {
+        ok = read({kRadius, kMagnification, kFeather, kPull});
         const auto shape = constant("magnifyShape");
         const auto link = constant("magnifyLink");
         ok = ok && shape && link && *shape >= 0 && *shape <= 1 && *link >= kMagnifyLinkNone &&
              *link <= kMagnifyLinkSizeAndFeather;
+        auto centre = point("center");
+        auto pull = point("pullPoint");
+        ok = ok && centre && pull;
         if (ok) {
             choices[4] = *shape;
             choices[5] = *link;
+            vectors = {*centre, *pull};
         }
-        strength = 11;
-        still = 100.0;
+        identity = ok && (constantIs(scalars[kRadius], 0.0) ||
+                          (constantIs(scalars[kMagnification], 100.0) &&
+                           constantIs(scalars[kPull], 0.0)));
+        break;
+    }
+    case kProceduralWarpWarp: {
+        ok = read({kBend, kHorizontal, kVertical});
+        const auto style = constant("warpStyle");
+        ok = ok && style && *style >= 0 && *style <= kWarpStyleLast;
+        if (ok)
+            choices[8] = *style;
+        identity = ok && constantIs(scalars[kBend], 0.0) && constantIs(scalars[kHorizontal], 0.0) &&
+                   constantIs(scalars[kVertical], 0.0);
+        break;
+    }
+    case kProceduralWarpBend: {
+        ok = read({kDirection, kBend, kHeight});
+        auto centre = point("center");
+        ok = ok && centre;
+        if (ok)
+            vectors = {*centre};
+        identity = ok && (constantIs(scalars[kBend], 0.0) || constantIs(scalars[kHeight], 0.0));
+        break;
+    }
+    case kProceduralWarpSplit: {
+        ok = read({kSplitDistance});
+        auto start = point("lineStart");
+        auto end = point("lineEnd");
+        ok = ok && start && end;
+        if (ok)
+            vectors = {*start, *end};
+        choices[9] = fieldChoice(node, "mirror");
+        identity = ok && choices[9] == 0 && constantIs(scalars[kSplitDistance], 0.0);
+        break;
+    }
+    case kProceduralWarpTurbulent: {
+        ok = read({kDisplacement, kComplexity, kEvolution});
+        const auto pins = constant("pinning");
+        const auto seed = constant("seed");
+        auto size = point("noiseSize");
+        auto offset = point("noiseOffset");
+        ok = ok && pins && seed && size && offset && *pins >= kWarpPinNone &&
+             *pins <= kWarpPinLastChoice && *seed >= 0 && *seed <= kMaximumProceduralWarpSeed;
+        if (ok) {
+            choices[2] = warpPinMask(*pins);
+            choices[11] = *seed;
+            vectors = {none, none, *size, *offset};
+        }
+        identity = ok && constantIs(scalars[kDisplacement], 0.0);
+        break;
+    }
+    default: {
+        ok = read({kRadius, kWavelength, kAmplitude, kPhase, kSpeed});
+        const auto seed = constant("seed");
+        const auto drops = constant("drops");
+        ok = ok && seed && drops && *seed >= 0 && *seed <= kMaximumProceduralWarpSeed &&
+             *drops >= 1 && *drops <= kMaximumDrizzleDrops;
+        if (ok) {
+            choices[10] = *drops;
+            choices[11] = *seed;
+        }
+        identity = ok && (constantIs(scalars[kAmplitude], 0.0) || constantIs(scalars[kRadius], 0.0));
+        waves = !constantIs(scalars[kSpeed], 0.0);
         break;
     }
     }
     if (!ok)
         return fail();
-    if (radial) {
-        auto point = compiledVec2Parameter(findParameterBinding(node, "center"));
-        if (!point)
-            return fail();
-        centre = std::move(*point);
-    }
-    const auto constantIs = [](const runtime::CompiledScalarParameter& value, const double what) {
-        const auto* number = std::get_if<double>(&value.source);
-        return number != nullptr && *number == what;
-    };
-    if (isMuted(node.id) || constantIs(scalars[strength], still) ||
-        (radial && constantIs(scalars[0], 0.0))) {
+    if (isMuted(node.id) || identity) {
         passWarpThrough(node, *input, indices);
         return true;
     }
-    // A speed that is not a constant zero advances the phase with the clock.
-    const bool waves = *mode == kProceduralWarpRipple || *mode == kProceduralWarpWave;
     FieldBuild build;
     build.operations = &operations;
     build.indices = &indices;
-    build.usesTime = waves && !constantIs(scalars[8], 0.0);
+    build.usesTime = waves;
     const auto c = fieldEmit(build, FieldOp::Coordinate, {-1, -1, -1, -1});
     const auto slot = warpSlot(build, node, *input);
     if (slot < 0)
         return false;
-    const auto where = fieldEmit(build, FieldOp::ProceduralWarp, {c, -1, -1, -1}, std::move(choices),
-                                 std::move(scalars), {centre});
+    const auto where = fieldEmit(build, FieldOp::ProceduralWarp, {c, -1, -1, -1},
+                                 std::move(choices), std::move(scalars), std::move(vectors));
     const std::vector<std::int64_t> sampling{*filter, warpEdge(*edges), 3, 4, 0, 1};
     auto result = warpRead(build, where, slot, sampling);
     if (*mode == kProceduralWarpMagnify) {
@@ -748,6 +838,11 @@ lowerProceduralWarp(const document::NodeRecord& node,
         const auto plain = warpRead(build, c, slot, sampling);
         const auto weight = fieldSwizzle(build, where, {2, 4, 4, 4});
         result = fieldEmit(build, FieldOp::Math, {plain, result, weight, -1}, {kLerp},
+                           {fieldConstant(0.1), fieldConstant(0.0)});
+    } else if (*mode == kProceduralWarpSplit) {
+        // Nothing in the gap: the picture times the weight (0 there, 1 elsewhere).
+        const auto weight = fieldSwizzle(build, where, {2, 2, 2, 2});
+        result = fieldEmit(build, FieldOp::Math, {result, weight, -1, -1}, {kMultiply},
                            {fieldConstant(0.1), fieldConstant(0.0)});
     }
     return finishWarp(node, build, result, *input, operations, indices);

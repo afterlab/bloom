@@ -146,9 +146,12 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
         const auto in = [mode](const std::initializer_list<std::int64_t> modes) {
             return std::ranges::find(modes, mode) != modes.end();
         };
-        if (role == "center" || role == "radius")
-            return !in({kProceduralWarpTwirl, kProceduralWarpBulgePinch, kProceduralWarpSpherize,
-                        kProceduralWarpRipple, kProceduralWarpMagnify});
+        const auto radial = {kProceduralWarpTwirl, kProceduralWarpBulgePinch, kProceduralWarpSpherize,
+                             kProceduralWarpRipple, kProceduralWarpMagnify};
+        if (role == "center")
+            return !(in(radial) || mode == kProceduralWarpBend);
+        if (role == "radius")
+            return !(in(radial) || mode == kProceduralWarpDrizzle);
         if (role == "falloff")
             return !in({kProceduralWarpTwirl, kProceduralWarpBulgePinch, kProceduralWarpRipple});
         if (role == "angle")
@@ -158,14 +161,35 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
         if (role == "refraction")
             return mode != kProceduralWarpSpherize;
         if (role == "wavelength" || role == "amplitude" || role == "phase" || role == "speed")
-            return !in({kProceduralWarpRipple, kProceduralWarpWave});
-        if (role == "direction" || role == "waveShape" || role == "pinning")
+            return !in({kProceduralWarpRipple, kProceduralWarpWave, kProceduralWarpDrizzle});
+        if (role == "direction")
+            return !in({kProceduralWarpWave, kProceduralWarpBend});
+        if (role == "waveShape")
             return mode != kProceduralWarpWave;
+        if (role == "pinning")
+            return !in({kProceduralWarpWave, kProceduralWarpTurbulent});
         if (role == "polarDirection" || role == "interpolation")
             return mode != kProceduralWarpPolar;
         if (role == "magnifyShape" || role == "magnification" || role == "magnifyLink" ||
-            role == "feather")
+            role == "feather" || role == "pull" || role == "pullPoint")
             return mode != kProceduralWarpMagnify;
+        if (role == "pulseRadius" || role == "pulseSpeed")
+            return mode != kProceduralWarpRipple;
+        if (role == "bend")
+            return !in({kProceduralWarpWarp, kProceduralWarpBend});
+        if (role == "warpStyle" || role == "horizontalDistortion" || role == "verticalDistortion")
+            return mode != kProceduralWarpWarp;
+        if (role == "height")
+            return mode != kProceduralWarpBend;
+        if (role == "lineStart" || role == "lineEnd" || role == "splitDistance" || role == "mirror")
+            return mode != kProceduralWarpSplit;
+        if (role == "displacement" || role == "complexity" || role == "evolution" ||
+            role == "noiseSize" || role == "noiseOffset")
+            return mode != kProceduralWarpTurbulent;
+        if (role == "seed")
+            return !in({kProceduralWarpTurbulent, kProceduralWarpDrizzle});
+        if (role == "drops")
+            return mode != kProceduralWarpDrizzle;
         return false;
     }
     if (node.typeId == kFilmGrainNodeType) {

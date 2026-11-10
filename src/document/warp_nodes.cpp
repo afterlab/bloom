@@ -17,9 +17,12 @@ std::string warpSchemaKey(const std::string_view nodeType, const std::string_vie
 bool isWarpParameterValueValid(const std::string_view schemaKey, const ParameterValue& value) noexcept {
     if (isWarpPointSchemaKey(schemaKey)) {
         const auto* corner = std::get_if<Vec2d>(&value);
+        // Procedural Warp's noise size is a size: at least a pixel on both axes.
+        const bool size = schemaKey == "bloom.procedural-warp.noiseSize";
         return corner != nullptr && std::isfinite(corner->x) && std::isfinite(corner->y) &&
                std::abs(corner->x) <= kMaximumCornerPinOffset &&
-               std::abs(corner->y) <= kMaximumCornerPinOffset;
+               std::abs(corner->y) <= kMaximumCornerPinOffset &&
+               (!size || (corner->x >= 1.0 && corner->y >= 1.0));
     }
     const auto* spec = warpParameterSpec(schemaKey);
     if (spec == nullptr)
@@ -108,10 +111,14 @@ NodeDefinition tileMirrorDefinition() {
 
 NodeDefinition proceduralWarpDefinition() {
     auto definition = warpDefinition(kProceduralWarpNodeType, proceduralWarpParameters(), false);
+    const auto defaults = warp_parameters::kProceduralWarpPointDefaults;
+    std::size_t point = 0;
     for (const auto role : proceduralWarpPointRoles()) {
-        definition.parameters.push_back({std::string(role),
-                                         warpSchemaKey(kProceduralWarpNodeType, role),
-                                         ParameterValueKind::Vec2d, true, true, Vec2d{}});
+        definition.parameters.push_back(
+            {std::string(role), warpSchemaKey(kProceduralWarpNodeType, role),
+             ParameterValueKind::Vec2d, true, true,
+             Vec2d{defaults[point][0], defaults[point][1]}});
+        ++point;
         definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
     }
     return definition;

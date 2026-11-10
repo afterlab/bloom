@@ -385,6 +385,9 @@ void blurNodeReopen() {
                     ? document::ParameterValue{document::Vec2d{3.5, -2.25}}
                 : parameter.schemaKey.starts_with("bloom.rolling-shutter.")
                     ? document::ParameterValue{0.375}
+                // #510 Procedural Warp's noise size is a size of at least a pixel.
+                : parameter.schemaKey == "bloom.procedural-warp.noiseSize"
+                    ? document::ParameterValue{document::Vec2d{140.5, 90.25}}
                 // #348 Corner Pin, ST Map and Displace: moved choices, moved corners and amounts.
                 : document::isWarpPointSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{document::Vec2d{17.5, -9.25}}

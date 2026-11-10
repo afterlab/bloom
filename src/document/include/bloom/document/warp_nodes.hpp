@@ -97,7 +97,15 @@ inline constexpr std::int64_t kProceduralWarpRipple = 3;
 inline constexpr std::int64_t kProceduralWarpWave = 4;
 inline constexpr std::int64_t kProceduralWarpPolar = 5;
 inline constexpr std::int64_t kProceduralWarpMagnify = 6;
-inline constexpr std::int64_t kProceduralWarpLastMode = kProceduralWarpMagnify;
+inline constexpr std::int64_t kProceduralWarpWarp = 7;
+inline constexpr std::int64_t kProceduralWarpBend = 8;
+inline constexpr std::int64_t kProceduralWarpSplit = 9;
+inline constexpr std::int64_t kProceduralWarpTurbulent = 10;
+inline constexpr std::int64_t kProceduralWarpDrizzle = 11;
+inline constexpr std::int64_t kProceduralWarpLastMode = kProceduralWarpDrizzle;
+inline constexpr std::int64_t kWarpStyleLast = 12;
+inline constexpr std::int64_t kMaximumDrizzleDrops = 64;
+inline constexpr std::int64_t kMaximumProceduralWarpSeed = 16777215;
 inline constexpr std::int64_t kWarpPinNone = 0;
 inline constexpr std::int64_t kWarpPinAllEdges = 1;
 inline constexpr std::int64_t kWarpPinLastChoice = 7;
@@ -197,8 +205,12 @@ inline constexpr std::array<std::string_view, 4> kTileMirrorPointRoles{
     "tileCenter", "offset", "mirrorPoint", "kaleidoscopeCenter"};
 inline constexpr std::array<std::string_view, 4> kTileMirrorPointLabels{
     "Tile Center", "Offset", "Line Point", "Center"};
-inline constexpr std::array<std::string_view, 7> kProceduralWarpModes{
-    "Twirl", "Bulge / Pinch", "Spherize / Lens", "Ripple", "Wave", "Polar Coordinates", "Magnify"};
+inline constexpr std::array<std::string_view, 12> kProceduralWarpModes{
+    "Twirl", "Bulge / Pinch", "Spherize / Lens", "Ripple", "Wave", "Polar Coordinates", "Magnify",
+    "Warp", "Bend", "Split", "Turbulent", "Drizzle"};
+inline constexpr std::array<std::string_view, 13> kWarpStyles{
+    "Arc", "Arc Lower", "Arc Upper", "Arch", "Bulge", "Flag", "Wave",
+    "Fish", "Rise", "Fisheye", "Inflate", "Squeeze", "Twist"};
 inline constexpr std::array<std::string_view, 4> kWaveShapes{"Sine", "Triangle", "Square", "Saw"};
 // The frame edges a Wave holds still (the order of the choice; the lowering turns it into a mask).
 inline constexpr std::array<std::string_view, 8> kWavePins{
@@ -250,10 +262,50 @@ inline constexpr std::array kProceduralWarp{
                       "Grow with Magnification"},
     WarpParameterSpec{"feather", Kind::Scalar, 0.0, 0.0, kMaximumWarpLength, {}, "Feather", 0.0,
                       200.0, 1.0, 1, "px"},
+    // Magnify's two-point pull and Ripple's pulse.
+    WarpParameterSpec{"pull", Kind::Scalar, 0.0, -100.0, 100.0, {}, "Pull", -100.0, 100.0, 1.0, 1,
+                      "%"},
+    WarpParameterSpec{"pulseRadius", Kind::Scalar, 0.0, 0.0, kMaximumWarpLength, {}, "Pulse Radius",
+                      0.0, 1500.0, 1.0, 1, "px"},
+    WarpParameterSpec{"pulseSpeed", Kind::Scalar, 0.0, -kMaximumWarpLength, kMaximumWarpLength, {},
+                      "Pulse Speed", -600.0, 600.0, 1.0, 1, "px/s"},
+    // Warp and Bend.
+    WarpParameterSpec{"warpStyle", Kind::Choice, 0.0, 0.0, static_cast<double>(kWarpStyleLast),
+                      kWarpStyles, "Style"},
+    WarpParameterSpec{"bend", Kind::Scalar, 50.0, -100.0, 100.0, {}, "Bend", -100.0, 100.0, 1.0, 1,
+                      "%"},
+    WarpParameterSpec{"horizontalDistortion", Kind::Scalar, 0.0, -100.0, 100.0, {},
+                      "Horizontal Distortion", -100.0, 100.0, 1.0, 1, "%"},
+    WarpParameterSpec{"verticalDistortion", Kind::Scalar, 0.0, -100.0, 100.0, {},
+                      "Vertical Distortion", -100.0, 100.0, 1.0, 1, "%"},
+    WarpParameterSpec{"height", Kind::Scalar, 400.0, 0.0, kMaximumWarpLength, {}, "Height", 0.0,
+                      1500.0, 1.0, 1, "px"},
+    // Split.
+    WarpParameterSpec{"splitDistance", Kind::Scalar, 40.0, 0.0, kMaximumWarpLength, {},
+                      "Split Distance", 0.0, 400.0, 1.0, 1, "px"},
+    WarpParameterSpec{"mirror", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Mirror"},
+    // Turbulent and Drizzle.
+    WarpParameterSpec{"displacement", Kind::Scalar, 50.0, -kMaximumWarpLength, kMaximumWarpLength,
+                      {}, "Displacement", -200.0, 200.0, 0.5, 1, "px"},
+    WarpParameterSpec{"complexity", Kind::Scalar, 3.0, 1.0, 8.0, {}, "Complexity", 1.0, 8.0, 0.1, 1},
+    WarpParameterSpec{"evolution", Kind::Scalar, 0.0, -1.0e4, 1.0e4, {}, "Evolution", 0.0, 10.0,
+                      0.05, 2},
+    WarpParameterSpec{"seed", Kind::Integer, 1.0, 0.0, static_cast<double>(kMaximumProceduralWarpSeed),
+                      {}, "Seed", 0.0, 999999.0},
+    WarpParameterSpec{"drops", Kind::Integer, 12.0, 1.0, static_cast<double>(kMaximumDrizzleDrops),
+                      {}, "Drops", 1.0, 64.0},
 };
-// Its point, in pixels from the frame's centre, y down: the centre of a radial mode.
-inline constexpr std::array<std::string_view, 1> kProceduralWarpPointRoles{"center"};
-inline constexpr std::array<std::string_view, 1> kProceduralWarpPointLabels{"Center"};
+// Its points, in pixels from the frame's centre, y down: the centre of a radial mode and of Bend,
+// the point Magnify's pull draws the picture towards, Split's line from its start to its end, and
+// Turbulent's noise size (a size, not a place) and offset.
+inline constexpr std::array<std::string_view, 6> kProceduralWarpPointRoles{
+    "center", "pullPoint", "lineStart", "lineEnd", "noiseSize", "noiseOffset"};
+inline constexpr std::array<std::string_view, 6> kProceduralWarpPointLabels{
+    "Center", "Pull Point", "Line Start", "Line End", "Noise Size", "Noise Offset"};
+// Each point's value on a new node: a vertical line through the middle, the pull to the right, a
+// noise of 100 px.
+inline constexpr std::array<std::array<double, 2>, 6> kProceduralWarpPointDefaults{
+    {{0.0, 0.0}, {200.0, 0.0}, {0.0, 200.0}, {0.0, -200.0}, {100.0, 100.0}, {0.0, 0.0}}};
 inline constexpr std::array kCornerPin{
     WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
 };

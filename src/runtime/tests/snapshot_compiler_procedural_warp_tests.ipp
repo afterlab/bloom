@@ -65,6 +65,37 @@ proceduralWarpReading(const std::unordered_map<std::string, document::ParameterV
         p.radius *= p.magnification;
     if (choice("magnifyLink") >= 2)
         p.feather *= p.magnification;
+    // The modes after Magnify, and Magnify's pull and Ripple's pulse.
+    const auto vec = [&](const std::string& role, const Vec2d fallback) {
+        return values.contains(role) ? std::get<Vec2d>(values.at(role)) : fallback;
+    };
+    p.pull = number("pull", 0.0) / 100.0;
+    p.pulseRadius = number("pulseRadius", 0.0);
+    p.pulseSpeed = number("pulseSpeed", 0.0);
+    p.warpStyle = static_cast<std::uint8_t>(choice("warpStyle"));
+    p.bend = number("bend", 50.0) / 100.0;
+    p.horizontalDistortion = number("horizontalDistortion", 0.0) / 100.0;
+    p.verticalDistortion = number("verticalDistortion", 0.0) / 100.0;
+    p.height = number("height", 400.0);
+    p.splitDistance = number("splitDistance", 40.0);
+    p.mirror = values.contains("mirror") && std::get<bool>(values.at("mirror"));
+    p.displacement = number("displacement", 50.0);
+    p.seed = values.contains("seed") ? std::get<std::int64_t>(values.at("seed")) : 1;
+    p.drops = values.contains("drops") ? std::get<std::int64_t>(values.at("drops")) : 12;
+    // Split's line runs between its two points, Magnify's pull towards its point; Bend's centre is
+    // the centre.
+    if (p.mode == core::field::ProceduralWarpMode::Split) {
+        const auto start = vec("lineStart", Vec2d{0.0, 200.0});
+        const auto end = vec("lineEnd", Vec2d{0.0, -200.0});
+        p.centreX = start.x;
+        p.centreY = -start.y;
+        p.secondX = end.x;
+        p.secondY = -end.y;
+    } else {
+        const auto pullPoint = vec("pullPoint", Vec2d{200.0, 0.0});
+        p.secondX = pullPoint.x;
+        p.secondY = -pullPoint.y;
+    }
     return p;
 }
 
@@ -105,19 +136,33 @@ void testProceduralWarpLowering(Expectations& expectations) {
                             what + ": the coverage fixture's program is the lowering's");
     };
     const std::vector<FieldOp> plain{FieldOp::Coordinate, FieldOp::ProceduralWarp, FieldOp::Image};
-    const std::array<const char*, 7> names{"Twirl", "Bulge / Pinch", "Spherize", "Ripple",
-                                           "Wave",  "Polar",         "Magnify"};
+    const std::array<const char*, 12> names{"Twirl", "Bulge / Pinch", "Spherize", "Ripple",
+                                            "Wave",  "Polar",         "Magnify",  "Warp",
+                                            "Bend",  "Split",         "Turbulent", "Drizzle"};
     for (std::int64_t mode = 0; mode <= kProceduralWarpLastMode; ++mode) {
         const auto program =
             field_test_programs::proceduralWarpProgram(1, mode, 0, 1, 0, 1920, 1080);
-        lowered({{"mode", mode}},
-                mode == kProceduralWarpMagnify
-                    ? std::vector<FieldOp>{FieldOp::Coordinate, FieldOp::ProceduralWarp,
-                                           FieldOp::Image, FieldOp::Image, FieldOp::Swizzle,
-                                           FieldOp::Math}
-                    : plain,
-                names[static_cast<std::size_t>(mode)], program);
+        std::vector<FieldOp> expected = plain;
+        if (mode == kProceduralWarpMagnify)
+            expected = {FieldOp::Coordinate, FieldOp::ProceduralWarp, FieldOp::Image,
+                        FieldOp::Image, FieldOp::Swizzle, FieldOp::Math};
+        else if (mode == kProceduralWarpSplit)
+            expected = {FieldOp::Coordinate, FieldOp::ProceduralWarp, FieldOp::Image,
+                        FieldOp::Swizzle, FieldOp::Math};
+        lowered({{"mode", mode}}, expected, names[static_cast<std::size_t>(mode)], program);
     }
+    // Every Warp style, and Split with its mirror, lowers to the program the fixture holds.
+    for (std::int64_t style = 0; style <= kWarpStyleLast; ++style)
+        lowered({{"mode", kProceduralWarpWarp}, {"warpStyle", style}}, plain,
+                std::string("Warp style ") + std::to_string(style),
+                field_test_programs::proceduralWarpProgram(1, kProceduralWarpWarp, 0, 1, style, 1920,
+                                                           1080));
+    lowered({{"mode", kProceduralWarpSplit}, {"mirror", true}},
+            {FieldOp::Coordinate, FieldOp::ProceduralWarp, FieldOp::Image, FieldOp::Swizzle,
+             FieldOp::Math},
+            "Split with the mirror",
+            field_test_programs::proceduralWarpProgram(1, kProceduralWarpSplit, 0, 1, 1, 1920,
+                                                       1080));
     // A mode's own choices reach the instruction: the wave, the pinned edges as a mask (Left and
     // Right is 1 | 2), the polar direction, the shape and the link.
     {
@@ -130,7 +175,7 @@ void testProceduralWarpLowering(Expectations& expectations) {
         const auto* raster = ops.size() == 1 ? lensRaster(*result.plan, ops[0]) : nullptr;
         expectations.expect(raster != nullptr &&
                                 raster->program.instructions[1].choices ==
-                                    std::vector<std::int64_t>{4, 2, 3, 0, 0, 0, 1920, 1080},
+                                    std::vector<std::int64_t>{4, 2, 3, 0, 0, 0, 1920, 1080, 0, 0, 12, 1},
                             "a Wave's shape and pinned edges reach the instruction");
     }
     {
@@ -144,7 +189,7 @@ void testProceduralWarpLowering(Expectations& expectations) {
         const auto* raster = ops.size() == 1 ? lensRaster(*result.plan, ops[0]) : nullptr;
         expectations.expect(raster != nullptr &&
                                 raster->program.instructions[1].choices ==
-                                    std::vector<std::int64_t>{6, 0, 0, 0, 1, 2, 1920, 1080},
+                                    std::vector<std::int64_t>{6, 0, 0, 0, 1, 2, 1920, 1080, 0, 0, 12, 1},
                             "a Magnify's shape and link reach the instruction, another mode's "
                             "choice does not");
     }
@@ -175,6 +220,28 @@ void testProceduralWarpLowering(Expectations& expectations) {
                         "a Polar conversion of 0% passes through");
     expectations.expect(passes({{"mode", std::int64_t{6}}, {"magnification", 100.0}}),
                         "a Magnify of 100% passes through");
+    expectations.expect(passes({{"mode", std::int64_t{6}}, {"pull", 30.0}, {"magnification", 100.0}}) == false,
+                        "a Magnify of 100% with a pull does not pass through");
+    expectations.expect(passes({{"mode", std::int64_t{7}}, {"bend", 0.0}}),
+                        "a Warp of no bend and no distortion passes through");
+    expectations.expect(!passes({{"mode", std::int64_t{7}}, {"bend", 0.0},
+                                 {"horizontalDistortion", 20.0}}),
+                        "a Warp with a distortion does not");
+    expectations.expect(passes({{"mode", std::int64_t{8}}, {"bend", 0.0}}),
+                        "a Bend of 0 passes through");
+    expectations.expect(passes({{"mode", std::int64_t{8}}, {"height", 0.0}}),
+                        "a Bend of no height passes through");
+    expectations.expect(passes({{"mode", std::int64_t{9}}, {"splitDistance", 0.0}}),
+                        "a Split of no distance passes through");
+    expectations.expect(!passes({{"mode", std::int64_t{9}}, {"splitDistance", 0.0},
+                                 {"mirror", true}}),
+                        "a mirror with no distance is a reflection, not a pass-through");
+    expectations.expect(passes({{"mode", std::int64_t{10}}, {"displacement", 0.0}}),
+                        "a Turbulent of no displacement passes through");
+    expectations.expect(passes({{"mode", std::int64_t{11}}, {"amplitude", 0.0}}),
+                        "a Drizzle of no amplitude passes through");
+    expectations.expect(passes({{"mode", std::int64_t{11}}, {"radius", 0.0}}),
+                        "a Drizzle of no radius passes through");
     expectations.expect(passes({{"radius", 0.0}}), "a radius of 0 passes through");
     expectations.expect(!passes({{"mode", std::int64_t{4}}, {"angle", 0.0}}),
                         "another mode's zero does not pass a Wave through");
@@ -238,6 +305,32 @@ void testProceduralWarpLowering(Expectations& expectations) {
                         "a ripple with a speed varies with time");
     expectations.expect(timed({{"mode", std::int64_t{4}}, {"speed", -1.0}}, "", false),
                         "a wave with a speed varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{3}}, {"pulseSpeed", 30.0}}, "", false),
+                        "a ripple with a pulse speed varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{3}}}, "pulseRadius", false),
+                        "a keyed pulse radius varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{6}}}, "pull", false, 0.0, 60.0),
+                        "a keyed magnify pull varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{6}}}, "pullPoint", true),
+                        "a keyed pull point varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{7}}}, "bend", false),
+                        "a keyed warp bend varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{8}}}, "height", false, 200.0, 600.0),
+                        "a keyed bend height varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{9}}}, "lineEnd", true),
+                        "a keyed split line end varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{9}}}, "splitDistance", false),
+                        "a keyed split distance varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{10}}}, "evolution", false, 0.0, 2.0),
+                        "a keyed turbulence evolution varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{10}}}, "displacement", false),
+                        "a keyed turbulence displacement varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{11}}, {"speed", 0.5}}, "", false),
+                        "a drizzle with a speed varies with time");
+    expectations.expect(!timed({{"mode", std::int64_t{10}}, {"speed", 0.5}}, "", false),
+                        "a speed does not move a Turbulent, which does not read it");
+    expectations.expect(!timed({{"mode", std::int64_t{10}}}, "bend", false),
+                        "a keyed bend does not make a Turbulent vary with time");
     expectations.expect(!timed({{"speed", 2.0}}, "", false),
                         "a speed does not move a Twirl, which does not read it");
     expectations.expect(!timed({{"mode", std::int64_t{4}}}, "angle", false),
@@ -258,7 +351,14 @@ void testProceduralWarpPixels(Expectations& expectations) {
     const auto evaluate = [&](const Values& values, const std::uint32_t w = kW,
                               const std::uint32_t h = kH) {
         auto result = lensEvaluate(proceduralWarpPlan(values), w, h);
-        require(result.frame() != nullptr, "the Procedural Warp plan evaluates");
+        require(result.frame() != nullptr,
+                std::string("the Procedural Warp plan evaluates (mode ") +
+                    (values.contains("mode") ? std::to_string(std::get<std::int64_t>(values.at("mode")))
+                                             : std::string("default")) +
+                    ")" +
+                    (result.diagnostics().empty() ? std::string{}
+                                                  : ": " + result.diagnostics().front().summary +
+                                                        " " + result.diagnostics().front().detail));
         return result;
     };
     // Every pixel of the node's frame against the reading: the input read nearest at the position the
@@ -292,6 +392,10 @@ void testProceduralWarpPixels(Expectations& expectations) {
                     const auto plain = warpNearest(source, kTileWidth, kTileHeight, x, y, edge);
                     for (std::size_t c = 0; c < 4; ++c)
                         want[c] = plain[c] + (want[c] - plain[c]) * at.weight;
+                } else if (parameters.mode == core::field::ProceduralWarpMode::Split) {
+                    // Nothing in the gap: the picture times the weight.
+                    for (std::size_t c = 0; c < 4; ++c)
+                        want[c] *= at.weight;
                 }
                 const auto got = lensPixel(warped.frame()->processImage(), i, j);
                 double here = 0.0;
@@ -364,6 +468,116 @@ void testProceduralWarpPixels(Expectations& expectations) {
     check({{"mode", std::int64_t{6}}, {"magnifyLink", std::int64_t{2}}, {"radius", 100.0},
            {"feather", 20.0}},
           "a Magnify whose size and feather grow with the magnification");
+
+    // Magnify's pull (Flo Motion), Ripple's pulse (Ripple Pulse).
+    check({{"mode", std::int64_t{6}}, {"magnification", 220.0}, {"radius", 260.0},
+           {"feather", 40.0}, {"pull", 70.0}, {"pullPoint", Vec2d{300.0, -120.0}},
+           {"center", centre}},
+          "a Magnify drawn towards its pull point");
+    {
+        const auto pulse = check({{"mode", std::int64_t{3}}, {"radius", 600.0},
+                                  {"wavelength", 60.0}, {"amplitude", 14.0},
+                                  {"pulseRadius", 200.0}, {"pulseSpeed", 90.0},
+                                  {"center", centre}},
+                                 "a Ripple pulse");
+        warpDump("frame-procedural-warp-ripple-pulse", pulse.frame()->processImage(), kW, kH);
+    }
+    // Warp: every style, with a bend and with the distortions.
+    for (std::int64_t style = 0; style <= kWarpStyleLast; ++style) {
+        const auto warped = check({{"mode", std::int64_t{7}}, {"warpStyle", style},
+                                   {"bend", style % 2 == 0 ? 60.0 : -45.0},
+                                   {"horizontalDistortion", style % 3 == 0 ? 0.0 : 25.0},
+                                   {"verticalDistortion", style % 3 == 0 ? 0.0 : -20.0}},
+                                  "Warp style " + std::to_string(style), 1, 25);
+        if (style == 0 || style == 5 || style == 9)
+            warpDump("frame-procedural-warp-warp-" + std::to_string(style),
+                     warped.frame()->processImage(), kW, kH);
+    }
+    for (const double direction : {90.0, 20.0}) {
+        const auto bent = check({{"mode", std::int64_t{8}}, {"direction", direction},
+                                 {"bend", 70.0}, {"height", 900.0}, {"center", centre}},
+                                "a Bend towards " + std::to_string(direction));
+        if (direction == 90.0)
+            warpDump("frame-procedural-warp-bend", bent.frame()->processImage(), kW, kH);
+    }
+    for (const bool mirror : {false, true}) {
+        const auto split = check({{"mode", std::int64_t{9}}, {"mirror", mirror},
+                                  {"splitDistance", 160.0}, {"lineStart", Vec2d{-100.0, 300.0}},
+                                  {"lineEnd", Vec2d{200.0, -250.0}}},
+                                 mirror ? "a Split mirrored" : "a Split", 1, 25);
+        warpDump(mirror ? "frame-procedural-warp-split-mirror" : "frame-procedural-warp-split",
+                 split.frame()->processImage(), kW, kH);
+    }
+    for (const std::int64_t drops : {1, 12, 40}) {
+        const auto drizzle = check({{"mode", std::int64_t{11}}, {"drops", drops}, {"seed", std::int64_t{9}},
+                                    {"radius", 420.0}, {"wavelength", 60.0}, {"amplitude", 14.0},
+                                    {"phase", 140.0}},
+                                   "a Drizzle of " + std::to_string(drops) + " drops", 1, 25);
+        if (drops == 12)
+            warpDump("frame-procedural-warp-drizzle", drizzle.frame()->processImage(), kW, kH);
+    }
+    check({{"mode", std::int64_t{7}}, {"warpStyle", std::int64_t{4}}, {"bend", 80.0}},
+          "a Warp at twice the scale", 2, 25);
+    // Turbulent (the field Noise operation's vector moves the pixels): the same project twice is the
+    // same frame; another seed and another evolution are other frames; the pinned edges stay put; a
+    // displacement of 0 is the input. The noise itself is tested with the field operation.
+    {
+        const auto run = [&](const Values& values) {
+            Values nearest = values;
+            nearest["mode"] = std::int64_t{10};
+            nearest["filter"] = std::int64_t{1};
+            return evaluate(nearest);
+        };
+        const auto differing = [&](const runtime::EvaluationResult& a,
+                                   const runtime::EvaluationResult& b) {
+            std::size_t count = 0;
+            for (std::uint32_t j = 0; j < kH; ++j)
+                for (std::uint32_t i = 0; i < kW; ++i)
+                    count += lensPixel(a.frame()->processImage(), i, j) !=
+                                     lensPixel(b.frame()->processImage(), i, j)
+                                 ? 1U
+                                 : 0U;
+            return count;
+        };
+        const auto first = run({{"displacement", 60.0}, {"seed", std::int64_t{4}}});
+        const auto again = run({{"displacement", 60.0}, {"seed", std::int64_t{4}}});
+        const auto other = run({{"displacement", 60.0}, {"seed", std::int64_t{5}}});
+        const auto evolved =
+            run({{"displacement", 60.0}, {"seed", std::int64_t{4}}, {"evolution", 0.7}});
+        const auto plainFrame = lensEvaluate(warpBarePlan(), kW, kH);
+        expectations.expect(first.frame() && again.frame() && other.frame() && evolved.frame(),
+                            "the Turbulent plans evaluate");
+        if (first.frame() && again.frame() && other.frame() && evolved.frame()) {
+            expectations.expect(differing(first, again) == 0,
+                                "Turbulent: the same seed and evolution are the same frame");
+            expectations.expect(differing(first, other) > kW * kH / 50,
+                                "Turbulent: another seed is another frame");
+            expectations.expect(differing(first, evolved) > kW * kH / 50,
+                                "Turbulent: another evolution is another frame");
+            expectations.expect(differing(first, plainFrame) > kW * kH / 50,
+                                "Turbulent moves the picture");
+        }
+        // All four edges pinned: the outermost pixels read where they are.
+        const auto pinned = run({{"displacement", 60.0}, {"pinning", std::int64_t{1}}});
+        if (pinned.frame()) {
+            std::size_t moved = 0;
+            std::size_t ring = 0;
+            for (std::uint32_t j = 0; j < kH; ++j)
+                for (std::uint32_t i = 0; i < kW; ++i) {
+                    if (i != 0 && j != 0 && i != kW - 1 && j != kH - 1)
+                        continue;
+                    ++ring;
+                    moved += lensPixel(pinned.frame()->processImage(), i, j) !=
+                                     lensPixel(plainFrame.frame()->processImage(), i, j)
+                                 ? 1U
+                                 : 0U;
+                }
+            expectations.expect(moved * 20 <= ring,
+                                "Turbulent: the pinned edges hold the picture still (" +
+                                    std::to_string(moved) + " of " + std::to_string(ring) +
+                                    " edge pixels moved)");
+        }
+    }
 
     // The edge rule: a Wave reaching past the frame reads nothing there with Transparent and the
     // edge's own texels with Extend (the reading holds both to the rule).
@@ -509,9 +723,10 @@ void testProceduralWarpCacheIdentity(Expectations& expectations) {
         {"Ripple",
          {{"mode", std::int64_t{3}}},
          {{"radius", 250.0}, {"falloff", 50.0}, {"wavelength", 55.0}, {"amplitude", 5.0},
-          {"phase", 30.0}, {"speed", 1.0}, {"center", Vec2d{8.0, 0.0}}},
+          {"phase", 30.0}, {"speed", 1.0}, {"center", Vec2d{8.0, 0.0}}, {"pulseRadius", 90.0},
+          {"pulseSpeed", 20.0}},
          {{"angle", 45.0}, {"direction", 10.0}, {"waveShape", std::int64_t{2}},
-          {"pinning", std::int64_t{1}}}},
+          {"pinning", std::int64_t{1}}, {"pull", 20.0}, {"bend", 10.0}}},
         {"Wave",
          {{"mode", std::int64_t{4}}},
          {{"wavelength", 55.0}, {"amplitude", 5.0}, {"phase", 30.0}, {"speed", 1.0},
@@ -527,8 +742,39 @@ void testProceduralWarpCacheIdentity(Expectations& expectations) {
          {{"mode", std::int64_t{6}}},
          {{"radius", 250.0}, {"magnification", 300.0}, {"feather", 3.0},
           {"magnifyShape", std::int64_t{1}}, {"magnifyLink", std::int64_t{1}},
-          {"center", Vec2d{8.0, 0.0}}},
-         {{"angle", 45.0}, {"falloff", 50.0}, {"amount", 20.0}, {"pinning", std::int64_t{3}}}}};
+          {"center", Vec2d{8.0, 0.0}}, {"pull", 40.0}, {"pullPoint", Vec2d{60.0, 20.0}}},
+         {{"angle", 45.0}, {"falloff", 50.0}, {"amount", 20.0}, {"pinning", std::int64_t{3}},
+          {"pulseRadius", 50.0}}},
+        {"Warp",
+         {{"mode", std::int64_t{7}}},
+         {{"warpStyle", std::int64_t{5}}, {"bend", -20.0}, {"horizontalDistortion", 30.0},
+          {"verticalDistortion", -30.0}},
+         {{"radius", 250.0}, {"center", Vec2d{8.0, 0.0}}, {"height", 80.0}, {"amplitude", 5.0},
+          {"seed", std::int64_t{9}}}},
+        {"Bend",
+         {{"mode", std::int64_t{8}}},
+         {{"direction", 20.0}, {"bend", -20.0}, {"height", 300.0}, {"center", Vec2d{8.0, 0.0}}},
+         {{"radius", 250.0}, {"warpStyle", std::int64_t{5}}, {"horizontalDistortion", 30.0},
+          {"splitDistance", 5.0}}},
+        {"Split",
+         {{"mode", std::int64_t{9}}},
+         {{"splitDistance", 90.0}, {"mirror", true}, {"lineStart", Vec2d{8.0, 40.0}},
+          {"lineEnd", Vec2d{70.0, -60.0}}},
+         {{"center", Vec2d{8.0, 0.0}}, {"radius", 250.0}, {"bend", 10.0}, {"pull", 20.0},
+          {"pullPoint", Vec2d{3.0, 3.0}}}},
+        {"Turbulent",
+         {{"mode", std::int64_t{10}}},
+         {{"displacement", 20.0}, {"complexity", 5.0}, {"evolution", 0.5},
+          {"seed", std::int64_t{7}}, {"noiseSize", Vec2d{80.0, 120.0}},
+          {"noiseOffset", Vec2d{12.0, -4.0}}, {"pinning", std::int64_t{1}}},
+         {{"radius", 250.0}, {"center", Vec2d{8.0, 0.0}}, {"speed", 1.0}, {"amplitude", 5.0},
+          {"drops", std::int64_t{30}}}},
+        {"Drizzle",
+         {{"mode", std::int64_t{11}}},
+         {{"radius", 250.0}, {"wavelength", 55.0}, {"amplitude", 5.0}, {"phase", 30.0},
+          {"speed", 1.0}, {"seed", std::int64_t{9}}, {"drops", std::int64_t{30}}},
+         {{"center", Vec2d{8.0, 0.0}}, {"falloff", 50.0}, {"displacement", 5.0},
+          {"complexity", 6.0}, {"noiseSize", Vec2d{50.0, 50.0}}}}};
     for (auto& mode : modes)
         mode.misses.insert(mode.misses.end(), common.begin(), common.end());
     for (const auto& mode : modes) {
