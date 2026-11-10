@@ -219,12 +219,17 @@ mcp::McpUiResult McpLiveUiBinding::setSelection(const mcp::McpSelectionRequest& 
 
     const auto& graph = target->graph();
     std::vector<document::NodeId> layerNodes;
+    // #502/#645: a Merge entry layer (an imported SVG's groups and shapes, at any depth) has no
+    // Layer node; it is selected as its Timeline row is.
+    bool entryLayers = false;
     for (const auto layer : request.layers) {
-        const auto boundary = session_.boundaryNodeForLayer(layer);
-        if (graph.findLayer(layer) == nullptr || !boundary)
+        if (graph.findLayer(layer) == nullptr)
             return uiResult(McpUiRefusal::UnknownTarget,
                             tr("The composition has no layer %1.").arg(layer.value()));
-        layerNodes.push_back(*boundary);
+        if (const auto boundary = session_.boundaryNodeForLayer(layer))
+            layerNodes.push_back(*boundary);
+        else
+            entryLayers = true;
     }
     for (const auto node : request.nodes)
         if (graph.findNode(node) == nullptr)
@@ -233,6 +238,10 @@ mcp::McpUiResult McpLiveUiBinding::setSelection(const mcp::McpSelectionRequest& 
 
     using Mode = mcp::McpSelectionMode;
     const bool layersOnly = request.nodes.empty() && !request.layers.empty();
+    if (entryLayers && (!layersOnly || request.mode == Mode::Remove))
+        return uiResult(McpUiRefusal::InvalidArgument,
+                        tr("A layer inside a group is selected by itself or with other layers, "
+                           "with mode set or add, not together with nodes or with remove."));
     if (layersOnly && request.mode != Mode::Remove) {
         // Exactly the Timeline's own clicks: the first layer replaces, the rest extend.
         bool extend = request.mode == Mode::Add;
@@ -271,7 +280,8 @@ mcp::McpUiResult McpLiveUiBinding::setSelection(const mcp::McpSelectionRequest& 
             session_.selectNodes(std::move(next), primary);
         }
     }
-    const auto count = static_cast<int>(session_.selectedNodes().size());
+    const auto count =
+        static_cast<int>(session_.selectedNodes().size() + session_.selectedEntries().size());
     return uiOk(count == 0 ? tr("Nothing is selected.") : tr("%n item(s) selected.", nullptr, count));
 }
 
@@ -348,6 +358,37 @@ mcp::McpUiResult McpLiveUiBinding::transport(const mcp::McpTransportRequest& req
 // ---- viewer.set --------------------------------------------------------------------------------
 
 mcp::McpUiResult McpLiveUiBinding::setViewer(const mcp::McpViewerRequest& request) {
+    // #645: the drill level is session state; it is checked first and applies without a Viewer.
+    const bool levelOnly = request.level || request.points;
+    if (levelOnly) {
+        const auto* composition = session_.composition();
+        if (composition == nullptr)
+            return uiResult(McpUiRefusal::InvalidArgument,
+                            tr("There is no active composition to drill into. Activate one first."));
+        ViewerLevel level = session_.viewerLevel();
+        if (request.level) {
+            level.groups = *request.level;
+            level.points.reset();
+        }
+        if (request.points)
+            level.points = *request.points;
+        const auto check = session_.setViewerLevel(level);
+        if (!check.ok())
+            return uiResult(check.refusal == document::DrillLevelRefusal::UnknownLayer
+                                ? McpUiRefusal::UnknownTarget
+                                : McpUiRefusal::InvalidArgument,
+                            QString::fromStdString(
+                                document::drillLevelRefusalText(*composition, check)));
+        // Point editing selects the layer whose points are shown, as a double-click does.
+        if (level.points)
+            (void)session_.enterViewerPoints(*level.points);
+    }
+    const bool displayFields = request.display || request.view || request.exposure ||
+                               request.channel || request.zoom || request.gamma ||
+                               request.resolution || request.background ||
+                               request.transparencyGrid || request.look || request.regionOfInterest;
+    if (levelOnly && !displayFields)
+        return uiOk(tr("The Viewer's level was updated."));
     auto* viewer = window_ ? window_->displayedViewer() : nullptr;
     if (viewer == nullptr)
         return uiResult(McpUiRefusal::UnknownTarget,
@@ -406,6 +447,8 @@ mcp::McpUndoHistory McpLiveUiBinding::undoHistory() const {
 
 mcp::McpViewerState McpLiveUiBinding::viewerState() {
     mcp::McpViewerState state;
+    state.level = session_.viewerLevel().groups;
+    state.points = session_.viewerLevel().points;
     auto* viewer = window_ ? window_->displayedViewer() : nullptr;
     if (viewer == nullptr)
         return state;

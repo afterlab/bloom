@@ -903,6 +903,12 @@ yyjson_mut_val* contextProjection(Json& out, McpCall& call, const document::Snap
     for (const auto layer : context.layers)
         out.append(layers, out.number(layer));
     out.set(result, "selectedLayers", layers);
+    // #645: the Viewer's drill level and the shape in point editing (empty headless).
+    auto* level = out.array();
+    for (const auto group : context.level)
+        out.append(level, out.number(group));
+    out.set(result, "level", level);
+    out.set(result, "points", context.points ? out.number(*context.points) : out.null());
     const auto time = context.time.value_or(core::RationalTime::fromInteger(0));
     auto* timeValue = out.array();
     out.append(timeValue, out.signedNumber(time.numerator()));

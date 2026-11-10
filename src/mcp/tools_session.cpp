@@ -592,8 +592,33 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
     case McpTool::ViewerSet: {
         members(arguments, {"display", "view", "exposure", "channel", "zoom", "gamma",
                             "resolution", "background", "transparencyGrid", "look",
-                            "regionOfInterest"});
+                            "regionOfInterest", "level", "points"});
         McpViewerRequest request;
+        if (auto* level = member(arguments, "level")) {
+            if (!yyjson_is_arr(level) || yyjson_arr_size(level) > 256)
+                throw InvalidInput("level is an array of group layer ids from the top, outermost "
+                                   "first ([] is the top level)");
+            std::vector<document::LayerId> groups;
+            std::size_t index = 0, count = 0;
+            yyjson_val* item = nullptr;
+            yyjson_arr_foreach(level, index, count, item) {
+                const auto id = identifier(item);
+                if (id == 0)
+                    throw InvalidInput("level holds layer ids (query kind=layers lists them)");
+                groups.push_back(document::LayerId::fromRaw(id));
+            }
+            request.level = std::move(groups);
+        }
+        if (auto* points = member(arguments, "points")) {
+            if (yyjson_is_null(points)) {
+                request.points = std::optional<document::LayerId>{};
+            } else {
+                const auto id = identifier(points);
+                if (id == 0)
+                    throw InvalidInput("points is a shape layer id, or null to leave point editing");
+                request.points = document::LayerId::fromRaw(id);
+            }
+        }
         if (auto* display = member(arguments, "display"))
             request.display = string(display, 256);
         if (auto* view = member(arguments, "view"))

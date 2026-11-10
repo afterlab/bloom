@@ -298,6 +298,11 @@ yyjson_mut_val* viewerQuery(McpServerCore::State& core, Json& out, McpCall& call
     auto* result = out.object();
     out.set(result, "revision", out.number(call.session.snapshot().revision().value()));
     out.set(result, "available", out.boolean(state.available));
+    auto* level = out.array();
+    for (const auto group : state.level)
+        out.append(level, out.number(group.value()));
+    out.set(result, "level", level);
+    out.set(result, "points", state.points ? out.number(state.points->value()) : out.null());
     if (!state.available)
         return result;
     out.set(result, "display", out.text(state.display));

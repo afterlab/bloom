@@ -249,6 +249,11 @@ struct McpViewerRequest final {
     // Present with a value: evaluate only that region (clipped to the composition frame); present
     // and empty: clear the region of interest.
     std::optional<std::optional<McpViewerRegion>> regionOfInterest;
+    // #645 drilling: the entered group layers of the active composition, outermost first (empty:
+    // the top level), and a shape layer of that level whose points are edited. Session state, like
+    // a double-click in the Viewer: never saved, never undone. `points` alone keeps the groups.
+    std::optional<std::vector<document::LayerId>> level;
+    std::optional<std::optional<document::LayerId>> points;
 };
 
 // ---- Preferences (preferences.get, preferences.set)
@@ -348,6 +353,10 @@ struct McpViewerState final {
     bool transparencyGrid = false;
     bool look = false;
     std::optional<McpViewerRegion> regionOfInterest;
+    // #645: the Viewer's drill level (entered groups, outermost first) and the shape in point
+    // editing. Reported even when no Viewer is showing.
+    std::vector<document::LayerId> level;
+    std::optional<document::LayerId> points;
 };
 
 // How the last RAM Preview fill ended.
