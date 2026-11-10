@@ -758,8 +758,10 @@ void writeScaled(Composition& work, ExpansionTarget& target, std::vector<ScaledP
 // ---- The layers and groups above an artwork's layer (VectorArtworkOversampledGroup) ----
 
 // The largest and smallest output scale a chain of layers reaches over its animation, whether any
-// of them turns, and whether all pivot on the frame (a content pivot's matrix follows its content's
-// bounds, so nothing beneath it can be clipped to the frame).
+// of them turns, and whether the window can be clipped through all of them: each pivots on the
+// frame, or (#642 B4) is a content pivot above the oversampled picture whose input's bounds the
+// runtime works out before the frame is drawn (contentPivotClips). Any other content pivot's
+// matrix follows its content's bounds, so nothing beneath it can be clipped to the frame.
 struct Span final {
     double largest = 1.0;
     double smallest = 1.0;
@@ -800,9 +802,10 @@ struct Span final {
     return std::nullopt;
 }
 
-// `layer` and its parents; nothing when a scale is driven by the graph.
+// `layer` and its parents; nothing when a scale is driven by the graph. `contentPivotClips`: a
+// content pivot on `first` (not on its parents) still clips (#642 B4).
 [[nodiscard]] std::optional<Span> chainSpan(const Composition& work, const LayerOutputBoundary& first,
-                                            const OverrideLookup& override) {
+                                            const OverrideLookup& override, const bool contentPivotClips = false) {
     Span span;
     std::unordered_set<LayerId> seen;
     for (const auto* layer = &first; layer != nullptr;
@@ -813,7 +816,8 @@ struct Span final {
         const auto smallest = scaleFloor(work, *layer, override);
         if (!largest || !smallest)
             return std::nullopt;
-        span *= Span{*largest, *smallest, turns(work, *layer, override), layer->pivot == LayerPivot::Frame};
+        const bool clips = layer->pivot == LayerPivot::Frame || (contentPivotClips && layer == &first);
+        span *= Span{*largest, *smallest, turns(work, *layer, override), clips};
     }
     return span;
 }
@@ -990,15 +994,20 @@ struct GroupLevel final {
 // Draws every group above the artwork's layer (reached by `first`, the hop from that layer to its
 // Merge) at the output scale its picture needs (VectorArtworkOversampledGroup) and returns what is
 // above the layer. A group that cannot be is named in `groupsResampled`; nothing above it counts in
-// the band of what is below it.
+// the band of what is below it. `pivotsClip`: whether a content pivot reading the artwork's picture
+// still clips it (contentPivotClips).
 [[nodiscard]] Above oversampleGroups(Composition& work, ExpansionTarget& target, const Hop& first,
-                                     const OverrideLookup& override, VectorArtworkExpansion& result) {
+                                     const OverrideLookup& override, const bool pivotsClip,
+                                     VectorArtworkExpansion& result) {
     Above above;
     // The Layer nodes after the artwork's layer (the first of `first.layers`) resample its picture
     // in one resample with it.
     for (std::size_t i = 1; i < first.layers.size(); ++i) {
         const auto* layer = work.graph().findLayer(first.layers[i]);
-        const auto span = layer ? chainSpan(work, *layer, override) : std::nullopt;
+        // #642 B4: each reads the layer before it, a Layer Output whose bounds the runtime works
+        // out before the frame is drawn when the artwork's own picture's are, so a content pivot
+        // here clips then too.
+        const auto span = layer ? chainSpan(work, *layer, override, pivotsClip) : std::nullopt;
         if (!span) {
             // Its scale is not known: count nothing above, and clip nothing.
             return Above{Span{}, 0.0, true, false};
@@ -1177,9 +1186,33 @@ struct GroupLevel final {
     return carrierId;
 }
 
+// #642 B4: whether a content pivot on the artwork's layer still clips its picture to the window the
+// frame shows. It does when the runtime can work out the bounds it pivots on before the frame is
+// drawn (runtime::detail::UnclippedPictures): every source the artwork is made of but text (whose
+// bounds are its rasterized words), and between the artwork and the layer the blurs, the colour
+// nodes and the layer's masks, not a Glow or a Drop Shadow (their pictures' bounds follow a
+// Transform 2D and a directional pass). Otherwise the whole picture is drawn, within the budget.
+[[nodiscard]] bool contentPivotClips(const Composition& work, const std::vector<NodeId>& artworkNodes,
+                                     const std::vector<NodeId>& between) {
+    const auto& graph = work.graph();
+    for (const auto id : artworkNodes)
+        if (const auto* node = graph.findNode(id); node != nullptr && node->typeId == kTextSourceNodeType)
+            return false;
+    for (const auto id : between) {
+        const auto* node = graph.findNode(id);
+        if (node == nullptr)
+            return false;
+        if (nodeMuted(work.nodeLayout(), id))
+            continue;
+        if (node->typeId == kGlowNodeType || node->typeId == kDropShadowNodeType)
+            return false;
+    }
+    return true;
+}
+
 // The span of the artwork's own layer and its parents, or why its largest scale is not known.
 [[nodiscard]] std::variant<Span, std::string> holdingSpan(const Composition& work, const LayerOutputBoundary& holding,
-                                                          const OverrideLookup& override) {
+                                                          const OverrideLookup& override, const bool contentPivotClips) {
     Span span;
     std::unordered_set<LayerId> seen;
     for (const auto* layer = &holding; layer != nullptr;
@@ -1193,7 +1226,8 @@ struct GroupLevel final {
                                                    "is not known when compiling"
                                                  : "a parent's scale is driven by the graph, so the layer's largest "
                                                    "scale is not known when compiling");
-        span *= Span{*largest, *smallest, turns(work, *layer, override), layer->pivot == LayerPivot::Frame};
+        const bool clips = layer->pivot == LayerPivot::Frame || (contentPivotClips && layer == &holding);
+        span *= Span{*largest, *smallest, turns(work, *layer, override), clips};
     }
     return span;
 }
@@ -1277,7 +1311,8 @@ struct GroupLevel final {
                        reader.layer->masks.empty() && reader.layer->timing.isIdentityMapping() &&
                        layerParameterBinding(graph, *reader.layer, kTimeRemapParameterRole) == nullptr;
     // What can stop the layer being oversampled is known before anything above it changes.
-    auto own = holdingSpan(work, *reader.layer, override);
+    const bool pivotsClip = contentPivotClips(work, artworkNodes, reader.between);
+    auto own = holdingSpan(work, *reader.layer, override, pivotsClip);
     if (auto* refusal = std::get_if<std::string>(&own)) {
         if (plain)
             return composeLayerTransform(work, target, reader.layer, root, artworkNodes, result);
@@ -1301,7 +1336,7 @@ struct GroupLevel final {
     }
     // Where nothing above it is known, its own band only, and no clip.
     const Above above =
-        walked ? oversampleGroups(work, target, first, override, result) : Above{Span{}, 0.0, true, false};
+        walked ? oversampleGroups(work, target, first, override, pivotsClip, result) : Above{Span{}, 0.0, true, false};
     // The groups may have added layers: find the layer again.
     reader.layer = work.graph().findLayer(layerId);
     if (reader.layer == nullptr)

@@ -144,12 +144,35 @@ as the stored one is (`scaledParameters`).
 operation's window is clipped to what its readers can show of the frame (`detail::visibleSupportWindows`,
 "What a layer draws" below), through the holding layer's matrix (the larger picture's pixels map to
 the frame through it), its masks (they multiply their content pixel by pixel), the nodes between
-(a transparent-edge blur widens the window by its taps, a glow by its keys, octaves and streaks, a
-drop shadow by its move) and the groups above. A layer scaled 8x in a 3840 x 2160 composition draws
-about one frame of pixels at 8x, not the 64 frames of the whole picture. The CPU reference and the
-GPU preparation take the same windows, so the pixels are the same on both routes. The window is not
-clipped (the whole picture is drawn) under a content-pivot layer, whose matrix follows its content's
-bounds, or through a blur that repeats its picture's edge (Clamp), whose edge is its window's.
+(a transparent-edge blur widens the window by its taps, each axis by its own radius when the axes
+are separate, a glow by its keys, octaves and streaks, a drop shadow by its move) and the groups
+above. A layer scaled 8x in a 3840 x 2160 composition draws about one frame of pixels at 8x, not the
+64 frames of the whole picture. The CPU reference and the GPU preparation take the same windows, so
+the pixels are the same on both routes. The window is not clipped (the whole picture is drawn)
+through a blur that repeats its picture's edge (Clamp), whose edge is its window's.
+
+A **content-pivot layer** (#642 B4) turns and scales about its content's centre: the centre of the
+bounds its input publishes, and an image effect (a mask, a blur) publishes its data window as its
+bounds, so a window clipped to the frame would move the pivot with the frame. Above an oversampled
+picture its pivot is instead taken from the bounds its input publishes with nothing clipped, worked
+out for the frame before it is drawn, without a pixel (`detail::UnclippedPictures`,
+src/runtime/visible_support.hpp, by the same rules and calls the CPU reference makes: a shape's
+flattened path bounds and window, a solid's size, a Layer Output through its matrix, a Merge's
+union, the masks, track mattes, blurs and colour kernels). Its window is then clipped like a frame
+pivot's, and the pivot is exactly where it is when the whole picture is drawn, so a pan neither
+moves it nor compiles anything. The CPU reference and the GPU preparation take the same pivot. Where
+those bounds are not known before the frame is drawn (the artwork has text, whose bounds are its
+rasterized words; a Glow or a Drop Shadow between, whose pictures' bounds follow a Transform 2D and a
+directional pass; anything else the rules do not cover), the expansion budgets the whole picture and
+the runtime draws it whole, as before. A content-pivot layer that is not above an oversampled
+picture keeps drawing its input whole.
+
+Over a mask or a blur, the content pivot is the centre of that kernel's data window, which carries
+its input's window margins in the input's own pixels: the oversampled picture's margins are pixels of
+the larger picture, so its pivot can sit a pixel or two of that picture (a fraction of a composition
+pixel) from the pivot of a pre-composition baked `s` times larger (1.5 of the 4x picture's pixels in
+`contentPivotDrawsItsWindow`). That is the runtime's rule for every image effect's bounds and
+predates B4; it is named here, not changed.
 
 **The pixel budget.** The band is halved while its window over the whole animation is estimated
 past `kVectorArtworkMaxOversampledPixels` (8192 x 4096 full-resolution pixels, 512 MiB of float
@@ -175,7 +198,10 @@ back with a content scale. The artwork inside is then drawn at the product: an i
 scaled 3x is drawn at 4x, the group at 4x. A layer drawn into an oversampled group publishes the
 bounds it would have at 1 (`publishOutputScaledBounds`, run by the CPU reference and the GPU
 preparation alike), so the Viewer's boxes are where they were. A sibling raster in the group is
-resampled twice (into the larger group and back), as a scaled pre-composition would. Named when it
+resampled twice (into the larger group and back), as a scaled pre-composition would. It is left so:
+drawing it once would mean compositing it into the group's picture at a different scale from the
+artwork it blends with (a Merge composites every entry in one pixel grid), or moving it out of the
+group, which changes what it blends with; neither is a small change (#642 B4 looked). Named when it
 cannot be (`groupsResampled`, by the Merge; the artwork is then drawn at the scale up to that group,
 and the group's reader resamples its picture): an Adjustment entry (its nodes would apply to the
 group's picture at the composition's scale), a Layer node shared with another Merge entry, a layer
@@ -209,10 +235,13 @@ row where the curve's tangent runs along the sample grid (a circle's leftmost po
 route shows the same at 4x.
 
 Cost (a suspicion from the code, not measured): the oversampled picture's drawn window is about the
-frame's preimage times `s`², so its memory follows the output's size within the pixel budget; a
-content-pivot layer's window is the whole picture, bounded only by the budget's estimate; the
-estimate takes the fitted frame or the file's viewport as the artwork's extent, not its drawn
-bounds, so a small artwork in a large viewport is budgeted as the whole viewport.
+frame's preimage times `s`², so its memory follows the output's size within the pixel budget, a
+content-pivot layer's too; through text, a Glow or a Drop Shadow a content-pivot layer's window is
+the whole picture, bounded only by the budget's estimate. Working out a content pivot's unclipped
+bounds draws no pixel but flattens every shape's path of the picture once more per frame (the
+frame's own drawing flattens them again), so a file of many shapes under a content pivot pays that
+twice. The estimate takes the fitted frame or the file's viewport as the artwork's extent, not its
+drawn bounds, so a small artwork in a large viewport is budgeted as the whole viewport.
 
 #### Compiling a Vector Artwork layer
 
@@ -271,8 +300,18 @@ on a layer of a very large file (which compiles each override) repeats that work
   with far more edge pixels; the content-pivot layer's bounds are the resampled layer's.
   `namedWhenItCannotBeSharp` names a vignette between, a driven blur radius and a driven scale,
   draws a masked layer scaled 6x at 4K at 8x, caps 100x at 64x, names the pixel budget for a
-  whole-frame artwork keyed from 1x to 8x at 4K (2x) and for a content pivot scaled 6x at 4K (2x),
-  halves a blur radius of 100 to 2x, and leaves a 0.8x layer alone. `oversampledCacheIdentity`: one
+  whole-frame artwork keyed from 1x to 8x at 4K (2x), draws a whole-frame content pivot scaled 6x at
+  4K at 8x (B4) and, with a Drop Shadow between (its whole picture drawn), resamples it with the
+  pixel budget named, halves a blur radius of 100 to 2x, and leaves a 0.8x layer alone.
+  `contentPivotDrawsItsWindow` (B4): a content-pivot Layer node scaled 3x (4x) and turned, panned so
+  about a third of the picture leaves the frame, equals its scaled pre-composition up to two coverage
+  samples on curved edges where the resampled picture differs on far more pixels, plain and masked
+  with a blur between (the pre-composition's pivot matched, above); its box and pivot are the same
+  panned as with all of it shown, where they equal its input's published bounds exactly, while its
+  input is drawn in a smaller window; fitted and scaled 5x (8x), a 64 MiB request below the whole 8x
+  picture (127 MB) renders the frame, and the same request is refused with a Drop Shadow between; a
+  pan compiles once, a frame showing another window draws it and a frame shown again hits; a
+  cancelled evaluation publishes nothing. `oversampledCacheIdentity`: one
   plan and cache hits over the frames of a keyed layer, a key in the same band hits, one past it
   draws at 8x, a scale override reaches the band and a mask path override is multiplied,
   cancellation and the pixel budget. Groups (`sharpInsideScaledGroups`, `groupBoundsAndSiblings`,
@@ -300,15 +339,23 @@ on a layer of a very large file (which compiles each override) repeats that work
   16/9 of one (the group at 4x) where the whole picture would be 112 to 448 million pixels, and a
   384 x 216 crop around the circle's edge equals the scaled pre-composition on the device (exact at
   4x and in the group; at 8x 18 of 138 edge pixels differ, by at most one column of coverage
-  samples) where the resampled picture differs on 850 to 2,200 pixels; phase admission, refusal and
+  samples) where the resampled picture differs on 850 to 2,200 pixels. A content-pivot Layer node
+  (B4) with a blur between, masked, keyed from 1x to 3x (4x), turned and panned matches the CPU
+  reference cold and warm with its bounds, 512 x 288 over frames 0 to 2, its box the same at every
+  frame and the largest window at the panned frame about a third of the whole 4x picture; at
+  3840 x 2160 one scaled 4x and 8x and turned 12 degrees draws at most one frame of pixels where the
+  whole picture would be 112 and 448 million, and a crop around the circle's edge equals the scaled
+  pre-composition on the device (exact at 4x; at 8x 54 of 347 edge pixels differ, by at most 0.17)
+  where the resampled picture differs on 1,400 to 2,200 pixels. Phase admission, refusal and
   retirement, a cancelled preparation and run, and the executor's request budget.
   `--require-device` fails without a device.
 - `bloom.ui.viewer_export_svg_artwork` runs every route for the one layer too (Viewer frames from the
   expected route, CPU route equal to GPU route, RAM preview cold and warm, still, range and movie
   with their provenance), and on the GPU route exports 1920 x 1080 and 3840 x 2160 stills from the
   device with no CPU reference frame, of the plain layer and of one with a blur between (drawn at its
-  output scale), and at 3840 x 2160 of one masked and scaled 8x (drawn at 8x) and of one in a group
-  scaled 3x (drawn at 4x). It found that the Viewer's and the export's scene caches
+  output scale), and at 3840 x 2160 of one masked and scaled 8x (drawn at 8x), of one in a group
+  scaled 3x (drawn at 4x) and of one read by a content-pivot Layer node scaled 6x and turned (drawn
+  at 8x, B4), each one device frame and no CPU reference frame. It found that the Viewer's and the export's scene caches
   together filled the process's image slots once every frame of the keyed layer drew new images;
   the caches now share one bound ([GPU backend](gpu-backend.md), "The scene cache keeps stacks").
 
@@ -457,8 +504,10 @@ by its taps. A layer's masks, the grades, keys and channel moves (Levels, Curves
 Grade, Colorize, Color Tool, Luma Key, Channel Select and Combine, Highlight Roll-Off, Alpha
 Association) read each input only where they are read; a Transform 2D that only moves (a Drop
 Shadow's offset) shifts the window by its move and widens it by its resample's taps; a directional
-(Glow Streak) pass widens it by its four taps' reach. Anything else (a content-pivot layer's input, a
-field image, any other kernel) asks for everything, so nothing it reads is clipped. A layer whose track matte is a plain alpha or luma
+(Glow Streak) pass widens it by its four taps' reach. A content-pivot layer above an oversampled
+Vector Artwork picture maps it back through its matrix too, its pivot taken from the bounds its input
+publishes with nothing clipped ("Only the window the frame shows is drawn" above). Anything else
+(any other content-pivot layer's input, a field image, any other kernel) asks for everything, so nothing it reads is clipped. A layer whose track matte is a plain alpha or luma
 multiply is also clipped to the matte's window, since nothing outside it survives the matte
 (`detail::visibleSupportWindows` and `detail::matteBoundedLayers`, src/runtime/visible_support.hpp,
 used by the CPU reference's layer arm and by `CpuGpuSceneBuilder`). Before, an imported elliptical

@@ -2641,9 +2641,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         // Layer Output is drawn only there (and, under an Alpha or Luma track matte that reads it
         // alone, only within the matte's image), and that window is the lattice its resample is
         // reconstructed over, so the two routes keep producing the same pixels.
+        // #642 B4: a content-pivot layer above an oversampled picture pivots on its input's bounds
+        // with nothing clipped (contentPivots), so only what the frame shows of its picture is
+        // drawn, as for a frame pivot.
+        std::vector<std::optional<ContentBounds>> contentPivots;
         const auto visible = detail::visibleSupportWindows(
             *plan, frameResolved, request.time, request.output.value(),
-            frameResolved.imageDescriptor.displayWindow());
+            frameResolved.imageDescriptor.displayWindow(), &contentPivots, cancellation);
         const auto matteBound = detail::matteBoundedLayers(*plan, visible);
         const auto matteWindowOf =
             [&](const std::size_t index) -> std::optional<render::ImageWindow> {
@@ -3403,7 +3407,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                    "Layer transform could not be resolved", {}, operationSubject));
                 // #502: a frame pivot is the composition frame's centre. #642: a content scale's
                 // input is that many times larger; its pivot is the picture's at the frame's scale.
-                const auto inputPivot = bounds[layer->input.value()].output.pivot();
+                const auto inputPivot = (contentPivots[index] ? *contentPivots[index]
+                                                              : bounds[layer->input.value()].output)
+                                            .pivot();
                 const auto centre =
                     layer->framePivot
                         ? document::Vec2d{static_cast<double>(plan->format().width()) / 2.0,
@@ -4953,7 +4959,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             auto& geometry = bounds[index];
                             geometry.layerId = layer.layerId;
-                            geometry.local = bounds[layer.input.value()].output;
+                            // #642 B4: a clipped content pivot's input bounds are the unclipped
+                            // frame's (visibleSupportWindows), as its matrix's pivot is.
+                            geometry.local = contentPivots[index]
+                                                 ? *contentPivots[index]
+                                                 : bounds[layer.input.value()].output;
                             if (geometry.local.empty())
                                 return;
 

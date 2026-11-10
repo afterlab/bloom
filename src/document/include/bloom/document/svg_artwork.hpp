@@ -286,9 +286,10 @@ struct VectorArtworkComposedLayer final {
 // kVectorArtworkMaxOversampledPixels, 8192 x 4096 full-resolution pixels (512 MiB of float RGBA):
 // a layer scaled 8x in a 3840 x 2160 composition draws about one frame of pixels at 8x, while a
 // whole-frame artwork keyed from 1x to 8x would need sixty-four frames at its first key and is drawn
-// at 2x, with `limited` naming the budget. Where the window cannot be clipped (a content pivot,
-// whose matrix follows its content's bounds; a node between with no bounded support) the estimate
-// is the whole picture.
+// at 2x, with `limited` naming the budget. A content pivot is clipped too (#642 B4): the runtime
+// works out the bounds it pivots on before the frame is drawn. Where the window cannot be clipped
+// (a content pivot over text or through a Glow or a Drop Shadow, whose bounds are known only once
+// drawn; a node between with no bounded support) the estimate is the whole picture.
 inline constexpr double kVectorArtworkMaxOversample = 64.0;
 inline constexpr double kVectorArtworkMaxOversampledPixels = 8192.0 * 4096.0;
 

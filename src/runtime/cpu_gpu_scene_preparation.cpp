@@ -556,8 +556,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     // #343: what of each image the frame can show, exactly as the CPU reference computes it.
-    const auto visible = detail::visibleSupportWindows(*plan, frameResolved, request.time,
-                                                       request.output.value(), fullDisplayWindow);
+    // #642 B4: a content-pivot layer above an oversampled picture pivots on its input's bounds with
+    // nothing clipped, exactly as on the CPU reference.
+    std::vector<std::optional<ContentBounds>> contentPivots;
+    const auto visible =
+        detail::visibleSupportWindows(*plan, frameResolved, request.time, request.output.value(),
+                                      fullDisplayWindow, &contentPivots, cancellation);
     const auto matteBound = detail::matteBoundedLayers(*plan, visible);
 
     // This build's own CPU work counters. They are local to the call -- never shared across
@@ -984,6 +988,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 sourceWindowHolder = *inputWindow;
                 inputLocal = bounds[inputIndexValue].output;
             }
+            // #642 B4: a clipped content pivot's input bounds are the unclipped frame's, as on the
+            // CPU reference.
+            if (contentPivots[index])
+                inputLocal = *contentPivots[index];
             // The CPU evaluator builds the matrix from the input's CONTENT-BOUNDS centre, composes
             // the parent matrix (which retains shear and inherits neither visibility nor opacity),
             // and records it for every layer whether or not the layer is active. The layer's own
