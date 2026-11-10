@@ -397,6 +397,11 @@ constexpr std::array kChoiceSchemas{
     std::string_view("bloom.path.offset-join"),
     std::string_view("bloom.path.combine"),
     std::string_view("bloom.path.stroke-cap"),
+    std::string_view("bloom.path.stroke-stamp"),
+    std::string_view("bloom.path.stamp-align"),
+    // Mask Path and Text Outline name the node they read: a picker, not a number.
+    std::string_view("bloom.path.mask-source"),
+    std::string_view("bloom.path.text-source"),
     std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),
