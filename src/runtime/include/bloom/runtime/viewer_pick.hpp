@@ -22,9 +22,10 @@
 // displayed frame. The answer is the outline the frame draws, not a bounding box: a Path-kind or
 // primitive Shape hits on its fill area (its fill rule) when its fill is on and within half its
 // stroke width plus `tolerance` of its outline when its stroke is on; any other leaf hits on its
-// evaluated bounds quad; a layer with a track matte hits only where its matte also hits (inverted:
-// where it does not); a group hits where any of its non-matte descendants hits. Children are tried
-// topmost first and the first hit wins.
+// evaluated bounds quad; a layer with path masks hits only where they cover half or more (their
+// drawn edge; a matte mask, whose shape is pixels, does not narrow a pick); a layer with a track
+// matte hits only where its matte also hits (inverted: where it does not); a group hits where any of
+// its non-matte descendants hits. Children are tried topmost first and the first hit wins.
 //
 // Placement comes from the displayed frame's own evaluated bounds (one content-to-parent affine
 // per layer, the same frame the artist sees, after transforms, parents and animation); outlines

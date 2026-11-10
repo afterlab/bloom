@@ -6,6 +6,7 @@
 
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
+#include "layer_mask_sampling.hpp"
 #include "shape_geometry.hpp"
 
 #include <algorithm>
@@ -153,8 +154,18 @@ struct ViewerPicker::FrameGeometry final {
     std::shared_ptr<const CompiledCompositionPlan> plan;
     std::optional<detail::ResolvedEvaluation> resolved;
     std::unordered_map<document::NodeId, std::size_t> shapes;
+    // Every compiled path mask by its id, with the operation that draws it (ADR 0028).
+    struct MaskSite final {
+        std::size_t operation = 0;
+        const CompiledLayerMask* mask = nullptr;
+    };
+    std::unordered_map<document::LayerMaskId, MaskSite> masks;
     mutable std::mutex mutex;
     mutable std::unordered_map<document::NodeId, Outline> outlines;
+    // A layer's path masks prepared at the frame, in its content space; null when it has none the
+    // pick can test (matte masks take their shape from pixels, which a pick never evaluates).
+    mutable std::unordered_map<document::LayerId, std::shared_ptr<const detail::PreparedLayerMasks>>
+        layerMasks;
 
     FrameGeometry(document::Snapshot owner) : snapshot(std::move(owner)) {}
 
@@ -213,6 +224,35 @@ struct ViewerPicker::FrameGeometry final {
         const std::lock_guard lock(mutex);
         outlines.emplace(node, result);
         return result;
+    }
+
+    [[nodiscard]] std::shared_ptr<const detail::PreparedLayerMasks>
+    masksOf(const document::LayerOutputBoundary& layer) const {
+        {
+            const std::lock_guard lock(mutex);
+            if (const auto found = layerMasks.find(layer.layerId); found != layerMasks.end())
+                return found->second;
+        }
+        LayerMaskKernel kernel;
+        std::optional<std::size_t> operation;
+        for (const auto& mask : layer.masks) {
+            const auto site = masks.find(mask.id);
+            if (mask.matte || site == masks.end())
+                continue;
+            kernel.masks.push_back(*site->second.mask);
+            operation = site->second.operation;
+        }
+        std::shared_ptr<const detail::PreparedLayerMasks> prepared;
+        if (operation) {
+            const auto clock = plan->operationClock(OperationIndex::fromRaw(*operation));
+            prepared = detail::sampleLayerMasks(kernel, *plan,
+                                                detail::resolvedForClock(*resolved, clock),
+                                                detail::timeForClock(*resolved, time, clock), 1.0,
+                                                1.0);
+        }
+        const std::lock_guard lock(mutex);
+        layerMasks.emplace(layer.layerId, prepared);
+        return prepared;
     }
 };
 
@@ -291,6 +331,18 @@ bool hitEntry(PickContext& context, const document::DrillEntry& entry,
     }
     if (!hit)
         return false;
+    // The layer's masks limit it to where they cover (half coverage or more: the edge drawn).
+    if (const auto* boundary = context.composition.graph().findLayer(entry.layer);
+        boundary != nullptr && !boundary->masks.empty() && local) {
+        const auto masks = context.frame->masksOf(*boundary);
+        const auto inverse = local->then(parent).inverted();
+        if (masks && inverse) {
+            const auto content = inverse->map(point);
+            if (detail::layerMaskCoverage(*masks, static_cast<float>(content.x),
+                                          static_cast<float>(content.y)) < 0.5F)
+                return false;
+        }
+    }
     // A track matte limits the layer to where its matte hits.
     if (const auto* boundary = context.composition.graph().findLayer(entry.layer);
         boundary != nullptr && boundary->trackMatte && boundary->trackMatte->source.isValid()) {
@@ -392,9 +444,16 @@ ViewerPickResult ViewerPicker::pick(const ViewerPickRequest& request,
             built->plan = compiled.plan;
             built->resolved = std::move(*preflight.resolved);
             const auto operations = compiled.plan->operations();
-            for (std::size_t index = 0; index < operations.size(); ++index)
+            for (std::size_t index = 0; index < operations.size(); ++index) {
                 if (const auto* shape = std::get_if<CompiledShape>(&operations[index]))
                     built->shapes.try_emplace(shape->sourceNodeId, index);
+                if (const auto* effect = std::get_if<CompiledImageEffect>(&operations[index]))
+                    if (const auto* kernel = std::get_if<LayerMaskKernel>(&effect->kernel))
+                        for (const auto& mask : kernel->masks)
+                            if (mask.id.isValid())
+                                built->masks.try_emplace(mask.id,
+                                                         FrameGeometry::MaskSite{index, &mask});
+            }
             frame = built;
             const std::lock_guard lock(mutex_);
             frame_ = frame;
