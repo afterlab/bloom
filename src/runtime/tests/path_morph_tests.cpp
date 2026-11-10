@@ -12,8 +12,14 @@
 #include "../path_resample.hpp"
 
 #include <bloom/document/path_value.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -407,6 +413,131 @@ void limits(Expectations& expectations) {
                         "but its ends are still the values themselves");
 }
 
+// A genuinely cancelled token, taken from a scheduler task that is cancelled while it runs.
+[[nodiscard]] runtime::CancellationToken cancelledToken() {
+    using namespace runtime;
+    TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    TaskScheduler scheduler(config);
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    CancellationToken token;
+    auto submission = scheduler.submit<void>(
+        TaskRequest("path morph cancel token",
+                    {.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(95)}),
+        [&](TaskContext& context) {
+            {
+                std::lock_guard lock(mutex);
+                token = context.cancellation();
+                entered = true;
+            }
+            condition.notify_all();
+            std::unique_lock lock(mutex);
+            condition.wait(lock, [&] { return release; });
+            return TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted())
+        throw std::logic_error("cancel token task was refused");
+    {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [&] { return entered; });
+    }
+    submission.handle.cancel();
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    condition.notify_all();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!submission.handle.tryTakeResult().has_value() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return token;
+}
+
+// Cancellation reaches the alignment: a token that fired answers Cancelled with nothing kept, in the
+// pairing of many contours and in the start search of long ones; and a token that fires while an
+// alignment is running ends that very alignment (the loop below can only finish by the alignment
+// itself answering Cancelled).
+void cancellation(Expectations& expectations) {
+    const auto fired = cancelledToken();
+    morph::AlignOptions options;
+    options.cancellation = &fired;
+
+    const auto small = valueOf({regular(0, 0, 50, 8)});
+    const auto other = valueOf({regular(0, 0, 80, 12)});
+    const auto few = morph::alignPaths(small, other, options);
+    expectations.expect(few.status == morph::AlignStatus::Cancelled && few.from.contours.empty() &&
+                            few.to.contours.empty(),
+                        "a cancelled alignment of two shapes answers Cancelled and keeps no contour");
+
+    std::vector<PathContour> manyFrom, manyTo;
+    for (int index = 0; index < 120; ++index) {
+        manyFrom.push_back(regular(index * 3.0, 0, 5, 6));
+        manyTo.push_back(regular(index * 3.0 + 1.0, 4, 6, 9));
+    }
+    const auto many = morph::alignPaths(valueOf(manyFrom), valueOf(manyTo), options);
+    expectations.expect(many.status == morph::AlignStatus::Cancelled && many.from.contours.empty(),
+                        "a cancelled alignment of 120 pairs answers Cancelled and keeps nothing");
+
+    const auto longFrom = valueOf({regular(0, 0, 100, 1500)});
+    const auto longTo = valueOf({regular(0, 0, 120, 1600)});
+    const auto checked = morph::morphPathsChecked(longFrom, longTo, 0.5, options);
+    expectations.expect(checked.status == morph::AlignStatus::Cancelled && checked.value.contours.empty(),
+                        "a cancelled morph of two 1500-anchor contours answers Cancelled and no value");
+    expectations.expect(!morph::morphPaths(small, other, 0.5, options).has_value(),
+                        "morphPaths answers nothing for a cancelled alignment");
+    expectations.expect(morph::morphPaths(small, other, 0.0, options) == small &&
+                            morph::morphPaths(small, other, 1.0, options) == other,
+                        "the ends need no alignment, so a cancelled token does not touch them");
+    expectations.expect(morph::alignPaths(small, other).status == morph::AlignStatus::Ok,
+                        "with no token the same inputs align");
+
+    // A token that fires inside a running alignment.
+    using namespace runtime;
+    TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    TaskScheduler scheduler(config);
+    std::atomic<bool> running{false};
+    std::atomic<int> rounds{0};
+    std::atomic<bool> endedByCancellation{false};
+    auto submission = scheduler.submit<void>(
+        TaskRequest("path morph alignment cancel",
+                    {.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(94)}),
+        [&](TaskContext& context) {
+            const auto token = context.cancellation();
+            morph::AlignOptions live;
+            live.cancellation = &token;
+            running = true;
+            while (rounds < 20000) {
+                const auto answer = morph::alignPaths(longFrom, longTo, live);
+                ++rounds;
+                if (answer.status == morph::AlignStatus::Cancelled) {
+                    endedByCancellation = answer.from.contours.empty() && answer.to.contours.empty();
+                    break;
+                }
+            }
+            return TaskResult<void>::succeeded();
+        });
+    expectations.expect(submission.accepted(), "the alignment task is accepted");
+    if (!submission.accepted())
+        return;
+    const auto start = std::chrono::steady_clock::now();
+    while (!running && std::chrono::steady_clock::now() - start < std::chrono::seconds(5))
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    submission.handle.cancel();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!submission.handle.tryTakeResult().has_value() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    expectations.expect(endedByCancellation.load(),
+                        "a token that fires while alignments run ends one of them with Cancelled and nothing kept");
+}
+
 } // namespace
 
 int main() {
@@ -418,6 +549,7 @@ int main() {
     groupKeys(expectations);
     identicalStructure(expectations);
     limits(expectations);
+    cancellation(expectations);
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " path morph expectation(s) failed\n";
         return EXIT_FAILURE;

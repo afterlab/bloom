@@ -218,14 +218,21 @@ void fft(std::vector<std::complex<double>>& values, const bool inverse) {
             value /= static_cast<double>(size);
 }
 
+[[nodiscard]] bool cancelled(const CancellationToken* cancellation) noexcept {
+    return cancellation != nullptr && cancellation->isCancellationRequested();
+}
+
 // cost[k] = sum over i of |a[i] - b[(i + k) mod n]|^2, for every shift k (a and b both n long).
-[[nodiscard]] std::vector<double> shiftCosts(std::span<const Vec2d> a, std::span<const Vec2d> b) {
+[[nodiscard]] std::vector<double> shiftCosts(std::span<const Vec2d> a, std::span<const Vec2d> b,
+                                             const CancellationToken* cancellation) {
     const std::size_t n = a.size();
     std::vector<double> costs(n, 0.0);
     if (n == 0)
         return costs;
     if (n <= kExactShiftLimit) {
         for (std::size_t shift = 0; shift < n; ++shift) {
+            if (cancelled(cancellation))
+                return costs;
             double sum = 0.0;
             for (std::size_t index = 0; index < n; ++index)
                 sum += squared(a[index], b[(index + shift) % n]);
@@ -259,6 +266,8 @@ void fft(std::vector<std::complex<double>>& values, const bool inverse) {
         left.resize(size);
         right.resize(size);
     }
+    if (cancelled(cancellation))
+        return costs;
     fft(left, false);
     fft(right, false);
     for (std::size_t index = 0; index < size; ++index)
@@ -277,13 +286,14 @@ struct Choice final {
 
 // Two closed contours of the same count: the start and direction of `to` that make the summed
 // squared distance between corresponding anchors least (forward first, then the earliest start).
-[[nodiscard]] PathContour alignClosed(const PathContour& from, const PathContour& to) {
+[[nodiscard]] PathContour alignClosed(const PathContour& from, const PathContour& to,
+                                      const CancellationToken* cancellation) {
     const auto n = from.anchors.size();
     const auto a = pointsOf(from, n);
     Choice best;
     for (const bool reverse : {false, true}) {
         const auto candidate = reverse ? reversed(to) : to;
-        const auto costs = shiftCosts(a, pointsOf(candidate, n));
+        const auto costs = shiftCosts(a, pointsOf(candidate, n), cancellation);
         for (std::size_t shift = 0; shift < n; ++shift)
             if (costs[shift] < best.cost)
                 best = {costs[shift], shift, reverse};
@@ -293,7 +303,8 @@ struct Choice final {
 
 // A closed contour of m anchors against an open one of m + 1: where to cut the closed one open (and
 // in which direction) so its anchors lie nearest the open one's, the cut repeated at the end.
-[[nodiscard]] PathContour cutNearest(const PathContour& closed, const PathContour& open) {
+[[nodiscard]] PathContour cutNearest(const PathContour& closed, const PathContour& open,
+                                     const CancellationToken* cancellation) {
     const auto m = closed.anchors.size();
     const auto a = pointsOf(open, m);
     const auto end = open.anchors.back().point;
@@ -301,7 +312,7 @@ struct Choice final {
     for (const bool reverse : {false, true}) {
         const auto candidate = reverse ? reversed(closed) : closed;
         const auto b = pointsOf(candidate, m);
-        auto costs = shiftCosts(a, b);
+        auto costs = shiftCosts(a, b, cancellation);
         for (std::size_t shift = 0; shift < m; ++shift) {
             const double cost = costs[shift] + squared(end, b[shift]);
             if (cost < best.cost)
@@ -313,13 +324,14 @@ struct Choice final {
 
 // Two contours with the same anchor count and closed flag that draw `from` and `to`.
 [[nodiscard]] std::pair<PathContour, PathContour> alignContours(const PathContour& from,
-                                                                const PathContour& to) {
+                                                                const PathContour& to,
+                                                                const CancellationToken* cancellation) {
     if (from.closed == to.closed) {
         const auto count = std::max(from.anchors.size(), to.anchors.size());
         auto a = subdivided(from, count);
         auto b = subdivided(to, count);
         if (from.closed) {
-            auto started = alignClosed(a, b);
+            auto started = alignClosed(a, b, cancellation);
             return {std::move(a), std::move(started)};
         }
         // Open: the ends stay ends; `to` turns round when its ends lie nearer the opposite ones.
@@ -336,7 +348,7 @@ struct Choice final {
     const auto& closed = from.closed ? from : to;
     const auto count = std::max(open.anchors.size(), closed.anchors.size() + 1);
     auto o = subdivided(open, count);
-    auto c = cutNearest(subdivided(closed, count - 1), o);
+    auto c = cutNearest(subdivided(closed, count - 1), o, cancellation);
     if (from.closed)
         return {std::move(c), std::move(o)};
     return {std::move(o), std::move(c)};
@@ -345,7 +357,8 @@ struct Choice final {
 // The pairs of one set of contours (indices into `from` and `to`), greedily by cost, or by order.
 void pairSet(const std::vector<std::size_t>& fromSet, const std::vector<std::size_t>& toSet,
              const std::vector<Shape>& fromShapes, const std::vector<Shape>& toShapes,
-             const Pairing pairing, std::vector<std::optional<std::size_t>>& partner) {
+             const Pairing pairing, std::vector<std::optional<std::size_t>>& partner,
+             const CancellationToken* cancellation) {
     if (pairing == Pairing::ByOrder || fromSet.size() * toSet.size() > kMaximumGeometricPairs) {
         for (std::size_t index = 0; index < std::min(fromSet.size(), toSet.size()); ++index)
             partner[fromSet[index]] = toSet[index];
@@ -353,9 +366,14 @@ void pairSet(const std::vector<std::size_t>& fromSet, const std::vector<std::siz
     }
     std::vector<std::tuple<double, std::size_t, std::size_t>> candidates;
     candidates.reserve(fromSet.size() * toSet.size());
-    for (const auto i : fromSet)
+    for (const auto i : fromSet) {
+        if (cancelled(cancellation))
+            return;
         for (const auto j : toSet)
             candidates.emplace_back(pairCost(fromShapes[i], toShapes[j]), i, j);
+    }
+    if (cancelled(cancellation))
+        return;
     std::ranges::sort(candidates);
     std::vector<bool> fromTaken(fromShapes.size(), false), toTaken(toShapes.size(), false);
     for (const auto& [cost, i, j] : candidates) {
@@ -405,10 +423,16 @@ Alignment alignPaths(const PathValue& from, const PathValue& to, const AlignOpti
     for (std::size_t index = 0; index < m; ++index)
         if (!to.contours[index].anchors.empty())
             toSets[toGroup[index].value_or(matches.size())].push_back(index);
-    for (std::size_t set = 0; set < fromSets.size(); ++set)
-        pairSet(fromSets[set], toSets[set], fromShapes, toShapes, options.pairing, partner);
-
     Alignment result;
+    for (std::size_t set = 0; set < fromSets.size(); ++set) {
+        pairSet(fromSets[set], toSets[set], fromShapes, toShapes, options.pairing, partner,
+                options.cancellation);
+        if (cancelled(options.cancellation)) {
+            result.status = AlignStatus::Cancelled;
+            return result;
+        }
+    }
+
     std::vector<bool> toPaired(m, false);
     for (const auto& each : partner)
         if (each)
@@ -459,7 +483,22 @@ Alignment alignPaths(const PathValue& from, const PathValue& to, const AlignOpti
     for (std::size_t index = 0; index < n; ++index) {
         const auto& a = from.contours[index];
         if (partner[index]) {
-            auto [first, second] = alignContours(a, to.contours[*partner[index]]);
+            // The costly step: one start and direction search per pair, so cancellation is looked
+            // at before each and the answer after it is discarded if the token fired inside it.
+            if (cancelled(options.cancellation)) {
+                result.status = AlignStatus::Cancelled;
+                result.from = {};
+                result.to = {};
+                return result;
+            }
+            auto [first, second] =
+                alignContours(a, to.contours[*partner[index]], options.cancellation);
+            if (cancelled(options.cancellation)) {
+                result.status = AlignStatus::Cancelled;
+                result.from = {};
+                result.to = {};
+                return result;
+            }
             result.from.contours.push_back(std::move(first));
             result.to.contours.push_back(std::move(second));
         } else {
@@ -509,19 +548,31 @@ PathValue mixAligned(const PathValue& from, const PathValue& to, const double am
     return result;
 }
 
+Morphed morphPathsChecked(const PathValue& from, const PathValue& to, const double amount,
+                          const AlignOptions& options) {
+    Morphed result;
+    if (amount == 0.0 || amount == 1.0) {
+        result.value = amount == 0.0 ? from : to;
+        return result;
+    }
+    const auto aligned = alignPaths(from, to, options);
+    result.status = aligned.status;
+    result.requested = aligned.requested;
+    result.contour = aligned.contour;
+    if (aligned.status != AlignStatus::Ok)
+        return result;
+    result.value = mixAligned(aligned.from, aligned.to, amount);
+    result.value.fillRule = from.fillRule;
+    result.value.groups = from.groups;
+    return result;
+}
+
 std::optional<PathValue> morphPaths(const PathValue& from, const PathValue& to, const double amount,
                                     const AlignOptions& options) {
-    if (amount == 0.0)
-        return from;
-    if (amount == 1.0)
-        return to;
-    const auto aligned = alignPaths(from, to, options);
-    if (aligned.status != AlignStatus::Ok)
+    auto morphed = morphPathsChecked(from, to, amount, options);
+    if (morphed.status != AlignStatus::Ok)
         return std::nullopt;
-    auto value = mixAligned(aligned.from, aligned.to, amount);
-    value.fillRule = from.fillRule;
-    value.groups = from.groups;
-    return value;
+    return std::move(morphed.value);
 }
 
 } // namespace bloom::runtime::pathmorph

@@ -32,6 +32,7 @@
 // below).
 
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/cancellation.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +49,9 @@ enum class Pairing : std::uint8_t {
 
 struct AlignOptions final {
     Pairing pairing = Pairing::ByGroupThenGeometry;
+    // Observed while contours pair and while each pair's start is chosen (the work that grows with
+    // the shapes); a cancelled alignment answers `Cancelled` and keeps nothing.
+    const CancellationToken* cancellation = nullptr;
 };
 
 enum class AlignStatus : std::uint8_t {
@@ -55,6 +59,8 @@ enum class AlignStatus : std::uint8_t {
     // The aligned form would hold more anchors than a contour or a value may, or more contours than
     // a value may: `requested` says how many, `contour` whether the bound is one contour's.
     TooMany,
+    // The cancellation token fired before the alignment finished; no value is answered.
+    Cancelled,
 };
 
 struct Alignment final {
@@ -81,10 +87,22 @@ inline constexpr std::size_t kMaximumGeometricPairs = std::size_t{1} << 20U;
 
 // The morph itself: `from` exactly at amount 0, `to` exactly at amount 1 (not the aligned form),
 // and otherwise the mix of the alignment, carrying `from`'s fill rule, groups and group attributes.
-// Nothing when the alignment is TooMany.
+// Nothing when the alignment is TooMany or Cancelled.
 [[nodiscard]] std::optional<document::PathValue> morphPaths(const document::PathValue& from,
                                                             const document::PathValue& to,
                                                             double amount,
                                                             const AlignOptions& options = {});
+
+// The same, with the reason the answer is missing: the Shape Morph node names a cap it hit and
+// stops quietly when cancelled.
+struct Morphed final {
+    AlignStatus status = AlignStatus::Ok;
+    document::PathValue value;
+    std::size_t requested = 0;
+    bool contour = false;
+};
+[[nodiscard]] Morphed morphPathsChecked(const document::PathValue& from,
+                                        const document::PathValue& to, double amount,
+                                        const AlignOptions& options = {});
 
 } // namespace bloom::runtime::pathmorph
