@@ -550,7 +550,9 @@ const std::string& fieldRasterProgramText() {
             " if (x < 0 || y < 0 || x >= size.x || y >= size.y) { return vec4(0.0); }\n"
             " return imageLoad(bloom_ocio_input, ivec2(x, y));\n"
             "}\n"
-            "precise float bfk_div(float a, float b) { return bloom_ocio_cpu_div(a, b); }\n";
+            "precise float bfk_div(float a, float b) { return bloom_ocio_cpu_div(a, b); }\n"
+            "uint bfk_bits(float f) { return floatBitsToUint(f); }\n"
+            "float bfk_float(uint u) { return uintBitsToFloat(u); }\n";
         out += field::fieldKernelGlsl();
         out += "\nvec4 bloom_field(ivec2 c) { return bfk_dispatch_pixel(0, c.x, c.y); }\n";
         return out;

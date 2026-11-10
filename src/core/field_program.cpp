@@ -3,6 +3,7 @@
 #include "bloom/core/value_primitives.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -79,6 +80,8 @@ struct Context final {
 }
 
 [[maybe_unused]] inline float bfk_div(const float a, const float b) noexcept { return a / b; }
+[[maybe_unused]] inline uint bfk_bits(const float f) noexcept { return std::bit_cast<uint>(f); }
+[[maybe_unused]] inline float bfk_float(const uint u) noexcept { return std::bit_cast<float>(u); }
 
 #define BFK_FN [[maybe_unused]] inline
 #define BFK_P

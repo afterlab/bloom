@@ -54,8 +54,12 @@ interpret the same table. Every intermediate is a `precise` binary32 value; ever
 (exp2, log2, sin, cos, atan2, pow) is Bloom's own polynomial, because a device's built-ins are only
 specified to a few ulps; lattice hashing is integer only (SplitMix64-keyed seeds,
 `core::primitives::hashWord`), and the seed is hashed with the lattice cell, never added to a
-coordinate. The only operation a device may round differently is `sqrt`; the native parity gate
-allows a bounded fraction of boundary pixels for that reason (below).
+coordinate. A device's `sqrt` is also only specified to a few ulps, so `bfk_sqrt` corrects it: from
+the device's root it steps (at most three times) to whichever neighbouring binary32 value squares
+closest to the argument, each residual taken with one `fma`. For every binary32 argument the
+closest square is the correctly rounded root, which the CPU's `sqrt` already gives, so every host
+evaluates the same binary32 operations. The coverage contract's native acceptance holds a Fields
+node to that (2e-6 on colour, exact alpha).
 
 ### Rasters
 
@@ -281,6 +285,7 @@ Nordenstam, "Curl-Noise for Procedural Fluid Flow", SIGGRAPH 2007), divergence-f
   the atlas), sub-samples and the mask distance on a device against the CPU oracle, one resident
   dispatch per pass and no readback, warm reuse with identical pixels and zero dispatches, a
   changed operand re-dispatching. Parity: at most 2% of pixels may differ, each otherwise within
-  1e-4 relative, for the `sqrt` rounding above at cell and step boundaries.
+  1e-4 relative (set when a device's `sqrt` could still round differently at cell and step
+  boundaries; the coverage contract's native acceptance above is the strict gate).
 - `tools/bench/scenario_spec.py`: the heavy-node scenario of a noise-driven Glow on synthetic media
   for cold and warm RAM preview.

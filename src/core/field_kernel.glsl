@@ -10,11 +10,13 @@
 //   bfk_data(BFK_CTXA, i)                 the i-th vec4 of the prepared table
 //   bfk_texel(BFK_CTXA, slot, x, y)       a stored premultiplied texel of image slot `slot`
 //   bfk_div(a, b)                         correctly rounded binary32 division
+//   bfk_bits(f), bfk_float(u)             a float's bits as a uint, and the float of bits
 // The dialect is a common subset: binary32 arithmetic, fma, floor, sqrt, abs, min, max, ldexp,
 // frexp, integer and bit operations. Every intermediate is stored in a precise variable, so no
-// compiler can fuse or reorder it, and every transcendental is Bloom's own polynomial; the only
-// operation a device may round differently from the CPU is sqrt. docs/architecture/fields.md is the
-// specification of every operation here.
+// compiler can fuse or reorder it, and every transcendental is Bloom's own polynomial. sqrt goes
+// through bfk_sqrt, which corrects a device's root to the correctly rounded one, so every host
+// evaluates the same binary32 operations. docs/architecture/fields.md is the specification of every
+// operation here.
 
 const float BFK_HALF_PI = 1.57079637f;
 
@@ -25,9 +27,30 @@ BFK_FN BFK_P float bfk_clamp(float v, float lo, float hi) {
     return r;
 }
 
+// The correctly rounded square root on every host: the host's root, then up to three steps to
+// whichever neighbour squares closest to v (fma gives each residual with one rounding). A device's
+// sqrt is only specified to a few ulps; the CPU's is already correctly rounded, so the steps leave
+// it as it is. Closest square and nearest root agree for every binary32 v (docs/architecture/fields.md).
 BFK_FN BFK_P float bfk_sqrt(float v) {
-    BFK_P float r = sqrt(max(v, 0.0f));
-    return r;
+    BFK_P float x = max(v, 0.0f);
+    BFK_P float s = sqrt(x);
+    if (!(s > 0.0f) || s > 3.0e38f)
+        return s;
+    for (int i = 0; i < 3; ++i) {
+        BFK_P float lo = bfk_float(bfk_bits(s) - 1u);
+        BFK_P float hi = bfk_float(bfk_bits(s) + 1u);
+        BFK_P float rs = abs(fma(s, s, -x));
+        BFK_P float rl = abs(fma(lo, lo, -x));
+        BFK_P float rh = abs(fma(hi, hi, -x));
+        if (rl < rs) {
+            s = lo;
+        } else if (rh < rs) {
+            s = hi;
+        } else {
+            break;
+        }
+    }
+    return s;
 }
 
 // 2^x for x in [-126, 126] (clamped): 2^floor(x) times a degree-9 polynomial of the fraction.
