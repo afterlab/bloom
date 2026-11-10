@@ -3199,6 +3199,43 @@ displayProofRunner(const bool customView) {
                               "under and alone, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #528 Inner Shadow and Inner Glow: the production chains (a coverage blur, an offset, a white
+    // held out by the inverted coverage, two Levels and an Atop or In composite) over the HDR,
+    // partial-alpha gradient inside its own window, in both sources and with the Only switches.
+    add(
+        "node.bloom.inner-shadow", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues shadow;
+            shadow.centred = true;
+            bloom::recipe_test::RecipeValues only;
+            only.centred = true;
+            only.shadowOnly = true;
+            only.direction = 135.0;
+            only.distance = 2.5;
+            only.choke = 0.4;
+            return runRecipes(bloom::recipe_test::Recipe::InnerShadow, {shadow, only}, 171600,
+                              "production Inner Shadow: the blurred, moved coverage held out of "
+                              "a white, choked, coloured and composited Atop and In the input, "
+                              "full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.inner-glow", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues edge;
+            edge.centred = true;
+            edge.tint = {3.0, 1.5, 0.5, 1.0};
+            bloom::recipe_test::RecipeValues centre = edge;
+            centre.centre = true;
+            centre.glowOnly = true;
+            centre.choke = 0.3;
+            return runRecipes(bloom::recipe_test::Recipe::InnerGlow, {edge, centre}, 171800,
+                              "production Inner Glow: the Edge and Centre sources, choked, "
+                              "scaled and composited Atop and In the input, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #506 Glow modes and their two primitives. The primitives run over the HDR, signed,
     // partial-alpha gradient (full frame and ROI); the modes run the production recipe chains.
     add(

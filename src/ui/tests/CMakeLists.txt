@@ -2377,10 +2377,24 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_strict_floating_point(bloom_ui_gpu_node_viewer_evidence_test)
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
                               denoise-temporal blur-separate blur-per-channel transform-skew hue-vibrance
-                              hue-colorize node-group)
+                              hue-colorize node-group tile-mirror-tile tile-mirror-wrap-offset
+                              tile-mirror-mirror tile-mirror-kaleidoscope inner-shadow
+                              inner-glow-edge inner-glow-center)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
+                    ${bloom_ui_gpu_viewer_service_chain_loader_args}
+            LABELS ui gpu viewer node-evidence
+            TIMEOUT 300
+        )
+    endforeach()
+    # #511 and #528: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
+    foreach(scenario IN ITEMS tile-mirror-tile tile-mirror-wrap-offset tile-mirror-mirror
+                              tile-mirror-kaleidoscope inner-shadow inner-glow-edge inner-glow-center)
+        bloom_add_test(
+            NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
+            COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4
                     ${bloom_ui_gpu_viewer_service_chain_loader_args}
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300

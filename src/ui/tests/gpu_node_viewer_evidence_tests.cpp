@@ -13,6 +13,11 @@
 //   * that the resident pixels match the CPU oracle at the sampled coordinates, and
 //   * that a warm identical refresh performs no new native work.
 //
+// With --ram <frames> the same composition also runs a cold and then a warm RAM preview over that many
+// frames through the real ui::RamPreviewController: the scenario's animated value changes every frame,
+// the cold fill must be genuine GPU-resident frames equal to the CPU oracle with no fallback, and the
+// warm pass must perform no preparation and no dispatch.
+//
 // The scenario is chosen with --scenario <name>; --project <file> runs the same checks over a saved
 // project instead (its lowest composition). --cold makes the node's frame the process's first: no
 // baseline frame, and the viewer stage the application builds (makeSessionRefreshingGpuSceneStage),
@@ -38,7 +43,10 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
+#include <bloom/ui/grading_controls.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -72,6 +80,7 @@ struct HarnessOptions final {
     std::string scenario;
     bool requireDevice = false;
     bool cold = false;
+    std::int64_t ramFrames = 0;
     bool valid = true;
 };
 
@@ -89,6 +98,8 @@ struct HarnessOptions final {
             options.requireDevice = true;
         } else if (argument == "--cold") {
             options.cold = true;
+        } else if (argument == "--ram" && index + 1 < argc) {
+            options.ramFrames = std::atoll(argv[++index]);
         } else {
             options.valid = false;
             return options;
@@ -107,6 +118,11 @@ struct Scenario final {
     Values sourceValues;
     std::string effect; // empty: the source is the node under test
     Values effectValues;
+    // A value of the effect that is keyed from its first to its last frame (a RAM preview then shows
+    // a new picture every frame): the role, its value on the first frame and on the last.
+    std::string animatedRole = {};
+    document::ParameterValue animatedFrom = {};
+    document::ParameterValue animatedTo = {};
     // #342: the effect sits inside a Node Group definition (Group Input image1 -> effect -> Group
     // Output image1) and the source feeds the instance's image1, so the node under test is the group.
     bool group = false;
@@ -144,7 +160,32 @@ struct Scenario final {
                            {{"colorize", true}, {"hue", 200.0}, {"saturation", 1.0}}};
     // #342: the same Exposure the flat node would be, inside a Node Group whose scalar1 slot drives
     // the exposure, over a gradient.
-    out["node-group"] = {"bloom.four-color-gradient", {}, "bloom.exposure", {{"amount", 0.0}}, true};
+    out["node-group"] = {"bloom.four-color-gradient", {}, "bloom.exposure", {{"amount", 0.0}}, {}, {}, {}, true};
+    // #511 Tile & Mirror: each mode over a checker, with its phase, offset, line angle or rotation
+    // keyed so a RAM preview shows a new picture every frame.
+    out["tile-mirror-tile"] = {"bloom.checker-source", {}, "bloom.tile-mirror",
+                               {{"mode", std::int64_t{0}}, {"tileWidth", 30.0}, {"tileHeight", 30.0},
+                                {"mirrorEdges", true}, {"clampToOutput", false}},
+                               "horizontalPhase", 0.0, 180.0};
+    out["tile-mirror-wrap-offset"] = {"bloom.checker-source", {}, "bloom.tile-mirror",
+                                      {{"mode", std::int64_t{1}}},
+                                      "offset", Vec2d{0.0, 0.0}, Vec2d{300.0, 120.0}};
+    out["tile-mirror-mirror"] = {"bloom.four-color-gradient", {}, "bloom.tile-mirror",
+                                 {{"mode", std::int64_t{2}}, {"mirrorAngle", 90.0}},
+                                 "mirrorAngle", 90.0, 45.0};
+    out["tile-mirror-kaleidoscope"] = {"bloom.four-color-gradient", {}, "bloom.tile-mirror",
+                                       {{"mode", std::int64_t{3}}, {"kaleidoscopeSegments", std::int64_t{6}}},
+                                       "kaleidoscopeAngle", 0.0, 60.0};
+    // #528 Inner Shadow and Inner Glow over a checker (its frame edge is the shape's edge).
+    out["inner-shadow"] = {"bloom.checker-source", {}, "bloom.inner-shadow",
+                           {{"softness", 12.0}, {"distance", 8.0}, {"choke", 0.2}, {"opacity", 0.9}},
+                           "distance", 2.0, 40.0};
+    out["inner-glow-edge"] = {"bloom.checker-source", {}, "bloom.inner-glow",
+                              {{"size", 30.0}, {"intensity", 1.5}},
+                              "size", 8.0, 80.0};
+    out["inner-glow-center"] = {"bloom.checker-source", {}, "bloom.inner-glow",
+                                {{"size", 30.0}, {"source", std::int64_t{1}}, {"intensity", 1.5}},
+                                "size", 8.0, 80.0};
     return out;
 }
 
@@ -415,9 +456,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         stackPointer = stack;
         compositionId = projectHost.lowestCompositionId();
     } else {
-        auto newProject = document::makeNewProject("Node Viewer Evidence", "Main",
-                                                   core::RationalTime::fromInteger(10),
-                                                   format1920x1080NonSquare());
+        // A RAM run is exactly its frames long (at 25 frames per second); otherwise ten seconds.
+        const auto rate = document::FrameRate::create(25, 1);
+        const auto aspect = core::PixelAspectRatio::create(4, 3);
+        const auto ramFormat = rate.has_value() && aspect.has_value()
+                                   ? document::CompositionFormat::create(1920U, 1080U, *aspect, *rate)
+                                   : format1920x1080NonSquare();
+        const auto ramDuration = core::RationalTime::create(std::max<std::int64_t>(options.ramFrames, 1), 25);
+        auto newProject = document::makeNewProject(
+            "Node Viewer Evidence", "Main",
+            options.ramFrames > 0 && ramDuration.has_value() ? *ramDuration
+                                                             : core::RationalTime::fromInteger(10),
+            options.ramFrames > 0 && ramFormat.has_value() ? *ramFormat : format1920x1080NonSquare());
         compositionId = newProject.initialCompositionId;
         ownDocument.emplace(std::move(newProject.project));
         ownStack = std::make_unique<commands::CommandStack>(*ownDocument);
@@ -472,8 +522,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         -> runtime::TaskSubmission<runtime::PreviewPreparationResultHandle> {
         return service.submit(std::move(request), snap, identity, limit, overrides);
     };
+    const auto frameCache =
+        options.ramFrames > 0 ? std::make_shared<ui::PreviewFrameCache>() : nullptr;
+    if (frameCache) {
+        const auto effective = service.status().residentCapacityPlan;
+        frameCache->setGpuResidentLimits(static_cast<std::size_t>(effective.cacheBytes),
+                                         static_cast<std::size_t>(effective.cacheEntries));
+    }
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
-                                                nullptr, nullptr, submitter);
+                                                frameCache, nullptr, submitter);
 
     auto host = std::make_unique<QWidget>();
     host->setWindowTitle(QString::fromStdString(
@@ -582,6 +639,26 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(connect(session, last, layerNode,
                                   std::string(document::kLayerOutputContentInputPort)),
                           "the chain feeds the layer");
+        if (options.ramFrames > 0 && !scenario->effect.empty() && !scenario->animatedRole.empty()) {
+            // Key the animated value on the first and on the last frame.
+            const auto effect = last;
+            const auto lastFrame = core::RationalTime::create(options.ramFrames - 1, 25).value();
+            const auto parameter = ui::nodeRoleParameter(session, effect, scenario->animatedRole);
+            checks.expect(parameter.has_value(), "the animated value exists");
+            if (parameter) {
+                checks.expect(session.setNodeParameterValue(effect, scenario->animatedRole,
+                                                            scenario->animatedFrom, QStringLiteral("Set")),
+                              "the animated value starts at its first key");
+                checks.expect(session.toggleKeyframeForParameter(*parameter),
+                              "the first key is set");
+                checks.expect(session.setCurrentTime(lastFrame), "the playhead moves to the last frame");
+                checks.expect(session.setNodeParameterValue(effect, scenario->animatedRole,
+                                                            scenario->animatedTo, QStringLiteral("Set")),
+                              "the last key is set");
+                checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(0)),
+                              "the playhead returns to the first frame");
+            }
+        }
     }
 
     const auto composition = nodeList(*session.composition());
@@ -615,8 +692,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       : "NOT-RESIDENT")
               << " baselineDispatches=" << baselineDispatches << " sceneDispatches=" << cold.dispatches
               << " fullFrameReadbacks=" << afterWarm.fullFrameReadbacks
-              << " warmDispatches=" << afterWarm.nativeDispatches - beforeWarm.nativeDispatches
-              << '\n';
+              << " warmDispatches=" << afterWarm.nativeDispatches - beforeWarm.nativeDispatches;
+    std::cout << '\n';
 
     bool retired = false;
     static_cast<void>(viewer->prepareNativeSurfaceMutation(
@@ -628,6 +705,125 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
     viewer.reset();
     host.reset();
+    // RAM preview: cold, then warm, over the keyed frames through the real controller.
+    std::uint64_t ramColdDispatches = 0;
+    std::uint64_t ramColdJobs = 0;
+    std::uint64_t ramWarmDispatches = 0;
+    std::uint64_t ramFrameCount = 0;
+    const auto runRam = [&] {
+    if (options.ramFrames > 0 && frameCache != nullptr) {
+        ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
+                                     submitter);
+        frameCache->clear();
+        const auto beforeCold = service.status().counters;
+        ram.start();
+        const bool coldComplete = waitUntil(
+            [&] {
+                static auto last = std::chrono::steady_clock::now();
+                if (std::chrono::steady_clock::now() - last > 5s) {
+                    last = std::chrono::steady_clock::now();
+                    std::cout << "RAM progress cached=" << ram.cachedFrameCount()
+                              << " prepared=" << ram.preparedFrameCount() << " dispatches="
+                              << service.status().counters.nativeDispatches - beforeCold.nativeDispatches
+                              << " fallbacks=" << service.status().counters.cpuFallbacks
+                              << std::endl;
+                }
+                return !ram.isCaching();
+            },
+            100s);
+        const auto afterCold = service.status().counters;
+        ramColdDispatches = afterCold.nativeDispatches - beforeCold.nativeDispatches;
+        ramColdJobs = afterCold.residentGraphJobs - beforeCold.residentGraphJobs;
+        ramFrameCount = ram.totalFrameCount();
+        std::cout << "RAM cold: caching=" << ram.isCaching() << " total=" << ramFrameCount
+                  << " cached=" << ram.cachedFrameCount() << " prepared=" << ram.preparedFrameCount()
+                  << " completion=" << (ram.lastCompletion() ? static_cast<int>(*ram.lastCompletion()) : -1) << '\n';
+        checks.expect(coldComplete && ramFrameCount >= 3U,
+                      "the RAM preview range terminates and holds at least three frames");
+        checks.expect(ram.lastCompletion() == ui::RamPreviewController::Completion::Complete &&
+                          ram.cachedFrameCount() == ramFrameCount && ram.canAutoPlay(),
+                      "the cold RAM preview retained every frame");
+        checks.expect(ramColdDispatches > 0U || ramColdJobs >= ramFrameCount - 1U,
+                      "the cold RAM preview performed real resident GPU work");
+        checks.expect(afterCold.cpuFallbacks == beforeCold.cpuFallbacks,
+                      "every RAM frame rendered on the GPU (no CPU fallback)");
+        checks.expect(afterCold.fullFrameReadbacks == beforeCold.fullFrameReadbacks,
+                      "the cold RAM preview performed no full-frame readback");
+        const auto identityForIndex = [](const std::int64_t index,
+                                         const ui::PreviewFrameCacheKey& key) {
+            return runtime::PreviewRequestIdentity{.projectId = key.projectId,
+                                                   .compositionId = key.compositionId,
+                                                   .sourceRevision = key.sourceRevision,
+                                                   .requestGeneration =
+                                                       static_cast<std::uint64_t>(index + 1),
+                                                   .time = key.time,
+                                                   .output = key.output,
+                                                   .resolution = key.resolution,
+                                                   .quality = key.quality,
+                                                   .colorIntent = key.colorIntent,
+                                                   .resolutionPolicy = key.resolutionPolicy,
+                                                   .roi = key.roi,
+                                                   .viewAdjust = key.viewAdjust,
+                                                   .displayName = key.displayName,
+                                                   .viewName = key.viewName,
+                                                   .showLook = key.showLook};
+        };
+        std::size_t verified = 0;
+        for (const auto retainedIndex : ram.retainedFrameIndices()) {
+            const auto index = static_cast<std::int64_t>(retainedIndex);
+            const auto time = core::RationalTime::create(index, 25).value();
+            const auto key = controller.cacheKeyForTime(time);
+            checks.expect(key.has_value() && frameCache->contains(*key),
+                          "the RAM frame is retained in the cache");
+            if (!key.has_value())
+                continue;
+            const auto identity = identityForIndex(index, *key);
+            const auto frame = frameCache->take(identity);
+            checks.expect(frame != nullptr &&
+                              frame->provenance().provider ==
+                                  runtime::PreviewDisplayProvider::GpuResident &&
+                              frame->isDisplayValid(),
+                          "the RAM frame is a genuine GPU-resident frame");
+            if (frame == nullptr)
+                continue;
+            const auto reference = snapshotCpuReferenceAtResolution(
+                fixture, session.evaluationSnapshotForTime(key->time), identity);
+            checks.expect(reference != nullptr && reference->displayBufferView().has_value(),
+                          "the CPU oracle evaluates the RAM frame identity");
+            if (reference == nullptr)
+                continue;
+            std::string detail;
+            checks.expect(sameOracleIdentity(*frame, *reference, detail),
+                          "the RAM frame matches the oracle identity: " + detail);
+            routeproof::FrameEvidence evidence;
+            const bool same =
+                routeproof::buildFrameEvidence(service, *frame, *reference, evidence, detail);
+            checks.expect(same, "the RAM frame's GPU pixels match the CPU oracle: " + detail);
+            verified += same ? 1U : 0U;
+        }
+        checks.expect(verified == ramFrameCount, "every RAM frame was held to the CPU oracle");
+        const auto ramBeforeWarm = service.status().counters;
+        ram.start();
+        const bool warmComplete = waitUntil(
+            [&] { return !ram.isCaching() && ram.cachedFrameCount() == ramFrameCount; }, 30s);
+        const auto ramAfterWarm = service.status().counters;
+        ramWarmDispatches = ramAfterWarm.nativeDispatches - ramBeforeWarm.nativeDispatches;
+        checks.expect(warmComplete, "the warm RAM replay completed from the cache");
+        checks.expect(ramAfterWarm.residentGraphJobs == ramBeforeWarm.residentGraphJobs &&
+                          ramAfterWarm.cpuFallbacks == ramBeforeWarm.cpuFallbacks &&
+                          ram.preparedFrameCount() == 0U,
+                      "the warm RAM replay prepared nothing");
+        checks.expect(ramWarmDispatches == 0U,
+                      "the warm RAM replay performed zero additional native dispatches");
+        ram.beginShutdown();
+    }
+    };
+    runRam();
+    if (options.ramFrames > 0)
+        std::cout << "NODE-RAM scenario=" << options.scenario << " ramFrames=" << ramFrameCount
+                  << " ramColdDispatches=" << ramColdDispatches
+                  << " ramColdResidentJobs=" << ramColdJobs
+                  << " ramWarmDispatches=" << ramWarmDispatches << '\n';
     controller.beginShutdown();
     bridge.beginShutdown();
     (void)waitUntil([&] { return scheduler.isQuiescent(); }, 10s);
