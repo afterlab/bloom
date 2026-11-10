@@ -35,7 +35,7 @@ struct ImageStatisticsValues final {
     double maximum = 0.0;
     double mean = 0.0;
     double deviation = 0.0;
-    // The pixels counted. A frame of more than 2^24 counted pixels is counted in binary32.
+    // The pixels counted, exactly (the passes carry the count as two whole binary32 numbers).
     double count = 0.0;
     ImageStatisticsRoute route = ImageStatisticsRoute::CpuReference;
 
@@ -62,8 +62,9 @@ struct ImageStatisticsRun final {
 };
 
 // The statistics a two-pixel result image holds (the output of a statistics plan), or none when it
-// is not one. Pixel 0 is (count, minimum, maximum) and pixel 1 is (mean, variance, 0); the deviation
-// is the square root of the variance, taken here, the same for every route.
+// is not one. Pixel 0 is (count rounded to binary32, minimum, maximum) and pixel 1 is (mean,
+// variance, the whole number the rounded count leaves out); the exact count is their sum and the
+// deviation the square root of the variance, both taken here, the same for every route.
 [[nodiscard]] std::optional<ImageStatisticsValues>
 readImageStatistics(const render::Rgba32fImage& result, ImageStatisticsRoute route);
 

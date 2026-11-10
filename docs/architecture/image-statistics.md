@@ -38,7 +38,9 @@ What is counted:
 - HDR and negative values are measured as they are; nothing is clamped.
 - A picture with nothing to count (a fully transparent picture in straight color, for instance) gives
   0 for every output, including `count`.
-- `count` is exact up to 16,777,216 pixels; a larger count is a binary32 sum.
+- `count` is exact for every picture the engine can hold, on every route: the Sum pass carries it
+  as two whole binary32 numbers (below), so a count above 16,777,216 (2^24, where binary32 stops
+  holding every whole number) is not rounded.
 
 ## Which frame's statistics a node reads
 
@@ -72,7 +74,19 @@ one GPU program (`bloom.render.statistics.v1`), as Histogram's and Auto Exposure
 1. Reduce cuts the picture into at most 32 by 32 tiles and reduces each tile, its pixels taken in
    row-major order, to its count, minimum, maximum, mean and sum of squared deviations from that mean.
 2. Sum combines the tiles in row-major order (the parallel variance combination), and publishes two
-   pixels: `(count, minimum, maximum)` and `(mean, variance, 0)`.
+   pixels: `(count, minimum, maximum)` and `(mean, variance, residual)`.
+
+The count of a tile is a whole number, and the Reduce pass counts it exactly up to 2^24. A tile is a
+32nd of the picture each way, so a tile holds more than 2^24 pixels only in a picture of more than
+2^34 pixels (256 GiB of RGBA binary32 pixels), which no pixel budget admits. The
+Sum pass carries the running count exactly as `high * 2^23 + low`, two whole binary32 numbers, adding
+each tile's count in two parts with a carry; every step is exact. Beside it, the count rounded to
+binary32 (`high * 2^23 + low`, correctly rounded once) is what weighs the mean and variance
+combination and divides the variance, as the running binary32 count did before: up to 2^24 it is the
+exact count and the passes' bits are unchanged, and above it the mean and variance depend on the count
+only through that weight, the correctly rounded one, so they keep binary32 accuracy. Pixel 0 holds
+that rounded count; the residual in pixel 1 is the whole number it leaves out (exact in binary32), and
+the host adds the two in double precision for the exact count.
 
 The CPU reference (`applyStatistics`) and the GPU program run the same binary32 operations in the same
 order over the same table, so they agree exactly. The deviation is the square root of the binary32
@@ -138,8 +152,12 @@ final composited image still reads back once at the codec boundary under `prep.e
 ## Evidence
 
 `bloom.runtime.image-statistics` (CPU reference, known answers, tile independence, refusals,
-cancellation, the cache and the value graph), `bloom.runtime.gpu_scene_effect_native` (CPU and
-device parity of the passes at the strict gate with exact alpha, windows, resident dispatches, warm
-zero-dispatch reuse, and the device route end to end through the GPU process frame evaluator), and
+cancellation, the cache and the value graph, and the Sum pass alone over tables of tiles counting
+16,777,219, 25,165,833 and 50,331,650 pixels: the count exact, the extremes exact, pixel 0 the
+binary32 count, mean and deviation to binary32 accuracy against a double precision measure),
+`bloom.runtime.gpu_scene_effect_native` (CPU and device parity of the passes at the strict gate with
+exact alpha, windows, resident dispatches, warm zero-dispatch reuse, the same three tables on the
+device with the CPU reference's bits exactly and the exact count read back, and the device route end
+to end through the GPU process frame evaluator), and
 the coverage fixtures `effect.StatisticsKernel` and `node.bloom.image-statistics`. The benchmark case
 `image-statistics-2k` is written and has not been run.

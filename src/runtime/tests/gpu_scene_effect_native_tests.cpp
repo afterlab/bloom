@@ -3552,6 +3552,67 @@ void runStatistics(Expectations& expectations, GpuDevice& device, GpuSceneCache&
                                 executor.executor->counters().dispatches > beforeChanged.dispatches,
                             name + "a changed value re-runs with CPU parity: " + detail);
     }
+
+    // #349: the count is exact above 2^24 on the device too. The Sum pass alone, over tables of
+    // tiles whose counts total 50,331,650, 25,165,833 and 16,777,219 (none a binary32 number), gives
+    // the CPU reference's bits exactly, and the count read back is exact.
+    std::vector<std::pair<stt::TileTable, double>> tables;
+    tables.push_back({stt::TileTable{}, 50331650.0});
+    stt::TileTable split;
+    split.top = bloom::core::Color4d{6.0, 0.25, 3.0, 1.0};
+    split.bottom = bloom::core::Color4d{8388609.0, 0.5, 2.0, 1.0};
+    tables.push_back({split, 25165833.0});
+    stt::TileTable whole;
+    whole.top = bloom::core::Color4d{3.0, -1.5, 7.0, 1.0};
+    whole.bottom = bloom::core::Color4d{16777216.0, 1.0, 1.0, 1.0};
+    whole.rows = 2;
+    tables.push_back({whole, 16777219.0});
+    std::uint64_t tableId = 35600;
+    for (const auto& [table, exact] : tables) {
+        cache.clear();
+        const std::string name = "statistics native (a count of " +
+                                 std::to_string(static_cast<std::int64_t>(exact)) + "): ";
+        const auto plan = stt::tileTableSumPlan(table, tableId);
+        tableId += 100;
+        auto request = requestFor(*plan);
+        const auto resultWindow = bloom::render::ImageWindow::create(0, 0, 2, 1);
+        request.roi = *resultWindow.value();
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        if (!executor)
+            continue;
+        const auto run = runScene(*executor.executor, prepared.scene);
+        const auto expected = oracle.frame()->processImage().pixels();
+        expectations.expect(run.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                run.pixels.size() == expected.size() &&
+                                std::memcmp(run.pixels.data(), expected.data(),
+                                            expected.size() * sizeof(Rgba32f)) == 0,
+                            name + "the device gives the CPU reference's bits");
+        if (run.pixels.size() != 2)
+            continue;
+        const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
+            *resultWindow.value(), *resultWindow.value(),
+            bloom::core::PixelAspectRatio::square());
+        auto builderImage = bloom::render::Rgba32fImageBuilder::create(*descriptor.value(), 1U << 20U);
+        if (!builderImage)
+            continue;
+        auto row = builderImage.value()->row(0);
+        (*row.value())[0] = run.pixels[0];
+        (*row.value())[1] = run.pixels[1];
+        auto frozen = std::move(*builderImage.value()).freeze();
+        const auto values = frozen ? bloom::runtime::readImageStatistics(
+                                         *frozen.value(), bloom::runtime::ImageStatisticsRoute::Device)
+                                   : std::nullopt;
+        expectations.expect(values && values->count == exact,
+                            name + "the count read back from the device is exact");
+    }
 }
 
 // #349: an Image Statistics value in a final render's frame is measured by the device route of the

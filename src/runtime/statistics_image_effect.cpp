@@ -20,6 +20,9 @@ namespace bloom::runtime::detail {
 namespace {
 
 constexpr std::int64_t kExactInteger = 16777216; // 2^24
+// The Sum pass carries the count as high * 2^23 + low (statisticsCountOf).
+constexpr float kCountBase = 8388608.0F; // 2^23
+constexpr float kCountBaseInverse = 1.0F / 8388608.0F;
 // Rec. 709 luminance of scene-linear color.
 constexpr float kLumaRed = 0.2126F;
 constexpr float kLumaGreen = 0.7152F;
@@ -241,6 +244,8 @@ vec4 bloom_statistics(ivec2 c) {
   return vec4(mean, squares, 0.0, 1.0);
  }
  int rows = int(bsg(33));
+ precise float high = 0.0;
+ precise float low = 0.0;
  precise float n = 0.0;
  precise float mean = 0.0;
  precise float squares = 0.0;
@@ -251,10 +256,18 @@ vec4 bloom_statistics(ivec2 c) {
   vec4 b = imageLoad(bloom_ocio_input, ivec2(1, t));
   float nb = a.x;
   if (nb == 0.0) { continue; }
+  precise float nbScaled = nb * (1.0 / 8388608.0);
+  precise float nbHigh = floor(nbScaled);
+  precise float nbHighWhole = nbHigh * 8388608.0;
+  precise float nbLow = nb - nbHighWhole;
+  low = low + nbLow;
+  if (low >= 8388608.0) { low = low - 8388608.0; high = high + 1.0; }
+  high = high + nbHigh;
+  precise float highWhole = high * 8388608.0;
+  precise float total = highWhole + low;
   if (n == 0.0) {
-   n = nb; mean = b.x; squares = b.y; mn = a.y; mx = a.z;
+   n = total; mean = b.x; squares = b.y; mn = a.y; mx = a.z;
   } else {
-   precise float total = n + nb;
    precise float delta = b.x - mean;
    precise float share = bloom_ocio_cpu_div(nb, total);
    precise float move = delta * share;
@@ -273,7 +286,10 @@ vec4 bloom_statistics(ivec2 c) {
  if (c.x == 0) { return vec4(n, mn, mx, 1.0); }
  precise float variance = 0.0;
  if (n > 0.0) { variance = bloom_ocio_cpu_div(squares, n); }
- return vec4(mean, variance, 0.0, 1.0);
+ precise float highAll = high * 8388608.0;
+ precise float above = highAll - n;
+ precise float residual = above + low;
+ return vec4(mean, variance, residual, 1.0);
 }
 )GLSL");
     return text;
@@ -348,6 +364,11 @@ ImageEffectResult applyStatistics(const PreparedColorGrade& grade,
         if (!row)
             return failed(EvaluationDiagnosticCode::InternalInvariant,
                           "Image Statistics row is unavailable");
+        // The count is carried exactly as high * 2^23 + low, both whole binary32 numbers, beside
+        // `n`, the count rounded to binary32 that weighs the mean and variance combination (equal to
+        // the exact count up to 2^24). A tile's count is whole and at most 2^24.
+        float high = 0.0F;
+        float low = 0.0F;
         float n = 0.0F;
         float mean = 0.0F;
         float squares = 0.0F;
@@ -365,14 +386,22 @@ ImageEffectResult applyStatistics(const PreparedColorGrade& grade,
             const float nb = a.red();
             if (nb == 0.0F)
                 continue;
+            const float nbHigh = std::floor(nb * kCountBaseInverse);
+            const float nbLow = nb - nbHigh * kCountBase;
+            low = low + nbLow;
+            if (low >= kCountBase) {
+                low = low - kCountBase;
+                high = high + 1.0F;
+            }
+            high = high + nbHigh;
+            const float joint = high * kCountBase + low;
             if (n == 0.0F) {
-                n = nb;
+                n = joint;
                 mean = b.red();
                 squares = b.green();
                 minimum = a.green();
                 maximum = a.blue();
             } else {
-                const float joint = n + nb;
                 const float delta = b.red() - mean;
                 const float share = nb / joint;
                 const float move = delta * share;
@@ -391,9 +420,12 @@ ImageEffectResult applyStatistics(const PreparedColorGrade& grade,
         float variance = 0.0F;
         if (n > 0.0F)
             variance = squares / n;
+        // What the binary32 count leaves out: a whole number, exact in binary32.
+        const float above = high * kCountBase - n;
+        const float residual = above + low;
         if (const auto bad = put(0, n, minimum, maximum, *row.value()))
             return failed(bad->code, "Image Statistics produced an invalid result");
-        if (const auto bad = put(1, mean, variance, 0.0F, *row.value()))
+        if (const auto bad = put(1, mean, variance, residual, *row.value()))
             return failed(bad->code, "Image Statistics produced an invalid result");
     } else {
         const auto layout = layoutOf(k, sourceWidth, sourceHeight);

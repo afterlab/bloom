@@ -561,6 +561,71 @@ void writeCapture() {
     }
 }
 
+// #349: the count is exact above 2^24. The Sum pass is run alone over tables of tiles whose
+// counts total 25,165,833, 16,777,219 and 50,331,650 (none of them a binary32 number): the count
+// read back is exact, the extremes are exact, pixel 0 still holds the count rounded to binary32
+// (whatever read it before reads the same), and the mean and deviation hold to a double precision
+// measure of the same table within binary32 accuracy.
+void testCountAbove2To24() {
+    std::vector<std::pair<st::TileTable, double>> tables;
+    tables.push_back({st::TileTable{}, 50331650.0});
+    st::TileTable split;
+    split.top = core::Color4d{6.0, 0.25, 3.0, 1.0};
+    split.bottom = core::Color4d{8388609.0, 0.5, 2.0, 1.0};
+    tables.push_back({split, 25165833.0});
+    st::TileTable whole;
+    whole.top = core::Color4d{3.0, -1.5, 7.0, 1.0};
+    whole.bottom = core::Color4d{16777216.0, 1.0, 1.0, 1.0};
+    whole.rows = 2;
+    tables.push_back({whole, 16777219.0});
+    std::uint64_t id = 35600;
+    for (const auto& [table, exact] : tables) {
+        const std::string what = "a table of " + std::to_string(static_cast<std::int64_t>(exact)) +
+                                 " pixels: ";
+        const auto answer = st::tileTableAnswer(table);
+        expect(answer.count == exact && static_cast<double>(static_cast<float>(exact)) != exact,
+               what + "the count is above 2^24 and not a binary32 number");
+        const auto plan = st::tileTableSumPlan(table, id);
+        id += 100;
+        runtime::CpuCompositionEvaluator evaluator;
+        runtime::EvaluationRequest request{core::RationalTime::fromInteger(0), plan->output(),
+                                           runtime::CompositionFormatResolution{}};
+        request.pixelStorageByteLimit = 1U << 26U;
+        const auto resultWindow = render::ImageWindow::create(0, 0, 2, 1);
+        request.roi = *resultWindow.value();
+        request.bypassOperationCache = true;
+        const auto result = evaluator.evaluate(plan, request, {});
+        expect(result.frame() != nullptr, what + "the Sum pass evaluates");
+        if (result.frame() == nullptr)
+            continue;
+        const auto& image = result.frame()->processImage();
+        const auto values =
+            runtime::readImageStatistics(image, runtime::ImageStatisticsRoute::CpuReference);
+        expect(values.has_value() && values->count == exact,
+               what + "the count is exact (got " +
+                   std::to_string(values ? values->count : -1.0) + ")");
+        const auto first = image.read(0, 0);
+        expect(first && first.value()->red() == static_cast<float>(exact),
+               what + "pixel 0 holds the count rounded to binary32, as before");
+        if (!values)
+            continue;
+        expect(values->minimum == answer.minimum && values->maximum == answer.maximum,
+               what + "the extremes are exact");
+        const auto relative = [](const double got, const double want) {
+            return std::abs(got - want) <= 1.0e-6 * std::max(1.0, std::abs(want));
+        };
+        expect(relative(values->mean, answer.mean),
+               what + "the mean holds to binary32 accuracy (got " + std::to_string(values->mean) +
+                   " want " + std::to_string(answer.mean) + ")");
+        expect(relative(values->deviation * values->deviation, answer.variance) ||
+                   std::abs(values->deviation - std::sqrt(answer.variance)) <=
+                       1.0e-6 * std::max(1.0, std::sqrt(answer.variance)),
+               what + "the deviation holds to binary32 accuracy (got " +
+                   std::to_string(values->deviation) + " want " +
+                   std::to_string(std::sqrt(answer.variance)) + ")");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -572,6 +637,7 @@ int main() {
         testCancellation();
         testCache();
         testValueGraph();
+        testCountAbove2To24();
         writeCapture();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

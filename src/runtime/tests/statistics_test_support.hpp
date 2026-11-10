@@ -12,6 +12,7 @@
 #include <bloom/document/image_math_parameters.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -90,6 +91,81 @@ statisticsPlan(const StatisticsValues& values = {}, const std::uint64_t idBase =
     definition.output = OperationIndex::fromRaw(definition.operations.size());
     definition.operations.emplace_back(CompiledCompositionOutput{NodeId::fromRaw(idBase + 96), merged});
     return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+}
+
+// A table of tiles as the Reduce pass leaves it, for the Sum pass alone: each row is one tile, pixel
+// 0 (count, minimum, maximum) and pixel 1 (mean, sum of squared deviations, 0). Two Solids two
+// pixels wide make it (a Solid's one color fills both pixels of a row, so a row's mean is its count
+// and its squares its minimum): `top` over the first `topRows` rows and `bottom` over the rest of
+// `rows`. Counts are whole numbers of at most 2^24, as a tile's are, and their total may be far above
+// 2^24: the Sum pass over a picture of that many pixels, without the picture.
+struct TileTable final {
+    core::Color4d top{5.0, 0.25, 3.0, 1.0};
+    std::uint32_t topRows = 1;
+    core::Color4d bottom{16777215.0, 0.5, 2.0, 1.0};
+    std::uint32_t rows = 4;
+};
+
+[[nodiscard]] inline std::shared_ptr<const runtime::CompiledCompositionPlan>
+tileTableSumPlan(const TileTable& table, const std::uint64_t idBase = 34990) {
+    using namespace runtime;
+    CompiledCompositionPlanDefinition definition{
+        document::Revision::fromRaw(1),
+        document::ProjectId::fromRaw(1),
+        document::CompositionId::fromRaw(idBase),
+        *document::CompositionFormat::create(kStatisticsSize, kStatisticsSize),
+        {},
+        OperationIndex::fromRaw(0)};
+    definition.duration = core::RationalTime::fromInteger(10);
+    definition.operations.emplace_back(
+        CompiledSolid{NodeId::fromRaw(idBase + 1), {ParameterId::fromRaw(idBase + 2), table.bottom},
+                      scalar(idBase + 3, 2.0), scalar(idBase + 4, table.rows)});
+    definition.operations.emplace_back(
+        CompiledSolid{NodeId::fromRaw(idBase + 5), {ParameterId::fromRaw(idBase + 6), table.top},
+                      scalar(idBase + 7, 2.0), scalar(idBase + 8, table.topRows)});
+    detail::RecipeEmitter emitter(NodeId::fromRaw(idBase + 30), definition.operations,
+                                  detail::definitionValueSink(definition));
+    const auto tiles = emitter.merge({{OperationIndex::fromRaw(1), core::BlendMode::Normal},
+                                      {OperationIndex::fromRaw(0), core::BlendMode::Normal}});
+    StatisticsKernel sum;
+    sum.role = StatisticsRole::Sum;
+    sum.channel = document::kStatisticsRed;
+    sum.grid = detail::kStatisticsTileGrid;
+    const auto summed = emitter.effect(tiles, sum);
+    const auto merged = OperationIndex::fromRaw(definition.operations.size());
+    definition.operations.emplace_back(
+        CompiledMerge{NodeId::fromRaw(idBase + 95), {{{}, {}, summed}}});
+    definition.output = OperationIndex::fromRaw(definition.operations.size());
+    definition.operations.emplace_back(
+        CompiledCompositionOutput{NodeId::fromRaw(idBase + 96), merged});
+    return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+}
+
+// The exact count, minimum and maximum of a table, and its mean and variance in double precision.
+struct TileTableAnswer final {
+    double count = 0.0;
+    double minimum = 0.0;
+    double maximum = 0.0;
+    double mean = 0.0;
+    double variance = 0.0;
+};
+[[nodiscard]] inline TileTableAnswer tileTableAnswer(const TileTable& table) {
+    const double topRows = table.topRows;
+    const double bottomRows = static_cast<double>(table.rows) - table.topRows;
+    const double topCount = table.top.red * topRows;
+    const double bottomCount = table.bottom.red * bottomRows;
+    TileTableAnswer answer;
+    answer.count = topCount + bottomCount;
+    answer.minimum = std::min(table.top.green, table.bottom.green);
+    answer.maximum = std::max(table.top.blue, table.bottom.blue);
+    // Each row is a tile whose mean is its count and whose squares are its minimum.
+    answer.mean = (topCount * table.top.red + bottomCount * table.bottom.red) / answer.count;
+    const double topDelta = table.top.red - answer.mean;
+    const double bottomDelta = table.bottom.red - answer.mean;
+    const double squares = topRows * table.top.green + bottomRows * table.bottom.green +
+                           topCount * topDelta * topDelta + bottomCount * bottomDelta * bottomDelta;
+    answer.variance = squares / answer.count;
+    return answer;
 }
 
 // A frame whose Solid is 40 pixels wide and as high as the statistic `output` (0 minimum, 1 maximum,

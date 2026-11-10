@@ -54,8 +54,11 @@ std::optional<ImageStatisticsValues> readImageStatistics(const render::Rgba32fIm
     const auto& second = (*row.value())[1];
     ImageStatisticsValues values;
     values.route = route;
-    values.count = static_cast<double>(first.red());
-    if (!(values.count >= 0.0) || !std::isfinite(values.count))
+    // The count is pixel 0's binary32 count plus what rounding it left out (pixel 1's third
+    // channel, a whole number), added here in double: exact for any count the passes can carry.
+    values.count = static_cast<double>(first.red()) + static_cast<double>(second.blue());
+    if (!(values.count >= 0.0) || !std::isfinite(values.count) ||
+        values.count != std::floor(values.count))
         return std::nullopt;
     if (values.count == 0.0)
         return values;
