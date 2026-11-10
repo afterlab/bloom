@@ -1119,6 +1119,12 @@ target_link_libraries(bloom_path_card_key_test PRIVATE bloom_ui bloom_commands b
 bloom_enable_warnings(bloom_path_card_key_test)
 bloom_add_test(NAME bloom.ui.path-card-key COMMAND bloom_path_card_key_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_vector_artwork_row_test vector_artwork_row_tests.cpp)
+target_include_directories(bloom_vector_artwork_row_test PRIVATE ..)
+target_link_libraries(bloom_vector_artwork_row_test PRIVATE bloom_ui bloom_commands bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_vector_artwork_row_test)
+bloom_add_test(NAME bloom.ui.vector-artwork-row COMMAND bloom_vector_artwork_row_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_delete_key_test node_delete_key_tests.cpp)
 target_include_directories(bloom_node_delete_key_test PRIVATE ..)
 target_link_libraries(bloom_node_delete_key_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
@@ -1566,6 +1572,14 @@ target_link_libraries(bloom_svg_window_capture PRIVATE bloom_ui bloom_runtime_co
 target_compile_definitions(bloom_svg_window_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_svg_window_capture)
+
+# #642: review captures of the SVG import modes (not a ctest).
+add_executable(bloom_svg_import_capture svg_import_capture.cpp)
+target_include_directories(bloom_svg_import_capture PRIVATE ..)
+target_link_libraries(bloom_svg_import_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_svg_import_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_svg_import_capture)
 
 add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
 target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)

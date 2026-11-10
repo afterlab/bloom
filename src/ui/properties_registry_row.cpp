@@ -666,9 +666,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                                       label);
         delete controls;
     } else {
-        // A Path's summary is filled in after the row is built, so its width is not known here.
+        // A Path's summary and a Vector Artwork's file line are filled in after the row is built, so
+        // their width is not known here.
         if (!text_ && !multiline_ && !checklist_ &&
-            definition_.valueKind != document::ParameterValueKind::Path) {
+            definition_.valueKind != document::ParameterValueKind::Path &&
+            definition_.schemaKey != document::kVectorArtworkBlockParameterSchemaKey) {
             const int preferred = controls->sizeHint().width();
             controls->setMaximumWidth(preferred);
         }
