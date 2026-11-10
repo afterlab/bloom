@@ -789,6 +789,23 @@ class ViewerEditor final : public QWidget,
     // Ends a handle drag keeping what it has reached.
     void finishMotionHandle();
     void paintMotionHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
+    // #599 Line ends: the selected Line's two ends as point handles; each drag is one edit of the
+    // end at the playhead (viewer_editor_line.cpp).
+    struct LineHandleDrag final {
+        document::NodeId node;
+        document::ParameterId parameter;
+        // Source coordinates to composition, frozen at the press.
+        QTransform toComposition;
+        // The dragged end and the layer anchor as they were at the press.
+        document::Vec2d endBase;
+        std::optional<document::Vec2d> anchorBase;
+    };
+    std::optional<LineHandleDrag> lineDrag_;
+    bool lineHandlePress(QMouseEvent* event);
+    bool lineHandleMove(QMouseEvent* event);
+    bool lineHandleRelease(QMouseEvent* event);
+    void finishLineHandle();
+    void paintLineHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);

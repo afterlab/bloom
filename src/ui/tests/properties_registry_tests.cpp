@@ -36,6 +36,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -2424,6 +2425,88 @@ void testCardRows() {
     expect(readout != nullptr && readout->height() >= readout->heightAt(readout->width()),
            "the Patch readout is as tall as its text needs");
 }
+
+// #599 A Line Shape Source in Properties: its two ends are position rows (an X and a Y field each,
+// a keyframe diamond like every animatable value), named in plain words, shown whole at the widths
+// of a wide, a normal and a narrow panel. Another kind shows neither. With
+// BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written at each width (suffixed with the device
+// pixel ratio).
+void lineEndRows() {
+    auto project = document::makeNewProject("Line", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    expect(session.addShapeLayer(document::ShapeKind::Line,
+                                 {.position = document::Vec2d{100, 100},
+                                  .size = {},
+                                  .lineStart = document::Vec2d{-50, 10},
+                                  .lineEnd = document::Vec2d{50, 20},
+                                  .path = {}}),
+           "add a Line");
+    ui::PropertiesEditor properties(session);
+    const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+    const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                               ? QStringLiteral("dpr1")
+                               : QStringLiteral("dpr15");
+    for (const int width : {900, 420}) {
+        properties.resize(width, 1700);
+        properties.show();
+        QCoreApplication::processEvents();
+        for (const auto& [role, text] : {std::pair{"lineStart", QStringLiteral("Line Start")},
+                                         std::pair{"lineEnd", QStringLiteral("Line End")}}) {
+            auto* found = row(properties, role);
+            expect(found != nullptr && found->isVisibleTo(&properties),
+                   "a Line presents both ends");
+            if (found == nullptr)
+                continue;
+            expect(found->property("rowLabel").toString() == text,
+                   "a Line end is named in plain words");
+            QLabel* label = nullptr;
+            for (auto* candidate : properties.findChildren<QLabel*>("propertiesRowLabel"))
+                if (candidate->text() == text && candidate->isVisibleTo(&properties))
+                    label = candidate;
+            expect(label != nullptr &&
+                       label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                   "a Line end label is shown whole");
+            int fields = 0;
+            for (auto* field : found->findChildren<ui::kit::KValueField*>())
+                if (field->isVisibleTo(&properties)) {
+                    ++fields;
+                    expect(!field->paintedText().contains(QChar(0x2026)) &&
+                               !field->isDisplayRounded(),
+                           "a Line end value is shown whole");
+                }
+            expect(fields == 2, "a Line end is an X and a Y position field");
+            expect(found->findChild<ui::KeyframeDiamond*>() != nullptr,
+                   "a Line end has a keyframe diamond");
+        }
+        if (auto* scroll = properties.findChild<QScrollArea*>())
+            expect(scroll->widget()->width() <= scroll->viewport()->width(),
+                   "a Line's rows never exceed the panel's width");
+        if (!directory.isEmpty()) {
+            QDir().mkpath(directory);
+            if (!properties.grab().save(directory + QStringLiteral("/line-ends-properties-") +
+                                        QString::number(width) + QLatin1Char('-') + suffix +
+                                        QStringLiteral(".png")))
+                std::cerr << "could not write the Line Properties capture\n";
+        }
+    }
+    // Keying the end through its diamond turns the row animated; another kind has no such rows.
+    const auto* end = session.parameterForSelection("lineEnd");
+    expect(end != nullptr && session.toggleKeyframeForParameter(end->id),
+           "a Line end keys through its diamond");
+    expect(session.addShapeLayer(document::ShapeKind::Rectangle,
+                                 {.position = document::Vec2d{100, 100},
+                                  .size = document::Vec2d{40, 40},
+                                  .lineStart = {},
+                                  .lineEnd = {},
+                                  .path = {}}),
+           "add a Rectangle");
+    QCoreApplication::processEvents();
+    expect(row(properties, "lineEnd") == nullptr || !row(properties, "lineEnd")->isVisibleTo(&properties),
+           "a Rectangle shows no line ends");
+}
+
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
@@ -2464,6 +2547,7 @@ int main(int argc, char** argv) try {
     autoExposureRows();
     colorCleanupRows();
     edgeExtendRows();
+    lineEndRows();
     extensionPropertiesRows();
     warpRows();
     audioEffectRows();

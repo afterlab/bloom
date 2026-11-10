@@ -1622,6 +1622,18 @@ set_tests_properties(bloom.ui.motion-blur-viewer PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;integration" TIMEOUT 180)
 
+# #599: the Viewer point handles of a Line's two ends: a constant end is set, a keyed end gets a key
+# at the playhead, a driven end takes no drag; each drag is one command.
+add_executable(bloom_line_end_viewer_ui_test line_end_viewer_ui_tests.cpp)
+target_include_directories(bloom_line_end_viewer_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_line_end_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands Qt6::Test)
+bloom_enable_warnings(bloom_line_end_viewer_ui_test)
+add_test(NAME bloom.ui.line-end-viewer COMMAND bloom_line_end_viewer_ui_test)
+set_tests_properties(bloom.ui.line-end-viewer PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;integration" TIMEOUT 180)
+
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
 add_executable(bloom_channel_pickers_ui_test channel_pickers_ui_tests.cpp)
@@ -2091,6 +2103,29 @@ bloom_enable_warnings(bloom_ui_viewer_export_path_value_test)
 bloom_add_test(
     NAME bloom.ui.viewer_export_path_value
     COMMAND bloom_ui_viewer_export_path_value_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# Issue #599: a Line whose ends are keyed and driven, through the Viewer, a cold and warm RAM preview
+# at Half, and the still, range and movie export routes. The CPU reference half always runs; the GPU
+# half runs with a Vulkan loader and a qualified device and prints NotRun otherwise
+# (--require-device fails instead).
+add_executable(bloom_ui_viewer_export_line_ends_test viewer_export_line_ends_tests.cpp)
+target_link_libraries(bloom_ui_viewer_export_line_ends_test PRIVATE bloom_ui bloom_host)
+if(TARGET bloom-media-worker)
+    add_dependencies(bloom_ui_viewer_export_line_ends_test bloom-media-worker)
+endif()
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_export_line_ends_test
+        PRIVATE BLOOM_UI_LINE_END_ROUTES_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_export_line_ends_test)
+endif()
+bloom_enable_warnings(bloom_ui_viewer_export_line_ends_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_export_line_ends
+    COMMAND bloom_ui_viewer_export_line_ends_test ${bloom_ui_background_parity_loader_args}
     LABELS ui integration
     TIMEOUT 300
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
