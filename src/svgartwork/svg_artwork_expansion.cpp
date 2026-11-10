@@ -1,6 +1,6 @@
 // #642: the Vector Artwork layer's expansion. See svg_artwork.hpp.
 
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/evaluation_inputs.hpp>

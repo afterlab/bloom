@@ -1050,7 +1050,8 @@ target_include_directories(bloom_runtime_gpu_svg_artwork_layer_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime"
             "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/tests/support")
 target_link_libraries(bloom_runtime_gpu_svg_artwork_layer_test
-    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands
+            bloom_svg_artwork)
 # The artwork's Gaussian blur is an image effect, which the production builder prepares through the
 # packaged shader tools.
 target_compile_definitions(bloom_runtime_gpu_svg_artwork_layer_test PRIVATE

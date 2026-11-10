@@ -3,7 +3,7 @@
 #include <bloom/runtime/vector_artwork_scene_cache.hpp>
 
 #include <bloom/document/data_block.hpp>
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/media/svg_scene.hpp>
 

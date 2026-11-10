@@ -7,7 +7,7 @@
 #include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/core/sha256.hpp>
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/media/svg_scene.hpp>
 #include <bloom/document/graph.hpp>

@@ -31,7 +31,7 @@
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_definition_registry.hpp>
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/project/open_archive.hpp>

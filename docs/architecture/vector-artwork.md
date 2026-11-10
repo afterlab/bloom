@@ -25,8 +25,8 @@ and so one undo step, in one of two modes (`SvgImportMode`, spelled `layer` and 
 - **As editable shapes** (`shapes`): the breakdown described under [Structure](#structure), every
   element its own layer and Path node.
 
-Both modes build from one description. `buildSvgArtwork()` (`src/document/svg_artwork.cpp`,
-library `bloom_svg_artwork`) reads a parsed scene and describes the nodes, Merge slots, entry
+Both modes build from one description. `buildSvgArtwork()` (`src/svgartwork/svg_artwork.cpp`,
+module `src/svgartwork`, library `bloom_svg_artwork`, [ADR 0038](../decisions/0038-svg-artwork-module.md)) reads a parsed scene and describes the nodes, Merge slots, entry
 layers, layer values, track mattes and node frames in the order they are made, as plain data;
 `SvgArtworkWriter` writes a description into a composition through an `SvgArtworkTarget` that
 supplies the ids and makes entry layers. The editable import writes it with ids from the project in

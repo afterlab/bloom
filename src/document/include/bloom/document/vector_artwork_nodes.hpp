@@ -4,7 +4,7 @@
 // source is one Vector Artwork node. The node names a data block that holds the SVG file's own
 // bytes, so the artwork renders with its source file missing, and the compiler expands the node,
 // before anything is lowered, into exactly the nodes the editable import would have made
-// (bloom/document/svg_artwork.hpp): the artist's graph holds one node, every route renders the
+// (bloom/svgartwork/svg_artwork.hpp): the artist's graph holds one node, every route renders the
 // file's vector geometry at the output resolution, and the picture is the editable import's.
 // See docs/architecture/vector-artwork.md.
 

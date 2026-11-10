@@ -13,7 +13,7 @@
 // a Shape cannot hold itself (a gradient, a clip, a mask, a dash pattern) is built from the nodes
 // Bloom already has.
 //
-// Both modes build from one description (bloom/document/svg_artwork.hpp) and report the same named
+// Both modes build from one description (bloom/svgartwork/svg_artwork.hpp) and report the same named
 // warnings. See docs/architecture/vector-artwork.md.
 
 #include <bloom/commands/layer_drop_operations.hpp>

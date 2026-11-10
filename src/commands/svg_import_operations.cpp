@@ -12,7 +12,7 @@
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/data_block.hpp>
 #include <bloom/document/node_definition_registry.hpp>
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/platform/font_catalog.hpp>
 

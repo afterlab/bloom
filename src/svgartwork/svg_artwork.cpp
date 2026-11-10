@@ -1,4 +1,4 @@
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 
 #include <bloom/document/font_id.hpp>
 #include <bloom/document/graph.hpp>

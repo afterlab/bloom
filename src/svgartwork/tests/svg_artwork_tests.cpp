@@ -5,7 +5,7 @@
 
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/shape.hpp>
-#include <bloom/document/svg_artwork.hpp>
+#include <bloom/svgartwork/svg_artwork.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/media/svg_scene.hpp>
 #include <bloom/platform/font_catalog.hpp>
