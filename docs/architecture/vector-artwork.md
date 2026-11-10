@@ -128,23 +128,68 @@ It is drawn as a scaled pre-composition would be instead (`VectorArtworkOversamp
   the layer's published local box is the picture's over `s` with the anchor where it was. Layers
   parented to it use its plain matrix.
 
-**The band.** `s` is the smallest power of two at least the product, over the layer and its
-parents, of the largest |scale| their keys reach (a held or linear segment's ends; an eased one's
-handles too; Back and Elastic overshoot widen the span by their amplitude), and at least 2 when any
-of them turns. It is at most `kVectorArtworkMaxOversample` (8) and at most
-`kVectorArtworkMaxOversampledEdge` (8192) pixels over the composition's longer side: a 3840 x 2160
-composition is drawn at up to 2x, 1920 x 1080 at up to 4x, 1024 and below at up to 8x. It is halved
-while a scaled length would leave its parameter's range (a blur radius past 256). `limited` says so
-when the band is cut. A layer that neither scales past 1 nor turns needs nothing and is in none of
-`composed`, `oversampled` or `resampled`. A Viewer gesture's override of the layer's scale reaches
-the band (the context's `override`), and an override of a scaled length is multiplied as the
-stored one is (`scaledParameters`).
+**The band.** `s` is the smallest power of two at least the product of the largest |scale| the keys
+reach (a held or linear segment's ends; an eased one's handles too; Back and Elastic overshoot widen
+the span by their amplitude) over the layer and its parents, the Layer nodes that resample its
+picture on the way to its Merge and their parents, and every group above it that is drawn larger
+(below), and at least 2 when any of them turns. It is at most `kVectorArtworkMaxOversample` (64).
+It is halved while a scaled length would leave its parameter's range (a blur radius past 256), and
+while the estimate of its drawn window is past the pixel budget (below). `limited` says so when the
+band is cut. A layer that neither scales past 1 nor turns, under groups that neither do, needs
+nothing and is in none of `composed`, `oversampled` or `resampled`. A Viewer gesture's override of a
+scale reaches the band (the context's `override`), and an override of a scaled length is multiplied
+as the stored one is (`scaledParameters`).
 
-**Cache identity.** The band is part of the plan. Every frame of an animated layer renders from one
-plan and one oversampled picture of the artwork (the carrier's scale is constant, so the artwork's
-operations keep their cache identity from frame to frame); a key edit that leaves the band where it
-was is a new revision with the same oversampled picture; only an edit that moves the band draws a
-different one.
+**Only the window the frame shows is drawn.** The oversampled picture is not drawn whole: every
+operation's window is clipped to what its readers can show of the frame (`detail::visibleSupportWindows`,
+"What a layer draws" below), through the holding layer's matrix (the larger picture's pixels map to
+the frame through it), its masks (they multiply their content pixel by pixel), the nodes between
+(a transparent-edge blur widens the window by its taps, a glow by its keys, octaves and streaks, a
+drop shadow by its move) and the groups above. A layer scaled 8x in a 3840 x 2160 composition draws
+about one frame of pixels at 8x, not the 64 frames of the whole picture. The CPU reference and the
+GPU preparation take the same windows, so the pixels are the same on both routes. The window is not
+clipped (the whole picture is drawn) under a content-pivot layer, whose matrix follows its content's
+bounds, or through a blur that repeats its picture's edge (Clamp), whose edge is its window's.
+
+**The pixel budget.** The band is halved while its window over the whole animation is estimated
+past `kVectorArtworkMaxOversampledPixels` (8192 x 4096 full-resolution pixels, 512 MiB of float
+RGBA). The estimate is made when compiling, for every frame at once: the artwork's area at a scale
+of 1 (the fitted frame, or the file's viewport when not fitted) times `s`², and, where the window is
+clipped, at most the frame's preimage through the smallest scale the layers above reach (a turn
+widens it, at worst to (width + height)² / 2), each side widened by the nodes' reach. A whole-frame
+artwork keyed from 1x to 8x is drawn at 2x (at its first key the frame shows the whole picture);
+one scaled 8x is drawn at 8x. The limit names the budget: "drawn at 2x: its window at 4x is
+estimated at ... pixels over the animation, past the pixel budget of one oversampled picture
+(8192 x 4096)". Past the band's own cap: "drawn at 64x, the most any layer oversamples".
+
+**Groups above the layer.** A Merge ends vector provenance: the group layer (or Layer node) that
+resamples a group's picture would resample the artwork's pixels too. Each group above the holding
+layer whose readers scale or turn is drawn at its own output scale instead
+(`VectorArtworkOversampledGroup`, by its Merge): its band is that of the layers resampling it and
+every group above it; every entry's layer of the Merge (one is made at its defaults, the identity,
+for an entry that has none) draws its picture that many times larger into the group
+(`CompiledLayerOutput::outputScale`, the layer's matrix followed by the scale about the origin;
+its children use the plain matrix), the lengths of the nodes between an entry's Layer node and its
+slot and between the Merge and its reader are multiplied, and the group's reader maps the picture
+back with a content scale. The artwork inside is then drawn at the product: an icon in a group
+scaled 3x is drawn at 4x, the group at 4x. A layer drawn into an oversampled group publishes the
+bounds it would have at 1 (`publishOutputScaledBounds`, run by the CPU reference and the GPU
+preparation alike), so the Viewer's boxes are where they were. A sibling raster in the group is
+resampled twice (into the larger group and back), as a scaled pre-composition would. Named when it
+cannot be (`groupsResampled`, by the Merge; the artwork is then drawn at the scale up to that group,
+and the group's reader resamples its picture): an Adjustment entry (its nodes would apply to the
+group's picture at the composition's scale), a Layer node shared with another Merge entry, a layer
+matted by a node's Mask or by a layer outside the group, a node after an entry's Layer node that is
+not known to draw the same at a larger scale, or a reader's scale driven by the graph.
+
+**Cache identity.** The band and the group's scale are part of the plan. Every frame of an animated
+layer renders from one plan and one oversampled picture of the artwork (the carrier's scale is
+constant, so the artwork's operations keep their cache identity from frame to frame); a key edit
+that leaves the band where it was is a new revision with the same oversampled picture; only an edit
+that moves the band draws a different one. The window is not in the plan: it is resolved per frame
+from the frame's transforms and is part of each frame's operation keys, so a pan compiles nothing
+and a frame showing another window of the picture draws that window (the frame's cache entry, not
+the plan's), while returning to a frame reads its kept pixels.
 
 **Named when it cannot be sharp** (`resampled`, by the node's id, the layer then resampling the
 artwork's picture at the composition's scale, as the editable import's root group does): a node
@@ -153,17 +198,21 @@ artwork and its layer is not known to draw the same at a larger scale"), one tha
 image or has a scaled length driven by the graph, a layer or parent scale driven by the graph (its
 largest scale is not known when compiling), a mask shaped by a node's Mask, more than one reader or
 none, a Merge entry without a layer, the artwork read through another node, a muted artwork, or a
-length that cannot be scaled at all. Group layers and Merges above the holding layer that scale its
-picture are not counted in the band.
+length that cannot be scaled at all.
 
 Comparing with a file whose points are scaled by `s` (the scaled pre-composition): at a band of 2
-the pixels are the same; at 4 the curves' flattenings differ (the one layer flattens in the file's
-units through a 4x matrix, the baked file at its own size, each within 1/32 pixel of the curve), so
-where a curve passes that close to one of a pixel's 4 x 4 coverage samples one or two of the
-sixteen samples may land on the other side. The composed route shows the same at 4x.
+the pixels are the same; at 4 and 8 the curves' flattenings differ (the one layer flattens in the
+file's units through the band's matrix, the baked file at its own size, each within 1/32 pixel of
+the curve), so where a curve passes that close to a pixel's 4 x 4 coverage samples some of the
+sixteen samples may land on the other side: one or two along a slanted edge, up to one column or
+row where the curve's tangent runs along the sample grid (a circle's leftmost point). The composed
+route shows the same at 4x.
 
-Cost (a suspicion from the code, not measured): the oversampled picture is `s`² times the pixels of
-the artwork's window, and a content-pivot layer's window is not clipped to the frame.
+Cost (a suspicion from the code, not measured): the oversampled picture's drawn window is about the
+frame's preimage times `s`², so its memory follows the output's size within the pixel budget; a
+content-pivot layer's window is the whole picture, bounded only by the budget's estimate; the
+estimate takes the fitted frame or the file's viewport as the artwork's extent, not its drawn
+bounds, so a small artwork in a large viewport is budgeted as the whole viewport.
 
 #### Compiling a Vector Artwork layer
 
@@ -221,23 +270,45 @@ on a layer of a very large file (which compiles each override) repeats that work
   samples on curved edges at 4) where the resampled picture differs on ten or more times the pixels
   with far more edge pixels; the content-pivot layer's bounds are the resampled layer's.
   `namedWhenItCannotBeSharp` names a vignette between, a driven blur radius and a driven scale,
-  caps 4K at 2x and 20x at 8x, halves a blur radius of 100 to 2x, and leaves a 0.8x layer alone.
-  `oversampledCacheIdentity`: one plan and cache hits over the frames of a keyed layer, a key in the
-  same band hits, one past it draws at 8x, a scale override reaches the band and a mask path
-  override is multiplied, cancellation and the pixel budget.
+  draws a masked layer scaled 6x at 4K at 8x, caps 100x at 64x, names the pixel budget for a
+  whole-frame artwork keyed from 1x to 8x at 4K (2x) and for a content pivot scaled 6x at 4K (2x),
+  halves a blur radius of 100 to 2x, and leaves a 0.8x layer alone. `oversampledCacheIdentity`: one
+  plan and cache hits over the frames of a keyed layer, a key in the same band hits, one past it
+  draws at 8x, a scale override reaches the band and a mask path override is multiplied,
+  cancellation and the pixel budget. Groups (`sharpInsideScaledGroups`, `groupBoundsAndSiblings`,
+  `groupsNamedWhenTheyCannotBe`, `windowAndGroupIdentity`): the artwork in a group scaled 3x (group
+  and artwork at 4x), in one scaled 1.6x and turned (2x) and in a group scaled 1.5x inside one scaled
+  2x (4x and 2x) each equals its scaled pre-composition as above where the resampled picture
+  differs on ten or more times the pixels; a sibling in the larger group publishes its bounds at 1
+  exactly and the layers above within their edge pixels; a vignette between a group and its layer,
+  a driven group scale and an Adjustment entry are named and the artwork is still drawn sharp
+  through its own layer; a pan of a masked layer scaled 4x compiles once, a frame showing another
+  window draws it and a frame shown again hits its pictures; a group keyed from 1.5x to 3x renders
+  every frame from one plan in the 4x band and a key at 6x moves it to 8x; a cancelled compile and
+  evaluation of a grouped artwork, and a request below its budget refused with the budget named.
 - `bloom.runtime.gpu_svg_artwork_layer` (production GPU route): 512 x 288 over frames 0 to 2 with
   the layer's position, scale, rotation and opacity keyed, cold and warm, with the CPU's bounds
   (box, polygon and anchor) and at half resolution; the one layer on the device equals the editable
   import's CPU frame on the in-repo files; 1920 x 1080 and 3840 x 2160 prepare and run on the device;
   drawn at the output scale (masked with a blur and a drop shadow between, keyed scale, rotation and
   opacity, frames 0 to 2; a content pivot; retimed), cold and warm with the CPU's bounds, and at
-  1920 x 1080 and 3840 x 2160 with a blur between (2x); phase admission, refusal and retirement, a cancelled preparation and run, and the executor's
-  request budget. `--require-device` fails without a device.
+  1920 x 1080 and 3840 x 2160 with a blur between (2x); in a group keyed from 2x to 3x and turned,
+  masked, with a sibling (4x, frames 0 to 2), and scaled 5x with a blur, a drop shadow and a glow
+  between, masked and panned (8x, frames 0 to 2, the largest window drawn about a sixth of the
+  whole picture), cold and warm with the CPU's bounds; at 3840 x 2160, masked and scaled 4x and 8x
+  and in a group scaled 3x, on the device only: the largest window drawn is one frame (4x, 8x) or
+  16/9 of one (the group at 4x) where the whole picture would be 112 to 448 million pixels, and a
+  384 x 216 crop around the circle's edge equals the scaled pre-composition on the device (exact at
+  4x and in the group; at 8x 18 of 138 edge pixels differ, by at most one column of coverage
+  samples) where the resampled picture differs on 850 to 2,200 pixels; phase admission, refusal and
+  retirement, a cancelled preparation and run, and the executor's request budget.
+  `--require-device` fails without a device.
 - `bloom.ui.viewer_export_svg_artwork` runs every route for the one layer too (Viewer frames from the
   expected route, CPU route equal to GPU route, RAM preview cold and warm, still, range and movie
   with their provenance), and on the GPU route exports 1920 x 1080 and 3840 x 2160 stills from the
   device with no CPU reference frame, of the plain layer and of one with a blur between (drawn at its
-  output scale). It found that the Viewer's and the export's scene caches
+  output scale), and at 3840 x 2160 of one masked and scaled 8x (drawn at 8x) and of one in a group
+  scaled 3x (drawn at 4x). It found that the Viewer's and the export's scene caches
   together filled the process's image slots once every frame of the keyed layer drew new images;
   the caches now share one bound ([GPU backend](gpu-backend.md), "The scene cache keeps stacks").
 
@@ -382,8 +453,12 @@ A layer draws only what can be seen, on both routes alike. Its window is its tra
 intersected with what its readers can show of the frame: the Composition Output asks for the frame,
 a Merge and the pass-through kernels (identity, combine, pointwise and colour transforms) pass that
 on, a frame-pivot layer maps it back through its own matrix, and a transparent-edge blur widens it
-by its taps. Anything else (a content-pivot layer's input, a field image, any other kernel) asks for
-everything, so nothing it reads is clipped. A layer whose track matte is a plain alpha or luma
+by its taps. A layer's masks, the grades, keys and channel moves (Levels, Curves, Hue/Saturation,
+Grade, Colorize, Color Tool, Luma Key, Channel Select and Combine, Highlight Roll-Off, Alpha
+Association) read each input only where they are read; a Transform 2D that only moves (a Drop
+Shadow's offset) shifts the window by its move and widens it by its resample's taps; a directional
+(Glow Streak) pass widens it by its four taps' reach. Anything else (a content-pivot layer's input, a
+field image, any other kernel) asks for everything, so nothing it reads is clipped. A layer whose track matte is a plain alpha or luma
 multiply is also clipped to the matte's window, since nothing outside it survives the matte
 (`detail::visibleSupportWindows` and `detail::matteBoundedLayers`, src/runtime/visible_support.hpp,
 used by the CPU reference's layer arm and by `CpuGpuSceneBuilder`). Before, an imported elliptical

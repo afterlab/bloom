@@ -955,7 +955,9 @@ measured run replaces them and adds its table here.
 `bloom.runtime.gpu_svg_artwork_node_bench_smoke`) imports a generated file of 100 and of 1,000
 filled and stroked shapes (in groups of 100) as editable shapes, its comparable, and as one layer,
 at the identity and scaled 1.5x and turned 20 degrees (the composed route, every shape covered
-through the layer's matrix), against a Grade. Besides the frame it records `compileMs`, the compile
+through the layer's matrix), masked and scaled 8x (`-masked-8x`: the artwork drawn at 8x, only the
+window the frame shows) and held in a group scaled 3x (`-group-3x`: the group and the artwork drawn
+at 4x), against a Grade. Besides the frame it records `compileMs`, the compile
 of the case's revision, which for a layer includes the expansion
 ([Vector Artwork](../architecture/vector-artwork.md), "Compiling a Vector Artwork layer"). The case
 is written and builds; it has not been run, and it carries no `NODE_COST_BUDGETS` entry of its own,
