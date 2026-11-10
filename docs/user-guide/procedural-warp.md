@@ -1,7 +1,7 @@
 # Procedural Warp
 
 **Procedural Warp** bends the picture by a formula: twirl, bulge or pinch, a glass sphere, ripples,
-waves, a polar wrap or a magnifying loupe. Find it under **Distort** in the Add menu. The rules are in
+waves, a polar wrap, a magnifying loupe, a bent or split frame, turbulent noise or raindrops. Find it under **Distort** in the Add menu. The rules are in
 [Image filters](../architecture/image-filters.md#procedural-warp).
 
 Pick the **Mode** first; the card and Properties show only the values that mode uses. Every mode leaves
@@ -53,6 +53,52 @@ A loupe at **Center**: inside the circle or square of **Radius** the picture is 
 **Magnification** (200% is twice the size). **Grow with Magnification** makes the loupe itself grow as you
 magnify (Size), or the loupe and its soft edge (Size and Feather). **Feather** softens the edge inside
 the loupe.
+
+Magnify also has **Pull** and a **Pull Point** (drag it on the pad or in the Viewer): the loupe drags
+the picture towards that point, most at the centre, so a pull of 100% moves the centre's picture all the
+way to the Pull Point.
+
+Ripple has **Pulse Radius** and **Pulse Speed** (pixels, and pixels a second): with either set the rings
+only move inside a front that travels outward, so a single wave goes out and the water behind it is stirred.
+
+## Warp
+
+Bends the whole frame by one of thirteen **Styles**: Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave,
+Fish, Rise, Fisheye, Inflate, Squeeze and Twist. **Bend** is how far (negative bends the other way);
+**Horizontal Distortion** and **Vertical Distortion** add a perspective, as if one side of the picture
+were nearer. A bend of 0 with no distortion leaves the picture alone.
+
+## Bend
+
+Bows the picture along a **Direction** (on the dial) with a smooth bump about **Center**, **Height** pixels
+wide: the picture is pushed along the direction by **Bend**, most at the centre line and not at all at the
+edges of the bump.
+
+## Split
+
+Cuts the picture along the line from **Line Start** to **Line End** (drag both ends on the pad or in the
+Viewer) and slides the two halves apart by **Split Distance**; the gap between them is transparent. Turn
+on **Mirror** instead to reflect one side onto the other (a mirror line you can move with the two points).
+
+## Turbulent
+
+Pushes the picture around with fractal noise, like heat haze or a flag in a gale. **Displacement** is how
+far (pixels), **Noise Size** the size of the swirls (each axis), **Noise Offset** slides the pattern,
+**Complexity** adds finer detail (octaves) and **Evolution** (degrees) makes it change over time, so key it
+to animate. **Seed** picks another pattern, and **Pin Edges** holds the frame's edges still.
+
+## Drizzle
+
+Raindrops on a pond: up to 64 **Drops** land across the frame and each sends a ring out to **Radius**,
+fading as it spreads. **Wavelength** and **Amplitude** shape the rings, **Phase** and **Speed** move them
+through their life, and **Seed** scatters the drops somewhere else.
+
+## Handles in the Viewer
+
+With the node selected the Viewer shows its handles. Drag a point (the centre, the Pull Point, the line's
+ends) to move it, or drag the **ring** to set the radius; the inner dashed ring of Twirl, Bulge / Pinch and
+Ripple is where the falloff starts. Each drag is one Undo step, and Escape keeps the drag as it stands. On
+the card, **Radius** and **Falloff** are one two-handle range bar.
 
 ## Every mode
 

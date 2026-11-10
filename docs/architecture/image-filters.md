@@ -3062,6 +3062,34 @@ degrees.
 | Wave | Parallel waves across the whole frame, sideways to their travel. | Wave (Sine, Triangle, Square, Saw), Wavelength, Amplitude, Direction (90 degrees, clockwise from up, a dial), Phase, Speed, Pin Edges (None, All Edges, Left, Right, Top, Bottom, Left and Right, Top and Bottom). |
 | Polar Coordinates | Wraps the frame into a disc about its centre (Rectangular to Polar), or unwraps a disc into the frame (Polar to Rectangular). | Conversion, Interpolation (100%: 0 is the picture, 100 the full conversion). |
 | Magnify | A loupe: a circle or square in which the picture is enlarged about the centre. | Center, Shape, Radius, Magnification (200%), Grow with Magnification (Nothing, Size, Size and Feather), Feather (px, inside the edge). |
+| Warp | A frame-wide shape bent by a **Style** (Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist): the classic warp styles, with the bend and the horizontal and vertical distortion working in the frame's normalised coordinates. | Style (Arc), Bend (50%, -100 to 100), Horizontal Distortion and Vertical Distortion (0%, -100 to 100). |
+| Bend | A smooth bump: the picture is shifted along a Direction by a (1 - w^2)^2 profile of the distance from the centre line, so it bows without a kink. | Center, Direction (90 degrees, a dial), Height (400 px, the bump's width), Bend (50%). |
+| Split | Cuts the picture along a line and moves the two halves apart by **Split Distance** (the gap between them is transparent), or with **Mirror** reflects one side of the line onto the other. | Line Start, Line End (points on the pad and the Viewer), Split Distance (40 px), Mirror (off). |
+| Turbulent | Displaces the picture by two decorrelated Perlin fractal noises (the Fields Noise operation, streams 0 and 1), moving along the noise, evolving with time. | Displacement (50 px), Noise Size (100 x 100 px), Noise Offset, Complexity (octaves, 3), Evolution (degrees), Seed (1), Pin Edges. |
+| Drizzle | Rings from up to 64 drops scattered over the frame by a seeded hash, each expanding to **Radius** and fading as it ages (rain on water). | Radius (the longest ring), Drops (12), Wavelength, Amplitude, Phase, Speed, Seed (1). |
+
+**Magnify's Pull.** Magnify also has **Pull** (percent, 0 off) and **Pull Point**: a second point whose
+direction the loupe drags the picture towards (a two-point move, the Flo Motion preset of the layer-based
+compositors). Inside the loupe the read position is shifted by `pull x (Pull Point - Center)` times
+`smooth01((size - distance) / size)`, so the centre moves fully and the edge not at all.
+
+**Ripple's Pulse.** Ripple has **Pulse Radius** (px) and **Pulse Speed** (px a second, both 0 = off): a
+wavefront that travels outward from the centre. Only the rings inside the front move, eased in over one
+wavelength (`smooth01((front - r) / wavelength)`); the front is `pulse radius + pulse speed x seconds`.
+
+**Warp, Bend and Split zero points.** Warp with a Bend of 0 and no distortion, Bend with a Bend of 0, Split
+with a Split Distance of 0 and Mirror off, Turbulent with a Displacement of 0 and Drizzle with an
+Amplitude of 0 read every pixel at its own position: the picture passes through exactly.
+
+**Turbulent keeps its noise inside the node.** The two noises are carried by the one ProceduralWarp
+instruction (two field Noise blocks after its own four vec4, `blockSize` = 4 + 2 x (4 + 5 x octaves)),
+because the evaluator refuses one parameter identity used by two instructions of a program.
+
+**Viewer handles.** Selecting the node shows its handles on the Viewer: the Center, Pull Point, Line
+Start and Line End as points (drag to move; one command per drag, Undo restores it, Escape confirms the
+drag as it stands), and the Radius as a ring about the Center (drag the ring to set it). Twirl, Bulge /
+Pinch and Ripple also show the Falloff as a dashed ring inside, and the card's **Radius** and **Falloff**
+are one two-handle range control (the outer handle the radius, the inner one where the fade starts).
 
 **Filter** (Bilinear, Nearest, Bicubic) and **Edges** (Transparent, Extend, Repeat, Mirror) are shared by
 every mode: the filter is how a read between texels is made, the edge rule what shows where a read
@@ -3109,7 +3137,7 @@ positions), `snapshot_compiler_procedural_warp_tests` (lowering per mode, the co
 activity and time dependence, pass-through cases, the pixels of every mode against the reference, region
 of interest, render scale, edge rule, budget, cancellation and cache identity), the Required
 `node.bloom.procedural-warp` and `feature.field.op.procedural-warp` GPU coverage fixtures and the native
-CPU/GPU parity cases (every mode through every filter). The user guide is
+CPU/GPU parity cases (every mode through every filter, and every Warp style), `bloom.ui.warp-viewer` (the handles) and the node-evidence scenarios for Warp, Bend, Split, Turbulent, Drizzle, Magnify Pull and Ripple Pulse. The user guide is
 [Procedural Warp](../user-guide/procedural-warp.md).
 
 ## Corner Pin, ST Map and Displace

@@ -182,8 +182,8 @@ block is four vec4, `[mode, centre x, centre y, radius] [1 / radius, a0, a1, a2]
 [a7 .. a10]`; the host (`encodeProceduralWarp`) resolves every angle to turns, every reciprocal, and
 the per-frame phase `frac(phase / 360 + speed x seconds)` in binary64, so the kernel holds no clock
 and divides by no operand that can be zero. The stored mode values are 0 Twirl, 1 Bulge / Pinch,
-2 Spherize, 3 Ripple, 4 Wave, 5 Polar Coordinates, 6 Magnify; a new mode is appended after Magnify
-(`kProceduralWarpModeCount`).
+2 Spherize, 3 Ripple, 4 Wave, 5 Polar Coordinates, 6 Magnify, 7 Warp, 8 Bend, 9 Split, 10 Turbulent,
+11 Drizzle; a new mode is appended after Drizzle (`kProceduralWarpModeCount`, 12).
 
 The radial modes (Twirl, Bulge / Pinch, Spherize, Ripple, Magnify) work on `d = p - centre`,
 `r = |d|` and `t = r / radius`. They leave `p` alone at and beyond the radius (tested on the larger
@@ -200,6 +200,13 @@ cubic smoothstep on [0, 1] (1 with a falloff of 0).
 | Wave | `p` read back along the normal of the travel direction (clockwise from up) by `amplitude x w(p . travel / wavelength - phase)`, `w` the Sine, Triangle, Square or Saw wave in [-1, 1], 0 at 0 and rising; each pinned frame edge (a mask: 1 left, 2 right, 4 top, 8 bottom) multiplies the move by `smooth01(distance to the edge / wavelength)`. |
 | Polar Coordinates | About the frame's centre, angles clockwise from up, the frame's left edge at angle 0 and its top row at the pole, the polar radius half the shorter side: Rectangular to Polar reads the frame position whose column is the pixel's angle and whose row is its radius; Polar to Rectangular the inverse. The move to the converted position is scaled by the interpolation. |
 | Magnify | Inside the circle or square of the radius (the larger axis for a square), `d` divided by the magnification, with the weight `smooth01((radius - distance) / feather)` (1 with no feather); 0 outside. |
+| Magnify, pull | A second point `c2` (`pullPoint`) drags the loupe: inside the shape the read position is moved by `-pull x (c2 - c) x smooth01((size - distance) / size)` as well, `size` the grown radius. |
+| Ripple, pulse | With a pulse radius or speed the front `f = pulseRadius + pulseSpeed x seconds` (the time resolved on the host) limits the rings: each ring's amplitude is scaled by `smooth01((f - r) / wavelength)`, so only the rings behind the front move. |
+| Warp | In frame coordinates `u = x / (w / 2)`, `v = y / (h / 2)`, the horizontal and vertical distortion are a perspective, `u1 = u / (1 + 0.5 h cv)`, `v1 = v / (1 + 0.5 vd cu)`, then the style of the 13 (Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist) offsets `(u1, v1)` to `(u2, v2)` by the bend; the move is `((u2 - u) w / 2, (v2 - v) h / 2)`, so a zero bend with no distortion is the identity. |
+| Bend | `w = (distance along the direction from the centre) / (height / 2)`; the move along the direction's normal is `bend x (1 - w^2)^2` for `|w| < 1` and 0 outside. |
+| Split | With `sd` the signed distance to the line (its normal to the left) and `gap` the split distance: a pixel with `sd > gap` reads `gap` nearer the line, one with `sd < -gap` reads it on the other side, and the gap `|sd| < gap` has the weight 0 (a Multiply by the weight swizzle in the program, transparent). With Mirror the side `sd < d` reads the reflection about the line `sd = d`, the other side being kept. |
+| Turbulent | `q = p + displacement x w x (n0, n1)`, `n0, n1` the field Noise operation's streams 0 and 1 (Perlin fractal Brownian, bipolar, `complexity` octaves, `noiseSize` and `noiseOffset` in pixels, evolution in turns) and `w` the product of `smooth01(distance to each pinned edge / ease length)`, the ease length the larger noise size. |
+| Drizzle | Drop `i` of `drops` (at most 64) is placed by `pcg4d` of `(i, 0..2, 0, seed)` as unit values `u0..u2`: its centre `((2 u0 - 1) w / 2, (2 u1 - 1) h / 2)` and age `fract(phase + u2)`. Its ring is at `r = age x radius` and moves the pixels inside it outward by `amplitude (1 - age) smooth01((front - r) / wavelength) sin(-(front - r) / wavelength turns)`; the drops' moves add. |
 
 Magnify's raster reads the image twice, at `p` and at `q`, and blends from the plain read to the
 magnified one by the weight (Math Lerp), so the feather is a soft edge, not a smear. A position
