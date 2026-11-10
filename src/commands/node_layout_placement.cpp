@@ -97,6 +97,9 @@ constexpr double kPadCardWidth = 336.0;
 // #525: the Noise card's long fractal-noise row labels ("Offset (Offset Turbulence)", "Sub Scaling
 // (lacunarity)") beside the dropdown field control.
 constexpr double kFieldNoiseCardWidth = 408.0;
+// #510: the Procedural Warp card's Falloff range row (its two values beside the label and the track)
+// is wider than any dropdown card.
+constexpr double kProceduralWarpCardWidth = 480.0;
 // #564: the motion cards (Frame Rate Hold has no dropdown) are never narrower than this.
 constexpr double kMotionCardWidth = 344.0;
 
@@ -440,6 +443,8 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                             static_cast<double>(controls.sliders) * (2.0 * kControl - kRow + kSmall);
     const double controlsWidth =
         node->typeId == document::kFieldNoiseNodeType ? std::max(cardWidth, kFieldNoiseCardWidth)
+        : node->typeId == document::kProceduralWarpNodeType
+            ? std::max(cardWidth, kProceduralWarpCardWidth)
         : controls.pad                                 ? std::max(cardWidth, kPadCardWidth)
                                                        : cardWidth;
     controlsHeight += static_cast<double>(controls.curves) *

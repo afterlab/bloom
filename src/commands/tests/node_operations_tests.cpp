@@ -51,6 +51,8 @@ bool sameTruth(const Snapshot& left, const Snapshot& right) {
 }
 
 struct Fixture {
+    Fixture() = default;
+    explicit Fixture(const CommandStack::HistoryLimits limits) : stack(document, limits) {}
     Document document{makeProject()};
     CommandStack stack{document};
 };
@@ -1524,7 +1526,9 @@ void testRecipeCommands(TestContext& test) {
 }
 
 void testAddAndLayout(TestContext& test) {
-    Fixture fixture;
+    // Every built-in definition below is added through one history entry each, so the fixture's
+    // history holds more entries than the registry has definitions (the default cap is 256).
+    Fixture fixture{CommandStack::HistoryLimits{4096, CommandStack::HistoryLimits{}.maxChargedBytes}};
     // #344 #530 #509 #349: the path processing and analysis nodes are among the definitions this
     // loop adds, lays out and checks.
     for (const auto* type :
