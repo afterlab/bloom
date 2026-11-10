@@ -66,7 +66,8 @@ void expect(const bool condition, const std::string& what) {
 
 [[nodiscard]] int run() {
     const std::set<std::string> sessionSourceOperations{
-        "bloom.asset.reload", "bloom.cryptomatte.pick", "bloom.layer.set-anchor-preset"};
+        "bloom.asset.reload", "bloom.cryptomatte.pick", "bloom.layer.set-anchor-preset",
+        "bloom.node.write-to-path"};
     const auto registry = OperationRegistry::builtIn();
     expect(!registry.descriptors().empty(), "the registry has operations");
 

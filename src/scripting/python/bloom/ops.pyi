@@ -8651,7 +8651,8 @@ class NodeOps:
         (the Path node written). Errors: "Node N does not exist"; "Node N has no Path output"; the
         node's own diagnostic when it fails at that time (a count past the Path caps, a bad operand);
         "Node N is not a Path node"; bloom.scripting.cancelled. Undo: one step removes the new node, or
-        restores the target's value. MCP example: {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.
+        restores the target's value. MCP example:
+        {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
