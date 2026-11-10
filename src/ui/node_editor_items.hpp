@@ -323,6 +323,13 @@ class NodeItem final : public QGraphicsObject {
         // carry one, only where a view shows them, and never rebuilds a selector (bug #401).
         if (session_)
             connect(session_, &CompositionSession::drivenValuesChanged, this, [this] {
+                // #598: a value node whose evaluation failed (a Warp Path of size 0 draws
+                // nothing) says so on its header, with the reason on hover.
+                if (auto problem = session_->valueNodeDiagnostic(id_); problem != valueProblem_) {
+                    valueProblem_ = std::move(problem);
+                    setToolTip(valueProblem_);
+                    update();
+                }
                 if (!timeVarying_)
                     return;
                 if (!shownInAView()) {
@@ -526,7 +533,7 @@ class NodeItem final : public QGraphicsObject {
         const auto categoryWidth = metrics.horizontalAdvance(eyebrow_);
         const qreal badge = kit::px(kit::Size::IconSmall) + kCardPadding;
         const auto right = width_ - kCardPadding - (layout_.muted ? badge : 0.0) -
-                           (assetProblem() ? badge : 0.0);
+                           (assetProblem() ? badge : 0.0) - (valueProblem_.isEmpty() ? 0.0 : badge);
         const qreal header = headerHeight();
         const QRectF category(right - categoryWidth, 0, categoryWidth, header);
         const qreal left = collapseToggleRect().right() + kit::px(kit::Spacing::XS);
@@ -558,6 +565,9 @@ class NodeItem final : public QGraphicsObject {
     // True for an Image, Video or Audio source whose asset is gone, gapped or unreadable: the
     // header shows a warning badge for it.
     [[nodiscard]] bool assetProblem() const;
+    // #598: what the value evaluation said about this node (empty when nothing): a warning badge on
+    // the header, the text on hover.
+    [[nodiscard]] const QString& valueProblem() const noexcept { return valueProblem_; }
     [[nodiscard]] qreal parameterRowHeight() const { return rowHeight_; }
     void setPrimary(bool primary) {
         primary_ = primary;
@@ -961,8 +971,9 @@ class NodeItem final : public QGraphicsObject {
                 binding.role == "composition")
                 continue;
             // #342: which group a Node Group reads is chosen in Properties, like a source's.
-            if (document::usesGroupReference(node.typeId) &&
-                binding.role == document::kNodeGroupReferenceRole)
+            if (std::ranges::find(document::groupReferenceRoles(node.typeId),
+                                  std::string_view(binding.role)) !=
+                document::groupReferenceRoles(node.typeId).end())
                 continue;
             // #364: the matte list is edited by name in Properties and by picking in the Viewer.
             if (node.typeId == document::kCryptomatteNodeType &&
@@ -2445,6 +2456,7 @@ class NodeItem final : public QGraphicsObject {
     bool timeOnly_ = false;
     bool timeVarying_ = false;
     bool timeStale_ = false;
+    QString valueProblem_;
     std::vector<SocketItem*> sockets_;
     std::set<QString> linkedInputs_;
     // Which parameter role each control edits. Keyed by widget because that is what the proxy sweep

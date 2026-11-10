@@ -23,6 +23,7 @@
 #include <QStyleOptionGraphicsItem>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -40,6 +41,9 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/path_value.hpp>
+#include <bloom/document/shape.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -2858,9 +2862,100 @@ void motionBlurCards() {
 }
 
 
+// #598: a Warp Path whose size is 0 draws nothing, and the card and Properties say why in the words the
+// MCP refusal carries: a warning badge on the card's header with the reason on hover, and the reason on
+// the node's Path readout in Properties. A size above 0 clears both.
+void warpPathRefusal() {
+    CardFixture fixture(document::kWarpPathNodeType);
+    const auto composition = fixture.project.initialCompositionId;
+    const auto run = [&](auto&& build) {
+        commands::Transaction transaction("Warp refusal", fixture.document.snapshot().revision());
+        build(transaction);
+        return fixture.stack.execute(std::move(transaction));
+    };
+    const auto path = addNode(fixture.session, document::kPathValueNodeType);
+    commands::ShapeLayerGeometry geometry;
+    document::PathContour square;
+    square.closed = true;
+    for (const auto& point : {document::Vec2d{-40, -40}, document::Vec2d{40, -40},
+                              document::Vec2d{40, 40}, document::Vec2d{-40, 40}})
+        square.anchors.push_back({point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
+    geometry.path = document::PathValue::fromContour(square);
+    commands::ShapeLayerStyle style;
+    style.fillColor = core::Color4d{0.9, 0.5, 0.1, 1.0};
+    const auto shape =
+        run([&](auto& t) {
+            t.template emplace<commands::AddShapeLayer>(composition, document::ShapeKind::Path,
+                                                        geometry, style);
+        }).template outputId<document::NodeId>("shapeNode");
+    expect(shape.has_value(), "warp refusal: the shape layer is added");
+    if (!shape)
+        return;
+    const auto parameterOf = [&](const document::NodeId node, const std::string_view role) {
+        for (const auto& binding :
+             fixture.session.composition()->graph().findNode(node)->parameters)
+            if (binding.role == role)
+                return binding.parameterId;
+        return document::ParameterId{};
+    };
+    expect(fixture.session.setParameterValue(parameterOf(path, document::kValueParameterRole),
+                                             *geometry.path, "Path"),
+           "warp refusal: the Path holds a square");
+    for (const auto& [from, port, to] :
+         {std::tuple{path, std::string(document::kValuePortName), fixture.node},
+          std::tuple{fixture.node, std::string("path"), *shape}})
+        expect(run([&](auto& t) {
+                   t.template emplace<commands::ConnectPorts>(
+                       composition, document::OutputPortRef{from, port},
+                       document::NodeInputRef{to, "path"});
+               }).succeeded(),
+               "warp refusal: the path chain connects");
+    ui::PropertiesEditor properties(fixture.session);
+    fixture.session.selectNode(fixture.node);
+    properties.resize(700, 1200);
+    properties.show();
+    const auto settle = [&](const bool problem) {
+        QElapsedTimer wait;
+        wait.start();
+        while (wait.elapsed() < 15'000) {
+            fixture.session.refreshDrivenValues();
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+            if (fixture.item != nullptr && fixture.item->valueProblem().isEmpty() != problem &&
+                !fixture.session.valueOutputText(fixture.node, "path").isEmpty())
+                return true;
+        }
+        return false;
+    };
+    const auto readout = [&] {
+        auto* label = properties.findChild<QLabel*>("propertiesValueOutput.path");
+        return label == nullptr ? QString{} : label->text();
+    };
+    expect(settle(false), "warp refusal: a working warp evaluates");
+    expect(fixture.item->valueProblem().isEmpty() && !readout().contains("not above zero"),
+           "warp refusal: a working warp shows no problem");
+    expect(fixture.session.setParameterValue(parameterOf(fixture.node, "size"), 0.0, "Size 0"),
+           "warp refusal: the size is set to 0");
+    expect(settle(true), "warp refusal: the size of 0 is reported");
+    const QString reason = "Warp Path size is not above zero";
+    expect(fixture.item->valueProblem().contains(reason) &&
+               fixture.item->toolTip().contains("must be above 0 pixels"),
+           "warp refusal: the card carries the refusal and its reason on hover");
+    expect(fixture.session.valueNodeDiagnostic(fixture.node).contains(reason),
+           "warp refusal: the session holds the node's refusal");
+    expect(readout().contains(reason), "warp refusal: Properties shows the refusal on the Path readout");
+    capture(fixture, QStringLiteral("warp-path-size-zero"));
+    if (const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR"); !directory.isEmpty())
+        (void)properties.grab().save(directory + QStringLiteral("/warp-path-size-zero-properties.png"));
+    expect(fixture.session.setParameterValue(parameterOf(fixture.node, "size"), 40.0, "Size 40"),
+           "warp refusal: the size is set back");
+    expect(settle(false) && !readout().contains(reason),
+           "warp refusal: a size above 0 clears the badge and the readout");
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
+    warpPathRefusal();
     everyCard();
     sliderVariant();
     exposureCard();

@@ -104,7 +104,10 @@ void PropertiesEditor::configureDrivenRows() {
                     document::NodeId::fromRaw(label->property("valueOutputNodeId").toULongLong());
                 const auto text = session_.valueOutputText(node, port.toStdString());
                 label->setText(text.isEmpty() ? tr("Resolving…") : text);
-                label->setToolTip(label->text());
+                // #598: the readout carries a refusal's summary; its tooltip the whole reason.
+                const auto problem = session_.valueNodeDiagnostic(node);
+                label->setToolTip(problem.isEmpty() ? label->text()
+                                                    : label->text() + QStringLiteral("\n") + problem);
             }
         });
     }

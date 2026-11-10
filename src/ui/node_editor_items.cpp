@@ -553,6 +553,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
             kit::iconPixmap(kit::IconId::Hidden, kit::Size::IconSmall, kit::Color::Foreground));
     if (assetProblem())
         drawBadge(kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn));
+    // #598: the value evaluation refused this node's inputs (its reason is the card's tooltip).
+    if (!valueProblem_.isEmpty())
+        drawBadge(kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn));
     if (layout_.collapsed) {
         selectionOutline();
         return;

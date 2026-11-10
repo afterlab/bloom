@@ -26,6 +26,9 @@ class DrivenValueResolver final : public QObject {
         std::map<ValueOutputKey, QString> outputs;
         // #543: the same driven values, typed, for a surface that draws one (a gradient stop).
         std::map<document::ParameterId, runtime::CompiledValue> values;
+        // #598: what a value node's evaluation said about it this frame (a Warp Path whose size is
+        // 0), summary and detail, for the warning badge on its card.
+        std::map<document::NodeId, QString> nodeDiagnostics;
     };
     // #358 work counters, shared with the worker task.
     struct Work final {

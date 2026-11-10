@@ -150,6 +150,11 @@ QString CompositionSession::valueOutputText(const document::NodeId nodeId,
     return found == valueOutputText_.end() ? QString{} : found->second;
 }
 
+QString CompositionSession::valueNodeDiagnostic(const document::NodeId nodeId) const {
+    const auto found = valueNodeDiagnostics_.find(nodeId);
+    return found == valueNodeDiagnostics_.end() ? QString{} : found->second;
+}
+
 CompositionSession::DrivenValueWork CompositionSession::drivenValueWork() const noexcept {
     if (drivenValues_ == nullptr)
         return {};
@@ -207,10 +212,11 @@ void CompositionSession::refreshDrivenValues() {
     }
     drivenRequest_ = signature;
     if (driven.empty() && !hasBoundsReadout && readoutNodes.empty()) {
-        if (!drivenText_.empty() || !valueOutputText_.empty()) {
+        if (!drivenText_.empty() || !valueOutputText_.empty() || !valueNodeDiagnostics_.empty()) {
             drivenText_.clear();
             drivenTyped_.clear();
             valueOutputText_.clear();
+            valueNodeDiagnostics_.clear();
             Q_EMIT drivenValuesChanged();
         }
         return;
@@ -221,6 +227,7 @@ void CompositionSession::refreshDrivenValues() {
             drivenText_ = values.parameters;
             drivenTyped_ = values.values;
             valueOutputText_ = values.outputs;
+            valueNodeDiagnostics_ = values.nodeDiagnostics;
             Q_EMIT drivenValuesChanged();
         };
     }

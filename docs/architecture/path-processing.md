@@ -396,16 +396,27 @@ Benchmark scenario: `warp-path-2k` in `tools/bench` (written, not run).
 ### Warp Path (Function)
 
 Warp Path (Function) (`bloom.warp-path-function`, Text & Paths) bends a path with a group's function, the
-custom case of #598. It is a function consumer like Function Plot: it names one group (scalar in, scalar
-out) and reads `f` through the same evaluator. A point `(x, y)` goes to `(x + amount * f(y / size), y)` in
-the matrix space (Position, Anchor, Scale, Rotation, Skew and Skew axis, as on Warp Path), so a group
-holding Sine is the issue's `(x + sin y, y)`. Rotate the space by 90 degrees to displace y by x, or chain
-two nodes to do both; this is the recorded default in place of a second function slot. The same adaptive
-subdivision, tolerance, limits and cancellation as Warp Path apply. A node naming no group does not
-compile. A group that has no answer at a point of the path (1 / x at zero) or answers a value that is not
-finite stops the warp with a diagnostic on the node and answers the empty path. Tests:
-`testWarpPathFunction` in the snapshot compiler tests (exact anchors, deviation from the analytic curve,
-no-answer refusal, unset group).
+custom case of #598. It is a function consumer like Function Plot: it names a group in **Group** (scalar
+in, scalar out) and reads `f` through the same evaluator, and optionally a second group in **Y Group**
+(`groupY`), read as `g`. A point `(x, y)` goes to `(x + amount * f(y / size), y + amount * g(x / size))` in
+the matrix space (Position, Anchor, Scale, Rotation, Skew and Skew axis, as on Warp Path); both functions
+read the point's own coordinates. With Y Group unset (None, the default) y stays, so a group holding Sine
+is the issue's `(x + sin y, y)`, and Sine with a Cosine Y Group is `(x + sin y, y + cos x)` on one node.
+Each group's body is expanded and lowered on its own (`secondFunctionBodyKey` names the second in the
+expansion), and the node is as time dependent as either body. A named Y Group that is missing does not
+compile ("Function cannot read its second group"). The same adaptive subdivision, tolerance, limits and
+cancellation as Warp Path apply. A node naming no Group does not compile. A group that has no answer at a
+point of the path (1 / x at zero) or answers a value that is not finite stops the warp with a diagnostic on
+the node and answers the empty path. Properties shows a chooser per group (Open and New beside each).
+Tests: `testWarpPathFunction` in the snapshot compiler tests (exact anchors, deviation from the analytic
+curve on one and on both axes, no-answer refusal, unset and missing groups);
+`bloom.runtime.gpu_warp_path_native` (one and two axes against the CPU reference on the device);
+`bloom.ui.viewer_export_warp_path` (both axes through the Viewer, RAM preview and export).
+
+A warp whose operands it refuses (a size of 0, a scale of 0, a tolerance out of range) answers the empty
+path. The refusal is the evaluation diagnostic MCP and scripts receive, and the app shows the same words:
+a warning badge on the node's card header with the summary and reason on hover, and the summary on the
+node's Path readout in Properties (`bloom.ui.grading-cards`, `warpPathRefusal`).
 
 ## Reference library
 

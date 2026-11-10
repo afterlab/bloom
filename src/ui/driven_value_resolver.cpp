@@ -308,6 +308,18 @@ void DrivenValueResolver::start() {
                     evaluatedOutputs = evaluated.outputs;
                     valueDiagnostics = evaluated.diagnostics;
                 }
+                for (const auto& diagnostic : valueDiagnostics) {
+                    if (!diagnostic.nodeId.isValid())
+                        continue;
+                    auto& text = values->nodeDiagnostics[diagnostic.nodeId];
+                    const auto line = QString::fromStdString(diagnostic.summary) +
+                                      (diagnostic.detail.empty()
+                                           ? QString{}
+                                           : QStringLiteral(": ") +
+                                                 QString::fromStdString(diagnostic.detail));
+                    if (!text.contains(line))
+                        text += (text.isEmpty() ? QString{} : QStringLiteral("\n")) + line;
+                }
                 for (const auto& operation : plan.valueOperations()) {
                     if (!operation.sourceNodeId.isValid())
                         continue;
@@ -322,9 +334,16 @@ void DrivenValueResolver::start() {
                         if (!slot)
                             continue;
                         const auto index = operation.firstOutput.value() + *slot;
-                        if (index < evaluatedOutputs.size())
-                            values->outputs[{node->id, output.name}] =
-                                readoutText(*node, output.name, evaluatedOutputs[index]);
+                        if (index >= evaluatedOutputs.size())
+                            continue;
+                        auto text = readoutText(*node, output.name, evaluatedOutputs[index]);
+                        // #598: why the node answered what it did (a Warp Path whose size is 0
+                        // answers the empty path), on the node's own readouts, in the words
+                        // MCP and scripts get.
+                        for (const auto& diagnostic : valueDiagnostics)
+                            if (diagnostic.nodeId == node->id)
+                                text += QString(" · %1").arg(QString::fromStdString(diagnostic.summary));
+                        values->outputs[{node->id, output.name}] = std::move(text);
                     }
                 }
                 // An Image Statistics that produced nothing (cancelled, or its image never

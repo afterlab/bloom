@@ -655,6 +655,9 @@ class CompositionSession final : public QObject {
     // Properties and node cards never evaluate the graph on the UI thread.
     [[nodiscard]] QString valueOutputText(document::NodeId nodeId,
                                           std::string_view outputPort) const;
+    // #598: what the last value evaluation said about a value node (summary: detail, one line per
+    // diagnostic), or an empty string when it said nothing. Read by the card's warning badge.
+    [[nodiscard]] QString valueNodeDiagnostic(document::NodeId nodeId) const;
     // Requests a fresh resolution of every driven parameter in the composition. Idempotent: a
     // request identical to the one already in flight or already answered -- same revision, same
     // time, same parameters -- starts nothing, so a surface may call it from the same refresh that
@@ -1221,6 +1224,7 @@ class CompositionSession final : public QObject {
     std::map<document::ParameterId, QString> drivenText_;
     std::map<document::ParameterId, runtime::CompiledValue> drivenTyped_;
     std::map<std::pair<document::NodeId, std::string>, QString> valueOutputText_;
+    std::map<document::NodeId, QString> valueNodeDiagnostics_;
 };
 
 } // namespace bloom::ui
