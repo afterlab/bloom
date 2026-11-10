@@ -10,6 +10,7 @@
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/vector_artwork_nodes.hpp>
 #include <limits>
 #include <memory>
 
@@ -258,13 +259,16 @@ void testSearchKeyboardAndMenus() {
     auto* popup = search(f);
     auto* field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     auto* list = popup->findChild<QListView*>();
-    // #554: search lists every node, the reroute included, so "Dot" finds it.
+    // #554: search lists every node, the reroute included, so "Dot" finds it. #642: a Vector
+    // Artwork node is made only by importing an SVG, so it is the one node search leaves out.
     expect(popup->isVisible() &&
                resultRows(list->model()) ==
-                   static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
+                   static_cast<int>(document::builtInNodeDefinitions().definitions().size()) - 1,
            "Tab opens every registered node kind at the cursor");
     expect(rowForKey(list->model(), document::kRerouteNodeType).isValid(),
            "the reroute is one of them");
+    expect(!rowForKey(list->model(), document::kVectorArtworkNodeType).isValid(),
+           "an import-only Vector Artwork node is not offered");
     // Task S1, item 4: the list is sectioned, and carries a heading only for a section that has
     // results under it. #554: the owner's tree, in its order; the eight value groups stay sections
     // of their own here, and Instances & Particles has no node yet so it does not show.

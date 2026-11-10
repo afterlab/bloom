@@ -18,7 +18,7 @@
 int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
     // #637 adds bloom.node.write-to-path.
-    if (registry.descriptors().size() != 151U ||
+    if (registry.descriptors().size() != 152U ||
         registry.find("bloom.layer.set-timing") == nullptr ||
         registry.find("bloom.node.write-to-path") == nullptr ||
         registry.find("bloom.layer.add-solid") == nullptr ||
