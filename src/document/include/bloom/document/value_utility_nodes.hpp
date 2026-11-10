@@ -133,6 +133,8 @@ enum class ValueUtilityKernel : std::uint8_t {
     // Source, as Path values.
     MaskPath,
     TextOutline,
+    // #637: a path with more or fewer points, spaced along each contour.
+    ResamplePath,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -482,6 +484,10 @@ selectorFromStoredValue(const std::array<Enumeration, Count>& vocabulary,
 struct ValueUtilityOperand final {
     std::string_view role;
     SocketValueKind kind = SocketValueKind::Scalar;
+    // The operand's own schema key, for a value that is not the generic one of its kind (#637: the
+    // count, gap, density and percentage of Resample Path, which Properties shows by mode). Empty
+    // is the kind's generic schema.
+    std::string_view schemaKey{};
     // The authored default, read according to `kind`: `number` for a Scalar and as the first
     // component of a vector, `y` and `z` for the rest of one, `integer`, `flag` and `text` for the
     // kinds that carry those. A Color operand always defaults to kDefaultValueColor -- opaque

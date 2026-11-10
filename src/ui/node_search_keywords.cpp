@@ -151,6 +151,8 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.mask-path", "Mask Outline|Stroke Mask|Mask To Path|Mask Shape|Roto Path"},
     {"bloom.text-outline", "Text To Shape|Glyph Outline|Stroke Text|Text Path|Create Outlines|"
                            "Letter Outline"},
+    {"bloom.resample-path", "Add Points|Subdivide|Equal Spacing|Even Points|Point Count|Densify|"
+                            "Reduce Points|Space Points"},
     {"bloom.round-corners", "Rounded Corners|Fillet|Smooth Corners|Corner Radius"},
     {"bloom.function-plot", "Graph|Plot|Curve|Chart|Equation|Sine Wave"},
     {"bloom.group-input", "Subgraph Input|Inputs|Function Input"},

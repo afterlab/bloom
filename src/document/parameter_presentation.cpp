@@ -4,6 +4,7 @@
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
@@ -402,6 +403,8 @@ constexpr std::array kChoiceSchemas{
     // Mask Path and Text Outline name the node they read: a picker, not a number.
     std::string_view("bloom.path.mask-source"),
     std::string_view("bloom.path.text-source"),
+    std::string_view("bloom.path.resample-mode"),
+    std::string_view("bloom.path.resample-output"),
     std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),
@@ -804,6 +807,19 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         other.named = true;
         return other;
     }
+    // #637 Resample Path: a count, a gap and a density are not bounded below the cap by the schema (a
+    // count past the Path caps is refused by the node with a diagnostic, never clamped here); a
+    // percentage of the points and the start offset run on a slider.
+    if (schemaKey == kResampleCountSchemaKey)
+        return whole(0.0, 1.0e9, 2.0, 1024.0);
+    if (schemaKey == kResampleGapSchemaKey)
+        return number(0.0, 1.0e9, 1.0, 100.0, 0.5, 2, kPixels);
+    if (schemaKey == kResampleDensitySchemaKey)
+        return number(0.0, 1.0e9, 1.0, 100.0, 0.5, 2);
+    if (schemaKey == kResamplePercentageSchemaKey)
+        return number(0.0, 1.0e6, 0.0, 200.0, 1.0, 1, kPercent);
+    if (schemaKey == kResampleStartOffsetSchemaKey)
+        return number(kLowest, kHighest, 0.0, 100.0, 0.5, 1, kPercent);
     // The value library: literals and operands carry no meaning beyond their kind, except where
     // the role says what the number is for.
     if (schemaKey == kScalarOperandParameterSchemaKey ||

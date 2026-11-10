@@ -4,6 +4,7 @@
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
@@ -231,6 +232,37 @@ constexpr std::array<ValueUtilitySelector, 1> kTextOutlineSelectors{
 constexpr std::array<ValueUtilityOutput, 2> kPathSourceOutputs{
     ValueUtilityOutput{"path", SocketValueKind::Path},
     ValueUtilityOutput{"count", SocketValueKind::Integer}};
+// #637 Resample Path. Distances are pixels, shares are percent, a density is points per 100 pixels.
+constexpr std::array<ValueUtilityOperand, 7> kResamplePathOperands{
+    ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
+    ValueUtilityOperand{.role = "count",
+                        .kind = SocketValueKind::Integer,
+                        .schemaKey = bloom::document::kResampleCountSchemaKey,
+                        .integer = 32},
+    ValueUtilityOperand{.role = "gap",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kResampleGapSchemaKey,
+                        .number = 10.0},
+    ValueUtilityOperand{.role = "density",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kResampleDensitySchemaKey,
+                        .number = 10.0},
+    ValueUtilityOperand{.role = "percentage",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kResamplePercentageSchemaKey,
+                        .number = 100.0},
+    ValueUtilityOperand{.role = "keepCorners", .kind = SocketValueKind::Boolean, .flag = true},
+    ValueUtilityOperand{.role = "startOffset",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kResampleStartOffsetSchemaKey,
+                        .number = 0.0}};
+constexpr std::array<ValueUtilitySelector, 2> kResamplePathSelectors{
+    ValueUtilitySelector{"mode", bloom::document::kResampleModeParameterSchemaKey,
+                         bloom::document::selectorStoredValue(
+                             bloom::document::ResampleMode::FixedCount)},
+    ValueUtilitySelector{"output", bloom::document::kResampleOutputParameterSchemaKey,
+                         bloom::document::selectorStoredValue(
+                             bloom::document::ResampleOutput::Curves)}};
 constexpr std::array<ValueUtilityOperand, 2> kRoundCornersOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "radius", .kind = SocketValueKind::Scalar, .number = 10.0}};
@@ -536,7 +568,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 81> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 82> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -783,6 +815,9 @@ constexpr std::array<ValueUtilityDescriptor, 81> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kTextOutlineNodeType, "Text Outline",
                            ValueUtilityKernel::TextOutline, NodeCategory::Values, kNoOperands,
                            kTextOutlineSelectors, kPathSourceOutputs},
+    ValueUtilityDescriptor{bloom::document::kResamplePathNodeType, "Resample Path",
+                           ValueUtilityKernel::ResamplePath, NodeCategory::Values,
+                           kResamplePathOperands, kResamplePathSelectors, kPathResult},
 };
 
 } // namespace

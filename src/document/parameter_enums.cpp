@@ -7,6 +7,7 @@
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
@@ -368,6 +369,12 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                      [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kOffsetJoinParameterSchemaKey)
         return named(kOffsetJoins, {"Miter", "Round", "Bevel"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kResampleModeParameterSchemaKey)
+        return named(kResampleModes, {"Fixed count", "Gap", "By length", "Percentage"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kResampleOutputParameterSchemaKey)
+        return named(kResampleOutputs, {"Straight", "Curves"},
                      [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kStrokeCapParameterSchemaKey)
         return named(kStrokeCaps, {"Butt", "Round", "Square"},

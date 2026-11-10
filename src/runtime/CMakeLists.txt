@@ -316,6 +316,8 @@ target_sources(
         value_utility_path.cpp
         value_utility_path_stroke.cpp
         value_utility_path_sources.cpp
+        value_utility_path_resample.cpp
+        path_resample.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include

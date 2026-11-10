@@ -33,6 +33,7 @@
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
@@ -109,11 +110,13 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     const auto integer = [&] { return std::holds_alternative<std::int64_t>(constant.value); };
     if (schemaKey == kScalarValueParameterSchemaKey ||
         schemaKey == kScalarOperandParameterSchemaKey ||
-        schemaKey == kStampRotationParameterSchemaKey) {
+        schemaKey == kStampRotationParameterSchemaKey || schemaKey == kResampleGapSchemaKey ||
+        schemaKey == kResampleDensitySchemaKey || schemaKey == kResamplePercentageSchemaKey ||
+        schemaKey == kResampleStartOffsetSchemaKey) {
         return finiteScalar();
     }
     if (schemaKey == kIntegerValueParameterSchemaKey ||
-        schemaKey == kIntegerOperandParameterSchemaKey) {
+        schemaKey == kIntegerOperandParameterSchemaKey || schemaKey == kResampleCountSchemaKey) {
         return integer();
     }
     if (schemaKey == kDataBlockParameterSchemaKey) {
@@ -207,6 +210,14 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kStampAlignParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kStampAligns, *stored).has_value();
+    }
+    if (schemaKey == kResampleModeParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kResampleModes, *stored).has_value();
+    }
+    if (schemaKey == kResampleOutputParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kResampleOutputs, *stored).has_value();
     }
     // #344: a path operand holds any valid path value, as a constant or a driver.
     if (schemaKey == kPathOperandParameterSchemaKey) {

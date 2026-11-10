@@ -75,6 +75,9 @@ struct ValueUtilityOutcome final {
     // broken plan than in a working one.
     bool failed = false;
     bool cancelled = false;
+    // A diagnosed condition that is not a failure: the outputs are the real answer, and `summary`
+    // and `detail` are recorded beside them (#637: a contour with no length).
+    bool notice = false;
     std::string_view summary;
     std::string_view detail;
     // Which operand was at fault, so the evaluator can name its parameter. Past the operand count

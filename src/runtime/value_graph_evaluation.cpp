@@ -1524,7 +1524,7 @@ void Evaluator::evaluateUtility(const runtime::CompiledValueOperation& operation
          kernel.textSource.has_value() ? &*kernel.textSource : nullptr});
     if (outcome.cancelled)
         return;
-    if (outcome.failed) {
+    if (outcome.failed || outcome.notice) {
         const auto& blamed = outcome.failedOperand < kernel.operands.size()
                                  ? kernel.operands[outcome.failedOperand]
                                  : CompiledValueOperand{};

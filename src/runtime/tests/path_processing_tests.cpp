@@ -5,10 +5,14 @@
 #include <bloom/runtime/value_utility_kernels.hpp>
 
 #include <bloom/document/path_value.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/render/text_raster.hpp>
+#include <bloom/runtime/cancellation.hpp>
+#include "../path_resample.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <chrono>
@@ -1048,6 +1052,367 @@ void testKernelBudgets(Expectations& expectations) {
     }
 }
 
+
+// ---- #637 Resample Path ----
+
+struct ResampleOptions final {
+    std::int64_t count = 32;
+    double gap = 10.0, density = 10.0, percentage = 100.0, startOffset = 0.0;
+    bool keepCorners = true;
+    document::ResampleMode mode = document::ResampleMode::FixedCount;
+    document::ResampleOutput output = document::ResampleOutput::Curves;
+};
+
+[[nodiscard]] ValueUtilityOutcome resample(const PathValue& path, const ResampleOptions& o) {
+    return run(Kernel::ResamplePath,
+               {wrap(path), o.count, o.gap, o.density, o.percentage, o.keepCorners, o.startOffset},
+               {document::selectorStoredValue(o.mode), document::selectorStoredValue(o.output)});
+}
+
+[[nodiscard]] ResampleOptions fixedCount(const std::int64_t count, const bool keepCorners = false) {
+    ResampleOptions o;
+    o.count = count;
+    o.keepCorners = keepCorners;
+    return o;
+}
+[[nodiscard]] ResampleOptions byGap(const double gap, const bool keepCorners = false) {
+    ResampleOptions o;
+    o.mode = document::ResampleMode::Gap;
+    o.gap = gap;
+    o.keepCorners = keepCorners;
+    return o;
+}
+
+[[nodiscard]] PathContour circle(const double radius, const Vec2d centre = {0, 0}) {
+    const double k = 0.5522847498307936 * radius;
+    PathContour contour;
+    contour.closed = true;
+    const auto at = [&](const double x, const double y, const Vec2d in, const Vec2d out) {
+        return PathAnchor{{centre.x + x, centre.y + y},
+                          Vec2d{centre.x + in.x, centre.y + in.y},
+                          Vec2d{centre.x + out.x, centre.y + out.y},
+                          document::PathAnchorMode::Mirrored};
+    };
+    contour.anchors = {at(radius, 0, {radius, -k}, {radius, k}),
+                       at(0, radius, {k, radius}, {-k, radius}),
+                       at(-radius, 0, {-radius, k}, {-radius, -k}),
+                       at(0, -radius, {-k, -radius}, {k, -radius})};
+    return contour;
+}
+
+[[nodiscard]] double arcStep(const PathContour& contour, const std::size_t index) {
+    const auto& a = contour.anchors[index].point;
+    const auto& b = contour.anchors[(index + 1) % contour.anchors.size()].point;
+    return std::hypot(b.x - a.x, b.y - a.y);
+}
+
+void testResamplePathKnownAnswers(Expectations& expectations) {
+    const auto line100 = single(polygon({{0, 0}, {100, 0}}, false));
+
+    // A 100 px line at a gap of 10 gives 11 points, 10 px apart, ends kept.
+    const auto gapped = resample(line100, byGap(10.0));
+    const auto& eleven = pathOf(gapped).contours.empty() ? PathContour{} : pathOf(gapped).contours[0];
+    expectations.expect(!gapped.failed && eleven.anchors.size() == 11,
+                        "a 100 px line at Gap 10 gives 11 points");
+    bool evenly = eleven.anchors.size() == 11;
+    for (std::size_t index = 0; evenly && index < eleven.anchors.size(); ++index)
+        evenly = near(eleven.anchors[index].point, Vec2d{10.0 * static_cast<double>(index), 0.0}, 1e-9);
+    expectations.expect(evenly, "the 11 points are 0, 10, ... 100 on the line");
+    expectations.expect(!eleven.closed && !eleven.anchors.front().outHandle &&
+                            !eleven.anchors.back().inHandle,
+                        "a straight line stays straight under Curves (no handles)");
+    // The gap is the largest step: 95 px at Gap 10 needs 10 steps of 9.5.
+    const auto ninety5 = pathOf(resample(single(polygon({{0, 0}, {95, 0}}, false)), byGap(10.0)));
+    expectations.expect(ninety5.contours[0].anchors.size() == 11 &&
+                            near(ninety5.contours[0].anchors[1].point.x, 9.5, 1e-9),
+                        "a gap that does not divide the length is the largest step, spread evenly");
+
+    // Fixed count: N points on every contour, open and closed alike, in a compound path.
+    PathValue compound;
+    compound.contours = {polygon({{0, 0}, {50, 0}, {50, 30}}, false), square(0, 0, 40),
+                         polygon({{0, 0}, {7, 3}}, false), circle(20)};
+    compound.fillRule = document::PathFillRule::EvenOdd;
+    for (const std::int64_t n : {2, 3, 7, 16, 100}) {
+        const auto fixed = resample(compound, fixedCount(n));
+        bool all = !fixed.failed && pathOf(fixed).contours.size() == compound.contours.size();
+        for (std::size_t index = 0; all && index < compound.contours.size(); ++index) {
+            const auto want = static_cast<std::size_t>(
+                std::max<std::int64_t>(n, compound.contours[index].closed ? 3 : 2));
+            all = pathOf(fixed).contours[index].anchors.size() == want &&
+                  pathOf(fixed).contours[index].closed == compound.contours[index].closed;
+        }
+        expectations.expect(all, "Fixed count " + std::to_string(n) +
+                                     " gives that many points on every contour (at least 2 open, 3 closed)");
+    }
+    expectations.expect(
+        pathOf(resample(compound, fixedCount(7))).contours.size() == 4 &&
+            pathOf(resample(compound, fixedCount(7))).fillRule == document::PathFillRule::EvenOdd,
+        "contours stay one to one and the fill rule is kept");
+
+    // By length: points per 100 px. 200 px at 5 per 100 is a gap of 20: 11 points; 50 px at 10 per
+    // 100 is a gap of 10: 6 points; a closed 160 px square at 25 per 100 is a gap of 4: 40 points.
+    ResampleOptions byLength;
+    byLength.mode = document::ResampleMode::ByLength;
+    byLength.keepCorners = false;
+    byLength.density = 5.0;
+    expectations.expect(pathOf(resample(single(polygon({{0, 0}, {200, 0}}, false)), byLength))
+                                .contours[0].anchors.size() == 11,
+                        "By length: 200 px at 5 points per 100 px gives 11 points");
+    byLength.density = 10.0;
+    expectations.expect(pathOf(resample(single(polygon({{0, 0}, {50, 0}}, false)), byLength))
+                                .contours[0].anchors.size() == 6,
+                        "By length: 50 px at 10 points per 100 px gives 6 points");
+    byLength.density = 25.0;
+    expectations.expect(pathOf(resample(single(square(0, 0, 40)), byLength)).contours[0].anchors.size() == 40,
+                        "By length: a closed 160 px square at 25 points per 100 px gives 40 points");
+
+    // Percentage of the contour's current point count; 100 percent keeps it; minimum 2 open / 3 closed.
+    ResampleOptions percentage;
+    percentage.mode = document::ResampleMode::Percentage;
+    percentage.keepCorners = false;
+    const auto octagon = single(polygon({{10, 0}, {20, 0}, {30, 10}, {30, 20}, {20, 30}, {10, 30}, {0, 20}, {0, 10}}, true));
+    const auto sizeAt = [&](const PathValue& path, const double share) {
+        percentage.percentage = share;
+        return pathOf(resample(path, percentage)).contours[0].anchors.size();
+    };
+    expectations.expect(sizeAt(octagon, 100.0) == 8 && sizeAt(octagon, 50.0) == 4 &&
+                            sizeAt(octagon, 200.0) == 16 && sizeAt(octagon, 1.0) == 3,
+                        "Percentage: 100 keeps 8 points, 50 gives 4, 200 gives 16, a tiny share keeps 3");
+    const auto polyline5 = single(polygon({{0, 0}, {10, 5}, {20, 0}, {30, 5}, {40, 0}}, false));
+    expectations.expect(sizeAt(polyline5, 50.0) == 3 && sizeAt(polyline5, 10.0) == 2 &&
+                            sizeAt(polyline5, 0.0) == 2,
+                        "Percentage on an open contour: 5 points at 50 gives 3 (half rounds up), the minimum is 2");
+
+    // A closed contour of N points does not duplicate the seam.
+    const auto sq = single(square(0, 0, 40));
+    const auto eight = pathOf(resample(sq, fixedCount(8))).contours[0];
+    bool noSeam = eight.closed && eight.anchors.size() == 8;
+    for (std::size_t index = 0; noSeam && index < 8; ++index)
+        noSeam = near(arcStep(eight, index), 20.0, 1e-9) || near(arcStep(eight, index), 20.0 * std::sqrt(2.0), 1e-9) ||
+                 arcStep(eight, index) > 0.0;
+    expectations.expect(noSeam && !near(eight.anchors.front().point, eight.anchors.back().point),
+                        "a closed contour of 8 points does not repeat its first point at the end");
+    // On a straight-sided square with the points at 20 px spacing along the perimeter the chord
+    // between neighbours is 20 except across corners.
+    expectations.expect(near(eight.anchors[0].point, Vec2d{0, 0}, 1e-9) &&
+                            near(eight.anchors[1].point, Vec2d{20, 0}, 1e-9) &&
+                            near(eight.anchors[2].point, Vec2d{40, 0}, 1e-9) &&
+                            near(eight.anchors[7].point, Vec2d{0, 20}, 1e-9),
+                        "the 8 points fall every 20 px of perimeter from the first anchor");
+
+    // Start offset slides the points: a closed square at 12.5 percent starts 20 px along, and 100
+    // percent is the start again (it wraps).
+    auto slid = fixedCount(8);
+    slid.startOffset = 12.5;
+    const auto shifted = pathOf(resample(sq, slid)).contours[0];
+    expectations.expect(near(shifted.anchors[0].point, Vec2d{20, 0}, 1e-9) &&
+                            near(shifted.anchors[7].point, Vec2d{0, 0}, 1e-9),
+                        "Start offset 12.5 percent slides the points 20 px along a 160 px contour");
+    slid.startOffset = 100.0;
+    expectations.expect(pathOf(resample(sq, slid)).contours[0] == eight,
+                        "Start offset 100 percent wraps to the start on a closed contour");
+    slid.startOffset = -75.0;
+    expectations.expect(near(pathOf(resample(sq, slid)).contours[0].anchors[0].point, Vec2d{40, 0}, 1e-9),
+                        "a negative offset wraps the other way (-75 is +25 of 100: 40 px along)");
+    // An open contour keeps its ends and slides the inner points; the offset clamps.
+    auto openFive = fixedCount(5);
+    const auto plain = pathOf(resample(line100, openFive)).contours[0];
+    openFive.startOffset = 50.0;
+    const auto moved = pathOf(resample(line100, openFive)).contours[0];
+    openFive.startOffset = 500.0;
+    const auto clamped = pathOf(resample(line100, openFive)).contours[0];
+    openFive.startOffset = 100.0;
+    const auto full = pathOf(resample(line100, openFive)).contours[0];
+    expectations.expect(plain.anchors.size() == 5 && near(plain.anchors[1].point.x, 25.0, 1e-9) &&
+                            near(plain.anchors[2].point.x, 50.0, 1e-9),
+                        "an open Fixed count 5 on 100 px falls at 0, 25, 50, 75, 100");
+    expectations.expect(moved.anchors.size() == 5 && near(moved.anchors[0].point.x, 0.0, 1e-9) &&
+                            near(moved.anchors[4].point.x, 100.0, 1e-9) &&
+                            near(moved.anchors[1].point.x, 34.375, 1e-9) &&
+                            near(moved.anchors[2].point.x, 56.25, 1e-9) &&
+                            near(moved.anchors[3].point.x, 78.125, 1e-9),
+                        "Start offset 50 percent slides the inner points half a gap, ends kept");
+    expectations.expect(clamped == full && full.anchors.size() == 5 &&
+                            full.anchors[3].point.x < 100.0 &&
+                            full.anchors[1].point.x > 25.0,
+                        "an open contour clamps the offset at 100 percent and never reaches the end");
+
+    // Keep corners keeps a square's four corners, off lets them go.
+    const auto six = pathOf(resample(sq, fixedCount(6, true))).contours[0];
+    const auto hasPoint = [](const PathContour& contour, const Vec2d point) {
+        return std::ranges::any_of(contour.anchors,
+                                   [&](const PathAnchor& each) { return near(each.point, point, 1e-9); });
+    };
+    expectations.expect(six.anchors.size() == 6 && hasPoint(six, {0, 0}) && hasPoint(six, {40, 0}) &&
+                            hasPoint(six, {40, 40}) && hasPoint(six, {0, 40}),
+                        "Keep corners: 6 points on a square still include its four corners");
+    const auto loose = pathOf(resample(sq, fixedCount(6, false))).contours[0];
+    expectations.expect(loose.anchors.size() == 6 && !hasPoint(loose, {40, 0}),
+                        "Keep corners off: 6 even points leave the corner at (40, 0)");
+    const auto gappedCorners = pathOf(resample(sq, byGap(15.0, true))).contours[0];
+    expectations.expect(hasPoint(gappedCorners, {40, 0}) && hasPoint(gappedCorners, {40, 40}) &&
+                            gappedCorners.anchors.size() == 4 * 3,
+                        "Keep corners with a gap: each 40 px side takes 3 steps, corners kept");
+    // Fewer points than corners: the corners cannot all stay, the count wins.
+    expectations.expect(pathOf(resample(sq, fixedCount(3, true))).contours[0].anchors.size() == 3,
+                        "Fixed count 3 on a square keeps 3 points, not its 4 corners");
+    // A collinear anchor is not a corner.
+    const auto straightish = single(polygon({{0, 0}, {50, 0}, {100, 0}}, false));
+    expectations.expect(pathOf(resample(straightish, fixedCount(5, true))).contours[0].anchors.size() == 5,
+                        "an anchor in the middle of a straight run is not a corner");
+    // Open polyline corners are kept.
+    const auto elbow = single(polygon({{0, 0}, {40, 0}, {40, 40}}, false));
+    const auto elbowed = pathOf(resample(elbow, fixedCount(7, true))).contours[0];
+    expectations.expect(elbowed.anchors.size() == 7 && hasPoint(elbowed, {40, 0}) &&
+                            hasPoint(elbowed, {0, 0}) && hasPoint(elbowed, {40, 40}),
+                        "an open elbow keeps its corner and its ends");
+
+    // Groups are kept.
+    PathValue grouped = compound;
+    grouped.groups = {{"a", 0, 2, std::nullopt}, {"b", 3, 1, core::Color4d{1, 0, 0, 1}}};
+    expectations.expect(pathOf(resample(grouped, fixedCount(9))).groups == grouped.groups,
+                        "groups on the input are kept");
+
+    // A zero-length contour: Fixed count answers copies of its point with a notice, not a failure.
+    PathValue dot;
+    dot.contours = {polygon({{3, 4}}, false)};
+    const auto dotted = resample(dot, fixedCount(5));
+    expectations.expect(!dotted.failed && dotted.notice && pathOf(dotted).contours[0].anchors.size() == 5 &&
+                            near(pathOf(dotted).contours[0].anchors[4].point, Vec2d{3, 4}),
+                        "Fixed count on a contour with no length repeats its point and says so");
+    const auto dotGap = resample(dot, byGap(5.0));
+    expectations.expect(!dotGap.failed && pathOf(dotGap) == dot, "a gap leaves a contour with no length as it is");
+    expectations.expect(pathOf(resample(PathValue{}, fixedCount(8))).contours.empty(),
+                        "an empty path answers the empty path");
+}
+
+void testResampleCurvesStayOnTheCurve(Expectations& expectations) {
+    const auto original = circle(100.0);
+    const auto value = single(original);
+    // The stated tolerance is 0.25 px for a count at the original density (4 anchors) or finer.
+    for (const std::int64_t n : {4, 8, 16, 32, 64, 128}) {
+        const auto result = resample(value, fixedCount(n));
+        const auto& contour = pathOf(result).contours[0];
+        expectations.expect(!result.failed && contour.anchors.size() == static_cast<std::size_t>(n),
+                            "the circle resamples to " + std::to_string(n));
+        const double off = runtime::pathresample::deviation(contour, original);
+        expectations.expect(off <= 0.25, "Curves output at " + std::to_string(n) + " points stays within 0.25 px of the circle (measured " + std::to_string(off) + ")");
+    }
+    // An open cubic S-curve, resampled at 5 and 24 points.
+    PathContour wave;
+    wave.anchors = {{{0, 0}, std::nullopt, Vec2d{60, -80}, document::PathAnchorMode::Free},
+                    {{200, 0}, Vec2d{140, 80}, std::nullopt, document::PathAnchorMode::Free}};
+    for (const std::int64_t n : {5, 24, 96}) {
+        const auto result = resample(single(wave), fixedCount(n));
+        const double off = runtime::pathresample::deviation(pathOf(result).contours[0], wave);
+        expectations.expect(off <= 0.25, "an open cubic at " + std::to_string(n) + " points stays within 0.25 px (measured " + std::to_string(off) + ")");
+    }
+    // A multi-segment open curve with a corner between smooth runs, more points than it has anchors.
+    PathContour mixed;
+    mixed.anchors = {{{0, 0}, std::nullopt, Vec2d{30, 40}, document::PathAnchorMode::Free},
+                     {{100, 60}, Vec2d{70, 80}, std::nullopt, document::PathAnchorMode::Corner},
+                     {{180, 0}, Vec2d{150, 60}, Vec2d{210, -40}, document::PathAnchorMode::Free},
+                     {{260, 50}, Vec2d{230, 10}, std::nullopt, document::PathAnchorMode::Free}};
+    for (const std::int64_t n : {12, 40, 120}) {
+        const auto result = resample(single(mixed), fixedCount(n, true));
+        const double off = runtime::pathresample::deviation(pathOf(result).contours[0], mixed);
+        expectations.expect(off <= 0.25, "a mixed open curve with corners kept at " + std::to_string(n) + " points stays within 0.25 px (measured " + std::to_string(off) + ")");
+    }
+    // Straight output follows the chords: within the sagitta of the points chosen.
+    ResampleOptions straight = fixedCount(64);
+    straight.output = document::ResampleOutput::Straight;
+    const auto chords = pathOf(resample(value, straight)).contours[0];
+    expectations.expect(!chords.anchors[0].outHandle && !chords.anchors[1].inHandle &&
+                            runtime::pathresample::deviation(chords, original) <= 0.13,
+                        "Straight output joins 64 points on the circle with chords within 0.13 px");
+    // A coarse count below the original detail is by definition not on the curve: 3 points on a circle.
+    const auto coarse = pathOf(resample(value, fixedCount(3))).contours[0];
+    expectations.expect(coarse.anchors.size() == 3, "a count below the original detail still answers that many points");
+    // The points are on the original curve: each is within 1e-3 of the circle.
+    bool onCircle = true;
+    const auto thirtySeven = resample(value, fixedCount(37));
+    for (const auto& anchor : pathOf(thirtySeven).contours[0].anchors)
+        onCircle = onCircle && std::abs(std::hypot(anchor.point.x, anchor.point.y) - 100.0) < 0.06;
+    expectations.expect(onCircle, "every resampled point lies on the original circle (within 0.06 px of radius 100)");
+}
+
+void testResampleBounds(Expectations& expectations) {
+    const auto line100 = single(polygon({{0, 0}, {100, 0}}, false));
+    const auto beyond = resample(line100, fixedCount(5000));
+    expectations.expect(beyond.failed &&
+                            std::string_view(beyond.detail).find("Resample Path") != std::string_view::npos &&
+                            std::string_view(beyond.detail).find("Fixed count") != std::string_view::npos &&
+                            std::string_view(beyond.detail).find("5000") != std::string_view::npos &&
+                            std::string_view(beyond.detail).find("4096") != std::string_view::npos &&
+                            pathOf(beyond).contours.empty(),
+                        "a count past the contour cap fails, naming the node, the mode, the count and the cap");
+    expectations.expect(!resample(line100, fixedCount(4096)).failed, "4096 points is the cap, allowed");
+    const auto tiny = resample(line100, byGap(0.001));
+    expectations.expect(tiny.failed && std::string_view(tiny.detail).find("Gap") != std::string_view::npos &&
+                            std::string_view(tiny.detail).find("100001") != std::string_view::npos,
+                        "a gap that would give 100001 points fails with the count named, nothing allocated");
+    ResampleOptions dense;
+    dense.mode = document::ResampleMode::ByLength;
+    dense.density = 1.0e12;
+    expectations.expect(resample(line100, dense).failed, "a density of a trillion points is refused");
+    ResampleOptions percentage;
+    percentage.mode = document::ResampleMode::Percentage;
+    percentage.percentage = 1.0e9;
+    expectations.expect(resample(single(square(0, 0, 4)), percentage).failed,
+                        "a percentage that would give billions of points is refused");
+    // The whole value has a cap too: 70 contours of 4000 points is 280000.
+    PathValue many;
+    for (int index = 0; index < 70; ++index)
+        many.contours.push_back(polygon({{0, 0}, {100, 0}}, false));
+    const auto crowded = resample(many, fixedCount(4000));
+    expectations.expect(crowded.failed &&
+                            std::string_view(crowded.detail).find("262144") != std::string_view::npos &&
+                            std::string_view(crowded.detail).find("Fixed count") != std::string_view::npos,
+                        "past the whole path's 262144 points, the node fails and names the mode and the cap");
+    expectations.expect(!resample(many, fixedCount(3000)).failed, "70 contours of 3000 points (210000) fit");
+    expectations.expect(resample(line100, byGap(0.0)).failed && resample(line100, byGap(-5.0)).failed &&
+                            resample(line100, byGap(std::nan(""))).failed,
+                        "a gap of zero, below zero or not a number is refused");
+    // Non-finite coordinates.
+    expectations.expect(resample(single(polygon({{0, 0}, {std::nan(""), 0}}, false)), fixedCount(5)).failed,
+                        "a path with a coordinate that is not a number is refused");
+}
+
+void testResampleCancellation(Expectations& expectations) {
+    PathValue many;
+    for (int index = 0; index < 8; ++index)
+        many.contours.push_back(circle(10.0 + index));
+    runtime::CancellationToken cancelled;
+    // A token that is not cancelled passes through; the evaluator-level observation between contours
+    // is covered with a real cancelled token by the integration test.
+    std::vector<const CompiledValue*> operands;
+    std::vector<CompiledValue> values{wrap(many), std::int64_t{16}, 10.0, 10.0, 100.0, true, 0.0};
+    for (const auto& value : values)
+        operands.push_back(&value);
+    const std::array<std::int64_t, 2> selectors{0, 1};
+    const auto done = runtime::evaluateValueUtility({Kernel::ResamplePath, operands, selectors,
+                                                     core::RationalTime::fromInteger(0),
+                                                     document::FrameRate::framesPerSecond24(), nullptr,
+                                                     {.cancellation = &cancelled}});
+    expectations.expect(!done.cancelled && !done.failed && pathOf(done).contours.size() == 8,
+                        "an uncancelled token changes nothing");
+}
+
+void testResampleHelper(Expectations& expectations) {
+    // The shared helper: exactly N points, spread evenly by length, on the curve.
+    const auto original = circle(50.0);
+    for (const std::size_t n : std::array<std::size_t, 4>{3, 5, 11, 40}) {
+        const auto result = runtime::pathresample::resampleToCount(original, n);
+        expectations.expect(result.status == runtime::pathresample::ResampleStatus::Ok &&
+                                result.contour.anchors.size() == n && result.contour.closed,
+                            "resampleToCount answers exactly N points");
+    }
+    // The same contour twice gives the same answer.
+    expectations.expect(runtime::pathresample::resampleToCount(original, 17).contour ==
+                            runtime::pathresample::resampleToCount(original, 17).contour,
+                        "resampling is deterministic");
+}
+
 } // namespace
 
 int main() {
@@ -1062,5 +1427,10 @@ int main() {
     testTextOutline(expectations);
     testKernelCancellation(expectations);
     testKernelBudgets(expectations);
+    testResamplePathKnownAnswers(expectations);
+    testResampleCurvesStayOnTheCurve(expectations);
+    testResampleBounds(expectations);
+    testResampleCancellation(expectations);
+    testResampleHelper(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

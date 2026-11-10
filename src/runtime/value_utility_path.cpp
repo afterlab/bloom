@@ -810,6 +810,8 @@ ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation) 
         return evaluateValueMaskPath(invocation);
     case Kernel::TextOutline:
         return evaluateValueTextOutline(invocation);
+    case Kernel::ResamplePath:
+        return evaluateValuePathResample(invocation);
     default:
         break;
     }

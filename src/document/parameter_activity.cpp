@@ -3,6 +3,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 
 #include <algorithm>
@@ -41,6 +42,20 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
         return constantOf(composition, node, "perChannel").value_or(0) == 0;
     // A mode that reads only some of a node's values: the others are not lowered (the compiler's
     // lowering of each node is the other half of these rules).
+    // #637 Resample Path reads only the value its mode names.
+    if (node.typeId == kResamplePathNodeType) {
+        const auto mode = static_cast<ResampleMode>(
+            constantOf(composition, node, "mode").value_or(selectorStoredValue(ResampleMode::FixedCount)));
+        if (schemaKey == kResampleCountSchemaKey)
+            return mode != ResampleMode::FixedCount;
+        if (schemaKey == kResampleGapSchemaKey)
+            return mode != ResampleMode::Gap;
+        if (schemaKey == kResampleDensitySchemaKey)
+            return mode != ResampleMode::ByLength;
+        if (schemaKey == kResamplePercentageSchemaKey)
+            return mode != ResampleMode::Percentage;
+        return false;
+    }
     if (node.typeId == kVignetteNodeType) {
         const bool exposure = constantOf(composition, node, "mode").value_or(kVignetteMultiply) ==
                               kVignetteExposure;
