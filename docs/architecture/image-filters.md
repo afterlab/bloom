@@ -2060,6 +2060,61 @@ model (red, white, gray, HDR) and the round trip of every model, the domains and
 the native harness holds ten variants (each model out and back, a 4 x 4 mix and a preset) to the CPU
 oracle. [Benchmarks](../development/benchmarks.md) lists `color-matrix-2k`, written and not yet run.
 
+## Quantize
+
+One node, `bloom.quantize`, under **Stylize** (#519): a **Threshold** that turns the picture into
+black and white (on luma or on each channel, hard or soft) and a **Posterize** that snaps each channel
+to a number of levels. It is a color tool kernel like Tone Map and Color Matrix
+(`ColorToolKernel`, operation Quantize): one pointwise pass over the straight color, the CPU reference
+(`quantizePixel`) and the GPU program (`bct_quantize`) running the same binary32 operations over one
+table, with no new GPU coverage exception. Values are in the working space (scene-linear by default),
+so a threshold level of 0.5 is half the scene-linear value, not half of the display's brightness.
+
+**Straight color and alpha.** Every operation reads the straight color (premultiplied divided by
+alpha) and writes it back premultiplied. A pixel of alpha 0 stays transparent black. Threshold keeps
+alpha. Posterize keeps alpha unless **Posterize Alpha** is on.
+
+| Mode | Rule |
+| --- | --- |
+| Threshold | `v` is the straight value: Rec. 709 luma (`0.2126 r + 0.7152 g + 0.0722 b`, the same value for the three channels) with **Threshold on Luma**, each channel on its own with **Per channel**. A hard step (Softness 0) is 1 for `v >= level` and 0 below it, so a value exactly at the level is white. With Softness `s > 0` the result is `smoothstep` over `[level - s/2, level + s/2]`: 0 at and below the low edge, exactly one half at the level, 1 at and above the high edge. **Invert** replaces the result `t` by `1 - t`. |
+| Posterize | A channel is clamped to `[0, 1]` and snapped to the nearest of `levels` equally spaced values: `round(x (levels - 1)) / (levels - 1)`, a half rounding up. The product and the fraction above its floor are taken in binary32 (the fraction is exact, so the half-way test is). With **Link levels** on, red, green and blue read **Levels**; off, they read **Red levels**, **Green levels** and **Blue levels**. **Posterize Alpha** snaps alpha the same way to **Alpha levels**; an alpha that snaps to 0 gives transparent black, and the color is scaled by the new alpha. |
+
+**HDR and negative values.** The output of a threshold is 0 or 1 (or the ramp between them), so an HDR
+value above the level is white and a negative one black. A posterize clamps its input first: a value
+above 1 is the top level and a negative one the bottom level (the nearest end level), never an
+out-of-range value.
+
+**Domain.** Level and Softness are finite and in `[0, 16]`; levels are in `[2, 256]` (a real number: at
+an integer it is exactly that many levels, and between integers the steps are spaced `1 / (levels - 1)`
+apart, so a keyed value changes smoothly). A value the mode does not read is neither shown, nor
+compiled (`isParameterInactive`, the lowering fixes it to a constant): a keyed value of the other
+mode, or of the channels while Link levels is on, neither varies the picture with time nor invalidates
+its cache. Mode, basis and the switches are constants with no socket; every scalar has one and can be
+keyed or driven.
+
+**Interface.** The card and Properties show Threshold as a span on a black-to-white luma strip (a
+`KRangeSelector` with the luma strip on): its centre is the Level and its width the Softness, so one
+handle drag writes both, as one undoable command, and a hard step is a span of no width. Posterize shows
+the master Levels with a Link levels switch; unlinking shows Red, Green and Blue levels in place of the
+master. Mode and Threshold on are choices; there is no color to pick.
+
+**Evaluation.** One resident pass on the GPU route for the preview, the RAM preview, every export and
+the headless render; a reduced render scale gives the same pixels (a pointwise pass reads nothing
+around the pixel), and a region of interest reads only its own pixels. A muted node passes its input
+through. The table is cached by value, so a changed level re-runs this pass only.
+
+Cost, from the code: one read and one write per pixel with a divide per channel, about a dozen
+arithmetic operations; nothing is read around the pixel. No timing is recorded; see
+[Benchmarks](../development/benchmarks.md).
+
+Tests: `quantize_tests` (known answers at the level and one ulp either side, every half-way step of
+levels 2 to 129, levels 2 and 256, a sweep against independent binary64 rules, alpha, HDR, negatives,
+domain refusal, cache identity of the table, the pixel budget and cancellation),
+`snapshot_compiler_effect_tests` (lowering, inactive values, time dependence, mute), the Required
+`node.bloom.quantize` GPU coverage fixture and the native CPU/GPU parity cases (boundary colours,
+warm zero-dispatch, a changed value), the node-viewer evidence scenarios `quantize-*` (viewer, cold
+then warm RAM preview), `properties_registry_tests` and `grading_cards_tests`.
+
 ## HSL Qualifier
 
 `bloom.hsl-qualifier`, schema 1, under Keying & Mattes (issue #523), selects the pixels of an image

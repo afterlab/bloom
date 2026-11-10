@@ -658,6 +658,21 @@ SCENARIOS["inner-glow-2k"] = {
     ],
 }
 
+# #519: Quantize in Posterize over a plate, the master levels keyed so every frame is new. A
+# pointwise pass: the cost is the plate's read and write. Written, not run: no recorded numbers and no
+# budget.
+SCENARIOS["quantize-2k"] = {
+    "description": "A PNG16 plate under Quantize in Posterize with keyed levels.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.quantize",
+                      {"mode": "Posterize"},
+                      {"keys": {"levels": [[0, 3.0], [23, 24.0]]}}]]},
+    ],
+}
+
 # #347: Audio Waveform and Audio Spectrum of ten seconds of generated sound, each frame reading a new
 # window (the time is the frame), so the cost is the audio window read, the reduction and the plot
 # pass. Written, not run: it has no recorded numbers and no budget.

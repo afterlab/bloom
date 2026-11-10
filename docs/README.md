@@ -123,6 +123,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   carry an element along with it.
 - [Inner Shadow and Inner Glow](user-guide/inner-shadow-and-glow.md) — shade or light the inside of a
   shape along its edges: colour, direction, blur, choke, size and Edge or Center.
+- [Quantize](user-guide/quantize.md) — cut the picture into a black-and-white threshold (luma or per
+  channel, hard or soft) or a posterize of a few levels per channel.
 - [Tile & Mirror](user-guide/tile-and-mirror.md) — repeat the picture in tiles, scroll it with wrap,
   reflect it about a line, or fold it into a kaleidoscope.
 - [Corner Pin, ST Map and Displace](user-guide/warp-nodes.md) — pin a picture to four corners with
