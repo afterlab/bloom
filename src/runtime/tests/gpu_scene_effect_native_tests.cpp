@@ -136,13 +136,14 @@ constexpr std::uint64_t kSceneBudget = 64ULL * 1024ULL * 1024ULL;
 [[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
 effectPlan(const bloom::runtime::ImageEffectKernel& kernel, const std::uint64_t idBase,
            const std::optional<AssetRecord>& lutAsset = std::nullopt,
-           const Color4d color = Color4d{-0.25, 1.75, 0.5, 0.625}) {
+           const Color4d color = Color4d{-0.25, 1.75, 0.5, 0.625},
+           const double sourceWidth = 12.0, const double sourceHeight = 10.0) {
     constexpr std::uint64_t layerRaw = 1;
     std::vector<CompiledOperation> operations;
     operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 1),
                                           {ParameterId::fromRaw(idBase + 2), color},
-                                          {ParameterId::fromRaw(idBase + 3), 12.0},
-                                          {ParameterId::fromRaw(idBase + 4), 10.0}});
+                                          {ParameterId::fromRaw(idBase + 3), sourceWidth},
+                                          {ParameterId::fromRaw(idBase + 4), sourceHeight}});
     auto capturedKernel = kernel;
     if (auto* file = std::get_if<FileTransformKernel>(&capturedKernel))
         file->asset = lutAsset;
@@ -2530,6 +2531,20 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                      id, 3, filter, filter + 1, 3 + 2 * filter),
                                  1U});
         id += 100;
+        // The window of a shape or text layer is its own small box: the same programs read a 5 x 4
+        // source of the 12 x 10 frame, the window laid with its centre at the frame's.
+        kernels.emplace_back("small input tile filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::tileMirrorProgram(
+                                     id, 0, filter, filter + 1, filter == 1 ? 0 : 3),
+                                 1U});
+        id += 100;
+        kernels.emplace_back("small input kaleidoscope filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::tileMirrorProgram(
+                                     id, 3, filter, filter + 1, 3 + 2 * filter),
+                                 1U});
+        id += 100;
         kernels.emplace_back("st map filter " + std::to_string(filter),
                              bloom::runtime::FieldRasterKernel{
                                  bloom::field_test_programs::stMapProgram(id, filter, filter + 1), 1U});
@@ -2548,8 +2563,10 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     }
     for (const auto& [name, kernel] : kernels) {
         cache.clear();
-        auto definition =
-            effectPlan(kernel, id, std::nullopt, Color4d{-0.25, 1.75, 0.5, 0.625})->copyDefinition();
+        const bool smallSource = name.starts_with("small input ");
+        auto definition = effectPlan(kernel, id, std::nullopt, Color4d{-0.25, 1.75, 0.5, 0.625},
+                                     smallSource ? 5.0 : 12.0, smallSource ? 4.0 : 10.0)
+                              ->copyDefinition();
         id += 200;
         auto& effect = std::get<CompiledImageEffect>(definition.operations[1]);
         const auto* field = std::get_if<bloom::runtime::FieldRasterKernel>(&effect.kernel);

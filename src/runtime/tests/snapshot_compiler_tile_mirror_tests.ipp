@@ -147,9 +147,9 @@ void testTileMirrorLowering(Expectations& expectations) {
     const std::vector<FieldOp> tileOps{FieldOp::Coordinate, FieldOp::Constant,  FieldOp::Swizzle,
                                        FieldOp::Constant,   FieldOp::Swizzle,   FieldOp::Math,
                                        FieldOp::Math,       FieldOp::Transform, FieldOp::Math,
-                                       FieldOp::Homography, FieldOp::Image};
+                                       FieldOp::Homography, FieldOp::Homography, FieldOp::Image};
     auto clampOps = tileOps;
-    clampOps.insert(clampOps.end() - 1,
+    clampOps.insert(clampOps.end() - 2,
                     {FieldOp::Constant, FieldOp::Swizzle, FieldOp::Math, FieldOp::Math, FieldOp::Constant,
                      FieldOp::Math, FieldOp::Swizzle, FieldOp::Math});
     const auto tileProgram = field_test_programs::tileMirrorProgram(1, 0, 1, 1, 0);
@@ -174,10 +174,10 @@ void testTileMirrorLowering(Expectations& expectations) {
     const auto kaleidoscopeProgram = field_test_programs::tileMirrorProgram(1, 3, 1, 1, 7);
     lowered({{"mode", std::int64_t{3}}, {"kaleidoscopeSegments", std::int64_t{7}},
              {"filter", std::int64_t{1}}},
-            3, false,
+            3, true,
             {FieldOp::Coordinate, FieldOp::Constant, FieldOp::Homography, FieldOp::Math,
              FieldOp::Math, FieldOp::Constant, FieldOp::Swizzle, FieldOp::Math, FieldOp::Swizzle,
-             FieldOp::Transform, FieldOp::Math, FieldOp::Image},
+             FieldOp::Transform, FieldOp::Math, FieldOp::Homography, FieldOp::Image},
             "Kaleidoscope", &kaleidoscopeProgram);
 
     // A muted node is its input.
@@ -618,6 +618,98 @@ void testTileMirrorPixels(Expectations& expectations) {
                                 scale == 1 ? "Tile at the proxy scale reads the cell rule"
                                            : "Tile at twice the scale reads the same cell rule");
         }
+    }
+}
+
+// A small input (a 240 x 135 pixel checker, the way a shape or text layer's window is its own small
+// box at the layer-local origin) under Tile and Kaleidoscope: the canvas is the composition frame, and
+// the input's window is laid with its centre at the frame's centre, so a 40% tile fills the frame with
+// copies of the box and a Kaleidoscope fills it with its wedge, whatever the window.
+void testTileMirrorSmallInput(Expectations& expectations) {
+    using namespace document;
+    constexpr std::uint32_t kW = 240;
+    constexpr std::uint32_t kH = 135;
+    const auto evaluate = [&](const std::unordered_map<std::string, ParameterValue>& values) {
+        auto fixture = tileMirrorFixture(values);
+        const auto* definition =
+            builtInNodeDefinitions().find(kCheckerSourceNodeType, kCheckerSourceNodeSchemaVersion);
+        std::uint64_t next = 1380;
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(next++);
+            if (parameter.role == "width" || parameter.role == "height")
+                require(fixture.recipe.project.findComposition(kCompositionId)
+                            ->parameters()
+                            .setSource(id, ConstantValueSource{parameter.role == "width"
+                                                                   ? std::int64_t{240}
+                                                                   : std::int64_t{135}}),
+                        "the checker is a small box");
+        }
+        auto result = compileRecipe(std::move(fixture.recipe.project));
+        require(result.plan != nullptr, "the small-input plan compiles");
+        auto frame = lensEvaluate(result.plan, kW, kH);
+        require(frame.frame() != nullptr, "the small input evaluates");
+        return frame;
+    };
+    const auto alpha = [](const render::Rgba32fImage& image, const std::uint32_t i, const std::uint32_t j) {
+        return lensPixel(image, i, j)[3];
+    };
+    // The box is 240 x 135 frame pixels: 30 x 17 texels of a 1/8 proxy. A 40% cell is 768 x 432 frame
+    // pixels, 96 x 54 texels, so the box repeats every 96 texels across and 54 down, about the
+    // frame's centre (120, 67).
+    {
+        const auto tiled = evaluate({{"filter", std::int64_t{1}}, {"tileWidth", 40.0},
+                                     {"tileHeight", 40.0}, {"clampToOutput", false}});
+        const auto& image = tiled.frame()->processImage();
+        std::size_t exact = 0;
+        std::size_t compared = 0;
+        std::size_t painted = 0;
+        for (std::uint32_t j = 0; j + 54 < kH; ++j)
+            for (std::uint32_t i = 0; i + 96 < kW; ++i) {
+                const auto here = lensPixel(image, i, j);
+                const auto across = lensPixel(image, i + 96, j);
+                const auto down = lensPixel(image, i, j + 54);
+                ++compared;
+                if (here == across && here == down)
+                    ++exact;
+                if (here[3] > 0.0F)
+                    ++painted;
+            }
+        expectations.expect(exact * 100 >= compared * 98,
+                            "a small input under a 40% tile repeats every cell across and down");
+        // The box is painted at the cell's centre and at the neighbouring cells', not only at one.
+        expectations.expect(alpha(image, 120, 67) > 0.0F && alpha(image, 120 + 96, 67) > 0.0F &&
+                                alpha(image, 120, 67 + 54) > 0.0F && alpha(image, 120 - 96, 67) > 0.0F &&
+                                alpha(image, 120, 67 - 54) > 0.0F,
+                            "a small input under a 40% tile fills the frame with copies");
+        // The gap between boxes in a cell is empty: a cell is wider than the box.
+        expectations.expect(alpha(image, 120 + 48, 67) == 0.0F,
+                            "the space of a cell outside the box stays transparent");
+        expectations.expect(painted > 0, "the tiled frame is not empty");
+    }
+    // Kaleidoscope: the wedge turns the box about the frame's centre; the frame is filled around it
+    // (the corners of the frame read the wedge, which the box reaches), and the box's window is the
+    // frame's centre, so the centre pixel is painted.
+    {
+        const auto kaleidoscope = evaluate({{"mode", std::int64_t{3}}, {"filter", std::int64_t{1}},
+                                            {"kaleidoscopeSegments", std::int64_t{6}}});
+        const auto& image = kaleidoscope.frame()->processImage();
+        expectations.expect(image.descriptor()->dataWindow().extent().width() == kW &&
+                                image.descriptor()->dataWindow().extent().height() == kH,
+                            "the kaleidoscope's canvas is the composition frame");
+        expectations.expect(alpha(image, 120, 67) > 0.0F,
+                            "a small input's kaleidoscope is centred on the frame");
+        // Six segments: a turn of 60 degrees about the centre repeats the picture; the point (dx, dy)
+        // and its mirror in the x axis (dy -> -dy) read the same texel, a fold of the wedge.
+        std::size_t same = 0;
+        std::size_t compared = 0;
+        for (std::uint32_t j = 1; j < 67; ++j)
+            for (std::uint32_t i = 0; i < kW; ++i) {
+                ++compared;
+                if (lensPixel(image, i, 67 - j) == lensPixel(image, i, 67 + j))
+                    ++same;
+            }
+        expectations.expect(same * 100 >= compared * 97,
+                            "the kaleidoscope of a small input is mirrored about its axis");
     }
 }
 

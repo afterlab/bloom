@@ -34,6 +34,11 @@ dial (90 is vertical, 0 horizontal), and choose with **Reflect** which side is k
 Folds the picture round **Center** into **Segments** wedges, turned by **Rotation** and magnified by
 **Size** (percent).
 
+## Small pictures
+
+Tile and Kaleidoscope fill the whole frame, and they treat the middle of the picture as the middle of the
+frame, so a small shape or text layer tiles into copies of itself and folds round its own middle.
+
 ## Both
 
 **Filter** is how the picture is sampled (Bilinear, Nearest, Bicubic). **Edges** is what shows where the

@@ -581,7 +581,8 @@ inline void packRegisters(FieldProgram& program) {
 // #511 Tile & Mirror: the programs its lowering builds over the 16 x 12 test composition, mirroring
 // snapshot_compiler_warp.ipp (the snapshot compiler test holds each to the same instruction sequence).
 // `mode` 0 Tile (`flags` bit 0 Mirror Edges, bit 1 Clamp to Output), 1 Wrap Offset, 2 Mirror (`flags`
-// bit 0 the upper side), 3 Kaleidoscope (`flags` the segment count).
+// bit 0 the upper side), 3 Kaleidoscope (`flags` the segment count). Tile and Kaleidoscope end with the
+// window-centre translation of the input's slot.
 [[nodiscard]] inline FieldProgram tileMirrorProgram(const std::uint64_t idBase, const std::int64_t mode,
                                                     const std::int64_t filter = 0,
                                                     const std::int64_t edge = 1,
@@ -618,6 +619,8 @@ inline void packRegisters(FieldProgram& program) {
             const auto far = b.add(FieldOp::Swizzle, {outside}, {0, 1, 4, 4}, {1.0e19, 1.0e19, 1.0, 1.0});
             where = b.add(FieldOp::Math, {where, far}, {0}, {0.1, 0.0});
         }
+        where = b.add(FieldOp::Homography, {where}, {2});
+        b.last().slot = 0;
         break;
     }
     case 1:
@@ -651,6 +654,8 @@ inline void packRegisters(FieldProgram& program) {
         const auto scaled = b.add(FieldOp::Swizzle, {divided}, {0, 1, 4, 4}, {100.0, 100.0, 1.0, 1.0});
         const auto wedge = b.add(FieldOp::Transform, {scaled}, {4, flags}, {0.0, 0.0});
         where = b.add(FieldOp::Math, {wedge, origin}, {0}, {0.1, 0.0});
+        where = b.add(FieldOp::Homography, {where}, {2});
+        b.last().slot = 0;
         break;
     }
     }

@@ -418,13 +418,16 @@ struct RaysParameters final {
 // With `windowSlot` >= 0 the map is not known until the raster's image is: it pins the data window
 // of that image slot, its four corners (top left, top right, bottom right, bottom left, in field
 // positions) each moved by `offsets` (x, y pairs, field pixels, y up). applyFieldRasterGeometry
-// solves it once the slot's window is placed; until then the map is invalid.
+// solves it once the slot's window is placed; until then the map is invalid. With `windowCentred` the
+// window map is instead the translation by the window's centre (an output position p reads
+// p + centre, `offsets` ignored): the picture's window laid with its centre at the field origin.
 struct HomographyParameters final {
     double centreX = 0.0;
     double centreY = 0.0;
     std::array<double, 9> m{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     bool valid = true;
     int windowSlot = -1;
+    bool windowCentred = false;
     std::array<double, 8> offsets{};
 };
 

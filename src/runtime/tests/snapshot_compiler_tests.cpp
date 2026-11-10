@@ -2220,6 +2220,7 @@ int main() {
         testStabilize(expectations);
         testTileMirrorLowering(expectations);
         testTileMirrorPixels(expectations);
+        testTileMirrorSmallInput(expectations);
         testTileMirrorCacheIdentity(expectations);
         testTrackJob(expectations);
         testLightRaysLowering(expectations);

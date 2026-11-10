@@ -160,6 +160,13 @@ position]`), used by Stabilize (`point-tracking.md`): the similarity map with th
 two points (no turn, no scale, no window), `direction` 0 holding the picture still and 1 carrying it
 along. It is encoded by the same `similarityHomography` and `encodeHomography` as the quad mode.
 
+A third mode, **window centre** (choice `[2]`, the input slot), is the translation `q = p + c` by the
+centre `c` of the slot's data window, solved when the window is placed like the quad mode. Tile & Mirror
+ends its Tile and Kaleidoscope programs with it, so a window of any size and place (a shape or text
+layer's own small box) is read as if its centre sat at the field origin; for a window that fills the
+frame `c` is zero. It is the same table block, with the flag in the window block's third lane, and the
+kernel is unchanged.
+
 ### Rays
 
 Light Rays (`image-filters.md`) lowers to a field raster and adds one instruction to the vocabulary

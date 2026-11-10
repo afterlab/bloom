@@ -304,6 +304,12 @@ lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOp
 // y down, moved into the program by the Homography instruction's translation mode, whose y flip
 // they need (held point P, zero second point): direction 0 reads p - P, direction 1 reads p + P.
 //
+// The canvas of Motion Tile and Kaleidoscope is the composition frame whatever the input's window
+// (a shape or text layer's window is its own small box at the layer-local origin): the input's
+// window is laid with its centre at the frame's centre (Homography choice 2, the translation by the
+// window's centre), and the lattice, the point and the wedge are placed in the frame about it. For
+// an input that fills the frame the translation is zero.
+//
 //   Motion Tile   the pixel, in tiles (p / tile size, less the phase), folded into the cell (Transform
 //                 Tile, or Mirror with Mirror Edges), back to pixels, moved to the tile centre; with
 //                 Clamp to Output, a pixel beyond half the output size reads a position no image
@@ -328,6 +334,14 @@ lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOp
 int warpPosition(FieldBuild& build, const runtime::CompiledVec2Parameter& point) {
     const auto nothing = fieldBroadcast(build, fieldConstant(0.0));
     return warpTranslate(build, nothing, point, 1);
+}
+
+// The position `where` read in the window of image slot `slot` laid with its centre at the field
+// origin: the translation by the window's centre, solved when the slot's window is placed.
+int warpWindowCentre(FieldBuild& build, const int where, const std::int8_t slot) {
+    const auto read = fieldEmit(build, FieldOp::Homography, {where, -1, -1, -1}, {2});
+    build.steps.back().instruction.slot = slot;
+    return read;
 }
 
 // A Math operation on `a` and `b` (the operation's index in core::field::FieldMathOperation).
@@ -464,6 +478,15 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
         return false;
     int where = c;
     runtime::OperationIndex canvas = *input;
+    // A transparent solid of the composition frame's size.
+    const auto frameCanvas = [&] {
+        const auto solid = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledSolid{
+            node.id,
+            runtime::CompiledColorParameter{document::ParameterId{}, core::Color4d{0.0, 0.0, 0.0, 0.0}},
+            fieldConstant(width), fieldConstant(height)});
+        return solid;
+    };
     switch (*mode) {
     case kTileMirrorModeTile: {
         // The tile size in pixels, and the phase and output size in the units they are used in.
@@ -499,12 +522,8 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
             const auto far = fieldSwizzle(build, outside, {0, 1, 4, 4}, {1.0e19, 1.0e19, 1.0, 1.0});
             where = warpMath(build, kAdd, where, far);
         }
-        const auto solidCanvas = runtime::OperationIndex::fromRaw(operations.size());
-        operations.emplace_back(runtime::CompiledSolid{
-            node.id,
-            runtime::CompiledColorParameter{document::ParameterId{}, core::Color4d{0.0, 0.0, 0.0, 0.0}},
-            fieldConstant(width), fieldConstant(height)});
-        canvas = solidCanvas;
+        where = warpWindowCentre(build, where, slot);
+        canvas = frameCanvas();
         break;
     }
     case kTileMirrorModeWrapOffset:
@@ -542,7 +561,8 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
         const auto scaled = fieldSwizzle(build, divided, {0, 1, 4, 4}, {100.0, 100.0, 1.0, 1.0});
         const auto wedge = fieldEmit(build, FieldOp::Transform, {scaled, -1, -1, -1}, {4, segments},
                                      {fieldConstant(0.0), fieldConstant(0.0)});
-        where = warpMath(build, kAdd, wedge, origin);
+        where = warpWindowCentre(build, warpMath(build, kAdd, wedge, origin), slot);
+        canvas = frameCanvas();
         break;
     }
     }

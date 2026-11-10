@@ -754,7 +754,7 @@ std::optional<std::vector<float>> encodeHomography(const HomographyParameters& p
         valid = valid && std::fabs(p.m[i]) < 1.0e15;
     std::vector<float> out;
     push(out, p.windowSlot >= 0 ? 1.0 : 0.0, static_cast<double>(std::max(p.windowSlot, 0)),
-         0.0, 0.0);
+         p.windowSlot >= 0 && p.windowCentred ? 1.0 : 0.0, 0.0);
     push(out, p.offsets[0], p.offsets[1], p.offsets[2], p.offsets[3]);
     push(out, p.offsets[4], p.offsets[5], p.offsets[6], p.offsets[7]);
     if (!valid) {
@@ -970,6 +970,14 @@ void placeHomographyWindows(std::vector<float>& table, const FieldRasterGeometry
         const double right = (static_cast<double>(slot.width) - slot.cx) / slot.kx;
         const double top = (0.0 - slot.cy) / slot.ky;
         const double bottom = (static_cast<double>(slot.height) - slot.cy) / slot.ky;
+        if (block[2] == 1.0F) {
+            // The translation by the window's centre: q = p + centre.
+            HomographyParameters move;
+            move.m = {1.0, 0.0, 0.5 * (left + right), 0.0, 1.0, 0.5 * (top + bottom),
+                      0.0, 0.0, 1.0};
+            write(move);
+            continue;
+        }
         const std::array<double, 8> from{left, top, right, top, right, bottom, left, bottom};
         std::array<double, 8> to = from;
         for (std::size_t k = 0; k < 8; ++k)

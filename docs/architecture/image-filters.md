@@ -2858,7 +2858,11 @@ Edges** the position in the cell is the triangle wave `g(m)` of `m = t + 1/2` (`
 reflected above 1) less 1/2, so each neighbouring tile is flipped. With **Clamp to Output** a pixel
 farther from the centre than half the output size (percent of the frame) is transparent; with it off the
 tiles fill the whole canvas and the output size is not read. The canvas is the composition frame, so the
-tiles can fill the composition whatever the size of the input. Tile sizes are in full-resolution
+tiles can fill the composition whatever the size of the input. The input's data window is laid with its
+centre at the frame's centre (the translation by the window's centre, Homography choice 2 in `fields.md`),
+and the cell, the Tile Center and the phase are placed in the frame about it: for a picture that fills the
+frame the translation is zero, and for a shape or text layer, whose window is its own small box, a 40%
+tile puts a copy of the box in every cell and fills the frame. Tile sizes are in full-resolution
 composition pixels: a reduced render scale draws the same pattern at fewer pixels, and the cell edges
 lie on pixel edges at any scale only where the tile size in pixels is a whole number there.
 
@@ -2877,7 +2881,10 @@ quarter turn clockwise points to; 180 degrees swaps the sides.) The data window 
 turns clockwise), divided by the size (a larger size shows less of the picture, larger), folded into the
 wedge of `1 / segments` turn that starts at screen right (the second half of each wedge is the mirror
 image of the first), and read about the centre. The result has the symmetry of a dihedral group of the
-segment count. The data window is the input's.
+segment count. The canvas is the composition frame, as for Tile: the centre and the wedge are placed in
+the frame, and the input's window is laid with its centre at the frame's centre, so the kaleidoscope of
+a small shape layer fills the frame. For a picture that fills the frame the result is as if the window
+were the frame.
 
 The picture's colour is not changed: values above one, negatives and alpha keep their range (the read
 is the filtered premultiplied texel as stored). A position beyond a billion pixels reads transparent.

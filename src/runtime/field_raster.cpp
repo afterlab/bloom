@@ -401,6 +401,11 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
                 p.offsets[2 * corner] = vector(corner).x;
                 p.offsets[2 * corner + 1] = -vector(corner).y;
             }
+        } else if (choiceAt(in, 0) == 2) {
+            // Tile & Mirror: the translation by the centre of the input slot's data window, so a
+            // window of any size and place is read as if its centre sat at the field origin.
+            p.windowSlot = std::max<int>(in.slot, 0);
+            p.windowCentred = true;
         } else if (choiceAt(in, 0) == 1) {
             // Stabilize and Match Move (#513): a move of the whole picture. The tracked position
             // (vector 1) against the point it is held to (vector 0), pixels with y down; choice 1 is
