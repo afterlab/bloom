@@ -1077,27 +1077,11 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         // docs/architecture/image-statistics.md), never the picture.
         const ImageStatisticsPreparation statisticsPreparation(
             imageStatisticsFrameKey(request, ImageStatisticsRoute::Device),
-            [this, &request, &assetBaseDirectory](
-                const ImageStatisticsQuery& query,
-                const CancellationToken& token) -> ImageStatisticsRun {
-                allowStatisticsNesting = true;
-                auto outcome = evaluate(query.plan, imageStatisticsRequest(request, query), token,
-                                        {}, nullptr, assetBaseDirectory);
-                allowStatisticsNesting = false;
-                if (outcome.status == GpuProcessFrameStatus::Cancelled)
-                    return {{ImageStatisticsOutcome::Cancelled, {}}, std::nullopt};
-                if (outcome.status != GpuProcessFrameStatus::Evaluated || outcome.frame == nullptr)
-                    return {{ImageStatisticsOutcome::Unavailable,
-                             "The device route could not measure the picture: " +
-                                 outcome.diagnostic.message},
-                            std::nullopt};
-                auto values = readImageStatistics(outcome.frame->processImage(),
-                                                  ImageStatisticsRoute::Device);
-                if (!values)
-                    return {{ImageStatisticsOutcome::Unavailable,
-                             "The statistics of the picture are not readable."},
-                            std::nullopt};
-                return {{ImageStatisticsOutcome::Ready, {}}, *values};
+            [this, &request,
+             &assetBaseDirectory](const ImageStatisticsQuery& query,
+                                  const CancellationToken& token) -> ImageStatisticsRun {
+                return measureImageStatisticsOnDevice(*this, query, request, token,
+                                                      assetBaseDirectory);
             },
             cancellation);
         auto preparation =
@@ -1215,6 +1199,47 @@ bool GpuProcessFrameEvaluator::retirementComplete() const noexcept {
     // without racing a live `evaluate()`.
     std::lock_guard lock(impl_->mutex);
     return impl_->inFlightPreparations == 0;
+}
+
+ImageStatisticsRun
+measureImageStatisticsOnDevice(GpuProcessFrameEvaluator& evaluator,
+                               const ImageStatisticsQuery& query, const EvaluationRequest& frame,
+                               const CancellationToken& cancellation,
+                               const std::optional<std::filesystem::path>& assetBaseDirectory) {
+    // Inside a frame this evaluator is preparing, the statistics plan is the one nested evaluate
+    // it admits; on any other worker the flag is not consulted.
+    const bool previous = allowStatisticsNesting;
+    allowStatisticsNesting = true;
+    auto outcome = evaluator.evaluate(query.plan, imageStatisticsRequest(frame, query),
+                                      cancellation, {}, nullptr, assetBaseDirectory);
+    allowStatisticsNesting = previous;
+    if (outcome.status == GpuProcessFrameStatus::Cancelled &&
+        cancellation.isCancellationRequested())
+        return {{ImageStatisticsOutcome::Cancelled, {}}, std::nullopt};
+    if (outcome.status != GpuProcessFrameStatus::Evaluated || outcome.frame == nullptr)
+        return {{ImageStatisticsOutcome::Unavailable,
+                 "The device route could not measure the picture: " + outcome.diagnostic.message},
+                std::nullopt};
+    auto values = readImageStatistics(outcome.frame->processImage(), ImageStatisticsRoute::Device);
+    if (!values)
+        return {{ImageStatisticsOutcome::Unavailable,
+                 "The statistics of the picture are not readable."},
+                std::nullopt};
+    return {{ImageStatisticsOutcome::Ready, {}}, *values};
+}
+
+ImageStatisticsDeviceMeasure makeImageStatisticsDeviceMeasure(
+    std::function<std::shared_ptr<GpuProcessFrameEvaluator>()> evaluatorSource) {
+    return [evaluatorSource = std::move(evaluatorSource)](
+               const ImageStatisticsQuery& query, const EvaluationRequest& frame,
+               const CancellationToken& cancellation) -> ImageStatisticsRun {
+        const auto evaluator = evaluatorSource ? evaluatorSource() : nullptr;
+        if (evaluator == nullptr)
+            return {{ImageStatisticsOutcome::Unavailable,
+                     "The device route is not ready to measure the picture."},
+                    std::nullopt};
+        return measureImageStatisticsOnDevice(*evaluator, query, frame, cancellation);
+    };
 }
 
 } // namespace bloom::runtime

@@ -323,6 +323,20 @@ oracle, cold/warm cache state, and no silent CPU whole-frame render for an ordin
 no device it reports an explicit skip, never a pass, and `--require-device` fails. An unavailable
 device must publish explicit Unsupported/CPU-fallback provenance, never a CPU frame labelled GPU.
 
+Values measured from pixels in the viewer and RAM preview (#349). A frame whose value graph reads
+Image Statistics (an Image Statistics node, or Denoise with Auto strength) needs the statistics before
+its scene is built. The preview's GPU scene stage is handed a device measure
+(`ImageStatisticsDeviceMeasure`); on its preparing worker, before the frame holds a processing phase
+lease, it submits each statistics plan to the application's GPU final-render evaluator (the
+`GpuExportProvider`'s `GpuProcessFrameEvaluator`) as an ordinary request with a two-pixel region, and
+reads back only that two-pixel result (`prep.statistics.result_readback`). The preview service's own
+device and executor are not involved, and the evaluator's owner is another thread, so the measure
+cannot wait on the frame it serves. A measure the device cannot make returns the frame as outside the
+GPU subset (`bloom.preview.gpu-scene.statistics-unavailable`) and it takes the CPU path, labelled
+CPU. [Image Statistics](image-statistics.md#routes) owns the details;
+`bloom.ui.gpu_ram_preview_image_statistics` proves the viewer and RAM preview frames GPU-resident
+against the CPU oracle with each frame measured once on the device.
+
 Resident preview product and service. The closed `PreparedPreviewFrame` display variant has a fourth,
 GPU-resident arm, `PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
 `gpu_resident_preview_product.hpp`. Its only pixel storage is the opaque, owner-bound

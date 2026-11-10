@@ -24,6 +24,7 @@
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -127,13 +128,18 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator);
 // to the general display program service. A null resolver or a failed resolve keeps the builder's
 // default fail-closed context and every affected request takes the CPU fallback with a reason.
 // Nothing here resolves tools, hashes, or compiles on the UI thread.
+//
+// `statisticsMeasure` (#349) is handed to makeCompositionPreviewGpuSceneStage: the application's
+// device route that measures the Image Statistics a frame reads (makeImageStatisticsDeviceMeasure
+// over its final-render evaluator). Empty keeps such frames on the CPU path.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedDisplayProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     CompiledPlanCacheHandle planCache = nullptr,
     std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr,
-    runtime::GpuScenePreparationPhase processingPhase = {});
+    runtime::GpuScenePreparationPhase processingPhase = {},
+    runtime::ImageStatisticsDeviceMeasure statisticsMeasure = {});
 
 // Owns the cached presentation capability for the whole application. It is not a QObject, holds no
 // native handle, and never blocks. The application refreshes it from the EXISTING TaskUiBridge poll

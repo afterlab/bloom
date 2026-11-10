@@ -84,7 +84,8 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     CompiledPlanCacheHandle planCache,
     std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver,
-    runtime::GpuScenePreparationPhase processingPhase) {
+    runtime::GpuScenePreparationPhase processingPhase,
+    runtime::ImageStatisticsDeviceMeasure statisticsMeasure) {
     // The one general-display service is created ONCE and consumes the shared resolver, so the
     // display program uses the exact same shared GpuOcioProgramPreparer as the scene builder.
     auto displayProgramService =
@@ -93,7 +94,8 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
             coverageCache = std::move(coverageCache), planCache = std::move(planCache),
             ocioContextResolver = std::move(ocioContextResolver),
             displayProgramService = std::move(displayProgramService),
-            processingPhase = std::move(processingPhase)](
+            processingPhase = std::move(processingPhase),
+            statisticsMeasure = std::move(statisticsMeasure)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -141,8 +143,9 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
         }
         const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext),
                                                   std::move(ocioContext), processingPhase);
-        auto stage = makeCompositionPreviewGpuSceneStage(
-            compiler, builder, qualifiedProcessorProvider, planCache, displayProgramService);
+        auto stage = makeCompositionPreviewGpuSceneStage(compiler, builder,
+                                                         qualifiedProcessorProvider, planCache,
+                                                         displayProgramService, statisticsMeasure);
         auto result =
             stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride, context);
         // A frame that leaves the GPU subset because the tools were not ready names that reason

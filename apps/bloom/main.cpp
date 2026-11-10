@@ -20,6 +20,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
@@ -95,6 +96,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 int main(int argc, char* argv[]) try {
@@ -377,6 +379,24 @@ int main(int argc, char* argv[]) try {
         // the CPU path, exactly as before.
         gpuOcioContextResolver = std::make_shared<bloom::runtime::GpuOcioContextResolver>();
     }
+    // #349: the Viewer and RAM Preview measure the Image Statistics a frame reads on the
+    // application's GPU final-render route (the provider created below), from their own preparing
+    // worker. Until that provider publishes an evaluator the measure is unavailable and such a
+    // frame takes the CPU reference path, labelled CPU.
+    struct StatisticsDeviceSource final {
+        std::mutex mutex;
+        std::weak_ptr<bloom::host::GpuExportProvider> provider;
+    };
+    const auto statisticsDeviceSource = std::make_shared<StatisticsDeviceSource>();
+    auto statisticsDeviceMeasure =
+        bloom::runtime::makeImageStatisticsDeviceMeasure([statisticsDeviceSource] {
+            std::shared_ptr<bloom::host::GpuExportProvider> provider;
+            {
+                const std::scoped_lock lock(statisticsDeviceSource->mutex);
+                provider = statisticsDeviceSource->provider.lock();
+            }
+            return provider != nullptr ? provider->evaluator() : nullptr;
+        });
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
         compiledPlanCache, gpuOcioContextResolver,
@@ -389,7 +409,8 @@ int main(int argc, char* argv[]) try {
                       // no fixed ceiling since #474; measured peaks replace this need, #417)
                       // plus concurrent transfer storage.
                       .deviceWorkingBytes = 512ULL * 1024 * 1024 +
-                                            gpuPreviewDisplayOptions.packedTransferByteAllowance}});
+                                            gpuPreviewDisplayOptions.packedTransferByteAllowance}},
+        std::move(statisticsDeviceMeasure));
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
     auto gpuPreviewCpuDisplayFallback =
@@ -546,6 +567,10 @@ int main(int argc, char* argv[]) try {
     };
     auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
     gpuExportProvider->prepare(taskScheduler);
+    {
+        const std::scoped_lock lock(statisticsDeviceSource->mutex);
+        statisticsDeviceSource->provider = gpuExportProvider;
+    }
     bool shutdownQuiescent = false;
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     shutdownCoordinator.setAudioRetirement([&] { audioDeviceControl.beginShutdown(); },

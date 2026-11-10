@@ -34,6 +34,7 @@
 #include <bloom/runtime/gpu_output_color.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <cstdint>
@@ -304,5 +305,22 @@ class GpuProcessFrameEvaluator final {
 
     std::unique_ptr<Impl> impl_;
 };
+
+// #349: the statistics of `query`'s picture for the frame `frame` is part of, measured through
+// `evaluator`'s production device route: the statistics plan runs on the device at the frame's own
+// time and resolution and only its two-pixel result is read back (the statistics readback of
+// docs/architecture/image-statistics.md), never the picture. Called on a CPU worker that is not the
+// evaluator's owner; a frame the evaluator is preparing calls it for its own statistics too.
+[[nodiscard]] ImageStatisticsRun measureImageStatisticsOnDevice(
+    GpuProcessFrameEvaluator& evaluator, const ImageStatisticsQuery& query,
+    const EvaluationRequest& frame, const CancellationToken& cancellation,
+    const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt);
+
+// The device measure an interactive route hands its frames: each query is measured on the evaluator
+// `evaluatorSource` returns at that moment (the application's final-render evaluator, published
+// once its device is ready). With no evaluator yet, or one whose device cannot run the picture, the
+// measure is Unavailable and says so.
+[[nodiscard]] ImageStatisticsDeviceMeasure makeImageStatisticsDeviceMeasure(
+    std::function<std::shared_ptr<GpuProcessFrameEvaluator>()> evaluatorSource);
 
 } // namespace bloom::runtime

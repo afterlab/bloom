@@ -73,6 +73,14 @@ readImageStatistics(const render::Rgba32fImage& result, ImageStatisticsRoute rou
 using ImageStatisticsProvider =
     std::function<ImageStatisticsRun(const ImageStatisticsQuery&, const CancellationToken&)>;
 
+// Measures `query` for the frame `frame` is part of on a device route, from a worker that is not
+// evaluating on that device itself (the interactive viewer and RAM preview prepare their frames on
+// their own workers and hand the picture to the application's device route). The result is labelled
+// Device; Unavailable says why the device could not measure, and the frame then takes the CPU
+// reference path, which measures the statistics itself.
+using ImageStatisticsDeviceMeasure = std::function<ImageStatisticsRun(
+    const ImageStatisticsQuery&, const EvaluationRequest& frame, const CancellationToken&)>;
+
 // The cache identity of `query` within the frame a preparation stands for: the same string for the
 // same node of the same plan revision at the same time and resolution, whatever thread asks.
 [[nodiscard]] std::string imageStatisticsKey(const std::string& frameKey,

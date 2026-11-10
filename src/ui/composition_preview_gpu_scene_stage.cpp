@@ -117,12 +117,14 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuGpuSceneBuilder& builder,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     CompiledPlanCacheHandle planCache,
-    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService) {
+    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService,
+    runtime::ImageStatisticsDeviceMeasure statisticsMeasure) {
     if (planCache == nullptr) {
         planCache = std::make_shared<CompiledPlanCache>();
     }
     return [&compiler, &builder, &qualifiedProcessorProvider, planCache = std::move(planCache),
-            displayProgramService = std::move(displayProgramService)](
+            displayProgramService = std::move(displayProgramService),
+            statisticsMeasure = std::move(statisticsMeasure)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -190,8 +192,62 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
                                 .subphase = "Preparing the immutable GPU scene",
                                 .completed = 0,
                                 .total = std::nullopt});
+        // #349: the Image Statistics this frame reads are measured on the device route for this
+        // frame while the builder resolves its value graph (before the frame holds any phase
+        // lease), and cached under the frame's own Device identity. A measure the device could not
+        // make is remembered: the frame is then not prepared with unmeasured values.
+        std::optional<std::string> statisticsUnavailable;
+        std::optional<runtime::ImageStatisticsPreparation> statisticsPreparation;
+        if (statisticsMeasure && runtime::planReadsImageStatistics(*compileResult.plan)) {
+            statisticsPreparation.emplace(
+                runtime::imageStatisticsFrameKey(evaluationRequest,
+                                                 runtime::ImageStatisticsRoute::Device),
+                [&statisticsMeasure, &evaluationRequest,
+                 &statisticsUnavailable](const runtime::ImageStatisticsQuery& query,
+                                         const runtime::CancellationToken& token) {
+                    auto run = statisticsMeasure(query, evaluationRequest, token);
+                    if (run.status.outcome == runtime::ImageStatisticsOutcome::Ready &&
+                        run.values && run.values->route != runtime::ImageStatisticsRoute::Device)
+                        run = {{runtime::ImageStatisticsOutcome::Unavailable,
+                                "The statistics were not measured on the device."},
+                               std::nullopt};
+                    if (run.status.outcome == runtime::ImageStatisticsOutcome::Cancelled &&
+                        !token.isCancellationRequested())
+                        run = {{runtime::ImageStatisticsOutcome::Unavailable,
+                                "The device route stopped measuring the picture."},
+                               std::nullopt};
+                    if (run.status.outcome == runtime::ImageStatisticsOutcome::Unavailable &&
+                        !statisticsUnavailable)
+                        statisticsUnavailable = run.status.detail;
+                    return run;
+                },
+                context.cancellation());
+        }
         auto buildResult =
             builder.build(compileResult.plan, evaluationRequest, context.cancellation());
+        statisticsPreparation.reset();
+
+        if (buildResult.diagnostic.code != runtime::PreparedGpuSceneDiagnosticCode::Cancelled &&
+            !context.isCancellationRequested() && statisticsUnavailable) {
+            // The device could not measure the picture: the frame takes the CPU reference path,
+            // which measures the statistics itself and labels the frame CPU. A scene the builder
+            // made from unmeasured values is released here, unused.
+            diagnostics.push_back(
+                {.code = "bloom.preview.gpu-scene.statistics-unavailable",
+                 .severity = runtime::DiagnosticSeverity::Warning,
+                 .summary = "Image Statistics could not be measured on the device for this frame",
+                 .detail = *statisticsUnavailable,
+                 .suggestedAction = "Take the full CPU composition preview path, which measures "
+                                    "the statistics on the CPU reference route."});
+            return StageResult::succeeded(
+                std::make_shared<const runtime::PreviewGpuSceneStageOutcome>(
+                    runtime::PreviewGpuSceneStageOutcome{
+                        .status = runtime::PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
+                        .stage = {},
+                        .diagnostics = std::move(diagnostics)}));
+        }
+        if (buildResult.scene == nullptr && context.isCancellationRequested())
+            return StageResult::cancelled(std::move(diagnostics));
 
         if (buildResult.scene == nullptr) {
             if (buildResult.diagnostic.code == runtime::PreparedGpuSceneDiagnosticCode::Cancelled) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
+#include <bloom/runtime/image_statistics.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -38,10 +39,19 @@ namespace bloom::ui {
 // no-tools path) the stage leaves the general program null and the service uses its startup fast
 // path or the CPU fallback. The service resolves tools and configs lazily on first use, so this
 // factory performs no I/O and no UI-thread work.
+//
+// `statisticsMeasure` (#349) measures the Image Statistics a frame's value graph reads on a device
+// route. When set, the stage installs a statistics preparation for the frame (its own time,
+// resolution, quality and color, labelled Device) on this worker while the builder resolves the
+// value graph, so the frame is prepared on the GPU with statistics the device measured. A frame
+// whose statistics the device could not measure is never prepared with unmeasured values: it is
+// returned as UnsupportedGpuSubset with the reason, and the CPU reference path measures them. When
+// empty, a frame that reads Image Statistics takes the CPU path, as before.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuGpuSceneBuilder& builder,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     CompiledPlanCacheHandle planCache = nullptr,
-    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService = nullptr);
+    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService = nullptr,
+    runtime::ImageStatisticsDeviceMeasure statisticsMeasure = {});
 
 } // namespace bloom::ui

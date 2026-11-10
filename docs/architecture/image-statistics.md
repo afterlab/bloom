@@ -108,21 +108,39 @@ and the picture measured whole.
   per-node or per-operation full-frame roundtrip exists. The result is labelled with the route that
   measured it (`ImageStatisticsRoute::Device`), and the cache keeps CPU and device results apart, so
   a CPU result is never reported as a device result.
-- A route that cannot run the plan reports it. A scene built where no preparation is installed (the
-  interactive viewer's device preparation, which does not run the plan) is declined as unsupported
-  with the reason "Image Statistics are measured by the CPU reference route here", and the frame
-  takes the CPU reference path, which measures the statistics itself. That frame is labelled as a CPU
-  reference frame. An unavailable device is reported by the evaluator as unavailable, as for any
-  other frame.
+- Interactive viewer and RAM preview (decision, 2026-11-10): the preview's GPU scene stage
+  (`makeCompositionPreviewGpuSceneStage`) is handed a device measure
+  (`ImageStatisticsDeviceMeasure`). While the scene builder resolves the frame's value graph, before
+  the frame holds a processing phase lease, the stage installs a preparation for the frame under its
+  own Device identity, and each statistics plan is measured by the application's device route: the
+  application's GPU final-render evaluator (`GpuExportProvider`), through
+  `makeImageStatisticsDeviceMeasure` and `measureImageStatisticsOnDevice`. That is the same device
+  route as a final render, with the same resident scene, the same two-pixel region and the same one
+  two-pixel readback under `prep.statistics.result_readback`. The preview's preparing worker is not
+  that evaluator's owner, so the measure cannot wait on the frame it serves. The measure carries the
+  frame task's cancellation, so a viewer request superseded by a newer one cancels it, and a cancelled
+  measure is not cached. The frame is then
+  prepared on the GPU and shown as a GPU-resident frame; RAM preview frames take the same stage, so
+  each frame of a range is measured once and a warm range measures nothing.
+- A route that cannot run the plan reports it. When the device measure is unavailable (no evaluator
+  yet, an unavailable device, a refused request, or values not measured on a device), the viewer
+  stage never prepares the frame with unmeasured values: it returns the frame as outside the GPU
+  subset with the diagnostic `bloom.preview.gpu-scene.statistics-unavailable` and the reason, and the
+  frame takes the CPU reference path, which measures the statistics itself and is labelled as a CPU
+  frame. A scene built where no preparation is installed at all (a preview stage without a device
+  measure) is declined as unsupported with the reason "Image Statistics are measured by the CPU
+  reference route here", with the same CPU path. An unavailable device is reported by the evaluator
+  as unavailable, as for any other frame.
 
 Denoise & Smooth's Auto strength (#514, `image-filters.md`) is a second user of this route: its
 lowering builds a statistics plan of the node's own input cropped to its sample region and reads the
 deviation as a compiled value, with the same preparation, cache, cancellation, budget, readback and
-viewer fallback as the node.
+viewer route and fallback as the node.
 
 The nested run is the one reentrant call the GPU process frame evaluator permits: the statistics plan
 of the frame being prepared, run by that frame's own preparation on the calling worker before the
-frame's scene is queued. It is admitted like any request and cannot wait on the frame it serves.
+frame's scene is queued. It is admitted like any request and cannot wait on the frame it serves. A
+preview frame's measure is not nested: it is an ordinary request from the preview's worker.
 
 ### The statistics readback (owner decision, 2026-11-09)
 
@@ -158,6 +176,15 @@ binary32 count, mean and deviation to binary32 accuracy against a double precisi
 `bloom.runtime.gpu_scene_effect_native` (CPU and device parity of the passes at the strict gate with
 exact alpha, windows, resident dispatches, warm zero-dispatch reuse, the same three tables on the
 device with the CPU reference's bits exactly and the exact count read back, and the device route end
-to end through the GPU process frame evaluator), and
+to end through the GPU process frame evaluator), `bloom.ui.composition_preview_gpu_scene_stage`
+(the viewer stage with a device measure: the frame prepared on the GPU and measured once for its own
+time, a cached frame not measured again, an unavailable or CPU-labelled measure taking the CPU path
+with `statistics-unavailable` and caching nothing, a cancelled measure caching nothing, and no
+measure at all taking the CPU path), `bloom.ui.gpu_ram_preview_image_statistics` (Image Statistics
+driving Levels and Denoise with Auto strength in the interactive viewer and RAM preview on the real
+service and the application's device route: GPU-resident frames against the CPU oracle, every 4th
+pixel within one code, each frame's statistics measured once on the device and equal to the CPU
+reference's exactly, a warm replay measuring nothing, an edit measuring every frame again, and a
+refused device route giving a CPU frame with the CPU reference's pixels), and
 the coverage fixtures `effect.StatisticsKernel` and `node.bloom.image-statistics`. The benchmark case
 `image-statistics-2k` is written and has not been run.

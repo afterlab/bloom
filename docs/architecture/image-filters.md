@@ -1722,9 +1722,11 @@ two noisy copies of the same content above zero). The measure is the Image Stati
 time and resolution, so it follows the footage; cached by node, revision and time, with the plan
 compared on reuse, so moving the region or changing the input re-measures; on a device route its only
 readback is the two-pixel statistics result (`prep.statistics.result_readback`), never the picture.
-The interactive viewer's device preparation does not run statistics plans, so a frame with Auto
-strength on takes the CPU reference path there and is labelled a CPU reference frame (as any Image
-Statistics frame is); final renders and the headless and scripted routes measure on the device. Wiring
+The interactive viewer and RAM preview measure it on the application's device route before the
+frame's GPU scene is prepared, so a frame with Auto strength on is prepared and shown on the GPU there
+too (as any Image Statistics frame is); when that route cannot measure, the frame takes the CPU
+reference path and is labelled a CPU frame. Final renders and the headless and scripted routes
+measure on the device. Wiring
 an Image Statistics node's `deviation` into `strength` by hand remains possible.
 
 All weights are polynomials of the host's float inputs and sums are `fma` folds in scan order (dy, then

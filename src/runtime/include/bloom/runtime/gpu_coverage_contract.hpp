@@ -613,8 +613,10 @@ struct GpuCoverageContractDiagnostic final {
             "a GPU implementation."},
         // Owner decision of 2026-11-09, recorded in docs/architecture/image-statistics.md. One
         // named, bounded readback: the two-pixel result of an Image Statistics plan, on any device
-        // route. The whole frame is still GPU work, the reduction runs on the device, and no picture
-        // and no per-node full-frame roundtrip is ever read back.
+        // route (a final render's, and the application's device route that measures the statistics
+        // of interactive viewer and RAM preview frames). The whole frame is still GPU work, the
+        // reduction runs on the device, and no picture and no per-node full-frame roundtrip is ever
+        // read back.
         GpuCoverageEntry{
             "prep.statistics.result_readback",
             "bounded readback of an Image Statistics result (two pixels) so its values can drive "
