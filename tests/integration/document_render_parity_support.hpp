@@ -165,9 +165,12 @@ runScene(runtime::GpuSceneExecutor& executor,
 
 // Prepares the production GPU scene for a CPU reference, runs it cold and warm, and requires
 // pixel parity and the same prepared bounds as the CPU evaluator.
+// `builder` is the preparation to use (one carrying the OCIO preparer when the scene holds an
+// image effect).
 inline void gpuParity(Expectations& expectations, runtime::GpuSceneExecutor& executor,
-                      const Reference& reference, const std::string& label) {
-    const auto prepared = runtime::CpuGpuSceneBuilder{}.build(reference.plan, reference.request);
+                      const Reference& reference, const std::string& label,
+                      const runtime::CpuGpuSceneBuilder& builder = runtime::CpuGpuSceneBuilder{}) {
+    const auto prepared = builder.build(reference.plan, reference.request);
     expectations.expect(prepared.hasValue(), label + ": prepares: " + prepared.diagnostic.message);
     if (!prepared)
         return;

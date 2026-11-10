@@ -1,11 +1,6 @@
 #include <QAction>
-#include <QDir>
-#include <QPixmap>
-#include <QRegularExpression>
-#include <functional>
-#include <map>
-#include <QScreen>
 #include <QApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGraphicsItem>
@@ -14,7 +9,10 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPixmap>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
+#include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -26,27 +24,28 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
-#include <bloom/document/warp_nodes.hpp>
-#include <bloom/document/color_cleanup_nodes.hpp>
-#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/audio_effect_nodes.hpp>
-#include <bloom/document/node_group_nodes.hpp>
-#include <bloom/document/value_utility_nodes.hpp>
-#include <bloom/document/document.hpp>
-#include <bloom/document/new_project.hpp>
-#include <bloom/document/project.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
-#include <bloom/document/motion_blur_parameters.hpp>
-#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/color_cleanup_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/document.hpp>
 #include <bloom/document/image_math_parameters.hpp>
+#include <bloom/document/layer_masks.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
-#include <bloom/ui/kit/angle_dial.hpp>
-#include <bloom/ui/kit/value_field.hpp>
-#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/curve_graph.hpp>
+#include <bloom/ui/grading_controls.hpp>
+#include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -55,13 +54,14 @@
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/test_card_widget.hpp>
-#include <bloom/ui/grading_controls.hpp>
-#include <bloom/document/test_card_nodes.hpp>
+#include <functional>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <string_view>
 #include <vector>
 using namespace bloom;
@@ -160,6 +160,35 @@ void transform2DRows() {
     QCoreApplication::processEvents();
     for (const auto* role : {"translate", "pivot", "scale", "rotation", "extent", "filter"})
         expect(row(properties, role) != nullptr, "Transform 2D presents every registry control");
+    // Scale is a factor shown as a percentage: the default 1 reads 100 %, and typing 50 % in X
+    // stores 0.5 through the parameter's component.
+    if (auto* scale = row(properties, "scale")) {
+        const auto fields = scale->findChildren<ui::kit::KValueField*>("propertiesRegistryValue");
+        expect(fields.size() == 2 && fields[0]->value() == 100.0 && fields[1]->value() == 100.0 &&
+                   fields[0]->unit() == QStringLiteral("%") &&
+                   fields[0]->paintedText().startsWith(QStringLiteral("100")),
+               "Transform 2D's default scale reads 100 %, not 1.00 %");
+        if (fields.size() == 2) {
+            fields[0]->setValue(50.0);
+            QCoreApplication::processEvents();
+            const auto stored = [&]() -> std::optional<document::Vec2d> {
+                for (const auto& binding :
+                     session.composition()->graph().findNode(node)->parameters)
+                    if (binding.role == "scale")
+                        return session.effectiveVec2Value(binding.parameterId);
+                return std::nullopt;
+            }();
+            expect(stored && stored->x == 0.5 && stored->y == 1.0,
+                   "typing 50 % in Scale X stores 0.5 and leaves Y at 1");
+            expect(fields[0]->value() == 50.0 && fields[1]->value() == 100.0,
+                   "the scale fields read the stored factor back as 50 % and 100 %");
+            expect(session.undo(), "the scale edit undoes");
+            QCoreApplication::processEvents();
+            expect(fields[0]->value() == 100.0, "after undo Scale X reads 100 % again");
+        }
+    } else {
+        expect(false, "Transform 2D has a scale row");
+    }
     auto* extent = row(properties, "extent");
     auto* selector = extent ? extent->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum")
                             : nullptr;
@@ -1100,12 +1129,16 @@ void recipeRows() {
           Expected{"bloom.glow",
                    {"threshold", "knee", "intensity", "size", "falloff", "tint", "octaves",
                     // #506
-                    "mode", "exponent", "radiusRed", "radiusGreen", "radiusBlue",
-                    "points", "angle", "length", "chromatic", "dirtAmount", "rollOff"},
+                    "mode", "exponent", "radiusRed", "radiusGreen", "radiusBlue", "points", "angle",
+                    "length", "chromatic", "dirtAmount", "rollOff"},
                    "glowOnly"},
           Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"},
           // #516: two values and no switch.
           Expected{"bloom.edge-extend", {"distance", "amount"}, nullptr},
+          // #509: a band's width, softness, offset, colour and composite choice; no switch.
+          Expected{"bloom.alpha-contour",
+                   {"width", "softness", "offset", "color", "composite"},
+                   nullptr},
           // #503: not a recipe, but the same shape: a mode, a colour and a switch.
           Expected{"bloom.alpha-association", {"mode", "background"}, "white"}}) {
         const auto node = addNode(session, type);
@@ -1978,6 +2011,148 @@ void pathReadoutsResolve() {
     }
 }
 
+// #509: Path Stroke's stamps in Properties (Brush stamp, Stamp direction, a Stamp Rotation dial),
+// and the node Mask Path and Text Outline read offered by name, with their readouts resolved.
+void pathStampAndSourceRows() {
+    ReadoutFixture fixture;
+    auto& session = fixture.session;
+    auto& properties = fixture.properties;
+    const auto labelsWhole = [&](const char* what) {
+        for (auto* label : properties.findChildren<QLabel*>("propertiesRowLabel"))
+            if (label->isVisibleTo(&properties))
+                expect(label->width() >= label->fontMetrics().horizontalAdvance(label->text()),
+                       (std::string(what) +
+                        ": a row label is shown whole: " + label->text().toStdString())
+                           .c_str());
+    };
+    const auto stroke = addNode(session, document::kPathStrokeNodeType);
+    session.selectNode(stroke);
+    setNodeValue(session, stroke, "path", squarePath(100.0));
+    setNodeValue(session, stroke, "spacing", 20.0);
+    const auto selectorIn = [&](const char* role) {
+        auto* found = row(properties, role);
+        return found ? found->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum") : nullptr;
+    };
+    auto* stamp = selectorIn("stamp");
+    expect(stamp != nullptr && stamp->count() == 4 && stamp->itemText(0) == QStringLiteral("Dot") &&
+               stamp->itemText(1) == QStringLiteral("Square") &&
+               stamp->itemText(2) == QStringLiteral("Diamond") &&
+               stamp->itemText(3) == QStringLiteral("Dash") &&
+               stamp->currentText() == QStringLiteral("Dot"),
+           "Brush stamp offers Dot (the default), Square, Diamond and Dash");
+    auto* align = selectorIn("stampAlign");
+    expect(align != nullptr && align->count() == 3 &&
+               align->currentText() == QStringLiteral("Automatic") &&
+               align->itemText(1) == QStringLiteral("Follow path") &&
+               align->itemText(2) == QStringLiteral("Fixed"),
+           "Stamp direction offers Automatic (the default), Follow path and Fixed");
+    auto* rotation = row(properties, "stampRotation");
+    auto* rotationDial = rotation ? rotation->findChild<ui::kit::KAngleDial*>() : nullptr;
+    auto* rotationField = rotation ? rotation->findChild<ui::kit::KValueField*>() : nullptr;
+    expect(rotationDial != nullptr && rotationField != nullptr &&
+               rotationField->unit() == QStringLiteral("\u00b0"),
+           "Stamp Rotation is an angle in degrees with a dial on its own row");
+    if (stamp != nullptr) {
+        stamp->chooseIndex(3);
+        QCoreApplication::processEvents();
+        const auto id = ui::nodeRoleParameter(session, stroke, "stamp");
+        const auto* record = id ? session.composition()->parameters().find(*id) : nullptr;
+        expect(record != nullptr &&
+                   std::get<std::int64_t>(
+                       std::get<document::ConstantValueSource>(record->source).value) == 3,
+               "choosing Dash stores the Dash stamp through a command");
+        expect(session.undo(), "the stamp choice undoes");
+        expect(session.redo(), "the stamp choice redoes");
+    }
+    const auto strokeTexts = resolvedReadouts(properties);
+    expect(strokeTexts.contains(QStringLiteral("path")) &&
+               strokeTexts.at(QStringLiteral("path")).endsWith(QStringLiteral("anchors")),
+           "Path Stroke's stamped outline resolves in its readout");
+    labelsWhole("Path Stroke");
+    saveReadoutCapture(properties, "properties-path-stroke-stamps");
+
+    // Mask Path: nothing to read until a mask exists, then the Mask node by name.
+    const auto maskPath = addNode(session, document::kMaskPathNodeType);
+    session.selectNode(maskPath);
+    QCoreApplication::processEvents();
+    const auto sourceIn = [&]() {
+        auto* found = row(properties, "source");
+        return found ? found->findChild<ui::kit::KDropdown*>("propertiesPathSource") : nullptr;
+    };
+    auto* source = sourceIn();
+    expect(source != nullptr && source->count() == 1 &&
+               source->currentText() == QStringLiteral("No masked layer or Mask node"),
+           "Mask Path with no mask to read says so");
+    const auto mask = addNode(session, document::kMaskNodeType);
+    setNodeValue(session, mask, "path", squarePath(80.0));
+    session.selectNode(maskPath);
+    QCoreApplication::processEvents();
+    source = sourceIn();
+    expect(source != nullptr && source->count() == 1 &&
+               source->currentText() ==
+                   QStringLiteral("Mask node %1").arg(static_cast<qulonglong>(mask.value())),
+           "Mask Path offers the Mask node and reads it");
+    auto texts = resolvedReadouts(properties);
+    expect(texts.contains(QStringLiteral("path")) &&
+               texts.at(QStringLiteral("path")) == QStringLiteral("1 contours, 4 anchors") &&
+               texts.contains(QStringLiteral("count")) &&
+               texts.at(QStringLiteral("count")) == QStringLiteral("1"),
+           "Mask Path reads the Mask node's one contour");
+    labelsWhole("Mask Path");
+    saveReadoutCapture(properties, "properties-mask-path");
+
+    // Text Outline: a text layer is offered by what it says.
+    commands::Transaction text("Text", session.snapshot().revision());
+    text.emplace<commands::AddTextLayer>(session.compositionId(), "Title", "Bloom");
+    expect(session.executeNodeTransaction(std::move(text)).changed(), "a text layer is added");
+    const auto outline = addNode(session, document::kTextOutlineNodeType);
+    session.selectNode(outline);
+    QCoreApplication::processEvents();
+    source = sourceIn();
+    expect(source != nullptr && source->count() == 1 &&
+               source->currentText() == QStringLiteral("Text \u201cBloom\u201d"),
+           "Text Outline offers the text by what it says and reads it");
+    texts = resolvedReadouts(properties);
+    expect(texts.contains(QStringLiteral("count")) &&
+               texts.at(QStringLiteral("count")).toInt() >= 5,
+           "Text Outline's glyph contours resolve in its readout");
+    labelsWhole("Text Outline");
+    saveReadoutCapture(properties, "properties-text-outline");
+
+    // Alpha Contour: its band's controls and the composite choice, each label whole.
+    const auto contour = addNode(session, document::kAlphaContourNodeType);
+    session.selectNode(contour);
+    QCoreApplication::processEvents();
+    std::map<QString, QString> contourRows;
+    for (auto* row : properties.findChildren<QWidget*>(QStringLiteral("propertiesRegistryRow")))
+        if (!row->isHidden())
+            contourRows[row->property("role").toString()] = row->property("rowLabel").toString();
+    expect(contourRows[QStringLiteral("width")] == QStringLiteral("Width") &&
+               contourRows[QStringLiteral("softness")] == QStringLiteral("Softness") &&
+               contourRows[QStringLiteral("offset")] == QStringLiteral("Offset") &&
+               contourRows[QStringLiteral("color")] == QStringLiteral("Color") &&
+               contourRows[QStringLiteral("composite")] == QStringLiteral("Composite"),
+           "Alpha Contour presents Width, Softness, Offset, Color and Composite");
+    // The colour chip shows the band's colour once the session's colour conversion is ready (it
+    // is prepared off the UI thread; until then the chip is disabled and says so).
+    const auto chipReady = [&properties] {
+        const auto chips = properties.findChildren<ui::kit::KColorChip*>(
+            QStringLiteral("propertiesRegistryColor"));
+        return !chips.isEmpty() && std::ranges::all_of(chips, [](const auto* chip) {
+            return chip->isHidden() || chip->isEnabled();
+        });
+    };
+    QElapsedTimer conversion;
+    conversion.start();
+    while (!chipReady() && conversion.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    expect(chipReady(), "Alpha Contour's colour chip shows its colour");
+    labelsWhole("Alpha Contour");
+    saveReadoutCapture(properties, "properties-alpha-contour");
+}
+
 void imageStatisticsReadoutsResolve() {
     ReadoutFixture fixture;
     const auto solid = addNode(fixture.session, document::kSolidSourceNodeType);
@@ -2255,6 +2430,7 @@ int main(int argc, char** argv) try {
     QSettings().clear();
     if (argc > 1 && std::string_view(argv[1]) == "--readouts") {
         pathReadoutsResolve();
+        pathStampAndSourceRows();
         imageStatisticsReadoutsResolve();
         timeUpdatesReadout();
         integerAndBooleanReadouts();
@@ -2303,6 +2479,7 @@ int main(int argc, char** argv) try {
     videoRows();
     testCardRows();
     pathReadoutsResolve();
+    pathStampAndSourceRows();
     imageStatisticsReadoutsResolve();
     timeUpdatesReadout();
     integerAndBooleanReadouts();

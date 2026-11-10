@@ -26,7 +26,9 @@ area, and its layers from the bottom up. A layer is one of:
   ...]}} drives it from a Function Plot reading that group, #595; "axesNode": {"values": {...},
   "keys": {...}} drives it from an Axes node, #596; "pathChain": {"keys": [[frame, path value],
   ...], "steps": [{"type": node type, "values": {...}, "keys": {...}}, ...]} drives it from a keyed
-  Path node read by each path processing step in turn, #344, #530).
+  Path node read by each path processing step in turn, #344, #530; "textOutline": {"text",
+  "size", "steps": [...]} adds a text layer and drives it from a Text Outline of that text read by
+  each step in turn, #509).
 
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
@@ -726,6 +728,42 @@ SCENARIOS["path-processing-2k"] = {
                   "keys": {"end": [[0, 10.0], [23, 100.0]]}},
                  {"type": "bloom.transform-path", "values": {"rotation": 0.0},
                   "keys": {"rotation": [[0, 0.0], [23, 20.0]]}}]}},
+    ],
+}
+
+# #509: Text Outline: a paragraph's glyph outlines, stroked with a keyed write-on and drawn by a
+# Shape Source over the text. The cost is the outline extraction (host font shaping), the stroke's
+# polygon union over every glyph contour, then the fill. No media is read. Written, not run.
+SCENARIOS["text-outline-2k"] = {
+    "description": "A Shape Source drawing a 120-character text's glyph outlines stroked with a "
+                   "keyed write-on.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Outline",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "textOutline": {
+             "text": "The quick brown fox jumps over the lazy dog. "
+                     "Pack my box with five dozen liquor jugs. Sphinx of black quartz!",
+             "size": 72.0,
+             "steps": [{"type": "bloom.path-stroke", "values": {"width": 3.0},
+                        "keys": {"end": [[0, 5.0], [23, 100.0]]}}]}},
+    ],
+}
+
+# #509: Alpha Contour over a keyed plate matte: Luma Key makes the alpha, and the contour's keyed
+# width makes every frame new and its distance transform reach the widest band the domains allow
+# (the costly case). Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["alpha-contour-2k"] = {
+    "description": "A PNG16 plate keyed by luma, its alpha edge stroked by Alpha Contour with a "
+                   "keyed width.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.luma-key", {"low": 0.2, "high": 0.6}, {}],
+                     ["bloom.alpha-contour", {"softness": 2.0, "offset": 4.0},
+                      {"keys": {"width": [[0, 2.0], [23, 24.0]]}}]]},
     ],
 }
 

@@ -624,11 +624,59 @@ void testEdgeExtendLowering(Expectations& expectations) {
                         "through the transparency mask");
 }
 
+// #509 Alpha Contour: the input's mask distance transform reaching just past the band, a field
+// raster over it reading it from image slot 0 (the eight-instruction band program, premultiplied),
+// then a Normal Merge with the input on top for Under. Driven values reach the widest band the
+// domains allow; Contour only publishes the raster itself.
+void testAlphaContourLowering(Expectations& expectations) {
+    using namespace document;
+    auto fixture =
+        recipeFixture(kAlphaContourNodeType, {{"width", 6.0},
+                                              {"softness", 2.0},
+                                              {"offset", 3.0},
+                                              {"composite", std::int64_t{kAlphaContourUnder}}});
+    const auto node = fixture.node;
+    auto result = compileRecipe(std::move(fixture.project));
+    expectations.expect(result.plan != nullptr, "Alpha Contour compiles");
+    if (!result.plan)
+        return;
+    const auto& plan = *result.plan;
+    const auto ops = recipeOperations(plan, node);
+    require(ops.size() == 3, "Alpha Contour lowers to a distance, a raster and a Merge");
+    const auto* distance = recipeKernel<runtime::MaskDistanceKernel>(plan, ops[0]);
+    const auto* raster = recipeKernel<runtime::FieldRasterKernel>(plan, ops[1]);
+    const auto* rasterEffect =
+        std::get_if<runtime::CompiledImageEffect>(&plan.operations()[ops[1]]);
+    const auto* merge = recipeMerge(plan, ops[2]);
+    // |offset| + width / 2 + 1/2 + softness / 2 + 2.
+    expectations.expect(distance && distance->reach == 9.5,
+                        "the distance transform reaches just past the band");
+    expectations.expect(
+        raster && raster->program.instructions.size() == 8 &&
+            raster->program.kind ==
+                static_cast<std::uint8_t>(core::field::FieldResultKind::Premultiplied) &&
+            rasterEffect && rasterEffect->input.value() == ops[0] &&
+            rasterEffect->fieldImages.size() == 1 && rasterEffect->fieldImages[0].value() == ops[0],
+        "the band's field rasters over the distance image it reads");
+    expectations.expect(merge && merge->entries.size() == 2 &&
+                            merge->entries[1].input.value() == ops[1] &&
+                            merge->entries[0].blendMode == core::BlendMode::Normal,
+                        "Under puts the input over the band");
+
+    auto alone =
+        recipeFixture(kAlphaContourNodeType, {{"composite", std::int64_t{kAlphaContourOnly}}});
+    const auto aloneNode = alone.node;
+    auto aloneResult = compileRecipe(std::move(alone.project));
+    expectations.expect(aloneResult.plan &&
+                            recipeOperations(*aloneResult.plan, aloneNode).size() == 2,
+                        "Contour only publishes the band's raster");
+}
+
 // A muted recipe passes its input through, like every image effect.
 void testRecipeMute(Expectations& expectations) {
     using namespace document;
-    for (const auto type :
-         {kDropShadowNodeType, kGlowNodeType, kLightWrapNodeType, kEdgeExtendNodeType}) {
+    for (const auto type : {kDropShadowNodeType, kGlowNodeType, kLightWrapNodeType,
+                            kEdgeExtendNodeType, kAlphaContourNodeType}) {
         auto fixture = recipeFixture(type, {}, type == kLightWrapNodeType
                                                    ? std::vector<std::string>{"background"}
                                                    : std::vector<std::string>{});

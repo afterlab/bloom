@@ -2182,6 +2182,32 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         cases.push_back(
             {Recipe::ChannelBlur, separate, separateChanged, 1, "per-channel blur, separate axes"});
     }
+    {
+        // #509 Alpha Contour: a changed colour re-runs only the band's field raster (the distance
+        // transform before it stays cached; the composite is a blend dispatch). The band's alpha
+        // is a function of a square root of the distance, which the device rounds within an ulp
+        // of the CPU (the Fields gate above), so alpha is held to the 2e-6 gate, not bit-exact.
+        constexpr auto contourAlpha = AlphaGate::KeyedFromToleranceQualifiedColour;
+        RecipeValues changed;
+        changed.contourColor = Color4d{0.25, 1.5, 3.0, 0.6};
+        cases.push_back({Recipe::AlphaContour, {}, changed, 1, "alpha contour over", contourAlpha});
+        RecipeValues under;
+        under.contourComposite = bloom::runtime::detail::AlphaContourComposite::Under;
+        under.contourSoftness = 0.0;
+        under.solidInput = true;
+        RecipeValues underChanged = under;
+        underChanged.contourColor = Color4d{0.25, 1.5, 3.0, 0.6};
+        cases.push_back({Recipe::AlphaContour, under, underChanged, 1, "alpha contour under, hard",
+                         contourAlpha});
+        RecipeValues inward;
+        inward.contourComposite = bloom::runtime::detail::AlphaContourComposite::ContourOnly;
+        inward.contourOffset = -1.5;
+        inward.contourWidth = 0.4;
+        RecipeValues inwardChanged = inward;
+        inwardChanged.contourColor = Color4d{6.0, 3.0, 0.5, 1.0};
+        cases.push_back({Recipe::AlphaContour, inward, inwardChanged, 1,
+                         "alpha contour alone, inward hairline", contourAlpha});
+    }
     std::uint64_t id = 9600;
     for (const auto& item : cases) {
         cache.clear();

@@ -417,6 +417,8 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `tone-map-2k` | 1920×1080 | 24 | A PNG16 plate through Tone Map with a keyed ceiling (#518); written, not run |
 | `color-matrix-2k` | 1920×1080 | 24 | A PNG16 plate through Color Matrix written as Lab with a keyed element (#517); written, not run |
 | `edge-extend-2k` | 1920×1080 | 24 | A PNG16 plate through Edge Extend with a keyed distance (#516); written, not run |
+| `alpha-contour-2k` | 1920×1080 | 24 | A PNG16 plate keyed by luma, its alpha edge stroked by Alpha Contour with a keyed width (#509); written, not run |
+| `text-outline-2k` | 1920×1080 | 24 | A 120-character text's glyph outlines (Text Outline) stroked with a keyed write-on and drawn by a Shape Source (#509); written, not run |
 | `hsl-qualifier-2k` | 1920×1080 | 24 | A PNG16 plate with a keyed HSL Qualifier hue window limiting a warm Grade through its mask input (#523); written, not run |
 | `depth-effects-2k` | 1920×1080 | 24 | Depth effects from both depth encodings (#483): a PNG16 plate through Depth Fog (exponential) and a physical-lens Z Defocus (85 mm, f/2, focus racking 8 to 24 m) from its derived 16-bit PNG mist pass read as data, under the beauty pass (multilayer EXR) through Depth Fog and Z Defocus (polygon bokeh, highlight boost) from its own float `ViewLayer.Depth.Z` channel; fog before defocus in both |
 | `lens-flare-2k` | 1920×1080 | 24 | A PNG16 plate under a Lens Flare (#507) with every element on at its largest counts (8 streak lines, 16 ghosts, 12 irises of 12 blades, the anamorphic streak), its intensity keyed so every frame is new and its brightness read from the plate through the probes' atlas |

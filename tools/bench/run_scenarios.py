@@ -641,6 +641,28 @@ class Builder:
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort=port)
+        if "textOutline" in layer:
+            # #509: a text layer's glyph outlines (Text Outline reads the composition's first
+            # text) through the path steps in turn, drawn by this generator.
+            outline = layer["textOutline"]
+            self.transact("bloom.layer.add-text", composition=self.composition,
+                          name=outline.get("name", "Title"), text=outline["text"],
+                          size=outline.get("size", 72.0))
+            driver = self.transact("bloom.node.add", composition=self.composition,
+                                   nodeType="bloom.text-outline")["node"]
+            port = "path"
+            for step in outline.get("steps") or ():
+                step_node = self.transact("bloom.node.add", composition=self.composition,
+                                          nodeType=step["type"])["node"]
+                self.set_values(step_node, step["type"], step.get("values") or {})
+                self.set_keys(step_node, step.get("keys") or {})
+                self.transact("bloom.parameter.set-source", composition=self.composition,
+                              parameter=self.parameter_id(step_node, "path"), driverNode=driver,
+                              driverPort=port)
+                driver, port = step_node, "path"
+            self.transact("bloom.parameter.set-source", composition=self.composition,
+                          parameter=self.parameter_id(source, "path"), driverNode=driver,
+                          driverPort=port)
         if "axesNode" in layer:
             axes = layer["axesNode"]
             driver = self.transact("bloom.node.add", composition=self.composition,

@@ -618,6 +618,23 @@ class DepthScenario(unittest.TestCase):
         self.assertEqual(effect[0], "bloom.edge-extend")
         self.assertIn("distance", effect[2]["keys"], "every frame is new")
 
+    def test_alpha_contour_scenario_keys_a_width_over_a_keyed_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["alpha-contour-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effects = scenario["layers"][0]["effects"]
+        self.assertEqual([effect[0] for effect in effects], ["bloom.luma-key", "bloom.alpha-contour"])
+        self.assertIn("width", effects[1][2]["keys"], "every frame is new")
+
+    def test_text_outline_scenario_strokes_a_text_with_a_keyed_write_on(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["text-outline-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        outline = scenario["layers"][0]["textOutline"]
+        self.assertGreater(len(outline["text"]), 100)
+        self.assertEqual([step["type"] for step in outline["steps"]], ["bloom.path-stroke"])
+        self.assertIn("end", outline["steps"][0]["keys"], "every frame is new")
+
     def test_hsl_qualifier_scenario_keys_a_hue_window_limiting_a_grade(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["hsl-qualifier-2k"]

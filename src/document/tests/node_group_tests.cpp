@@ -76,11 +76,12 @@ void movingAGroupLeavesTheEffectMaskAlone() {
                               "bloom.motion-blur", "bloom.z-defocus", "bloom.colorize", "bloom.sharpen", "bloom.codec-degrade", "bloom.auto-exposure",
                               "bloom.tone-map", "bloom.color-matrix"})
         expect(masked(typeId), std::string(typeId) + " keeps its effect mask");
-    for (const auto typeId : {"bloom.lens-flare", "bloom.drop-shadow", "bloom.light-wrap",
-                              "bloom.luma-key", "bloom.hsl-qualifier", "bloom.edge-extend", "bloom.channel-shuffle", "bloom.alpha-association",
-                              "bloom.lens-distortion", "bloom.chromatic-aberration",
-                              "bloom.rolling-shutter", "bloom.test-card", "bloom.corner-pin",
-                              "bloom.st-map", "bloom.displace"})
+    for (const auto typeId :
+         {"bloom.lens-flare", "bloom.drop-shadow", "bloom.light-wrap", "bloom.luma-key",
+          "bloom.hsl-qualifier", "bloom.edge-extend", "bloom.alpha-contour",
+          "bloom.channel-shuffle", "bloom.alpha-association", "bloom.lens-distortion",
+          "bloom.chromatic-aberration", "bloom.rolling-shutter", "bloom.test-card",
+          "bloom.corner-pin", "bloom.st-map", "bloom.displace"})
         expect(!masked(typeId), std::string(typeId) + " still takes no effect mask");
 }
 

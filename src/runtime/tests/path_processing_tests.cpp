@@ -6,6 +6,7 @@
 
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/render/text_raster.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -367,16 +368,16 @@ void testCombine(Expectations& expectations) {
 struct StrokeOptions final {
     double width = 10.0, start = 0.0, end = 100.0, offset = 0.0, taperStart = 0.0, taperEnd = 0.0;
     double dashLength = 0.0, dashGap = 8.0, dashOffset = 0.0, spacing = 0.0, wiggle = 0.0;
-    double frequency = 2.0, phase = 0.0, core = 0.0, tolerance = 0.25;
-    std::int64_t seed = 0, cap = 0, join = 0;
+    double frequency = 2.0, phase = 0.0, core = 0.0, tolerance = 0.25, stampRotation = 0.0;
+    std::int64_t seed = 0, cap = 0, join = 0, stamp = 0, stampAlign = 0;
 };
 
 [[nodiscard]] ValueUtilityOutcome stroke(const PathValue& path, const StrokeOptions& o) {
     return run(Kernel::PathStroke,
                {wrap(path), o.width, o.start, o.end, o.offset, o.taperStart, o.taperEnd,
                 o.dashLength, o.dashGap, o.dashOffset, o.spacing, o.wiggle, o.frequency, o.phase,
-                o.seed, o.core, o.tolerance},
-               {o.cap, o.join});
+                o.seed, o.core, o.tolerance, o.stampRotation},
+               {o.cap, o.join, o.stamp, o.stampAlign});
 }
 
 [[nodiscard]] const PathValue& coreOf(const ValueUtilityOutcome& outcome) {
@@ -466,6 +467,55 @@ void testPathStroke(Expectations& expectations) {
                                  0.5),
                         "brush spacing stamps a dot every 25 along the path");
 
+    // #509 stamps. Each is sized by the width: a square's side, a diamond's diagonal, a dash as
+    // long as the width and a quarter as thick.
+    const auto stamped = [&](const PathValue& path, const std::int64_t kind,
+                             const std::int64_t align, const double rotation, const double core) {
+        StrokeOptions o;
+        o.spacing = 25;
+        o.width = 10;
+        o.stamp = kind;
+        o.stampAlign = align;
+        o.stampRotation = rotation;
+        o.core = core;
+        return stroke(path, o);
+    };
+    const auto extentX = [](const PathValue& value) {
+        double reach = 0.0;
+        for (const auto& contour : value.contours)
+            for (const auto& anchor : contour.anchors)
+                reach = std::max(reach, std::abs(anchor.point.x));
+        return reach;
+    };
+    const auto squares = stamped(line, 1, 0, 0.0, 50.0);
+    expectations.expect(!squares.failed && pathOf(squares).contours.size() == 5 &&
+                            near(area(pathOf(squares)), 500.0, 1e-6) &&
+                            near(area(coreOf(squares)), 125.0, 1e-6),
+                        "square stamps are the width on a side, and the core's are its share");
+    expectations.expect(near(area(pathOf(stamped(line, 2, 0, 0.0, 0.0))), 250.0, 1e-6),
+                        "diamond stamps have the width as their diagonal");
+    expectations.expect(near(area(pathOf(stamped(line, 3, 0, 0.0, 0.0))), 125.0, 1e-6),
+                        "dash stamps are the width long and a quarter of it thick");
+    const PathValue upright = single(polygon({{0, 0}, {0, 100}}, false));
+    expectations.expect(extentX(pathOf(stamped(upright, 3, 0, 0.0, 0.0))) <= 1.25 + 1e-9 &&
+                            near(extentX(pathOf(stamped(upright, 3, 2, 0.0, 0.0))), 5.0, 1e-9),
+                        "Automatic turns a dash along the path; Fixed leaves it level");
+    expectations.expect(extentX(pathOf(stamped(upright, 3, 2, 90.0, 0.0))) <= 1.25 + 1e-9,
+                        "the stamp rotation turns a fixed dash a quarter turn upright");
+    // The last stamp of a 45 degree line is 125 along it. The union keeps three decimals.
+    const PathValue diagonal = single(polygon({{0, 0}, {100, 100}}, false));
+    const double last = 125.0 / std::sqrt(2.0);
+    expectations.expect(
+        near(extentX(pathOf(stamped(diagonal, 1, 1, 0.0, 0.0))), last + 5.0 * std::sqrt(2.0),
+             1e-3) &&
+            near(extentX(pathOf(stamped(diagonal, 1, 0, 0.0, 0.0))), last + 5.0, 1e-3),
+        "Follow path turns a square with the path; Automatic keeps it level");
+    expectations.expect(pathOf(stamped(line, 0, 1, 30.0, 0.0)) == pathOf(dots) &&
+                            pathOf(stamped(line, 0, 2, 0.0, 0.0)) == pathOf(dots),
+                        "a dot is the original brush dot whatever the alignment or rotation");
+    expectations.expect(stamped(line, 1, 0, std::numeric_limits<double>::infinity(), 0.0).failed,
+                        "a stamp rotation that is not finite is refused");
+
     // A closed square stroked with mitered joins is a ring: 110 outside, 90 inside.
     const PathValue box = single(square(0, 0, 100));
     StrokeOptions ring;
@@ -508,6 +558,117 @@ void testPathStroke(Expectations& expectations) {
     fine.dashLength = 1.0e-6;
     fine.dashGap = 0.0;
     expectations.expect(stroke(line, fine).failed, "dashes that would number millions are refused");
+}
+
+// #509 Mask Path: the mask index, then each mask's path at the frame (the evaluator samples them).
+[[nodiscard]] ValueUtilityOutcome maskPath(const std::int64_t which,
+                                           const std::vector<PathValue>& masks) {
+    std::vector<CompiledValue> values{CompiledValue{which}};
+    for (const auto& mask : masks)
+        values.push_back(wrap(mask));
+    return run(Kernel::MaskPath, values, {0});
+}
+
+[[nodiscard]] std::int64_t countOf(const ValueUtilityOutcome& outcome) {
+    const auto* count = std::get_if<std::int64_t>(&outcome.outputs[1]);
+    return count == nullptr ? -1 : *count;
+}
+
+void testMaskPath(Expectations& expectations) {
+    PathValue first = single(square(0, 0, 10));
+    first.fillRule = document::PathFillRule::EvenOdd;
+    PathValue second;
+    second.contours = {square(20, 0, 5), polygon({{0, 30}, {40, 30}}, false)};
+    const auto every = maskPath(0, {first, second});
+    expectations.expect(!every.failed && pathOf(every).contours.size() == 3 &&
+                            pathOf(every).contours[0] == first.contours[0] &&
+                            pathOf(every).contours[1] == second.contours[0] &&
+                            pathOf(every).contours[2] == second.contours[1] &&
+                            pathOf(every).fillRule == document::PathFillRule::EvenOdd &&
+                            countOf(every) == 3,
+                        "Mask Path 0 reads every mask's contours in mask order, with the first "
+                        "mask's fill rule, and counts them");
+    const auto only = maskPath(2, {first, second});
+    expectations.expect(pathOf(only) == second && countOf(only) == 2,
+                        "Mask Path 2 reads the second mask exactly");
+    expectations.expect(pathOf(maskPath(3, {first, second})).contours.empty() &&
+                            countOf(maskPath(3, {first, second})) == 0 &&
+                            !maskPath(3, {first, second}).failed,
+                        "a mask past the last reads the empty path");
+    expectations.expect(pathOf(maskPath(0, {})).contours.empty() && !maskPath(0, {}).failed,
+                        "no masks read the empty path");
+    expectations.expect(maskPath(-1, {first}).failed, "a negative mask is refused");
+}
+
+// #509 Text Outline: the text's content, size, line height, letter spacing and alignment, with its
+// face and fixed layout beside them.
+[[nodiscard]] ValueUtilityOutcome textOutline(const std::string& content, const double size,
+                                              const std::int64_t alignment = 0,
+                                              const double spacing = 0.0) {
+    const std::vector<CompiledValue> values{CompiledValue{content}, size, 1.0, spacing,
+                                            CompiledValue{alignment}};
+    std::vector<const CompiledValue*> operands;
+    for (const auto& value : values)
+        operands.push_back(&value);
+    // The anchor follows the alignment, as a new Text Source's does.
+    runtime::CompiledTextOutlineSource text{};
+    text.anchorMode = render::kTextAnchorFollowsAlignment;
+    return runtime::evaluateValueUtility({Kernel::TextOutline,
+                                          operands,
+                                          std::vector<std::int64_t>{0},
+                                          core::RationalTime::fromInteger(0),
+                                          document::FrameRate::framesPerSecond24(),
+                                          nullptr,
+                                          {},
+                                          &text});
+}
+
+void testTextOutline(Expectations& expectations) {
+    // The answer the render library gives for the same text, laid out as the text draws it.
+    render::TextLayoutOptions layout;
+    layout.multiline = true;
+    layout.anchorMode =
+        render::resolveTextAnchorMode(render::kTextAnchorFollowsAlignment, layout.alignment);
+    const auto parameters = render::TextRasterParameters::create(40, 40);
+    const auto reference =
+        render::textOutlines(render::EmbeddedFace::DejaVuSans, "Ag", *parameters.value(), layout);
+    const auto outline = textOutline("Ag", 40);
+    bool same = reference && !outline.failed &&
+                pathOf(outline).contours.size() == reference.value()->size();
+    for (std::size_t index = 0; same && index < reference.value()->size(); ++index) {
+        const auto& expected = (*reference.value())[index];
+        const auto& actual = pathOf(outline).contours[index];
+        same = expected.closed == actual.closed && expected.anchors.size() == actual.anchors.size();
+        for (std::size_t anchor = 0; same && anchor < expected.anchors.size(); ++anchor)
+            same = expected.anchors[anchor].point.x == actual.anchors[anchor].point.x &&
+                   expected.anchors[anchor].point.y == actual.anchors[anchor].point.y &&
+                   expected.anchors[anchor].inHandle.has_value() ==
+                       actual.anchors[anchor].inHandle.has_value() &&
+                   expected.anchors[anchor].outHandle.has_value() ==
+                       actual.anchors[anchor].outHandle.has_value();
+    }
+    expectations.expect(same && countOf(outline) ==
+                                    static_cast<std::int64_t>(pathOf(outline).contours.size()),
+                        "Text Outline is the render library's glyph outlines of the same text, "
+                        "anchor for anchor, and counts its contours");
+    expectations.expect(pathOf(outline).fillRule == document::PathFillRule::NonZero,
+                        "glyph outlines fill by the non-zero rule, as the text draws them");
+    // 'A' has an outer contour and a counter, 'g' its bowl and its counter.
+    expectations.expect(pathOf(outline).contours.size() >= 3, "Ag has more than one contour");
+    expectations.expect(!(pathOf(textOutline("Ag", 60)) == pathOf(outline)) &&
+                            !(pathOf(textOutline("Ag", 40, 1)) == pathOf(outline)) &&
+                            !(pathOf(textOutline("Ag", 40, 0, 5.0)) == pathOf(outline)),
+                        "the size, alignment and letter spacing each move the outline");
+    expectations.expect(pathOf(textOutline(" ", 40)).contours.empty() &&
+                            !textOutline(" ", 40).failed,
+                        "blank text is the empty path");
+    expectations.expect(textOutline("Ag", 0.0).failed && textOutline("Ag", 40, 7).failed,
+                        "a size or alignment the text cannot lay out is refused");
+    // No text to read (the node's source is gone): the empty path, not a failure.
+    const std::vector<CompiledValue> none;
+    const auto unread = run(Kernel::TextOutline, none, {0});
+    expectations.expect(!unread.failed && pathOf(unread).contours.empty() && countOf(unread) == 0,
+                        "with no text to read Text Outline is the empty path");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -577,6 +738,7 @@ struct Scenario final {
     Kernel kernel;
     std::vector<CompiledValue> values;
     std::vector<std::int64_t> selectors;
+    std::optional<runtime::CompiledTextOutlineSource> text{};
 };
 
 [[nodiscard]] ValueUtilityOutcome runWith(const Scenario& scenario,
@@ -586,8 +748,8 @@ struct Scenario final {
         operands.push_back(&value);
     return runtime::evaluateValueUtility({scenario.kernel, operands, scenario.selectors,
                                           core::RationalTime::fromInteger(0),
-                                          document::FrameRate::framesPerSecond24(), nullptr,
-                                          limits});
+                                          document::FrameRate::framesPerSecond24(), nullptr, limits,
+                                          scenario.text ? &*scenario.text : nullptr});
 }
 
 [[nodiscard]] bool publishedNothing(const ValueUtilityOutcome& outcome) {
@@ -656,8 +818,8 @@ struct Scenario final {
                          options.offset, options.taperStart, options.taperEnd, options.dashLength,
                          options.dashGap, options.dashOffset, options.spacing, options.wiggle,
                          options.frequency, options.phase, options.seed, options.core,
-                         options.tolerance},
-                        {options.cap, options.join}};
+                         options.tolerance, options.stampRotation},
+                        {options.cap, options.join, options.stamp, options.stampAlign}};
     };
     scenarios.push_back({"Transform Path",
                          Kernel::TransformPath,
@@ -699,6 +861,27 @@ struct Scenario final {
         o.dashGap = 4;
     }));
     scenarios.push_back(stroke("Path Stroke (dots)", [](StrokeOptions& o) { o.spacing = 14; }));
+    scenarios.push_back(stroke("Path Stroke (dash stamps, turned)", [](StrokeOptions& o) {
+        o.spacing = 14;
+        o.stamp = 3;
+        o.stampRotation = 15;
+        o.core = 50;
+    }));
+    {
+        // #509 Mask Path over many masks, and Text Outline over a long text.
+        Scenario masks{"Mask Path", Kernel::MaskPath, {CompiledValue{std::int64_t{0}}}, {0}};
+        for (int mask = 0; mask < 16; ++mask)
+            masks.values.push_back(wrap(crowd(64, 200, true, mask)));
+        scenarios.push_back(std::move(masks));
+        std::string text;
+        for (int line = 0; line < 40; ++line)
+            text += "The quick brown fox jumps over the lazy dog 0123456789\n";
+        scenarios.push_back({"Text Outline",
+                             Kernel::TextOutline,
+                             {CompiledValue{text}, 24.0, 1.0, 0.0, CompiledValue{std::int64_t{0}}},
+                             {0},
+                             runtime::CompiledTextOutlineSource{}});
+    }
     scenarios.push_back(stroke("Path Stroke (tapered, wiggle)", [](StrokeOptions& o) {
         o.taperStart = 30;
         o.taperEnd = 30;
@@ -711,8 +894,6 @@ struct Scenario final {
 void testKernelCancellation(Expectations& expectations) {
     for (const auto& scenario : heavyScenarios()) {
         const std::string name = scenario.name;
-        if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr)
-            std::cerr << "scenario: " << name << '\n';
         // The answer with no cancellation, and how many times the kernel polls to reach it.
         std::uint64_t total = 0;
         const std::function<void()> counter = [&total] { ++total; };
@@ -795,14 +976,31 @@ void testKernelBudgets(Expectations& expectations) {
     {
         StrokeOptions options;
         options.tolerance = fine;
-        refusal({"Path Stroke",
-                 Kernel::PathStroke,
-                 {wrap(vast), options.width, options.start, options.end, options.offset,
-                  options.taperStart, options.taperEnd, options.dashLength, options.dashGap,
-                  options.dashOffset, options.spacing, options.wiggle, options.frequency,
-                  options.phase, options.seed, options.core, options.tolerance},
-                 {options.cap, options.join}},
-                "Path Stroke is too detailed");
+        refusal(
+            {"Path Stroke",
+             Kernel::PathStroke,
+             {wrap(vast), options.width, options.start, options.end, options.offset,
+              options.taperStart, options.taperEnd, options.dashLength, options.dashGap,
+              options.dashOffset, options.spacing, options.wiggle, options.frequency, options.phase,
+              options.seed, options.core, options.tolerance, options.stampRotation},
+             {options.cap, options.join, options.stamp, options.stampAlign}},
+            "Path Stroke is too detailed");
+    }
+    // #509: masks or glyphs past the path value's anchor cap.
+    {
+        Scenario masks{"Mask Path", Kernel::MaskPath, {CompiledValue{std::int64_t{0}}}, {0}};
+        const auto full = wrap(single(ring(document::kMaximumPathAnchors, 0.0, 0.0, 100.0, false)));
+        for (std::size_t mask = 0;
+             mask <= document::kMaximumPathValueAnchors / document::kMaximumPathAnchors; ++mask)
+            masks.values.push_back(full);
+        refusal(masks, "Mask Path result is too large");
+        refusal({"Text Outline",
+                 Kernel::TextOutline,
+                 {CompiledValue{std::string(12000, '@')}, 12.0, 1.0, 0.0,
+                  CompiledValue{std::int64_t{0}}},
+                 {0},
+                 runtime::CompiledTextOutlineSource{}},
+                "Text Outline result is too large");
     }
     // Rounding every corner of a contour already at the anchor cap doubles it past the cap.
     PathValue crowded;
@@ -830,11 +1028,15 @@ void testKernelBudgets(Expectations& expectations) {
             return Scenario{name,
                             Kernel::PathStroke,
                             {wrap(line), o.width, o.start, o.end, o.offset, o.taperStart,
-                             o.taperEnd, o.dashLength, o.dashGap, o.dashOffset, o.spacing,
-                             o.wiggle, o.frequency, o.phase, o.seed, o.core, o.tolerance},
-                            {o.cap, o.join}};
+                             o.taperEnd, o.dashLength, o.dashGap, o.dashOffset, o.spacing, o.wiggle,
+                             o.frequency, o.phase, o.seed, o.core, o.tolerance, o.stampRotation},
+                            {o.cap, o.join, o.stamp, o.stampAlign}};
         };
         refusal(make(dots, "Path Stroke (dots)"), "Path Stroke spacing is too small");
+        StrokeOptions squares = dots;
+        squares.stamp = 1;
+        squares.stampAlign = 1;
+        refusal(make(squares, "Path Stroke (square stamps)"), "Path Stroke spacing is too small");
         StrokeOptions dashes;
         dashes.dashLength = 1.0e-3;
         dashes.dashGap = 0.0;
@@ -856,6 +1058,8 @@ int main() {
     testOffset(expectations);
     testCombine(expectations);
     testPathStroke(expectations);
+    testMaskPath(expectations);
+    testTextOutline(expectations);
     testKernelCancellation(expectations);
     testKernelBudgets(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

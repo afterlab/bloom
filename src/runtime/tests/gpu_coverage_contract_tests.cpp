@@ -3130,6 +3130,25 @@ displayProofRunner(const bool customView) {
                               "solid pixels mixed under a soft edge, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #509 Alpha Contour: the production chain (the mask distance transform and the field raster
+    // of the band over it, composited over, under or alone) over the HDR, partial-alpha gradient,
+    // outward and inward, soft and hard, with an HDR colour.
+    add(
+        "node.bloom.alpha-contour", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues under;
+            under.contourComposite = bloom::runtime::detail::AlphaContourComposite::Under;
+            under.contourSoftness = 0.0;
+            bloom::recipe_test::RecipeValues inward;
+            inward.contourComposite = bloom::runtime::detail::AlphaContourComposite::ContourOnly;
+            inward.contourOffset = -1.5;
+            inward.contourWidth = 0.4;
+            return runRecipes(bloom::recipe_test::Recipe::AlphaContour, {{}, under, inward}, 509000,
+                              "production Alpha Contour: the band of the input's alpha edge over, "
+                              "under and alone, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #506 Glow modes and their two primitives. The primitives run over the HDR, signed,
     // partial-alpha gradient (full frame and ROI); the modes run the production recipe chains.
     add(

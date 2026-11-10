@@ -303,6 +303,26 @@ target_link_libraries(bloom_runtime_film_grain_monochrome_migration_test PRIVATE
 bloom_enable_warnings(bloom_runtime_film_grain_monochrome_migration_test)
 bloom_enable_strict_floating_point(bloom_runtime_film_grain_monochrome_migration_test)
 bloom_add_test(NAME bloom.runtime.film-grain-monochrome-migration COMMAND bloom_runtime_film_grain_monochrome_migration_test LABELS runtime integration)
+
+# #509: Mask Path and Text Outline through the compiler against independent references.
+add_executable(bloom_runtime_path_source_nodes_test ${PROJECT_SOURCE_DIR}/tests/integration/path_source_nodes_tests.cpp)
+target_link_libraries(bloom_runtime_path_source_nodes_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
+bloom_enable_warnings(bloom_runtime_path_source_nodes_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_source_nodes_test)
+bloom_add_test(NAME bloom.runtime.path-source-nodes COMMAND bloom_runtime_path_source_nodes_test LABELS runtime integration paths)
+
+# #509: a Path Stroke saved before stamps opens with Dot stamps and draws what it drew.
+add_executable(bloom_runtime_path_stroke_stamp_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/path_stroke_stamp_migration_tests.cpp)
+target_link_libraries(bloom_runtime_path_stroke_stamp_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_path_stroke_stamp_migration_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_stroke_stamp_migration_test)
+bloom_add_test(NAME bloom.runtime.path-stroke-stamp-migration COMMAND bloom_runtime_path_stroke_stamp_migration_test LABELS runtime integration paths)
+# #509: the glowing path presets (ready-made Node Groups) render, undo, save and reopen.
+add_executable(bloom_runtime_path_glow_preset_test ${PROJECT_SOURCE_DIR}/tests/integration/path_glow_preset_tests.cpp)
+target_link_libraries(bloom_runtime_path_glow_preset_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_path_glow_preset_test)
+bloom_enable_strict_floating_point(bloom_runtime_path_glow_preset_test)
+bloom_add_test(NAME bloom.runtime.path-glow-presets COMMAND bloom_runtime_path_glow_preset_test LABELS runtime integration paths)
 # #565: a Film Grain saved before Sensor Noise opens in Film mode and renders identically.
 add_executable(bloom_runtime_film_grain_sensor_noise_test ${PROJECT_SOURCE_DIR}/tests/integration/film_grain_sensor_noise_tests.cpp)
 target_link_libraries(bloom_runtime_film_grain_sensor_noise_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)

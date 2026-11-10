@@ -10,8 +10,9 @@
 // the pixels and is dispatched, an unrelated edit is not; an operand animated over time gives a
 // frame per time and a held key dispatches nothing new. A fill with alpha one half and a colour
 // above one, a path partly outside the frame, a region of interest and the chain
-// `Path Stroke core -> Shape Source -> Glow` run the same way. Preparation and the native job
-// cancel, and the budget refuses.
+// `Path Stroke core -> Shape Source -> Glow` run the same way, as do image effects and compositing
+// recipes (Gaussian Blur, Exposure, Drop Shadow, Glow) over a curved Shape Source and over a Text
+// Source read as an image. Preparation and the native job cancel, and the budget refuses.
 //
 // The CPU assertions always run. Without a device the GPU half reports an explicit SKIP (exit 77)
 // after the CPU half passed; --require-device makes that a failure.
@@ -19,10 +20,13 @@
 #include "document_render_parity_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/path_glow_presets.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -30,12 +34,18 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <span>
 #include <thread>
 
 namespace {
@@ -120,6 +130,27 @@ struct Fixture final {
         execute<commands::ConnectPorts>(document, commands, main,
                                         document::OutputPortRef{from, std::string(output)},
                                         document::NodeInputRef{to, std::string(input)});
+    }
+    // Adds `source`'s image as a new entry of `merge`, at the entry's defaults: at the bottom of
+    // its stack, or on top.
+    void enter(const document::NodeId source, const document::NodeId merge,
+               const bool onTop = false) {
+        std::optional<document::LayerSlotId> top;
+        if (const auto* stack = composition(document, main).graph().merge(merge);
+            onTop && stack != nullptr && !stack->entries().empty())
+            top = stack->entries().front().slotId;
+        execute<commands::ConnectPorts>(
+            document, commands, main, document::OutputPortRef{source, "image"},
+            document::InputPortRef{document::LayerStackInputRef{merge, {}, "content"}},
+            document::builtInNodeDefinitions(), top);
+    }
+    // The Merge `layer`'s image is an entry of.
+    [[nodiscard]] document::NodeId mergeFeeding(const document::NodeId layer) const {
+        for (const auto& edge : composition(document, main).graph().edges())
+            if (const auto* entry = std::get_if<document::LayerStackInputRef>(&edge.destination);
+                entry != nullptr && edge.source.nodeId == layer)
+                return entry->stackNodeId;
+        throw std::runtime_error("fixture layer feeds no Merge");
     }
     // A value equal to the parameter's current one is not an edit; that is fine here.
     void set(const document::NodeId node, const std::string_view role,
@@ -272,6 +303,9 @@ struct Scenario final {
         {"path stroke (solid)", [](Fixture& f, document::NodeId n) { f.set(n, "width", 8.0); }},
         {"path stroke (dashed)",
          [](Fixture& f, document::NodeId n) {
+             // Butt caps, so each gap shows (a round cap would close a gap narrower than the
+             // stroke).
+             f.set(n, "cap", document::selectorStoredValue(document::StrokeCap::Butt));
              f.set(n, "dashLength", 9.0);
              f.set(n, "dashGap", 5.0);
          }},
@@ -279,6 +313,30 @@ struct Scenario final {
          [](Fixture& f, document::NodeId n) {
              f.set(n, "spacing", 10.0);
              f.set(n, "width", 7.0);
+         }},
+        // #509 stamps: each shape, a dash following the path, and a fixed one turned.
+        {"path stroke (square stamps)",
+         [](Fixture& f, document::NodeId n) {
+             f.set(n, "spacing", 10.0);
+             f.set(n, "stamp", std::int64_t{1});
+         }},
+        {"path stroke (diamond stamps, follow path)",
+         [](Fixture& f, document::NodeId n) {
+             f.set(n, "spacing", 10.0);
+             f.set(n, "stamp", std::int64_t{2});
+             f.set(n, "stampAlign", std::int64_t{1});
+         }},
+        {"path stroke (dash stamps)",
+         [](Fixture& f, document::NodeId n) {
+             f.set(n, "spacing", 9.0);
+             f.set(n, "stamp", std::int64_t{3});
+         }},
+        {"path stroke (dash stamps, fixed, turned)",
+         [](Fixture& f, document::NodeId n) {
+             f.set(n, "spacing", 9.0);
+             f.set(n, "stamp", std::int64_t{3});
+             f.set(n, "stampAlign", std::int64_t{2});
+             f.set(n, "stampRotation", 35.0);
          }},
         {"path stroke (tapered)",
          [](Fixture& f, document::NodeId n) {
@@ -292,8 +350,7 @@ struct Scenario final {
              f.set(n, "wiggleFrequency", 4.0);
              f.set(n, "seed", std::int64_t{7});
          }},
-        {"path stroke (core)",
-         [](Fixture& f, document::NodeId n) {
+        {"path stroke (core)", [](Fixture& f, document::NodeId n) {
              f.set(n, "coreWidth", 45.0);
              // The shape draws the glowing core, not the body.
              const auto shape = lastNode(f.document, f.main, document::kShapeSourceNodeType);
@@ -308,7 +365,113 @@ struct Scenario final {
                 return c.processor;
             },
             [](Fixture& f, const document::NodeId n) { f.set(n, "width", 14.0); });
+    // #509 Mask Path and Text Outline: a layer's masks and a text's glyph outlines, stroked where
+    // they are. The masks are in the plate's own space, which for a frame-sized plate at its
+    // default place is the frame's, so the stroke's Shape is an entry of the composition's Merge at
+    // its defaults (the identity). The glyph outlines are in the text's own space, so the stroke's
+    // Shape is merged with the text before the text's layer and moves with it.
+    add(
+        "mask path (layer masks, stroked)",
+        [](Fixture& f) {
+            execute<commands::AddSolidLayer>(f.document, f.commands, f.main, "Plate",
+                                             core::Color4d{0.1, 0.1, 0.1, 1.0});
+            const auto boundary = composition(f.document, f.main).graph().layerOutputs().back();
+            const auto layer = boundary.layerId;
+            const auto layerNode = boundary.nodeId;
+            execute<commands::AddLayerMask>(f.document, f.commands, f.main, layer,
+                                            PathValue::fromContour(square(10, 10, 40, true)));
+            execute<commands::AddLayerMask>(f.document, f.commands, f.main, layer,
+                                            PathValue::fromContour(square(50, 30, 30, false)));
+            const auto source = f.addNode(document::kMaskPathNodeType);
+            f.set(source, document::kPathSourceParameterRole,
+                  static_cast<std::int64_t>(layerNode.value()));
+            const auto stroke = f.addNode(document::kPathStrokeNodeType);
+            f.set(stroke, "width", 5.0);
+            f.connect(source, "path", stroke, "path");
+            const auto shape = f.addNode(document::kShapeSourceNodeType);
+            f.set(shape, "kind", static_cast<std::int64_t>(document::ShapeKind::Path));
+            f.set(shape, "fillColor", core::Color4d{0.9, 0.8, 0.2, 1.0});
+            f.connect(stroke, "path", shape, "path");
+            f.enter(shape, f.mergeFeeding(layerNode), true);
+            return stroke;
+        },
+        [](Fixture& f, const document::NodeId n) { f.set(n, "width", 9.0); });
+    add(
+        "text outline (stroked)",
+        [](Fixture& f) {
+            execute<commands::AddTextLayer>(f.document, f.commands, f.main, "Title", "Ag",
+                                            Vec2d{48, 40}, 1.0, 30.0);
+            const auto text = lastNode(f.document, f.main, document::kTextSourceNodeType);
+            const auto textLayer = layerNode(f.document, f.main, lastLayer(f.document, f.main));
+            const auto outline = f.addNode(document::kTextOutlineNodeType);
+            const auto stroke = f.addNode(document::kPathStrokeNodeType);
+            f.set(stroke, "width", 2.0);
+            f.connect(outline, "path", stroke, "path");
+            const auto shape = f.addNode(document::kShapeSourceNodeType);
+            f.set(shape, "kind", static_cast<std::int64_t>(document::ShapeKind::Path));
+            f.set(shape, "fillColor", core::Color4d{0.9, 0.2, 0.6, 1.0});
+            f.connect(stroke, "path", shape, "path");
+            // The text with its stroke over it, merged as the text layer's content.
+            const auto merge = f.addNode(document::kLayerStackNodeType);
+            f.enter(text, merge);
+            f.enter(shape, merge, true);
+            f.connect(merge, "image", textLayer, "image");
+            return stroke;
+        },
+        [](Fixture& f, const document::NodeId n) { f.set(n, "width", 3.5); });
     return result;
+}
+
+// --montage <dir>: every case's CPU reference and GPU frame written side by side as 8-bit PPMs
+// (over a dark grey, sRGB-encoded) for a reviewer's contact sheet. Off by default; the files are
+// evidence for a person, never compared by the test.
+std::filesystem::path& montageDirectory() {
+    static std::filesystem::path directory;
+    return directory;
+}
+
+void writePpm(const std::filesystem::path& file, const std::span<const render::Rgba32f> pixels,
+              const std::size_t width, const std::size_t height) {
+    std::ofstream out(file, std::ios::binary);
+    out << "P6\n" << width << ' ' << height << "\n255\n";
+    const auto encode = [](const float linear) {
+        const float v = std::clamp(linear, 0.0F, 1.0F);
+        const float srgb =
+            v <= 0.0031308F ? 12.92F * v : 1.055F * std::pow(v, 1.0F / 2.4F) - 0.055F;
+        return static_cast<char>(static_cast<unsigned char>(std::lround(srgb * 255.0F)));
+    };
+    for (std::size_t i = 0; i < width * height && i < pixels.size(); ++i) {
+        const auto& p = pixels[i];
+        const float under = 0.05F * (1.0F - std::clamp(p.alpha(), 0.0F, 1.0F));
+        out.put(encode(p.red() + under));
+        out.put(encode(p.green() + under));
+        out.put(encode(p.blue() + under));
+    }
+}
+
+void montagePair(const std::string& label, const Reference& reference,
+                 const std::vector<render::Rgba32f>& gpu) {
+    if (montageDirectory().empty())
+        return;
+    std::string name;
+    for (const char c : label)
+        name += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
+    const auto window = reference.frame->processImage().descriptor()->dataWindow();
+    const auto width = static_cast<std::size_t>(window.extent().width());
+    const auto height = static_cast<std::size_t>(window.extent().height());
+    writePpm(montageDirectory() / (name + "-cpu.ppm"), reference.frame->processImage().pixels(),
+             width, height);
+    writePpm(montageDirectory() / (name + "-gpu.ppm"), gpu, width, height);
+}
+
+// The GPU frame of a reference, for the montage only (gpuParity already proved it).
+void montageCapture(runtime::GpuSceneExecutor& executor, const runtime::CpuGpuSceneBuilder& builder,
+                    const Reference& reference, const std::string& label) {
+    if (montageDirectory().empty())
+        return;
+    const auto prepared = builder.build(reference.plan, reference.request);
+    if (prepared)
+        montagePair(label, reference, runScene(executor, prepared.scene));
 }
 
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
@@ -414,8 +577,8 @@ void gpuParityWithOcio(Expectations& expectations, runtime::GpuSceneExecutor& ex
 }
 
 void cancellationAndBudget(Expectations& expectations, runtime::GpuSceneExecutor& executor,
-                           const Reference& reference, const std::string& label) {
-    const runtime::CpuGpuSceneBuilder builder;
+                           const runtime::CpuGpuSceneBuilder& builder, const Reference& reference,
+                           const std::string& label) {
     const auto cancelled = builder.build(reference.plan, reference.request, cancelledToken());
     expectations.expect(!cancelled.hasValue() &&
                             cancelled.diagnostic.code ==
@@ -480,6 +643,18 @@ struct Prepared final {
 
 int main(int argc, char** argv) {
     try {
+        // --montage <dir> is this test's own; the shared options never see it.
+        std::vector<char*> arguments;
+        for (int i = 0; i < argc; ++i) {
+            if (std::string_view(argv[i]) == "--montage" && i + 1 < argc) {
+                montageDirectory() = argv[++i];
+                std::filesystem::create_directories(montageDirectory());
+                continue;
+            }
+            arguments.push_back(argv[i]);
+        }
+        argc = static_cast<int>(arguments.size());
+        argv = arguments.data();
         const Options options = parseOptions(argc, argv);
         if (!options.valid) {
             std::cerr << "invalid arguments\n";
@@ -504,13 +679,6 @@ int main(int argc, char** argv) {
             // An edit of a node's own operand changes the picture.
             scenario.edit(fixture, node);
             entry.edited = referenceAt(expectations, fixture, 0, scenario.label + " edited");
-            if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr && entry.edited) {
-                const auto a = coverage(entry.base);
-                const auto b = coverage(*entry.edited);
-                std::cerr << scenario.label << ": base " << a.left << ',' << a.top << ' ' << a.right
-                          << ',' << a.bottom << " edited " << b.left << ',' << b.top << ' ' << b.right
-                          << ',' << b.bottom << '\n';
-            }
             expectations.expect(entry.edited && !samePixels(*entry.edited, entry.base),
                                 scenario.label + ": editing one operand changes the CPU reference");
             // An unrelated edit (a value node nothing reads) changes no pixel.
@@ -523,15 +691,11 @@ int main(int argc, char** argv) {
             prepared.push_back(std::move(entry));
         }
 
-        if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr)
-            std::cerr << "stage: hdr\n";
         // 2. HDR and alpha: a fill at alpha one half and a colour above one, through Offset Path.
         Fixture hdr;
         hdr.chain(document::kOffsetPathNodeType, framed(), {2.5, 0.4, 0.1, 0.5});
         hdr.set(lastNode(hdr.document, hdr.main, document::kOffsetPathNodeType), "amount", 5.0);
         auto hdrReference = referenceAt(expectations, hdr, 0, "hdr alpha");
-        if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr)
-            std::cerr << "stage: window\n";
         // 3. Data window: Transform Path moves the shape partly outside the frame.
         Fixture outside;
         const auto outsideChain = outside.chain(document::kTransformPathNodeType, framed());
@@ -540,8 +704,6 @@ int main(int argc, char** argv) {
         outside.set(layerNode(outside.document, outside.main, lastLayer(outside.document, outside.main)),
                     "position", Vec2d{-34, -26});
         auto outsideReference = referenceAt(expectations, outside, 0, "data window outside frame");
-        if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr)
-            std::cerr << "stage: roi\n";
         // 4. Region of interest: Round Corners over a crop of the frame.
         Fixture region;
         const auto regionChain = region.chain(document::kRoundCornersNodeType, framed());
@@ -572,8 +734,6 @@ int main(int argc, char** argv) {
                 }
             expectations.expect(identical, "region of interest: the CPU region is the full frame's crop");
         }
-        if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr)
-            std::cerr << "stage: glow\n";
         // 5. Path Stroke core -> Shape Source -> Glow.
         Fixture glow;
         const auto stroke = glow.chain(document::kPathStrokeNodeType, openLine());
@@ -586,6 +746,104 @@ int main(int argc, char** argv) {
         const auto layer = lastLayer(glow.document, glow.main);
         glow.connect(glowNode, "image", layerNode(glow.document, glow.main, layer), "image");
         auto glowReference = referenceAt(expectations, glow, 0, "path stroke core into glow");
+
+        // 5b. An image effect or a compositing recipe over a vector leaf read as an image: a curved
+        // Shape Source (its leaf raster, not a layer's), and a Text Source. The recipes' Merge
+        // takes the leaf itself as an entry (Glow's Add, Drop Shadow's Normal), and Exposure keeps
+        // the leaf's window, so a downstream Layer pivots where the CPU reference does.
+        struct LeafEffect final {
+            std::string label;
+            Reference reference;
+        };
+        std::vector<LeafEffect> leafEffects;
+        {
+            struct Effect final {
+                const char* type;
+                const char* name;
+                std::function<void(Fixture&, document::NodeId)> style;
+            };
+            const std::vector<Effect> effects{
+                {"bloom.gaussian-blur", "gaussian blur",
+                 [](Fixture& f, document::NodeId n) { f.set(n, "radius", 3.0); }},
+                {"bloom.exposure", "exposure",
+                 [](Fixture& f, document::NodeId n) { f.set(n, "amount", 1.0); }},
+                {"bloom.drop-shadow", "drop shadow", [](Fixture&, document::NodeId) {}},
+                {"bloom.glow", "glow (default threshold)", [](Fixture&, document::NodeId) {}},
+                {"bloom.glow", "glow (threshold 0)",
+                 [](Fixture& f, document::NodeId n) { f.set(n, "threshold", 0.0); }},
+                {"bloom.glow", "glow only",
+                 [](Fixture& f, document::NodeId n) {
+                     f.set(n, "threshold", 0.0);
+                     f.set(n, "glowOnly", true);
+                 }},
+                // #509 Alpha Contour: a band outside the edge over the leaf, and one alone.
+                {"bloom.alpha-contour", "alpha contour",
+                 [](Fixture& f, document::NodeId n) {
+                     f.set(n, "width", 3.0);
+                     f.set(n, "offset", 2.0);
+                     f.set(n, "color", core::Color4d{2.0, 0.6, 0.2, 1.0});
+                 }},
+                {"bloom.alpha-contour", "alpha contour alone, soft, inward",
+                 [](Fixture& f, document::NodeId n) {
+                     f.set(n, "width", 2.0);
+                     f.set(n, "softness", 2.0);
+                     f.set(n, "offset", -2.0);
+                     f.set(n, "composite", std::int64_t{2});
+                 }}};
+            for (const bool text : {false, true})
+                for (const auto& effect : effects) {
+                    Fixture f;
+                    document::NodeId leaf;
+                    if (text) {
+                        execute<commands::AddTextLayer>(f.document, f.commands, f.main, "Label",
+                                                        "Gly");
+                        leaf = lastNode(f.document, f.main, document::kTextSourceNodeType);
+                    } else {
+                        const auto path = f.addNode(document::kPathValueNodeType);
+                        f.set(path, document::kValueParameterRole, framed());
+                        leaf = f.addShape({0.2, 0.5, 0.9, 1.0});
+                        f.connect(path, document::kValuePortName, leaf, "path");
+                    }
+                    const auto node = f.addNode(effect.type);
+                    f.connect(leaf, "image", node, "input");
+                    effect.style(f, node);
+                    f.connect(node, "image",
+                              layerNode(f.document, f.main, lastLayer(f.document, f.main)),
+                              "image");
+                    const std::string label =
+                        std::string(text ? "text" : "curved shape") + " -> " + effect.name;
+                    if (auto reference = referenceAt(expectations, f, 0, label))
+                        leafEffects.push_back({label, std::move(*reference)});
+                    // #509: Alpha Contour over a region of interest, on the device as on the CPU.
+                    if (!text && std::string_view(effect.name) == "alpha contour")
+                        if (const auto crop = render::ImageWindow::create(20, 16, 40, 34))
+                            if (auto cropped =
+                                    referenceAt(expectations, f, 0, label + " (region of interest)",
+                                                *crop.value()))
+                                leafEffects.push_back(
+                                    {label + " (region of interest)", std::move(*cropped)});
+                }
+        }
+
+        // 5c. #509 the glowing path presets: each ready-made Node Group (Path Stroke, Shape
+        // Source, Glow inside a group) drawn by a layer, at a moment Write-on and Vegas are moving.
+        std::vector<LeafEffect> presets;
+        for (const auto preset : commands::kPathGlowPresets) {
+            Fixture f;
+            execute<commands::CreatePathGlowPreset>(f.document, f.commands, f.main, preset,
+                                                    Vec2d{0, 0});
+            const auto instance = lastNode(f.document, f.main, document::kNodeGroupNodeType);
+            execute<commands::AddSolidLayer>(f.document, f.commands, f.main, "Glow",
+                                             core::Color4d{0.0, 0.0, 0.0, 1.0});
+            f.connect(instance, "image1",
+                      layerNode(f.document, f.main, lastLayer(f.document, f.main)), "image");
+            const std::string label =
+                "glowing path preset " + std::string(commands::pathGlowPresetName(preset));
+            if (auto reference = referenceAt(expectations, f, 3, label)) {
+                expectations.expect(!coverage(*reference).empty(), label + ": draws something");
+                presets.push_back({label, std::move(*reference)});
+            }
+        }
 
         // 6. Keyed: Trim Path's end animates, then holds.
         Fixture keyed;
@@ -634,13 +892,28 @@ int main(int argc, char** argv) {
         if (!executor)
             return 1;
         const runtime::CpuGpuSceneBuilder builder;
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+        // A layer's masks reach the frame through the image-effect route, whose working-space
+        // programs the OCIO preparer makes, as the application always configures it.
+        const runtime::CpuGpuSceneBuilder sceneBuilder(nullptr, {}, ocioContext());
+#else
+        const runtime::CpuGpuSceneBuilder& sceneBuilder = builder;
+#endif
 
         for (auto& entry : prepared) {
-            gpuParity(expectations, *executor.executor, entry.base, entry.label);
+#ifndef BLOOM_GPUSHADER_TOOLS_DIR
+            if (entry.label.starts_with("mask path")) {
+                std::cout << "NOTRUN: " << entry.label << " (shader tools unavailable)\n";
+                expectations.expect(!options.require_device,
+                                    "the layer-mask cases need the pinned shader tools");
+                continue;
+            }
+#endif
+            gpuParity(expectations, *executor.executor, entry.base, entry.label, sceneBuilder);
             // Cache identity: the edited state is a different scene and is dispatched; the
             // unrelated edit prepares the same scene and dispatches nothing new.
             if (entry.edited && entry.unrelated) {
-                const auto scene = builder.build(entry.edited->plan, entry.edited->request);
+                const auto scene = sceneBuilder.build(entry.edited->plan, entry.edited->request);
                 expectations.expect(scene.hasValue(), entry.label + ": the edited state prepares");
                 if (scene) {
                     const auto before = executor.executor->counters();
@@ -650,7 +923,8 @@ int main(int argc, char** argv) {
                         entry.label + ": the edited frame matches the CPU reference");
                     expectations.expect(executor.executor->counters().dispatches > before.dispatches,
                                         entry.label + ": the edited frame is dispatched, not served stale");
-                    const auto same = builder.build(entry.unrelated->plan, entry.unrelated->request);
+                    const auto same =
+                        sceneBuilder.build(entry.unrelated->plan, entry.unrelated->request);
                     expectations.expect(same.hasValue(),
                                         entry.label + ": the unrelated-edit state prepares");
                     if (same) {
@@ -664,7 +938,8 @@ int main(int argc, char** argv) {
                 }
             }
             if (entry.cancels)
-                cancellationAndBudget(expectations, *executor.executor, entry.base, entry.label);
+                cancellationAndBudget(expectations, *executor.executor, sceneBuilder, entry.base,
+                                      entry.label);
         }
         if (hdrReference)
             gpuParity(expectations, *executor.executor, *hdrReference, "hdr alpha (colour above one, alpha one half)");
@@ -673,44 +948,55 @@ int main(int argc, char** argv) {
                       "data window: the path lies partly outside the frame");
         if (regionReference)
             gpuParity(expectations, *executor.executor, *regionReference, "region of interest");
-        if (glowReference) {
-            // KNOWN GAP (shared GPU code, not these nodes): Glow over an input whose data window is
-            // smaller than the frame (any Shape Source, a plain one too) loses its halo on the
-            // device: the GPU frame is transparent where the CPU reference has the glow. Glow over
-            // a frame-sized Solid matches (gpu_scene_effect_native_tests). The device half of this
-            // chain therefore runs only when BLOOM_PATH_TEST_GLOW_CHAIN is set, until the Glow
-            // lowering's window handling is fixed; the CPU half above always runs.
-            if (std::getenv("BLOOM_PATH_TEST_GLOW_CHAIN") != nullptr) {
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
-                gpuParityWithOcio(expectations, *executor.executor, *glowReference,
-                                  "path stroke core -> shape source -> glow");
+        // 6. Image effects and compositing recipes over a vector leaf read as an image.
+        for (const auto& leaf : leafEffects)
+            gpuParityWithOcio(expectations, *executor.executor, leaf.reference, leaf.label);
 #else
-                std::cout << "NOTRUN: path stroke core -> shape source -> glow (shader tools unavailable)\n";
-                expectations.expect(!options.require_device,
-                                    "the Glow chain needs the pinned shader tools");
+        if (!leafEffects.empty()) {
+            std::cout << "NOTRUN: image effects over vector leaves (shader tools unavailable)\n";
+            expectations.expect(!options.require_device,
+                                "the leaf effect cases need the pinned shader tools");
+        }
 #endif
-            } else {
-                std::cout << "KNOWN GAP: the device half of path stroke core -> shape source -> glow is "
-                             "not run (Glow loses its halo on the device over a shape; set "
-                             "BLOOM_PATH_TEST_GLOW_CHAIN=1 to see it)\n";
-            }
+        if (glowReference) {
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+            gpuParityWithOcio(expectations, *executor.executor, *glowReference,
+                              "path stroke core -> shape source -> glow");
+#else
+            std::cout
+                << "NOTRUN: path stroke core -> shape source -> glow (shader tools unavailable)\n";
+            expectations.expect(!options.require_device,
+                                "the Glow chain needs the pinned shader tools");
+#endif
+        }
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+        for (const auto& preset : presets)
+            gpuParityWithOcio(expectations, *executor.executor, preset.reference, preset.label);
+#else
+        if (!presets.empty()) {
+            std::cout << "NOTRUN: glowing path presets (shader tools unavailable)\n";
+            expectations.expect(!options.require_device,
+                                "the glowing path presets need the pinned shader tools");
+        }
+#endif
+        // The reviewer's contact sheet: every case's CPU and GPU frames (only with --montage).
+        if (!montageDirectory().empty()) {
+            for (const auto& entry : prepared)
+                montageCapture(*executor.executor, sceneBuilder, entry.base, entry.label);
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+            const runtime::CpuGpuSceneBuilder ocioBuilder(nullptr, {}, ocioContext());
+            for (const auto& leaf : leafEffects)
+                montageCapture(*executor.executor, ocioBuilder, leaf.reference, leaf.label);
+            for (const auto& preset : presets)
+                montageCapture(*executor.executor, ocioBuilder, preset.reference, preset.label);
+            if (glowReference)
+                montageCapture(*executor.executor, ocioBuilder, *glowReference,
+                               "path stroke core -> shape source -> glow");
+#endif
         }
         if (keyedStart && keyedMiddle && keyedEnd && keyedHolding) {
             auto& run = *executor.executor;
-            if (std::getenv("BLOOM_PATH_TEST_VERBOSE") != nullptr) {
-                const auto scene = builder.build(keyedStart->plan, keyedStart->request);
-                if (scene) {
-                    const auto dump = [](const char* who, const auto& bounds) {
-                        for (const auto& b : bounds)
-                            std::cerr << who << " local " << b.local.left << ',' << b.local.top << ' '
-                                      << b.local.right << ',' << b.local.bottom << " output "
-                                      << b.output.left << ',' << b.output.top << ' ' << b.output.right
-                                      << ',' << b.output.bottom << '\n';
-                    };
-                    dump("cpu", keyedStart->frame->evaluatedBounds());
-                    dump("gpu", scene.scene->bounds());
-                }
-            }
             gpuParity(expectations, run, *keyedStart, "keyed start");
             gpuParity(expectations, run, *keyedMiddle, "keyed middle");
             gpuParity(expectations, run, *keyedEnd, "keyed end");
@@ -741,8 +1027,9 @@ int main(int argc, char** argv) {
         std::cout << "PASS: Transform, Trim, Offset, Round Corners, Boolean, Merge and Path Stroke "
                      "match the CPU reference on the device, cold and warm, with cache identity, "
                      "invalidation, animation, HDR and alpha, data window, region of interest, "
-                     "cancellation and budget (the Glow chain's CPU half ran; its device half "
-                     "only with BLOOM_PATH_TEST_GLOW_CHAIN, see the KNOWN GAP line)\n";
+                     "cancellation and budget, every brush stamp, a stroked Mask Path and Text "
+                     "Outline, the Path Stroke core through Glow, image effects and Alpha Contour "
+                     "over curved shapes and text, and every glowing path preset\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

@@ -25,7 +25,15 @@ using runtime::CompiledColorParameter;
 using runtime::CompiledScalarParameter;
 using runtime::OperationIndex;
 
-enum class Recipe : std::uint8_t { DropShadow, Glow, LightWrap, EdgeExtend, ChannelBlur, Denoise };
+enum class Recipe : std::uint8_t {
+    DropShadow,
+    Glow,
+    LightWrap,
+    EdgeExtend,
+    ChannelBlur,
+    Denoise,
+    AlphaContour
+};
 
 // Which image the plan's Composition Output publishes: the recipe, or one of the images it reads
 // (an evaluation request may only name the terminal output).
@@ -84,7 +92,15 @@ struct RecipeValues final {
     // #514 Denoise & Smooth Median: the radius and the threshold.
     double denoiseRadius = 2.0;
     double denoiseStrength = 0.0;
-    // An animated Drop Shadow distance (0 at t = 0 to `distance` at t = 1) or Glow intensity.
+    // #509 Alpha Contour
+    double contourWidth = 3.0;
+    double contourSoftness = 1.0;
+    double contourOffset = 1.0;
+    core::Color4d contourColor{2.5, 0.5, 0.25, 0.8};
+    runtime::detail::AlphaContourComposite contourComposite =
+        runtime::detail::AlphaContourComposite::Over;
+    // An animated Drop Shadow distance (0 at t = 0 to `distance` at t = 1), Glow intensity or
+    // (#509) Alpha Contour width.
     bool animated = false;
     // The input is an HDR, partial-alpha solid instead of the gradient. Luma Key's coverage is a
     // function of colour, and the generated gradient's colour is within 2e-6, not bit-exact, on a
@@ -269,6 +285,17 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                 detail::appendEdgeExtend(emitter, result.input,
                                          {scalar(idBase + 71, values.extendDistance),
                                           scalar(idBase + 72, values.extendAmount)});
+            break;
+        case Recipe::AlphaContour:
+            // `animated` keys the width (0 at t = 0), so the distance transform reaches the widest
+            // band the domains allow.
+            result.recipe = detail::appendAlphaContour(
+                emitter, result.input,
+                {animatedScalar(idBase + 81, values.contourWidth),
+                 scalar(idBase + 83, values.contourSoftness),
+                 scalar(idBase + 84, values.contourOffset),
+                 CompiledColorParameter{ParameterId::fromRaw(idBase + 85), values.contourColor},
+                 values.contourComposite});
             break;
         }
     }

@@ -178,15 +178,43 @@ void blurNodeReopen() {
     auto* composition = draft.project().findComposition(initial.initialCompositionId);
     std::vector<document::NodeId> nodes;
     // #490: the Image Preview's display (1, RGB) reopens with the node.
-    for (const auto* type :
-         {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
-          "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
-          "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
-          "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
-          "bloom.film-grain", "bloom.sharpen", "bloom.camera-shake", "bloom.codec-degrade", "bloom.auto-exposure", "bloom.tone-map", "bloom.color-matrix", "bloom.hsl-qualifier", "bloom.edge-extend",
-          "bloom.lens-distortion", "bloom.chromatic-aberration", "bloom.rolling-shutter",
-          "bloom.test-card", "bloom.corner-pin", "bloom.st-map", "bloom.displace"}) {
+    for (const auto* type : {"bloom.gaussian-blur",
+                             "bloom.box-blur",
+                             "bloom.matte-blur",
+                             "bloom.matte-erode",
+                             "bloom.matte-dilate",
+                             "bloom.luma-key",
+                             "bloom.image-preview",
+                             "bloom.levels",
+                             "bloom.curves",
+                             "bloom.hue-saturation",
+                             "bloom.grade",
+                             "bloom.separate-channels",
+                             "bloom.combine-channels",
+                             "bloom.drop-shadow",
+                             "bloom.glow",
+                             "bloom.light-wrap",
+                             "bloom.alpha-association",
+                             "bloom.colorize",
+                             "bloom.vignette",
+                             "bloom.lens-flare",
+                             "bloom.film-grain",
+                             "bloom.sharpen",
+                             "bloom.camera-shake",
+                             "bloom.codec-degrade",
+                             "bloom.auto-exposure",
+                             "bloom.tone-map",
+                             "bloom.color-matrix",
+                             "bloom.hsl-qualifier",
+                             "bloom.edge-extend",
+                             "bloom.alpha-contour",
+                             "bloom.lens-distortion",
+                             "bloom.chromatic-aberration",
+                             "bloom.rolling-shutter",
+                             "bloom.test-card",
+                             "bloom.corner-pin",
+                             "bloom.st-map",
+                             "bloom.displace"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");

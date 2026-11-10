@@ -486,6 +486,55 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
     return out;
 }
 
+// #509 Alpha Contour, written directly: the window the distance transform covers is the input's
+// grown by ceil(reach) + 2 pixels, reach = |offset| + max(width / 2, 1/2) + 1/2 + softness / 2 + 2;
+// each pixel's signed distance is the brute-force Euclidean distance between pixel centres to the
+// nearest pixel on the other side of the coverage (alpha at least 1/2), capped at that grown reach
+// plus one, less half a pixel (outside positive). The band's coverage falls linearly over one
+// pixel plus the softness across each edge of |d - offset| <= max(width / 2, 1/2); the colour is
+// premultiplied by its alpha times min(width, 1).
+[[nodiscard]] Image alphaContourReference(const Image& input, const RecipeValues& values) {
+    const double w = values.contourWidth;
+    const double s = values.contourSoftness;
+    const double o = values.contourOffset;
+    const double half = std::max(0.5 * w, 0.5);
+    const double reach = std::abs(o) + half + 0.5 + 0.5 * s + 2.0;
+    const auto grown = static_cast<std::int64_t>(std::ceil(reach)) + 2;
+    const double cap = static_cast<double>(grown + 1);
+    auto band = Image::blank(input.x0 - grown, input.y0 - grown, input.width + 2 * grown,
+                             input.height + 2 * grown);
+    const auto inside = [&](const std::int64_t x, const std::int64_t y) {
+        return input.at(x, y)[3] >= 0.5;
+    };
+    const double alpha = values.contourColor.alpha * std::min(w, 1.0);
+    const double low = half - 0.5 - 0.5 * s;
+    const double high = half + 0.5 + 0.5 * s;
+    for (auto y = band.y0; y < band.y0 + band.height; ++y)
+        for (auto x = band.x0; x < band.x0 + band.width; ++x) {
+            const bool in = inside(x, y);
+            double nearest = cap * cap;
+            for (auto v = band.y0; v < band.y0 + band.height; ++v)
+                for (auto u = band.x0; u < band.x0 + band.width; ++u)
+                    if (inside(u, v) != in)
+                        nearest = std::min(
+                            nearest, static_cast<double>((u - x) * (u - x) + (v - y) * (v - y)));
+            const double d = in ? 0.5 - std::sqrt(nearest) : std::sqrt(nearest) - 0.5;
+            const double k =
+                std::clamp(1.0 - (std::abs(d - o) - low) / (high - low), 0.0, 1.0) * alpha;
+            band(x, y) = {values.contourColor.red * k, values.contourColor.green * k,
+                          values.contourColor.blue * k, k};
+        }
+    switch (values.contourComposite) {
+    case runtime::detail::AlphaContourComposite::ContourOnly:
+        return band;
+    case runtime::detail::AlphaContourComposite::Under:
+        return composite(input, band, Composite::Over);
+    case runtime::detail::AlphaContourComposite::Over:
+        break;
+    }
+    return composite(band, input, Composite::Over);
+}
+
 [[nodiscard]] Image reference(const runtime::CpuCompositionEvaluator& evaluator,
                               const Recipe recipe, const RecipeValues& values) {
     using recipe_test::Published;
@@ -505,6 +554,8 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
             input, evaluated(evaluator, recipe, values, Published::Background), values);
     case Recipe::EdgeExtend:
         return edgeExtendReference(input, values.extendDistance, values.extendAmount);
+    case Recipe::AlphaContour:
+        return alphaContourReference(input, values);
     case Recipe::ChannelBlur:
     case Recipe::Denoise:
         return {}; // held to the CPU reference by the separable blur tests, and on a device
@@ -549,8 +600,8 @@ void testCacheAndRoi() {
                                    faded.frame()->processImage().pixels()),
            "a changed opacity re-runs only Levels, the recipe's Merge and the output's Merge and "
            "Composition Output");
-    for (const auto recipe :
-         {Recipe::DropShadow, Recipe::Glow, Recipe::LightWrap, Recipe::EdgeExtend}) {
+    for (const auto recipe : {Recipe::DropShadow, Recipe::Glow, Recipe::LightWrap,
+                              Recipe::EdgeExtend, Recipe::AlphaContour}) {
         const auto roiPlan = recipe_test::recipePlan(recipe, {});
         const auto full = evaluator.evaluate(roiPlan.plan, request(roiPlan.plan->output()), {});
         auto roiRequest = request(roiPlan.plan->output());
@@ -573,7 +624,7 @@ void testCacheAndRoi() {
 // time dependent from the animated step on, and the frame at t = 1 equals the constant recipe.
 void testAnimation() {
     const runtime::CpuCompositionEvaluator evaluator;
-    for (const auto recipe : {Recipe::DropShadow, Recipe::Glow}) {
+    for (const auto recipe : {Recipe::DropShadow, Recipe::Glow, Recipe::AlphaContour}) {
         RecipeValues values;
         values.animated = true;
         const auto animated = recipe_test::recipePlan(recipe, values);
@@ -675,6 +726,111 @@ void testEdgeExtend() {
                              std::abs(flat.pixels[i][c] - flatExtended.pixels[i][c]) <= 1e-5;
         expect(fixedPoint, where + "one uniform colour is a fixed point");
     }
+}
+
+// #509 Alpha Contour's known answers: width 0 leaves the input exactly; deep inside the coverage
+// (beyond the band) Over is exactly the input; Contour only is transparent far from the edge and
+// carries the colour on it; a negative offset moves the band inside; at half scale the band keeps
+// its width in composition pixels, so it covers about a quarter of the pixels. Cancellation inside
+// the distance transform publishes nothing, and an exhausted budget refuses the frame.
+void testAlphaContour() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto at = [&](const RecipeValues& values, const recipe_test::Published published,
+                        const runtime::EvaluationResolution resolution =
+                            runtime::CompositionFormatResolution{}) {
+        const auto plan =
+            recipe_test::recipePlan(Recipe::AlphaContour, values, 3900, published).plan;
+        auto value = request(plan->output());
+        value.resolution = resolution;
+        const auto result = evaluator.evaluate(plan, value, {});
+        if (!result.frame())
+            throw std::logic_error("Alpha Contour fixture does not evaluate");
+        return imageOf(result.frame()->processImage());
+    };
+    // Equal over the composition window (the published one), transparent outside each window.
+    const auto same = [](const Image& a, const Image& b) {
+        for (std::int64_t y = 0; y < recipe_test::kRecipeHeight; ++y)
+            for (std::int64_t x = 0; x < recipe_test::kRecipeWidth; ++x)
+                if (a.at(x, y) != b.at(x, y))
+                    return false;
+        return true;
+    };
+    RecipeValues values;
+    const auto source = at(values, recipe_test::Published::Input);
+    // The input's coverage is its whole 12 x 10 rectangle at the origin (alpha 0.6 to 1). Pixel
+    // (5, 5) is 5 pixels inside its edge, beyond the band (offset 1, half width 1.5, a one-pixel
+    // edge, softness 1); (23, 19) is over 15 pixels outside it.
+    constexpr std::int64_t inX = 5;
+    constexpr std::int64_t inY = 5;
+    values.contourWidth = 0.0;
+    expect(same(at(values, recipe_test::Published::Recipe), source),
+           "Alpha Contour of width 0 is the input");
+    values = {};
+    const auto over = at(values, recipe_test::Published::Recipe);
+    expect(over.at(inX, inY) == source.at(inX, inY),
+           "Over leaves the input inside the band exactly");
+    values.contourComposite = runtime::detail::AlphaContourComposite::ContourOnly;
+    const auto only = at(values, recipe_test::Published::Recipe);
+    expect(only.at(23, 19)[3] == 0.0 && only.at(inX, inY)[3] == 0.0,
+           "Contour only is transparent far from the edge");
+    // The pixel just right of the rectangle is 1/2 from its edge: |1/2 - offset| is in the band.
+    const auto edge = only.at(12, inY);
+    expect(std::abs(edge[3] - values.contourColor.alpha) < 1e-5 &&
+               std::abs(edge[0] - values.contourColor.red * values.contourColor.alpha) < 1e-4,
+           "Contour only carries the colour on the band");
+    values.contourOffset = -2.0;
+    const auto inner = at(values, recipe_test::Published::Recipe);
+    // (13, 5) is 3/2 outside: |3/2 + 2| is past the band; (10, 5) is 3/2 inside, on it.
+    expect(inner.at(13, inY)[3] == 0.0 && inner.at(10, inY)[3] > 0.5,
+           "a negative offset moves the band inside the coverage");
+    values = {};
+    values.contourComposite = runtime::detail::AlphaContourComposite::ContourOnly;
+    const auto halfExtent =
+        render::ImageExtent::create(recipe_test::kRecipeWidth / 2, recipe_test::kRecipeHeight / 2);
+    if (!halfExtent)
+        throw std::logic_error("the proxy extent is valid");
+    const auto proxy =
+        at(values, recipe_test::Published::Recipe, runtime::ProxyResolution{*halfExtent.value()});
+    const auto coverage = [](const Image& image) {
+        double sum = 0.0;
+        for (const auto& pixel : image.pixels)
+            sum += pixel[3];
+        return sum;
+    };
+    const double ratio = coverage(proxy) / coverage(only);
+    expect(ratio > 0.15 && ratio < 0.35,
+           "at half scale the band keeps its width in composition pixels (coverage ratio " +
+               std::to_string(ratio) + ")");
+
+    const auto plan = recipe_test::recipePlan(Recipe::AlphaContour, {});
+    runtime::TaskScheduler scheduler;
+    const runtime::TaskOwner owner{runtime::TaskOwnerKind::PanelRequest,
+                                   runtime::TaskOwnerId::fromRaw(5090)};
+    std::promise<bool> outcome;
+    auto future = outcome.get_future();
+    const auto task = scheduler.submit<void>(
+        runtime::TaskRequest("Alpha Contour cancellation", owner),
+        [&](runtime::TaskContext& context) {
+            std::atomic_bool cancelled{false};
+            const auto result = evaluator.evaluate(
+                plan.plan, request(plan.plan->output()), context.cancellation(),
+                [&](const runtime::EvaluationProgress& progress) {
+                    // Inside the distance transform, between its two passes.
+                    if (progress.operation && progress.operation->value() > plan.input.value() &&
+                        !cancelled.exchange(true))
+                        static_cast<void>(scheduler.cancelOwner(owner));
+                });
+            outcome.set_value(result.status() == runtime::EvaluationStatus::Cancelled &&
+                              !result.frame());
+            return runtime::TaskResult<void>::cancelled();
+        });
+    expect(task.accepted() && future.get(),
+           "cancellation inside Alpha Contour's distance transform publishes no frame");
+    auto small = request(plan.plan->output());
+    small.pixelStorageByteLimit = 4096;
+    const auto refused = evaluator.evaluate(plan.plan, small, {});
+    expect(!refused.frame() && refused.status() != runtime::EvaluationStatus::Cancelled,
+           "an Alpha Contour beyond the pixel budget is refused, never partially published");
 }
 
 // A cancelled frame publishes nothing; cancellation arriving inside the chain (while the softened
@@ -901,6 +1057,24 @@ int main() {
         values.extendAmount = 0.6;
         testReference(Recipe::EdgeExtend, values, "Edge Extend (a part of the way, fractional reach)");
         testEdgeExtend();
+        // #509 Alpha Contour: over, under and alone, outward and inward, soft and hard, a hairline
+        // thinner than a pixel, and an HDR colour.
+        values = {};
+        testReference(Recipe::AlphaContour, values, "Alpha Contour");
+        values.contourComposite = runtime::detail::AlphaContourComposite::Under;
+        values.contourSoftness = 0.0;
+        testReference(Recipe::AlphaContour, values, "Alpha Contour (under, hard)");
+        values.contourComposite = runtime::detail::AlphaContourComposite::ContourOnly;
+        values.contourOffset = -1.5;
+        values.contourWidth = 0.4;
+        testReference(Recipe::AlphaContour, values, "Alpha Contour (alone, inward hairline)");
+        values = {};
+        values.solidInput = true;
+        values.contourWidth = 5.0;
+        values.contourSoftness = 2.5;
+        values.contourColor = core::Color4d{6.0, 3.0, 0.5, 1.0};
+        testReference(Recipe::AlphaContour, values, "Alpha Contour (solid input, wide, HDR)");
+        testAlphaContour();
         testModes();
         testPhysicalEnergy();
         testCacheAndRoi();

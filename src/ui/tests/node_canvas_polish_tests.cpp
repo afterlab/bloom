@@ -7,6 +7,7 @@
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/properties_editor.hpp>
 
 #include <QGraphicsProxyWidget>
 #include <QImage>
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -426,6 +428,105 @@ void testSourceCardsHaveNoPreview() {
     }
 }
 
+// #509: Light & Shadow's Glowing paths submenu offers the five presets; one adds its group and an
+// instance in one undo step, and the instance's slot sockets and Properties rows read as what they
+// drive in the group, not as "Scalar 1".
+void testGlowingPathPresets() {
+    Fixture f;
+    std::unique_ptr<QMenu> menu(f.editor.contextMenuForTest());
+    auto* presets = menu ? menu->findChild<QMenu*>(QStringLiteral("nodeAddPathGlowMenu")) : nullptr;
+    expect(presets != nullptr, "Light & Shadow offers the Glowing paths submenu");
+    if (presets == nullptr)
+        return;
+    QStringList names;
+    for (auto* action : presets->actions())
+        names << action->text();
+    expect(names == QStringList{"Saber", "Beam", "Vegas", "Write-on", "Stroke"},
+           "the submenu offers Saber, Beam, Vegas, Write-on and Stroke");
+    auto* saber = presets->findChild<QAction*>(QStringLiteral("nodeAddPathGlow.0"));
+    expect(saber != nullptr && saber->isEnabled(), "Saber can be added");
+    if (saber == nullptr)
+        return;
+    const auto compositions = f.session.snapshot().project().compositions().size();
+    const auto nodes = f.session.composition()->graph().nodes().size();
+    saber->trigger();
+    QCoreApplication::processEvents();
+    expect(f.session.snapshot().project().compositions().size() == compositions + 1 &&
+               f.session.composition()->graph().nodes().size() == nodes + 1,
+           "Saber adds its group and one Node Group");
+    const auto* selected = f.session.selectedNode();
+    expect(selected != nullptr && selected->typeId == document::kNodeGroupNodeType,
+           "the new Node Group is selected");
+    if (selected == nullptr)
+        return;
+    const auto instance = selected->id;
+    std::map<QString, QString> sockets;
+    if (auto* card = f.card(instance))
+        for (auto* socket : card->sockets())
+            if (socket->input)
+                sockets[socket->name] = socket->label;
+    expect(sockets[QStringLiteral("scalar1")] == QStringLiteral("Path Stroke Width") &&
+               sockets[QStringLiteral("scalar2")] == QStringLiteral("Glow Size") &&
+               sockets[QStringLiteral("scalar3")] == QStringLiteral("Glow Intensity") &&
+               sockets[QStringLiteral("color1")] == QStringLiteral("Glow Tint") &&
+               sockets[QStringLiteral("scalar4")].isEmpty(),
+           ("the card names the slots after what they drive (" +
+            sockets[QStringLiteral("scalar1")].toStdString() + ", " +
+            sockets[QStringLiteral("scalar2")].toStdString() + ", " +
+            sockets[QStringLiteral("scalar3")].toStdString() + ", " +
+            sockets[QStringLiteral("color1")].toStdString() + ")")
+               .c_str());
+    PropertiesEditor properties(f.session);
+    properties.resize(900, 1200);
+    properties.show();
+    QCoreApplication::processEvents();
+    std::map<QString, QString> rows;
+    for (auto* row : properties.findChildren<QWidget*>(QStringLiteral("propertiesRegistryRow")))
+        rows[row->property("role").toString()] = row->property("rowLabel").toString();
+    expect(rows[QStringLiteral("scalar1")] == QStringLiteral("Path Stroke Width") &&
+               rows[QStringLiteral("scalar2")] == QStringLiteral("Glow Size") &&
+               rows[QStringLiteral("color1")] == QStringLiteral("Glow Tint") &&
+               rows[QStringLiteral("scalar4")] == QStringLiteral("Scalar 4"),
+           "Properties names the slots the same way");
+    if (const auto directory = qEnvironmentVariable("BLOOM_UI_CAPTURE_DIR"); !directory.isEmpty())
+        properties.grab().save(directory + QStringLiteral("/properties-glowing-path-saber.png"));
+    expect(f.session.undo() &&
+               f.session.snapshot().project().compositions().size() == compositions &&
+               f.session.composition()->graph().nodes().size() == nodes,
+           "the preset undoes in one step");
+    // A preset without a white core takes its colour on the stroke's fill: Beam's colour slot
+    // reads as the Shape node's Fill Color. A menu adds at the revision it opened on, so it is
+    // opened again.
+    std::unique_ptr<QMenu> again(f.editor.contextMenuForTest());
+    auto* againPresets =
+        again ? again->findChild<QMenu*>(QStringLiteral("nodeAddPathGlowMenu")) : nullptr;
+    auto* beam = againPresets
+                     ? againPresets->findChild<QAction*>(QStringLiteral("nodeAddPathGlow.1"))
+                     : nullptr;
+    expect(beam != nullptr && beam->isEnabled(), "Beam can be added");
+    if (beam == nullptr)
+        return;
+    beam->trigger();
+    QCoreApplication::processEvents();
+    std::optional<document::NodeId> beamNode;
+    for (const auto& node : f.session.composition()->graph().nodes())
+        if (node.typeId == document::kNodeGroupNodeType)
+            beamNode = node.id;
+    expect(beamNode.has_value() &&
+               f.session.snapshot().project().compositions().size() == compositions + 1,
+           "Beam adds its group and its Node Group");
+    if (!beamNode)
+        return;
+    QString beamColor;
+    if (auto* card = f.card(*beamNode))
+        for (auto* socket : card->sockets())
+            if (socket->input && socket->name == QStringLiteral("color1"))
+                beamColor = socket->label;
+    expect(
+        beamColor == QStringLiteral("Shape Fill Color"),
+        ("Beam's colour slot names the stroke's fill (" + beamColor.toStdString() + ")").c_str());
+}
+
 // Bug #401: with 25 animated layers, playback touches only the visible time-varying cards, once
 // per display frame, rebuilds no selector, and does nothing at all while the panel is hidden.
 void testPlaybackRefreshIsBounded() {
@@ -519,6 +620,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testMergeSlotsHaveTheirOwnSockets();
         bloom::ui::test::testSourceCardsHaveNoPreview();
         bloom::ui::test::testNodesIcon();
+        bloom::ui::test::testGlowingPathPresets();
         bloom::ui::test::testPlaybackRefreshIsBounded();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -10,17 +10,26 @@
 // to have been evaluated on the device; otherwise it prints NotRun explicitly, and --require-device
 // turns that into a failure. A movie needs the media worker: where it is absent the test says
 // NotRun for that route.
+//
+// #509 runs the same routes again over the path-stroke features: the keyed path stroked as Diamond
+// stamps and outlined by Alpha Contour, a text whose Text Outline is stroked over it in a Merge, a
+// solid's mask stroked through Mask Path, and the Saber glowing path preset.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/path_glow_presets.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_analysis.hpp>
@@ -181,6 +190,8 @@ struct Pixels final {
 struct Route final {
     const char* name;
     bool gpu;
+    // #509: the composition also carries the path-stroke features (see addPathStrokeFeatures).
+    bool features = false;
 };
 
 document::PathContour square(const double left, const double top, const double size) {
@@ -282,6 +293,175 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     return authored;
 }
 
+// #509: the path-stroke features, added to the authored composition. The keyed path is stroked as
+// Diamond stamps that follow it and its Shape is outlined by Alpha Contour; a text is stroked along
+// its Text Outline, the stroke merged over it as the text layer's content; a solid's mask is
+// stroked through Mask Path, on top of the composition's Merge; and a Saber glowing path preset
+// is drawn by a layer of its own. Nothing added moves with time, so the keyed path is still the
+// only motion.
+[[nodiscard]] bool addPathStrokeFeatures(Expectations& checks, Authored& authored) {
+    const auto comp = authored.composition;
+    bool ok = true;
+    const auto must = [&](commands::CommandResult result, const std::string& what) {
+        checks.expect(result.succeeded(), "#509 features: " + what);
+        ok = ok && result.succeeded();
+        return result;
+    };
+    const auto graph = [&]() -> const document::CanonicalGraph& {
+        return authored.scripting->snapshot().project().findComposition(comp)->graph();
+    };
+    const auto add = [&](const std::string_view type) {
+        return must(edit<commands::AddNode>(authored, comp, std::string(type),
+                                            document::Vec2d{0, 0}),
+                    "adds " + std::string(type))
+            .outputId<document::NodeId>(commands::kAddNodeOutput)
+            .value_or(document::NodeId{});
+    };
+    const auto set = [&](const document::NodeId node, const std::string_view role,
+                         document::ParameterValue value) {
+        const auto* record = graph().findNode(node);
+        if (record == nullptr)
+            return;
+        for (const auto& binding : record->parameters)
+            if (binding.role == role)
+                (void)must(edit<commands::SetParameterSource>(
+                               authored, comp, binding.parameterId,
+                               document::ConstantValueSource{std::move(value)}),
+                           "sets " + std::string(role));
+    };
+    const auto connect = [&](const document::NodeId from, const std::string_view output,
+                             const document::NodeId to, const std::string_view input) {
+        const document::NodeInputRef into{to, std::string(input)};
+        if (std::ranges::any_of(graph().edges(), [&](const auto& edge) {
+                const auto* target = std::get_if<document::NodeInputRef>(&edge.destination);
+                return target != nullptr && *target == into;
+            }))
+            (void)must(edit<commands::DisconnectInput>(authored, comp, into), "disconnects");
+        (void)must(edit<commands::ConnectPorts>(
+                       authored, comp, document::OutputPortRef{from, std::string(output)}, into),
+                   "connects " + std::string(input));
+    };
+    // `source`'s image as a new entry of `merge`, on top of it or at its bottom.
+    const auto enter = [&](const document::NodeId source, const document::NodeId merge,
+                           const bool onTop) {
+        std::optional<document::LayerSlotId> top;
+        if (const auto* stack = graph().merge(merge);
+            onTop && stack != nullptr && !stack->entries().empty())
+            top = stack->entries().front().slotId;
+        (void)must(edit<commands::ConnectPorts>(
+                       authored, comp, document::OutputPortRef{source, "image"},
+                       document::InputPortRef{document::LayerStackInputRef{merge, {}, "content"}},
+                       document::builtInNodeDefinitions(), top),
+                   "enters a Merge");
+    };
+    // The input an output feeds (the one edge from it), to put a node between them.
+    const auto fed = [&](const document::NodeId from,
+                         const std::string_view output) -> std::optional<document::NodeInputRef> {
+        for (const auto& edge : graph().edges())
+            if (const auto* target = std::get_if<document::NodeInputRef>(&edge.destination);
+                target != nullptr && edge.source.nodeId == from && edge.source.port == output)
+                return *target;
+        return std::nullopt;
+    };
+
+    // The keyed path, stroked as Diamond stamps, and the Shape outlined by Alpha Contour.
+    std::optional<document::NodeId> pathNode;
+    std::optional<document::NodeId> shape;
+    for (const auto& node : graph().nodes()) {
+        if (node.typeId == document::kPathValueNodeType)
+            pathNode = node.id;
+        if (node.typeId == document::kShapeSourceNodeType)
+            shape = node.id;
+    }
+    const auto layerInput = shape ? fed(*shape, "image") : std::nullopt;
+    checks.expect(pathNode && shape && layerInput, "#509 features: the keyed shape is found");
+    if (!pathNode || !shape || !layerInput)
+        return false;
+    const auto stroke = add(document::kPathStrokeNodeType);
+    set(stroke, "width", 4.0);
+    set(stroke, "spacing", 6.0);
+    set(stroke, "stamp", document::selectorStoredValue(document::StrokeStamp::Diamond));
+    set(stroke, "stampAlign", document::selectorStoredValue(document::StampAlign::FollowPath));
+    connect(*pathNode, document::kValuePortName, stroke, "path");
+    connect(stroke, "path", *shape, "path");
+    const auto contour = add(document::kAlphaContourNodeType);
+    set(contour, "width", 2.0);
+    set(contour, "offset", 1.0);
+    set(contour, "color", core::Color4d{1.0, 0.6, 0.2, 1.0});
+    connect(*shape, "image", contour, "input");
+    connect(contour, "image", layerInput->nodeId, layerInput->port);
+
+    // A text stroked along its Text Outline, the stroke merged over it.
+    const auto text = must(edit<commands::AddTextLayer>(authored, comp, "Title", "Ag",
+                                                        document::Vec2d{40, 30}, 1.0, 18.0),
+                           "adds a text");
+    const auto textNode = text.outputId<document::NodeId>(commands::kAddTextLayerTextNodeOutput);
+    const auto textLayer =
+        text.outputId<document::NodeId>(commands::kAddTextLayerLayerOutputNodeOutput);
+    if (!textNode || !textLayer)
+        return false;
+    const auto outline = add(document::kTextOutlineNodeType);
+    const auto outlineStroke = add(document::kPathStrokeNodeType);
+    set(outlineStroke, "width", 1.5);
+    connect(outline, "path", outlineStroke, "path");
+    const auto outlineShape = add(document::kShapeSourceNodeType);
+    set(outlineShape, "kind", static_cast<std::int64_t>(document::ShapeKind::Path));
+    set(outlineShape, "fillColor", core::Color4d{0.9, 0.2, 0.6, 1.0});
+    connect(outlineStroke, "path", outlineShape, "path");
+    const auto textMerge = add(document::kLayerStackNodeType);
+    enter(*textNode, textMerge, false);
+    enter(outlineShape, textMerge, true);
+    connect(textMerge, "image", *textLayer, std::string(document::kLayerOutputContentInputPort));
+
+    // A solid's mask, stroked through Mask Path, on top of the composition's Merge.
+    const auto solid = must(
+        edit<commands::AddSolidLayer>(authored, comp, "Plate", core::Color4d{0.1, 0.1, 0.1, 1.0}),
+        "adds a solid");
+    const auto plate = solid.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
+    const auto plateNode =
+        solid.outputId<document::NodeId>(commands::kAddSolidLayerLayerOutputNodeOutput);
+    if (!plate || !plateNode)
+        return false;
+    (void)must(edit<commands::AddLayerMask>(authored, comp, *plate,
+                                            document::PathValue::fromContour(square(6, 26, 16))),
+               "masks the solid");
+    std::optional<document::NodeId> mainMerge;
+    for (const auto& edge : graph().edges())
+        if (const auto* entry = std::get_if<document::LayerStackInputRef>(&edge.destination);
+            entry != nullptr && edge.source.nodeId == *plateNode)
+            mainMerge = entry->stackNodeId;
+    checks.expect(mainMerge.has_value(), "#509 features: the solid is an entry of a Merge");
+    if (!mainMerge)
+        return false;
+    const auto maskPath = add(document::kMaskPathNodeType);
+    set(maskPath, document::kPathSourceParameterRole,
+        static_cast<std::int64_t>(plateNode->value()));
+    const auto maskStroke = add(document::kPathStrokeNodeType);
+    set(maskStroke, "width", 2.0);
+    connect(maskPath, "path", maskStroke, "path");
+    const auto maskShape = add(document::kShapeSourceNodeType);
+    set(maskShape, "kind", static_cast<std::int64_t>(document::ShapeKind::Path));
+    set(maskShape, "fillColor", core::Color4d{0.9, 0.8, 0.2, 1.0});
+    connect(maskStroke, "path", maskShape, "path");
+    enter(maskShape, *mainMerge, true);
+
+    // The Saber preset, drawn by a layer of its own.
+    const auto saber =
+        must(edit<commands::CreatePathGlowPreset>(authored, comp, commands::PathGlowPreset::Saber,
+                                                  document::Vec2d{0, 0}),
+             "adds the Saber preset")
+            .outputId<document::NodeId>(commands::kPathGlowPresetNodeOutput);
+    const auto glowLayer =
+        must(edit<commands::AddSolidLayer>(authored, comp, "Saber",
+                                           core::Color4d{0.0, 0.0, 0.0, 1.0}),
+             "adds the Saber's layer")
+            .outputId<document::NodeId>(commands::kAddSolidLayerLayerOutputNodeOutput);
+    if (!saber || !glowLayer)
+        return false;
+    connect(*saber, "image1", *glowLayer, std::string(document::kLayerOutputContentInputPort));
+    return ok;
+}
+
 struct PreviewRig final {
     runtime::TaskScheduler scheduler;
     runtime::NodeDefinitionRegistry definitions;
@@ -298,6 +478,9 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     const std::string prefix = std::string(route.name) + ": ";
     auto authored = author(checks);
     if (!authored.has_value()) {
+        return;
+    }
+    if (route.features && !addPathStrokeFeatures(checks, *authored)) {
         return;
     }
     auto& session = *authored->session;
@@ -378,14 +561,32 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         controller.requestRefresh();
         const auto before =
             index == 0 ? ui::PreparedPreviewFrameHandle{} : viewer.displayedFrameForTest();
-        const bool ready = waitUntil([&] {
+        // The first frame of a route may wait on the device's first preparation of every program
+        // the composition needs (the #509 features need many); later frames reuse them.
+        const bool ready = waitUntil(
+            [&] {
+                const auto displayed = viewer.displayedFrameForTest();
+                return controller.state().activity == ui::PreviewActivity::Ready &&
+                       displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
+                       displayed->provenance().provider == expectedProvider &&
+                       viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
+            },
+            index == 0 ? 120s : 30s);
+        if (!ready) {
+            const auto& state = controller.state();
             const auto displayed = viewer.displayedFrameForTest();
-            return controller.state().activity == ui::PreviewActivity::Ready &&
-                   displayed != nullptr && (index == 0 || displayed != before || index == 3) &&
-                   displayed->provenance().provider == expectedProvider &&
-                   viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
-        });
-        checks.expect(ready, label + "the Viewer displays a current frame from the expected route");
+            std::string why =
+                "activity " + std::to_string(static_cast<int>(state.activity)) + ", provider " +
+                (displayed ? std::to_string(static_cast<int>(displayed->provenance().provider))
+                           : std::string("none")) +
+                ", " + state.message.toStdString();
+            for (const auto& diagnostic : state.diagnostics)
+                why += "; " + diagnostic.summary;
+            checks.expect(false, label +
+                                     "the Viewer displays a current frame from the expected "
+                                     "route (" +
+                                     why + ")");
+        }
         shown.at(index) = pixelsOf(viewer.displayedFrameForTest());
         checks.expect(shown.at(index).ok && shown.at(index).width == kWidth &&
                           shown.at(index).height == kHeight,
@@ -397,11 +598,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
 
     // The picture moves with the keys. The layer centers the 4..44 square on the frame, so a path
     // point (x, y) shows at (x + 8, y): the hole's center goes from (22, 14) to (38, 30), and
-    // holds.
-    checks.expect(shown[0].at(22, 14)[3] == 0 && shown[0].at(38, 30)[3] == 255,
-                  prefix + "the first key's hole shows in the Viewer");
-    checks.expect(shown[2].at(22, 14)[3] == 255 && shown[2].at(38, 30)[3] == 0,
-                  prefix + "the second key's hole shows in the Viewer");
+    // holds. (With the #509 features the path is stroked, not filled, so only the motion and the
+    // hold are asked of it.)
+    if (!route.features) {
+        checks.expect(shown[0].at(22, 14)[3] == 0 && shown[0].at(38, 30)[3] == 255,
+                      prefix + "the first key's hole shows in the Viewer");
+        checks.expect(shown[2].at(22, 14)[3] == 255 && shown[2].at(38, 30)[3] == 0,
+                      prefix + "the second key's hole shows in the Viewer");
+    }
     checks.expect(shown[1].rgba != shown[0].rgba && shown[1].rgba != shown[2].rgba,
                   prefix + "the frame between them moves");
     checks.expect(shown[3].rgba == shown[2].rgba,
@@ -547,6 +751,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     Expectations checks;
     const std::filesystem::path workDir = temporary.path().toStdString();
     exerciseRoute(checks, {"cpu", false}, workDir, loader);
+    exerciseRoute(checks, {"cpu-509", false, true}, workDir, loader);
 
 #if defined(BLOOM_UI_PATH_VALUE_ROUTES_GPU)
     if (loader.empty()) {
@@ -554,6 +759,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(!gRequireDevice, "--require-device needs --loader");
     } else {
         exerciseRoute(checks, {"gpu", true}, workDir, loader);
+        exerciseRoute(checks, {"gpu-509", true, true}, workDir, loader);
     }
 #else
     std::cout << "NotRun: gpu route: this build has no Vulkan support\n";

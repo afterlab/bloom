@@ -1028,11 +1028,22 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
             ++added;
     }
     expectations.expect(added > 100, "the canvas adds every built-in node");
+    // A card outside every view waits for the next view change to take a fresh answer (bug #401),
+    // so the Layer Bounds card is brought into view wherever its place in the built-in list put it.
+    for (auto* item : fixture.scene()->items()) {
+        if (item->data(ui::kNodeItemKindRole).toString() != QStringLiteral("node"))
+            continue;
+        const auto* node = fixture.session.composition()->graph().findNode(
+            document::NodeId::fromRaw(item->data(ui::kNodeStableIdRole).toULongLong()));
+        if (node != nullptr && node->typeId == document::kLayerBoundsNodeType)
+            fixture.view()->centerOn(item);
+    }
     const auto readouts = [&fixture] {
         struct Found final {
             int readoutLabels = 0;
             int resolving = 0;
             int bounds = 0;
+            QStringList cards; // every label of each card left on the placeholder
         } found;
         for (auto* item : fixture.scene()->items()) {
             auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item);
@@ -1043,8 +1054,13 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
                     ++found.readoutLabels;
                     ++found.bounds;
                 }
-                if (label->text() == QStringLiteral("Resolving…"))
+                if (label->text() == QStringLiteral("Resolving…")) {
                     ++found.resolving;
+                    QStringList texts;
+                    for (auto* other : proxy->widget()->findChildren<QLabel*>())
+                        texts << other->text();
+                    found.cards << texts.join(QStringLiteral(" | "));
+                }
             }
         }
         return found;
@@ -1061,7 +1077,8 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
                         "only the Layer Bounds card carries value readouts (its four outputs): " +
                             std::to_string(found.readoutLabels));
     expectations.expect(found.resolving == 0,
-                        "no node card shows \"Resolving…\" once its readouts resolve");
+                        "no node card shows \"Resolving…\" once its readouts resolve: " +
+                            found.cards.join(QStringLiteral(" || ")).toStdString());
     // The same in a clean composition holding only a Layer Bounds node: its four rows resolve to
     // text (a value, or the reason there is none).
     GraphFixture clean(makeProject("Card Readout Clean Test"));
@@ -1090,8 +1107,6 @@ void testNoNodeCardStaysOnResolving(Expectations& expectations) {
         QThread::msleep(5);
         texts = cleanTexts();
     }
-    if (std::getenv("BLOOM_CARD_DEBUG") != nullptr)
-        std::cerr << "clean texts: " << texts.join(" | ").toStdString() << '\n';
     expectations.expect(texts.size() == 4 && !texts.contains(QStringLiteral("Resolving…")),
                         "a Layer Bounds card's four readouts leave the placeholder");
 }

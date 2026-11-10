@@ -1,7 +1,8 @@
 // #344 #530 #509 #349: the path processing nodes (Transform Path, Trim Path, Offset Path, Round
-// Corners, Boolean Paths, Merge Paths, Path Stroke) and the analysis nodes (Histogram, Image
-// Compare, Image Statistics) save, reopen and save again with every parameter, selector, link and
-// layout field exactly as authored, and an edit of a selector or a Path operand undoes and redoes.
+// Corners, Boolean Paths, Merge Paths, Path Stroke with its stamps, Mask Path, Text Outline) and
+// the analysis nodes (Histogram, Image Compare, Image Statistics) save, reopen and save again with
+// every parameter, selector, link and layout field exactly as authored, and an edit of a selector
+// or a Path operand undoes and redoes.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -25,6 +26,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -185,7 +187,8 @@ void pathAndAnalysisNodesReopen() {
     const std::array pathNodes{document::kTransformPathNodeType, document::kTrimPathNodeType,
                                document::kOffsetPathNodeType,    document::kRoundCornersNodeType,
                                document::kBooleanPathsNodeType,  document::kMergePathsNodeType,
-                               document::kPathStrokeNodeType};
+                               document::kPathStrokeNodeType,    document::kMaskPathNodeType,
+                               document::kTextOutlineNodeType};
     const std::array analysisNodes{document::kHistogramNodeType, document::kImageCompareNodeType,
                                    document::kImageStatisticsNodeType};
     std::vector<document::NodeId> all;
@@ -197,13 +200,23 @@ void pathAndAnalysisNodesReopen() {
         expect(definition != nullptr, std::string("a definition exists for ") + std::string(type));
         if (definition == nullptr)
             continue;
+        // #509 Mask Path and Text Outline read a node by its id and take no path in.
+        const bool reader =
+            type == document::kMaskPathNodeType || type == document::kTextOutlineNodeType;
+        const auto processor = fixture.add(type, {x, 120.0});
+        for (const auto& declared : definition->parameters)
+            fixture.change(processor, declared);
+        if (reader) {
+            const auto shape = fixture.add(document::kShapeSourceNodeType, {x, 360.0});
+            fixture.connect(processor, "path", shape, "path");
+            all.insert(all.end(), {processor, shape});
+            x += 240.0;
+            continue;
+        }
         const auto producer = fixture.add(document::kPathValueNodeType, {x, 0.0});
         fixture.change(producer, *document::builtInNodeDefinitions()
                                       .find(document::kPathValueNodeType, 1)
                                       ->parameters.data());
-        const auto processor = fixture.add(type, {x, 120.0});
-        for (const auto& declared : definition->parameters)
-            fixture.change(processor, declared);
         fixture.connect(producer, document::kValuePortName, processor,
                         type == document::kBooleanPathsNodeType ? "first" : "path");
         if (type == document::kBooleanPathsNodeType) {
@@ -320,12 +333,38 @@ void selectorAndPathEditsUndoAndRedo() {
     }
 }
 
+// #509: the stamp controls, and the source and mask of Mask Path and Text Outline, undo and redo.
+void stampAndSourceEditsUndoAndRedo() {
+    Fixture fixture;
+    const std::vector<std::tuple<std::string_view, std::string_view, document::ParameterValue>>
+        edits{{document::kPathStrokeNodeType, "stamp", std::int64_t{3}},
+              {document::kPathStrokeNodeType, "stampAlign", std::int64_t{2}},
+              {document::kPathStrokeNodeType, "stampRotation", 30.0},
+              {document::kMaskPathNodeType, "source", std::int64_t{7}},
+              {document::kMaskPathNodeType, "mask", std::int64_t{2}},
+              {document::kTextOutlineNodeType, "source", std::int64_t{9}}};
+    for (const auto& [type, role, edited] : edits) {
+        const auto node = fixture.add(type, {0.0, 0.0});
+        const auto parameter = fixture.parameter(node, role);
+        const auto original = fixture.source(parameter);
+        const std::string label = std::string(type) + " " + std::string(role);
+        fixture.run<commands::SetParameterSource>(parameter, document::ConstantValueSource{edited});
+        const document::ParameterSource applied{document::ConstantValueSource{edited}};
+        expect(fixture.source(parameter) == applied, label + ": the edit is applied");
+        expect(fixture.commands.undo().succeeded() && fixture.source(parameter) == original,
+               label + ": undo restores the original");
+        expect(fixture.commands.redo().succeeded() && fixture.source(parameter) == applied,
+               label + ": redo restores the edit");
+    }
+}
+
 } // namespace
 
 int main() {
     try {
         pathAndAnalysisNodesReopen();
         selectorAndPathEditsUndoAndRedo();
+        stampAndSourceEditsUndoAndRedo();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -1413,6 +1413,9 @@ add_test(NAME bloom.ui.properties-registry.labels.dpr1.5 COMMAND bloom_propertie
 set_tests_properties(bloom.ui.properties-registry.labels.dpr1.5 PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5"
     LABELS "ui;integration;kit" TIMEOUT 120)
+# #344 #349 #509: the value-node readouts resolve, and the path nodes' stamp, source and Alpha
+# Contour rows read whole (BLOOM_READOUT_CAPTURE_DIR saves their Properties captures).
+bloom_add_test(NAME bloom.ui.properties-readouts COMMAND bloom_properties_registry_test --readouts LABELS ui integration kit TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_properties_layer_time_test properties_layer_time_tests.cpp)
 target_link_libraries(bloom_properties_layer_time_test PRIVATE bloom_ui)
@@ -2392,6 +2395,16 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_add_test(
         NAME bloom.ui.gpu_ram_preview_animated_mask
         COMMAND bloom_ui_gpu_ram_preview_route_proof_test --animated-mask
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu ram
+        TIMEOUT 300
+    )
+    # #344 #530 #509: the path nodes (a keyed Trim Path, Boolean Paths, a dashed Path Stroke and its
+    # core through Glow) in the interactive viewer and RAM preview on the real service: GPU-resident
+    # frames against the CPU oracle, a warm replay with no work, and an operand edit re-rendered.
+    bloom_add_test(
+        NAME bloom.ui.gpu_ram_preview_path_nodes
+        COMMAND bloom_ui_gpu_ram_preview_route_proof_test --path-nodes
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu ram
         TIMEOUT 300

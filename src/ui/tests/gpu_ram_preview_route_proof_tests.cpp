@@ -18,12 +18,26 @@
 // The cold fill must dispatch genuine GPU frames that match the CPU oracle while running the
 // shader compiler at most once for the whole run (the mask geometry is per-dispatch data), and the
 // warm replay must perform zero preparation, dispatch or compile. It publishes no route proof.
+//
+// `--path-nodes` (#344, #530, #509) is another non-writing run: a 512 x 288, six-frame composition
+// of the path nodes drawn by Shape Sources -- a Trim Path whose end is keyed, a Boolean Paths
+// subtraction, a dashed Path Stroke and its core through Glow -- previewed in the interactive
+// viewer and RAM-previewed through the same service. The viewer frame and every RAM frame must be
+// GPU-resident and match the CPU oracle, the warm replay must do no work, and an operand edit must
+// re-render every frame on the GPU against the edited CPU oracle.
 
 #include "gpu_route_proof_harness_support.hpp"
 
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/path_value.hpp>
+#include <bloom/document/shape.hpp>
+#include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -73,6 +87,7 @@ struct HarnessOptions final {
     bool expectPartial = false;
     bool expireBeforeAdmission = false;
     bool animatedMask = false;
+    bool pathNodes = false;
     std::uint64_t poolBytes = 1ULL << 30;
 };
 
@@ -97,6 +112,8 @@ struct HarnessOptions final {
             options.expireBeforeAdmission = true;
         } else if (argument == "--animated-mask") {
             options.animatedMask = true;
+        } else if (argument == "--path-nodes") {
+            options.pathNodes = true;
         } else if (argument == "--expect-partial") {
             options.expectPartial = true;
         } else if (argument == "--require-device") {
@@ -117,13 +134,14 @@ struct HarnessOptions final {
     return *value;
 }
 
-[[nodiscard]] document::CompositionFormat ramFormat() {
+[[nodiscard]] document::CompositionFormat ramFormat(const std::uint32_t width = 1920U,
+                                                    const std::uint32_t height = 1080U) {
     const auto rate = document::FrameRate::create(kFrameRate, 1);
     if (!rate.has_value()) {
         std::abort();
     }
     const auto format =
-        document::CompositionFormat::create(1920U, 1080U, core::PixelAspectRatio::square(), *rate);
+        document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(), *rate);
     if (!format.has_value()) {
         std::abort();
     }
@@ -178,6 +196,142 @@ struct HarnessOptions final {
     return path;
 }
 
+// The `--path-nodes` document, built through commands as an artist's edits would be.
+struct PathNodesDocument final {
+    document::Document& document;
+    commands::CommandStack& commands;
+    document::CompositionId composition;
+    Expectations& checks;
+    document::NodeId booleanNode;
+
+    [[nodiscard]] const document::Composition& current() const {
+        return *document.snapshot().project().findComposition(composition);
+    }
+    template <typename Operation, typename... Arguments> bool run(Arguments&&... arguments) {
+        commands::Transaction transaction("Path nodes", document.snapshot().revision());
+        transaction.emplace<Operation>(std::forward<Arguments>(arguments)...);
+        return commands.execute(std::move(transaction)).changed();
+    }
+    [[nodiscard]] document::NodeId last(const std::string_view type) const {
+        const auto nodes = current().graph().nodes();
+        for (auto it = nodes.rbegin(); it != nodes.rend(); ++it)
+            if (it->typeId == type)
+                return it->id;
+        return {};
+    }
+    [[nodiscard]] document::ParameterId parameter(const document::NodeId node,
+                                                  const std::string_view role) const {
+        if (const auto* record = current().graph().findNode(node))
+            for (const auto& binding : record->parameters)
+                if (binding.role == role)
+                    return binding.parameterId;
+        return {};
+    }
+    document::NodeId add(const std::string_view type) {
+        checks.expect(run<commands::AddNode>(composition, std::string(type), document::Vec2d{}),
+                      "a path-nodes node is added");
+        return last(type);
+    }
+    void set(const document::NodeId node, const std::string_view role,
+             document::ParameterValue value) {
+        checks.expect(
+            run<commands::SetParameterSource>(composition, parameter(node, role),
+                                              document::ConstantValueSource{std::move(value)}),
+            "a path-nodes operand is set");
+    }
+    void connect(const document::NodeId from, const std::string_view output,
+                 const document::NodeId to, const std::string_view input) {
+        const bool linked = std::ranges::any_of(current().graph().edges(), [&](const auto& edge) {
+            const auto* target = std::get_if<document::NodeInputRef>(&edge.destination);
+            return target != nullptr && target->nodeId == to && target->port == input;
+        });
+        if (linked)
+            static_cast<void>(run<commands::DisconnectInput>(
+                composition, document::NodeInputRef{to, std::string(input)}));
+        checks.expect(run<commands::ConnectPorts>(
+                          composition, document::OutputPortRef{from, std::string(output)},
+                          document::NodeInputRef{to, std::string(input)}),
+                      "a path-nodes link is made");
+    }
+    // A Shape Source on a layer of its own whose `path` is `from`'s `output`; answers the shape.
+    document::NodeId shape(const document::NodeId from, const std::string_view output,
+                           const core::Color4d fill) {
+        commands::ShapeLayerGeometry geometry;
+        commands::ShapeLayerStyle style;
+        style.fillColor = fill;
+        checks.expect(
+            run<commands::AddShapeLayer>(composition, document::ShapeKind::Path, geometry, style),
+            "a path-nodes shape layer is added");
+        const auto node = last(document::kShapeSourceNodeType);
+        connect(from, output, node, "path");
+        return node;
+    }
+    document::NodeId pathNode(document::PathValue value) {
+        const auto node = add(document::kPathValueNodeType);
+        set(node, document::kValueParameterRole, std::move(value));
+        return node;
+    }
+
+    void build(const std::int64_t frameCount) {
+        using document::PathAnchor;
+        using document::PathContour;
+        using document::PathValue;
+        using document::Vec2d;
+        const auto square = [](const double left, const double top, const double size) {
+            PathContour contour;
+            contour.closed = true;
+            contour.anchors = {
+                PathAnchor{Vec2d{left, top}, std::nullopt, std::nullopt},
+                PathAnchor{Vec2d{left + size, top}, std::nullopt,
+                           Vec2d{left + size + 30.0, top + size * 0.5}},
+                PathAnchor{Vec2d{left + size, top + size}, std::nullopt, std::nullopt},
+                PathAnchor{Vec2d{left, top + size}, std::nullopt, std::nullopt}};
+            return contour;
+        };
+        // 1. Trim Path whose end is keyed from 10 to 90 over the range.
+        const auto trimmed = pathNode(PathValue::fromContour(square(20, 20, 90)));
+        const auto trim = add(document::kTrimPathNodeType);
+        connect(trimmed, document::kValuePortName, trim, "path");
+        const auto end = add(document::kScalarValueNodeType);
+        const auto keyed = parameter(end, document::kValueParameterRole);
+        checks.expect(
+            run<commands::SetKeyframeAtTimeForParameter>(composition, keyed, frameTime(0), 10.0) &&
+                run<commands::SetKeyframeAtTimeForParameter>(composition, keyed,
+                                                             frameTime(frameCount - 1), 90.0),
+            "the Trim Path end is keyed");
+        connect(end, document::kValuePortName, trim, "end");
+        static_cast<void>(shape(trim, "path", {0.9, 0.6, 0.2, 1.0}));
+        // 2. Boolean Paths: a curved square less a second one.
+        const auto first = pathNode(PathValue::fromContour(square(160, 40, 110)));
+        const auto second = pathNode(PathValue::fromContour(square(200, 70, 80)));
+        booleanNode = add(document::kBooleanPathsNodeType);
+        connect(first, document::kValuePortName, booleanNode, "first");
+        connect(second, document::kValuePortName, booleanNode, "second");
+        set(booleanNode, "operation", std::int64_t{1});
+        static_cast<void>(shape(booleanNode, "path", {0.3, 0.8, 0.4, 1.0}));
+        // 3. A dashed Path Stroke with a core, the core's shape through Glow.
+        PathContour line;
+        line.closed = false;
+        line.anchors = {PathAnchor{Vec2d{300, 220}, std::nullopt, Vec2d{360, 150}},
+                        PathAnchor{Vec2d{420, 220}, Vec2d{400, 260}, std::nullopt},
+                        PathAnchor{Vec2d{490, 170}, std::nullopt, std::nullopt}};
+        const auto source = pathNode(PathValue::fromContour(line));
+        const auto stroke = add(document::kPathStrokeNodeType);
+        connect(source, document::kValuePortName, stroke, "path");
+        set(stroke, "width", 12.0);
+        set(stroke, "dashLength", 18.0);
+        set(stroke, "dashGap", 6.0);
+        set(stroke, "coreWidth", 40.0);
+        static_cast<void>(shape(stroke, "path", {0.2, 0.4, 1.0, 1.0}));
+        const auto core = shape(stroke, "core", {1.5, 1.5, 1.8, 1.0});
+        const auto glow = add(document::kGlowNodeType);
+        set(glow, "threshold", 0.4);
+        set(glow, "size", 14.0);
+        connect(core, "image", glow, "input");
+        connect(glow, "image", current().graph().layerOutputs().back().nodeId, "image");
+    }
+};
+
 } // namespace
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
@@ -193,7 +347,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   << platformName.toStdString() << ")\n";
         return options.requireDevice ? 1 : 0;
     }
-    if (options.loader.empty() || (options.proofDirectory.empty() && !options.animatedMask)) {
+    if (options.loader.empty() ||
+        (options.proofDirectory.empty() && !options.animatedMask && !options.pathNodes)) {
         std::cout << "SKIP: RAM route proof needs --loader and --proof-dir\n";
         return options.requireDevice ? 1 : 0;
     }
@@ -210,7 +365,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setApplicationName(QStringLiteral("RamRouteProof"));
 
     std::string nonce;
-    if (!options.animatedMask && !routeproof::readProofNonce(options.proofDirectory, nonce)) {
+    if (!options.animatedMask && !options.pathNodes &&
+        !routeproof::readProofNonce(options.proofDirectory, nonce)) {
         std::cout << "SKIP: no fresh run nonce in " << options.proofDirectory.string() << '\n';
         return options.requireDevice ? 1 : 0;
     }
@@ -227,10 +383,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
 
     std::shared_ptr<const runtime::GpuSceneOcioContext> ocioContext;
-    if (options.animatedMask) {
+    if (options.animatedMask || options.pathNodes) {
         ocioContext = packagedOcioContext();
         if (ocioContext == nullptr || ocioContext->preparer == nullptr) {
-            std::cout << "SKIP: the animated-mask RAM run needs the packaged shader tools\n";
+            std::cout << "SKIP: the animated-mask and path-nodes RAM runs need the packaged shader "
+                         "tools\n";
             return options.requireDevice ? 1 : 0;
         }
         auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator);
@@ -240,7 +397,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
     const auto frameCount = options.sequence100    ? std::int64_t{100}
                             : options.animatedMask ? std::int64_t{24}
+                            : options.pathNodes    ? std::int64_t{6}
                                                    : kFrameCount;
+    const std::uint32_t frameWidth = options.pathNodes ? 512U : options.half ? 960U : 1920U;
+    const std::uint32_t frameHeight = options.pathNodes ? 288U : options.half ? 540U : 1080U;
     auto sequenceAsset = fixture.mediaAsset;
     if (options.sequence100) {
         sequenceAsset.kind = document::AssetKind::Sequence;
@@ -270,18 +430,26 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (!duration.has_value()) {
         return 2;
     }
-    auto newProject = document::makeNewProject("RAM Route Proof", "Main", *duration, ramFormat());
+    auto newProject =
+        document::makeNewProject("RAM Route Proof", "Main", *duration,
+                                 options.pathNodes ? ramFormat(512U, 288U) : ramFormat());
     if (options.sequence100)
         checks.expect(newProject.project.addAsset(sequenceAsset), "the sequence asset validates");
     const auto compositionId = newProject.initialCompositionId;
     document::Document document(std::move(newProject.project));
     commands::CommandStack commands(document);
     ui::CompositionSession session(document, commands, compositionId);
+    std::optional<PathNodesDocument> pathNodes;
     if (options.sequence100) {
         commands::Transaction addImage("Add RAM sequence");
         addImage.emplace<commands::AddImageLayer>(compositionId, sequenceAsset.id);
         checks.expect(commands.execute(std::move(addImage)).succeeded(),
                       "the genuine sequence layer is added");
+    } else if (options.pathNodes) {
+        pathNodes.emplace(PathNodesDocument{document, commands, compositionId, checks, {}});
+        pathNodes->build(frameCount);
+        checks.expect(session.setCurrentTime(frameTime(0)) || session.currentTime() == frameTime(0),
+                      "the path-nodes session is at frame 0");
     } else if (options.animatedMask) {
         checks.expect(session.addSolidLayer(QStringLiteral("Masked Solid"),
                                             core::Color4d{0.2, 0.4, 0.8, 1.0}),
@@ -445,6 +613,32 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
                   30s),
         "the foreground frame settled before the RAM run");
+    if (options.pathNodes) {
+        // The interactive viewer route: the foreground frame is the service's GPU-resident frame,
+        // nothing fell back to the CPU, and its pixels are the CPU oracle's.
+        const auto viewerFrame = controller.state().frame;
+        checks.expect(viewerFrame != nullptr && viewerFrame->provenance().provider ==
+                                                    runtime::PreviewDisplayProvider::GpuResident,
+                      "the path-nodes viewer frame is GPU-resident");
+        checks.expect(service.status().counters.cpuFallbacks == 0U,
+                      "the path-nodes viewer frame did not fall back to the CPU");
+        if (viewerFrame != nullptr) {
+            const auto identity = viewerFrame->desiredIdentity();
+            const auto reference = snapshotCpuReferenceAtResolution(
+                fixture, session.evaluationSnapshotForTime(identity.time), identity);
+            routeproof::FrameEvidence viewerEvidence;
+            std::string detail;
+            checks.expect(reference != nullptr &&
+                              routeproof::buildFrameEvidence(service, *viewerFrame, *reference,
+                                                             viewerEvidence, detail),
+                          "the path-nodes viewer frame matches the CPU oracle: " + detail);
+            std::cout << "PHASE path-viewer provider=GpuResident cpuFallbacks="
+                      << service.status().counters.cpuFallbacks
+                      << " nativeDispatches=" << service.status().counters.nativeDispatches
+                      << " sparseSamples=" << viewerEvidence.sparseBytes / sizeof(render::Rgba8)
+                      << '\n';
+        }
+    }
     if (options.expireBeforeAdmission) {
         frameCache->setByteBudget(ui::PreviewFrameCache::frameByteCost(*controller.state().frame));
     } else {
@@ -511,6 +705,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto afterCold = service.status().counters;
     const auto afterColdPreparer = preparerCounters();
     const auto coldDispatches = afterCold.nativeDispatches - beforeCold.nativeDispatches;
+    if (options.pathNodes) {
+        checks.expect(afterCold.cpuFallbacks == beforeCold.cpuFallbacks,
+                      "every path-nodes frame rendered on the GPU (no CPU fallback)");
+        checks.expect(coldDispatches > 0, "the cold path-nodes fill dispatched native work");
+        std::cout << "PHASE path-cold frames=" << ram.cachedFrameCount()
+                  << " coldDispatches=" << coldDispatches
+                  << " graphJobs=" << (afterCold.residentGraphJobs - beforeCold.residentGraphJobs)
+                  << " cpuFallbacks=" << (afterCold.cpuFallbacks - beforeCold.cpuFallbacks) << '\n';
+    }
     if (options.animatedMask) {
         checks.expect(afterCold.cpuFallbacks == beforeCold.cpuFallbacks,
                       "every animated-mask frame rendered on the GPU (no CPU fallback)");
@@ -591,8 +794,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         }
         checks.expect(frame->isDisplayValid(), "the resident RAM lease is live");
         const auto& lease = frame->residentFrame()->lease();
-        const auto width = options.half ? 960U : 1920U;
-        const auto height = options.half ? 540U : 1080U;
+        const auto width = frameWidth;
+        const auto height = frameHeight;
         checks.expect(lease.width() == width && lease.height() == height,
                       "the native retained image has the actual Full/Half dimensions");
         checks.expect(lease.allocationBytes() >= static_cast<std::uint64_t>(width) * height * 4U,
@@ -731,6 +934,56 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                       afterPresentation.nativeDispatches == beforeWarm.nativeDispatches &&
                       afterPresentation.fullFrameReadbacks == beforeWarm.fullFrameReadbacks,
                   "forward/reverse warm presentation performs zero evaluation or pixel dispatch");
+    if (options.pathNodes) {
+        std::cout << "PHASE path-warm cached=" << ram.cachedFrameCount() << " warmDispatches="
+                  << (afterWarm.nativeDispatches - beforeWarm.nativeDispatches) << " warmGraphJobs="
+                  << (afterWarm.residentGraphJobs - beforeWarm.residentGraphJobs)
+                  << " replayed=" << replayed << '\n';
+        // An operand edit (Boolean Paths: Subtract to Intersect) changes every frame: the next
+        // fill re-renders each on the GPU, and each matches the edited document's CPU oracle.
+        pathNodes->set(pathNodes->booleanNode, "operation", std::int64_t{2});
+        checks.expect(
+            waitUntil([&] { return controller.state().activity != ui::PreviewActivity::Rendering; },
+                      30s),
+            "the viewer settled after the operand edit");
+        const auto beforeEdit = service.status().counters;
+        ram.start();
+        const bool editComplete = waitUntil([&] { return !ram.isCaching(); }, 120s);
+        const auto afterEdit = service.status().counters;
+        checks.expect(editComplete &&
+                          ram.cachedFrameCount() == static_cast<std::uint64_t>(frameCount),
+                      "the edited range refills");
+        checks.expect(afterEdit.nativeDispatches > beforeEdit.nativeDispatches &&
+                          afterEdit.cpuFallbacks == beforeEdit.cpuFallbacks,
+                      "the edit re-renders the range on the GPU, not from the stale cache");
+        std::size_t editedMatches = 0;
+        for (const auto retainedIndex : ram.retainedFrameIndices()) {
+            const auto index = static_cast<std::int64_t>(retainedIndex);
+            const auto key = controller.cacheKeyForTime(frameTime(index));
+            if (!key.has_value())
+                continue;
+            const auto identity = identityForIndex(index, *key);
+            const auto frame = frameCache->take(identity);
+            if (frame == nullptr ||
+                frame->provenance().provider != runtime::PreviewDisplayProvider::GpuResident)
+                continue;
+            const auto reference = snapshotCpuReferenceAtResolution(
+                fixture, session.evaluationSnapshotForTime(key->time), identity);
+            routeproof::FrameEvidence editedEvidence;
+            std::string detail;
+            const bool matched =
+                reference != nullptr &&
+                routeproof::buildFrameEvidence(service, *frame, *reference, editedEvidence, detail);
+            checks.expect(matched,
+                          "an edited path-nodes frame matches the edited CPU oracle: " + detail);
+            editedMatches += matched ? 1U : 0U;
+        }
+        checks.expect(editedMatches == static_cast<std::size_t>(frameCount),
+                      "every edited frame was verified against the CPU oracle");
+        std::cout << "PHASE path-edit frames=" << editedMatches
+                  << " dispatches=" << (afterEdit.nativeDispatches - beforeEdit.nativeDispatches)
+                  << " cpuFallbacks=" << (afterEdit.cpuFallbacks - beforeEdit.cpuFallbacks) << '\n';
+    }
     std::cout << "PHASE ram-warm cached=" << ram.cachedFrameCount()
               << " warmDispatches=" << (afterWarm.nativeDispatches - beforeWarm.nativeDispatches)
               << " replayed=" << replayed
@@ -768,6 +1021,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::cerr << "RAM route proof: " << checks.failures()
                   << " verification failure(s); no proof written\n";
         return 1;
+    }
+    if (options.pathNodes) {
+        std::cout << "PASS: path-nodes viewer and RAM preview on the GPU (frames=" << frames.size()
+                  << ", coldDispatches=" << coldDispatches << ")\n";
+        return 0;
     }
     if (options.animatedMask) {
         std::cout << "PASS: animated-mask RAM preview (frames=" << frames.size()
