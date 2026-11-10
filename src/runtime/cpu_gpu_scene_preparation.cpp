@@ -1259,9 +1259,41 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
 
         if (const auto* stack = std::get_if<CompiledMerge>(&operation)) {
+            // A vector leaf entry is rasterized at its own window with its chain matrix, as an
+            // image effect over the same leaf materializes it, and is counted as consumed.
+            const auto materialize =
+                [&](const std::size_t entryIndex, const render::ImageWindow window,
+                    GpuSceneCommandIndex& command, std::string& key,
+                    bool& materialized) -> std::optional<detail::GpuSceneLeafFailure> {
+                const auto& chain = vectors[entryIndex];
+                if (!chain.has_value()) {
+                    return std::nullopt;
+                }
+                if (chain->source >= operationCount) {
+                    return detail::GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                                       "A merge entry's vector chain is invalid"};
+                }
+                bool consumedText = false;
+                bool consumedShape = false;
+                if (const auto error = detail::emitVectorLeafLayer(
+                        plan->operations()[chain->source], *plan,
+                        detail::resolvedForClock(
+                            frameResolved,
+                            plan->operationClock(OperationIndex::fromRaw(chain->source))),
+                        chain->matrix, window, fullDisplayWindow, fullPixelAspect, hScale, vScale,
+                        chain->opacity, false, allowance, operationIndex, coverageCache_,
+                        cancellation, emit, chargeTransient, chargeCoverage, command, key,
+                        consumedText, consumedShape, true)) {
+                    return error;
+                }
+                textConsumed[chain->source] = textConsumed[chain->source] || consumedText;
+                shapeConsumed[chain->source] = shapeConsumed[chain->source] || consumedShape;
+                materialized = true;
+                return std::nullopt;
+            };
             if (const auto error = detail::emitMergeCommand(
                     *stack, *plan, resolved, index, bounds, outputWindowOf, commandForOperation,
-                    keyOf, operationIndex, emit, chargeTransient)) {
+                    keyOf, operationIndex, emit, chargeTransient, materialize)) {
                 return fail(error->code, error->message);
             }
             continue;

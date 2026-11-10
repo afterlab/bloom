@@ -212,7 +212,13 @@ that producer's device provenance and dispatch counters, so the Required
 layer whose composed matrix is an identity linear map on the integer device grid keeps the CPU
 reference's leaf form: the glyph coverage over its own bitmap window, then one translation by the
 composed matrix's translation, parents included, so a parented text layer moves exactly as its
-CPU reference does. A Composition Source publishes its nested frame as its bounds, as the CPU
+CPU reference does. A Shape, Text or Solid source read as an image rather than through a Layer (an
+image effect's input, or an entry of a Merge such as Glow's or Drop Shadow's) is materialized as
+the CPU reference's leaf image: a shape is rasterized by `PathRaster::create` at the proxy scales
+(the layer arm's `PathRaster::transformed` flattens curves at a tolerance that follows its matrix,
+so it is not the leaf's raster), text by its leaf coverage form, each over the leaf's own window.
+An image effect publishes its data window as its content bounds, as the CPU reference does (only
+Transform 2D keeps its input's). A Composition Source publishes its nested frame as its bounds, as the CPU
 evaluator does ([Layer And Graph Model](layer-graph-model.md#composition-sources)). Command
 semantic keys carry the resolved operands plus the pinned render SPIR-V digests and never node/layer
 IDs, operation indexes, or the revision. `ImageSource`/`VideoSource` leaves decode raw on the CPU

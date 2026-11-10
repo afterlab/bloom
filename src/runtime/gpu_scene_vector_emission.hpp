@@ -151,23 +151,24 @@ publishVectorLeafBounds(const CompiledOperation& operation, const CompiledCompos
 }
 
 template <typename Emit, typename Charge, typename ChargeCoverage>
-[[nodiscard]] std::optional<GpuSceneLeafFailure>
-emitVectorLeafLayer(const CompiledOperation& inputOperation, const CompiledCompositionPlan& plan,
-                    const ResolvedEvaluation& resolved, const LayerMatrix& matrix,
-                    const render::ImageWindow layerWindow,
-                    const render::ImageWindow fullDisplayWindow,
-                    const core::PixelAspectRatio fullPixelAspect, const double hScale,
-                    const double vScale, const double opacity, const bool nativeGrid,
-                    const std::uint64_t allowance, const OperationIndex operationIndex,
-                    const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
-                    const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
-                    ChargeCoverage&& chargeCoverage, GpuSceneCommandIndex& composed,
-                    std::string& semanticKey, bool& consumedText, bool& consumedShape) {
+[[nodiscard]] std::optional<GpuSceneLeafFailure> emitVectorLeafLayer(
+    const CompiledOperation& inputOperation, const CompiledCompositionPlan& plan,
+    const ResolvedEvaluation& resolved, const LayerMatrix& matrix,
+    const render::ImageWindow layerWindow, const render::ImageWindow fullDisplayWindow,
+    const core::PixelAspectRatio fullPixelAspect, const double hScale, const double vScale,
+    const double opacity, const bool nativeGrid, const std::uint64_t allowance,
+    const OperationIndex operationIndex,
+    const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
+    const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
+    ChargeCoverage&& chargeCoverage, GpuSceneCommandIndex& composed, std::string& semanticKey,
+    bool& consumedText, bool& consumedShape, const bool leafImage = false) {
     const auto* solidInput = std::get_if<CompiledSolid>(&inputOperation);
     const auto* textInput = std::get_if<CompiledText>(&inputOperation);
     const auto* shapeInput = std::get_if<CompiledShape>(&inputOperation);
 
-    if (textInput != nullptr && nativeGrid) {
+    // A text leaf read as an image (by an image effect or a Merge) is the CPU leaf's own coverage
+    // image too: the identity matrix lands it in place, exactly as the integer-grid arm does.
+    if (textInput != nullptr && (nativeGrid || leafImage)) {
         // The integer-grid CPU arm renders the text leaf's own proxy-scaled coverage image and
         // translates it by an exact integer. Build that leaf coverage over its own bitmap window,
         // then the identity TranslationOpacityBilinearV1 command performs the exact integer move
@@ -254,7 +255,7 @@ emitVectorLeafLayer(const CompiledOperation& inputOperation, const CompiledCompo
                 buildShapeCoverage(*shapeInput, plan, resolved, matrix, layerWindow,
                                    fullDisplayWindow, fullPixelAspect, hScale, vScale, opacity,
                                    coverageCache, charge, cancellation, shapeCoverage,
-                                   nativeGrid)) {
+                                   nativeGrid || leafImage)) {
             return error;
         }
         std::string composedKey;
@@ -367,15 +368,21 @@ emitVectorLeafLayer(const CompiledOperation& inputOperation, const CompiledCompo
 }
 
 // Builds the Normal SourceOver merge command for a merged stack of already-emitted foreground
-// commands, folding entries bottom-to-top and charging the merge output.
-template <typename WindowVector, typename BoundsVector, typename Emit, typename Charge>
+// commands, folding entries bottom-to-top and charging the merge output. An entry whose input is a
+// deferred vector leaf (a Shape, Text or Solid source wired straight into the stack, or through an
+// identity effect, as a compositing recipe's Merge takes its input) has no command of its own:
+// `materialize` rasterizes it at its own window through the accepted coverage commands, exactly
+// as an image effect over the same leaf does, and returns that command. Before #509 such an entry
+// was skipped, so Glow's Add Merge lost its input on the device.
+template <typename WindowVector, typename BoundsVector, typename Emit, typename Charge,
+          typename Materialize>
 [[nodiscard]] inline std::optional<GpuSceneLeafFailure>
 emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan,
                  const ResolvedEvaluation& resolved, const std::size_t index, BoundsVector& bounds,
                  WindowVector& outputWindowOf,
                  std::vector<GpuSceneCommandIndex>& commandForOperation,
                  std::vector<std::string>& keyOf, const OperationIndex operationIndex, Emit&& emit,
-                 Charge&& charge) {
+                 Charge&& charge, Materialize&& materialize) {
     ContentBounds storage;
     for (const auto& entry : stack.entries) {
         bounds[index].local =
@@ -435,13 +442,26 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
             }
             mode = *blend;
         }
-        const auto inner = commandForOperation[entry->input.value()];
+        auto inner = commandForOperation[entry->input.value()];
+        std::string innerKey = keyOf[entry->input.value()];
+        const auto& entryWindow = outputWindowOf[entry->input.value()];
         if (inner == kInvalidGpuSceneCommand) {
-            continue;
+            // An entry without a window publishes no image (an empty or inactive input), exactly as
+            // the CPU fold skips an absent image.
+            if (!entryWindow) {
+                continue;
+            }
+            bool materialized = false;
+            if (const auto error = materialize(entry->input.value(), *entryWindow, inner, innerKey,
+                                               materialized)) {
+                return error;
+            }
+            if (!materialized || inner == kInvalidGpuSceneCommand) {
+                continue;
+            }
         }
         allNormal = allNormal && mode == core::BlendMode::Normal;
-        const auto& entryWindow = outputWindowOf[entry->input.value()];
-        ordered.push_back(OrderedForeground{inner, keyOf[entry->input.value()],
+        ordered.push_back(OrderedForeground{inner, std::move(innerKey),
                                             entryWindow.value_or(descriptor.dataWindow()), mode});
     }
 

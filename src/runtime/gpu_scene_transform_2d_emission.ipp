@@ -59,7 +59,8 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
                 plan.operations()[chain->source], plan, leafResolved, chain->matrix, *inputWindow,
                 ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale, chain->opacity,
                 false, ctx.allowance, operation, ctx.coverageCache, cancellation, emit, charge,
-                chargeCoverage, inputCommand, inputKey, result.consumedText, result.consumedShape))
+                chargeCoverage, inputCommand, inputKey, result.consumedText, result.consumedShape,
+                true))
             return error;
         result.consumedLeaf = chain->source;
     }

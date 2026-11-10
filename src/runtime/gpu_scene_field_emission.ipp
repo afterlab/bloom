@@ -37,7 +37,7 @@ residentFieldInput(const std::size_t value, const OperationIndex operation,
             ctx.plan->operations()[chain->source], *ctx.plan, leafResolved, chain->matrix, *window,
             ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale, chain->opacity,
             false, ctx.allowance, operation, ctx.coverageCache, cancellation, emit, charge,
-            chargeCoverage, command, key, consumed.text, consumed.shape))
+            chargeCoverage, command, key, consumed.text, consumed.shape, true))
         return error;
     result.consumedFieldLeaves.push_back(consumed);
     return std::nullopt;

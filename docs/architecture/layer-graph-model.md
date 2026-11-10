@@ -61,7 +61,10 @@ are listed in the Add menu under the group the [UI grammar](../ux/ui-grammar.md)
 any image producer to any image consumer, including chains before a Layer Output, Merge, or Output.
 The ordinary graph dependency validation continues to reject cycles.
 
-Effects preserve their input's content bounds, data window, display window, and pixel aspect.
+Effects preserve their input's display window and pixel aspect. An effect's content bounds are
+its output data window (a pointwise effect keeps its input's window, so they are the input's
+window, not its exact content rectangle); Transform 2D alone keeps its input's content bounds, so
+a downstream Layer keeps the authored movement. The GPU route publishes the same bounds.
 Color kernels unpremultiply RGB when alpha is positive, transform straight RGB, and multiply by
 that same alpha before publishing RGBA32F. Alpha is unchanged; zero-alpha pixels remain exact
 transparent black. Identity and bypass share the original image without a divide/multiply round

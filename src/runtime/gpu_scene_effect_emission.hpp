@@ -239,7 +239,6 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto& commandForOperation = *ctx.commandForOperation;
     const auto& keyOf = *ctx.keyOf;
     const auto& outputWindowOf = *ctx.outputWindowOf;
-    const auto& bounds = *ctx.bounds;
     const auto& commands = *ctx.commands;
 
     if (effect.input.value() >= plan.operations().size()) {
@@ -289,7 +288,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                     chain->matrix, *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
                     ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
                     ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
-                    inputKey, result.consumedText, result.consumedShape))
+                    inputKey, result.consumedText, result.consumedShape, true))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -600,7 +599,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 chain->matrix, *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect,
                 ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
                 ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command, key,
-                consumedText, consumedShape);
+                consumedText, consumedShape, true);
             if (!error)
                 consumedLeaf = chain->source;
             return error;
@@ -752,7 +751,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                     chain->matrix, sourceWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
                     ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
                     ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
-                    inputKey, result.consumedText, result.consumedShape))
+                    inputKey, result.consumedText, result.consumedShape, true))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -1116,7 +1115,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
                 chain.opacity, false, ctx.allowance, operationIndex, ctx.coverageCache,
                 cancellation, emit, charge, chargeCoverage, materialized, materializedKey,
-                result.consumedText, result.consumedShape)) {
+                result.consumedText, result.consumedShape, true)) {
             return error;
         }
         result.consumedLeaf = chain.source;
@@ -1207,12 +1206,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     result.command = currentCommand;
     result.key = std::move(currentKey);
     result.window = outputWindow;
-    // A grade can lift transparent pixels inside the data window (an alpha transfer), so its
-    // content bounds are that whole window, as on the CPU reference.
-    // A Channel Select (#479) makes every pixel of the window opaque or reads alpha from colour.
-    result.local = grows || isColorGradeKernel(effect.kernel) || selectKernel != nullptr
-                       ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale)
-                       : bounds[inputValue].output;
+    // The CPU reference publishes every image effect's data window as its content bounds (only
+    // Transform 2D follows its input), so a downstream Layer pivots on the same centre. Keeping the
+    // input's bounds here moved a Layer over, say, Exposure of a curved Shape Source by a fraction
+    // of a pixel on the device: a leaf's exact bounds and its pixel window differ.
+    result.local = boundsForWindow(outputWindow, ctx.hScale, ctx.vScale);
     result.output = result.local;
     return std::nullopt;
 }

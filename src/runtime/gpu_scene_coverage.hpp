@@ -102,6 +102,8 @@ resolveShapeLeafWindow(const CompiledShape& shape, const CompiledCompositionPlan
 // shapePath the evaluator's vector arm uses; colours are the resolved premultiplied pixels. No CPU
 // RGBA frame is materialised. `leafGrid` is the CPU reference's leaf arm: a direct shape whose
 // matrix is a whole-pixel translation, rasterized as its own leaf and moved.
+// A leaf read as an image by an image effect or a Merge (#509) takes the same leaf arm with the
+// identity matrix.
 [[nodiscard]] std::optional<GpuSceneLeafFailure>
 buildShapeCoverage(const CompiledShape& shape, const CompiledCompositionPlan& plan,
                    const ResolvedEvaluation& resolved, const LayerMatrix& matrix,
