@@ -107,6 +107,17 @@ target_compile_features(bloom_document PUBLIC cxx_std_20)
 target_link_libraries(bloom_document PUBLIC bloom_core)
 bloom_enable_warnings(bloom_document)
 
+# #343, #642: the SVG artwork builder, one description of an SVG scene as document records, written
+# into a Draft by the editable import and into a compile-time expansion by the Vector Artwork layer
+# (docs/architecture/vector-artwork.md). Its own library so only its users link the SVG reader and
+# the platform font catalogue.
+add_library(bloom_svg_artwork STATIC svg_artwork.cpp)
+target_sources(bloom_svg_artwork PUBLIC FILE_SET HEADERS BASE_DIRS include
+    FILES include/bloom/document/svg_artwork.hpp)
+target_compile_features(bloom_svg_artwork PUBLIC cxx_std_20)
+target_link_libraries(bloom_svg_artwork PUBLIC bloom_document PRIVATE bloom_media_vector bloom_platform)
+bloom_enable_warnings(bloom_svg_artwork)
+
 if(BUILD_TESTING)
     include(BloomTesting)
     add_executable(bloom_document_node_model_test tests/node_model_tests.cpp)
@@ -118,6 +129,12 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_document_font_id_test PRIVATE bloom_document)
     bloom_enable_warnings(bloom_document_font_id_test)
     bloom_add_test(NAME bloom.document.font-id COMMAND bloom_document_font_id_test LABELS unit)
+
+    add_executable(bloom_document_svg_artwork_test tests/svg_artwork_tests.cpp)
+    target_link_libraries(bloom_document_svg_artwork_test PRIVATE bloom_svg_artwork bloom_media_vector
+                                                                  bloom_platform)
+    bloom_enable_warnings(bloom_document_svg_artwork_test)
+    bloom_add_test(NAME bloom.document.svg-artwork COMMAND bloom_document_svg_artwork_test LABELS unit)
 
     add_executable(bloom_document_node_group_test tests/node_group_tests.cpp)
     target_link_libraries(bloom_document_node_group_test PRIVATE bloom_document)
