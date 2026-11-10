@@ -2,10 +2,13 @@
 
 Status: canonical
 
-Updated: 2026-11-10
+Updated: 2026-11-11
 
 Issues: [#343](https://github.com/kinetik-gg/bloom/issues/343),
-[#642](https://github.com/kinetik-gg/bloom/issues/642).
+[#642](https://github.com/kinetik-gg/bloom/issues/642),
+[#644](https://github.com/kinetik-gg/bloom/issues/644),
+[#645](https://github.com/kinetik-gg/bloom/issues/645),
+[#646](https://github.com/kinetik-gg/bloom/issues/646).
 
 An SVG file imports as native Bloom layers, not as a picture. An artist can select any element,
 move its points, key them, fill it with another colour, run Trim Path or Offset Path over it, and
@@ -69,7 +72,7 @@ no file I/O and no font enumeration. A file that cannot be prepared still makes 
 rejects with the reason when it applies (`withPreparationFailure`).
 
 **Desktop.** `AssetController::chooseSvgImportMode(count, done)` is the one call every route shares
-(File > Import, drops on Assets, Timeline and Viewer; later Add to Composition): it answers from
+(File > Import, drops on Assets, Timeline and Viewer, Add to Composition, New Composition from Selection and the node editor drop): it answers from
 **Preferences > Import > SVG files** (`ApplicationPreferences::importSvgMode`, `import/svg-mode`:
 `ask`, `layer`, `shapes`) when that is not Ask, otherwise opens `SvgImportModeDialog` over the active
 window (As one layer selected, "Remember my choice" storing the answer). It asks once per batch;
@@ -92,7 +95,6 @@ file I/O is allowed: the desktop does it on the import worker, the registry in t
 One undo restores the layer exactly. The Composition menu and the Timeline layer context menu offer
 it for a selected one-layer SVG.
 
-### Expansion
 ### Expansion
 
 `document::expandVectorArtwork(project, composition, context)` replaces every Vector Artwork node
@@ -632,3 +634,56 @@ routes, `mode` default `layer`); `AddImageLayer` and `AddImageNode` refuse an SV
 layer made from an SVG asset by an older build is reported by `svgFootageWarning` /
 `layerSvgFootageWarning` (src/document) on the card, timeline row, Properties and the MCP/Python
 queries.
+
+## Keying a whole path from its card (#644)
+
+A Path node's `value` and a gradient are whole values: one key holds every contour and anchor, or
+every stop. A card row that shows a read-only Path or Gradient value that can be animated carries a
+`KeyframeDiamond` (`readOnlyDiamonds_`, `src/ui/node_editor_items.hpp`), bound to that parameter
+and refreshed with the playhead. A click is `CompositionSession::toggleKeyframeForParameter`, the
+command Properties' Value row and the Timeline's row use, so there is one transaction and one undo
+per click. A row another node drives shows no diamond, and a Shape Source's own `path` is not
+animatable (`isPathAnimatableSchemaKey`): its outline is keyed through a Path node connected to it.
+While the value is animated the card text reads the value at the playhead ("12 anchors"). The card
+layout already reserves the diamond column, so `estimatedNodeCardSize` needed no change
+(`testEstimateBoundsEveryCard`). Tests: `bloom.ui.path-card-key` (card), `bloom.ui.viewer-drill`
+`testTimelineKeysAPathNode` (Timeline).
+
+## Drilling into groups and artwork (#645)
+
+**Level (session state).** `CompositionSession::viewerLevel()` is the chain of group layers the
+Viewer has entered (outermost first) and the optional shape whose points are edited
+(`ViewerLevel`). It is never saved and is not an undo step; it is cleared on a composition switch
+and trimmed to its valid prefix after every revision. Selecting a layer anywhere sets it to the
+layer's enclosing groups; a Viewer pick does not re-derive it. `viewerLevelChanged` drives the
+breadcrumb and the re-render.
+
+**What is a group.** `document::isDrillGroup`, `drillChildren`, `drillShape` and
+`drillLevelRefusalText` (`src/document/drill_levels.cpp`) define it from the graph: a group is a
+Merge entry whose image chain reaches a Merge, a matte source is never a child, and a shape is a
+Shape Source on a Path, or a small group of two to eight direct parts that share one Path node
+(a gradient fill, a dashed or gradient stroke), which edits that Path node. A one-layer SVG is
+neither: a double-click offers Break Apart first.
+
+**Picking.** `runtime::ViewerPicker` (`src/runtime/viewer_pick.cpp`, Qt-free) picks on the
+frame's evaluated value graph and layer bounds: a shape hits on its fill area (its fill rule) or
+within half its stroke width plus half a gizmo handle, a layer with a track matte or a path mask
+hits only where the matte or mask does, anything else hits on its bounds, and the topmost wins.
+The Viewer runs it as an Interactive task (`submitViewerPick`) with the snapshot revision and time,
+drops a stale result and cancels it when a newer click comes. It does no pixel work, so it is not a
+GPU coverage entry. A click that arrives before the changed selection's overlay is painted uses the
+displayed frame's mapping (`ViewerEditor::drillMapping`), as the double-click does.
+
+**Isolation.** Inside a group the Viewer draws every sibling off the entered chain at 30%
+(`runtime::kViewerIsolationOpacity`) of its own opacity. It is a Viewer-only input of the preview
+request (`SnapshotCompileRequest::isolation`, `CompiledLayerOutput::isolationOpacity`, applied by
+`detail::resolveLayerOpacity` on the CPU reference and the GPU scene alike), part of the plan key,
+the operation key, `PreviewRequestIdentity` and the preview frame cache key, so a frame cached
+inside a group is never shown outside it. It is 1 in every export, render and query plan.
+
+**Breadcrumb.** `kit::KBreadcrumb` in the Viewer header (`viewerBreadcrumb`), hidden at the top
+level and for a pinned Viewer.
+
+**MCP and Python.** MCP `viewer.set` takes `level` and `points`; viewer state and `query` `context`
+report them; Python has `bloom.context.level`, `bloom.context.points` and
+`bloom.viewer.set_level`. All set the one session state on the owner thread.
