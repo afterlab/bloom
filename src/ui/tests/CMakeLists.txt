@@ -2800,6 +2800,29 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Issue #597: Shape Morph and the whole Shape animation group (Line ends, Resample Path, Warp Path and
+# Shape Morph in one composition) through the Viewer, a cold and warm RAM preview at Half, and the
+# still, range and movie export routes. The CPU half always runs; the GPU half runs with a Vulkan
+# loader and a qualified device and prints NotRun otherwise (--require-device fails instead).
+add_executable(bloom_ui_viewer_export_shape_morph_test viewer_export_shape_morph_tests.cpp)
+target_link_libraries(bloom_ui_viewer_export_shape_morph_test PRIVATE bloom_ui bloom_host)
+if(TARGET bloom-media-worker)
+    add_dependencies(bloom_ui_viewer_export_shape_morph_test bloom-media-worker)
+endif()
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_export_shape_morph_test
+        PRIVATE BLOOM_UI_MORPH_ROUTES_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_export_shape_morph_test)
+endif()
+bloom_enable_warnings(bloom_ui_viewer_export_shape_morph_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_export_shape_morph
+    COMMAND bloom_ui_viewer_export_shape_morph_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Issue #598: Warp Path (a keyed Path node feeding it, feeding a Path Shape Source) through the
 # Viewer, a cold and warm RAM preview at Half, and the still, range and movie export routes. The CPU
 # half always runs; the GPU half runs with a Vulkan loader and a qualified device and prints NotRun
