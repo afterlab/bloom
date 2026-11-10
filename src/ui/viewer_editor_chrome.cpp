@@ -10,6 +10,7 @@
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/breadcrumb.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -155,6 +156,15 @@ void ViewerEditor::buildHeader() {
     bar->addWidget(objectSelector_);
     bar->setElideFloor(objectSelector_, kit::px(kit::Size::DropdownWidth));
 
+    // #645: where the Viewer is while it is inside a group, after the layer it acts on. Hidden at
+    // the top level; a click on a crumb goes back to that level.
+    breadcrumb_ = new kit::KBreadcrumb(this);
+    breadcrumb_->setObjectName(QStringLiteral("viewerBreadcrumb"));
+    breadcrumb_->setAccessibleName(tr("Viewer level"));
+    connect(breadcrumb_, &kit::KBreadcrumb::crumbActivated, this,
+            &ViewerEditor::jumpToViewerCrumb);
+    bar->addWidget(breadcrumb_);
+
     bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
     bar->addMenuButton(tr("Select"), viewerSelectMenu_, QStringLiteral("viewerSelectMenuButton"));
     bar->addMenuButton(tr("Add"), viewerAddMenu_, QStringLiteral("viewerAddMenuButton"));
@@ -177,6 +187,7 @@ void ViewerEditor::buildHeader() {
 
     rebuildCompositionSelector();
     rebuildObjectSelector();
+    rebuildBreadcrumb();
     updateCompositionActions();
 }
 
@@ -270,6 +281,55 @@ void ViewerEditor::rebuildObjectSelector() {
     }
     objectSelector_->setCurrentIndex(selectedIndex);
     objectSelector_->setMutedValue(selectedIndex == 0);
+}
+
+void ViewerEditor::rebuildBreadcrumb() {
+    if (breadcrumb_ == nullptr)
+        return;
+    const auto* composition = session_.composition();
+    const auto& level = session_.viewerLevel();
+    // A Viewer pinned to another composition is not where the level is.
+    const bool inside = composition != nullptr &&
+                        previewController_->targetCompositionId() == session_.compositionId() &&
+                        (!level.groups.empty() || level.points.has_value());
+    // The row lays itself out again when a control's suppression changes.
+    breadcrumb_->setProperty("chromeSuppressed", !inside);
+    if (!inside) {
+        breadcrumb_->setCrumbs({});
+        return;
+    }
+    std::vector<kit::KBreadcrumb::Crumb> crumbs;
+    const auto compositionName = QString::fromStdString(composition->name());
+    crumbs.push_back({compositionName, tr("Back to the top level of %1").arg(compositionName)});
+    for (const auto group : level.groups) {
+        const auto name = layerName(*composition, group);
+        crumbs.push_back({name, tr("Back to inside %1").arg(name)});
+    }
+    if (level.points) {
+        const auto name = layerName(*composition, *level.points);
+        crumbs.push_back({name, tr("Editing the points of %1").arg(name)});
+    }
+    breadcrumb_->setCrumbs(std::move(crumbs), level.points ? tr("Points") : QString());
+}
+
+void ViewerEditor::jumpToViewerCrumb(const int index) {
+    const auto level = session_.viewerLevel();
+    const auto groups = static_cast<int>(level.groups.size());
+    if (index < 0 || index > groups)
+        return;
+    // The group (or, from the points, the shape) the jump leaves is selected, as Escape does.
+    std::optional<document::LayerId> left;
+    if (index < groups)
+        left = level.groups[static_cast<std::size_t>(index)];
+    else if (level.points)
+        left = level.points;
+    else
+        return;
+    ViewerLevel next{std::vector(level.groups.begin(), level.groups.begin() + index), std::nullopt};
+    if (!session_.setViewerLevel(std::move(next)).ok())
+        return;
+    if (left)
+        session_.selectLayerFromViewer(*left);
 }
 
 void ViewerEditor::updateCompositionActions() {

@@ -16,6 +16,7 @@ add_library(bloom_ui_kit STATIC)
 target_sources(
     bloom_ui_kit
     PRIVATE
+        kit/breadcrumb.cpp
         kit/button.cpp
         kit/chart.cpp
         kit/color.cpp
@@ -69,6 +70,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/ui/kit/breadcrumb.hpp
             include/bloom/ui/kit/button.hpp
             include/bloom/ui/kit/chart.hpp
             include/bloom/ui/kit/color.hpp

@@ -377,6 +377,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
         rebuildCompositionSelector();
         rebuildObjectSelector();
+        rebuildBreadcrumb();
         updateCompositionActions();
         updateOverlayActions();
         updateEmptyState();
@@ -389,6 +390,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         rebuildCompositionSelector();
         rebuildObjectSelector();
+        rebuildBreadcrumb();
         updateCompositionActions();
         updateOverlayActions();
         updateEmptyState();
@@ -397,6 +399,11 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
         }
+    });
+    // #645: the breadcrumb and the dimmed outside follow the level.
+    connect(&session_, &CompositionSession::viewerLevelChanged, this, [this] {
+        rebuildBreadcrumb();
+        update();
     });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         rebuildObjectSelector();

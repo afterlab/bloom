@@ -49,6 +49,7 @@ class ImageExtent;
 }
 
 namespace bloom::ui::kit {
+class KBreadcrumb;
 class KButton;
 class KDropdown;
 class KIconToggle;
@@ -481,6 +482,13 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] bool breakApartDrillPendingForTest() const noexcept {
         return breakApartDrill_.has_value();
     }
+    // The header's breadcrumb of the entered groups (objectName "viewerBreadcrumb"), shown only
+    // below the top level. Crumb 0 is the composition, crumb k the k-th entered group, and while
+    // points are edited the last crumb is the shape.
+    [[nodiscard]] kit::KBreadcrumb* breadcrumbForTest() const noexcept { return breadcrumb_; }
+    // What a click on crumb `index` does: the level becomes that crumb's (the composition's top
+    // level, or inside that group), with the group or shape just left selected.
+    void jumpToViewerCrumb(int index);
 
   signals:
     void displayedStateChanged();
@@ -613,6 +621,7 @@ class ViewerEditor final : public QWidget,
     // owns the arrow keys has focus (transportKeysDeferred_).
     void applyTransportAvailability();
     void rebuildObjectSelector();
+    void rebuildBreadcrumb();
     void updateCompositionActions();
     // Select acts on anchors while a path's anchors are being edited (the Pen tool, a mask, or an
     // anchor selection), and on the composition's layers otherwise.
@@ -1162,6 +1171,7 @@ class ViewerEditor final : public QWidget,
     QWidget* headerMenuWidget_ = nullptr;
     kit::KDropdown* compositionSelector_ = nullptr;
     kit::KDropdown* objectSelector_ = nullptr;
+    kit::KBreadcrumb* breadcrumb_ = nullptr;
     QToolButton* compositionMenuButton_ = nullptr;
     QToolButton* fullscreenButton_ = nullptr;
     QMenu* viewerViewMenu_ = nullptr;

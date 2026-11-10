@@ -254,6 +254,8 @@ void ViewerEditor::refreshPreviewBinding() {
                 : std::nullopt);
     }
     rebuildCompositionSelector();
+    // #645: a Viewer pinned to another composition is not where the level is.
+    rebuildBreadcrumb();
     updatePinControl();
     updateEmptyState();
     update();
