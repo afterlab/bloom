@@ -61,7 +61,8 @@ void feedLayer(document::Project& project, const document::NodeId from,
 }
 
 [[nodiscard]] runtime::EvaluationResult evaluateField(const runtime::SnapshotCompileResult& compiled,
-                                                      const core::RationalTime time = {}) {
+                                                      const core::RationalTime time = {},
+                                                      const std::size_t byteLimit = 1U << 22U) {
     require(compiled.plan != nullptr, "the field graph compiles");
     return runtime::CpuCompositionEvaluator{}.evaluate(
         compiled.plan,
@@ -70,7 +71,7 @@ void feedLayer(document::Project& project, const document::NodeId from,
          .resolution = runtime::CompositionFormatResolution{},
          .quality = runtime::EvaluationQuality::Reference,
          .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-         .pixelStorageByteLimit = 1U << 22U},
+         .pixelStorageByteLimit = byteLimit},
         runtime::CancellationToken{});
 }
 
@@ -234,6 +235,113 @@ void testFieldChainCompilesToOneProgram(Expectations& expectations) {
                 "a looping noise moves with the clock and repeats after its loop length");
         }
     }
+}
+
+// #647 Field Noise's vector output compiles two Noise instructions (the x and the y stream) behind
+// one Combine. A vector output drives Rasterize Field to the layer: it compiles, the evaluator
+// accepts the plan (each instruction carries its own operands, so no parameter identity is shared
+// between two instructions), and it evaluates over a few frames at 512 x 384 on the looping clock.
+// The streams are decorrelated, the scalar output of the same node is unchanged, and a frame is the
+// same frame when evaluated again.
+void testFieldNoiseVectorOutput(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "field built-ins");
+    registry.freeze();
+    const auto noise = NodeId::fromRaw(61);
+    const auto rasterize = NodeId::fromRaw(62);
+    const auto build = [&](const std::string_view port) {
+        auto options = singleLayerOptions();
+        options.format = requireValue(document::CompositionFormat::create(512, 384), "field extent");
+        auto project = makeProject(options);
+        require(project.findComposition(kCompositionId)
+                    ->parameters()
+                    .setSource(kFirstPosition,
+                               document::ConstantValueSource{document::Vec2d{256.0, 192.0}}),
+                "center the layer");
+        addFieldNode(project, noise, kFieldNoiseNodeType,
+                     {{"size", Vec2d{96.0, 96.0}},
+                      {"loop", true},
+                      {"evolution", 1.0},
+                      {"loopLength", 4.0},
+                      {"seed", std::int64_t{5}}});
+        addFieldNode(project, rasterize, kFieldRasterizeNodeType);
+        connect(project, 910, noise, port, rasterize, "field");
+        feedLayer(project, rasterize, kFieldImageOutputPort);
+        return project;
+    };
+    std::vector<std::vector<render::Rgba32f>> vectorFrames;
+    std::vector<std::vector<render::Rgba32f>> scalarFrames;
+    for (const std::string_view port : {"vector", "scalar"}) {
+        auto project = build(port);
+        expectations.expect(project.validate().ok(),
+                            std::string("a Noise ") + std::string(port) + " output into Rasterize Field is valid");
+        const auto compiled = compile(std::move(project), registry);
+        expectations.expect(compiled.plan != nullptr,
+                            std::string("a Noise ") + std::string(port) + " output compiles");
+        if (!compiled.plan)
+            continue;
+        const auto* raster = fieldRaster(*compiled.plan, rasterize);
+        expectations.expect(raster != nullptr, std::string(port) + ": Rasterize Field owns the raster");
+        if (raster == nullptr)
+            continue;
+        const auto& program = std::get<runtime::FieldRasterKernel>(raster->kernel).program;
+        const auto noises = std::ranges::count_if(program.instructions, [](const auto& instruction) {
+            return instruction.op == static_cast<std::uint8_t>(core::field::FieldOp::Noise);
+        });
+        // One Noise instruction either way (the vector output holds both streams in it, choice 2),
+        // so the plan names each of the node's parameters once.
+        const auto noiseInstruction = std::ranges::find_if(program.instructions, [](const auto& i) {
+            return i.op == static_cast<std::uint8_t>(core::field::FieldOp::Noise);
+        });
+        expectations.expect(noises == 1 && program.usesTime &&
+                                noiseInstruction != program.instructions.end() &&
+                                noiseInstruction->choices.size() == 9 &&
+                                noiseInstruction->choices[8] == (port == "vector" ? 2 : 0),
+                            std::string(port) + ": the program holds one noise instruction, with "
+                                                "the streams it reads, and reads the clock");
+        for (std::int64_t frame = 0; frame < 4; ++frame) {
+            const auto evaluated =
+                evaluateField(compiled, core::RationalTime::fromInteger(frame), 1U << 24U);
+            expectations.expect(evaluated.frame() != nullptr,
+                                std::string(port) + " output evaluates at frame " +
+                                    std::to_string(frame) +
+                                    (evaluated.diagnostics().empty()
+                                         ? std::string{}
+                                         : ": " + evaluated.diagnostics().front().summary + " " +
+                                               evaluated.diagnostics().front().detail));
+            if (!evaluated.frame())
+                continue;
+            (port == "vector" ? vectorFrames : scalarFrames)
+                .emplace_back(evaluated.frame()->processImage().pixels().begin(),
+                              evaluated.frame()->processImage().pixels().end());
+            const auto again =
+                evaluateField(compiled, core::RationalTime::fromInteger(frame), 1U << 24U);
+            expectations.expect(again.frame() &&
+                                    std::ranges::equal(again.frame()->processImage().pixels(),
+                                                       evaluated.frame()->processImage().pixels()),
+                                std::string(port) + ": the same frame evaluates to the same pixels");
+        }
+    }
+    expectations.expect(vectorFrames.size() == 4 && scalarFrames.size() == 4,
+                        "a vector and a scalar output each evaluate four frames");
+    if (vectorFrames.size() != 4 || scalarFrames.size() != 4)
+        return;
+    expectations.expect(!std::ranges::equal(vectorFrames[0], vectorFrames[1]) &&
+                            !std::ranges::equal(vectorFrames[1], vectorFrames[2]) &&
+                            !std::ranges::equal(vectorFrames[2], vectorFrames[3]),
+                        "the vector output moves from frame to frame");
+    // The vector's x stream is the scalar output (stream 0) and its y stream differs from it.
+    std::size_t red = 0;
+    std::size_t differing = 0;
+    for (std::size_t i = 0; i < vectorFrames[0].size(); ++i) {
+        red += vectorFrames[1][i].red() == scalarFrames[1][i].red() ? 1U : 0U;
+        differing += vectorFrames[1][i].green() != vectorFrames[1][i].red() ? 1U : 0U;
+    }
+    expectations.expect(red == vectorFrames[1].size(),
+                        "the vector output's x stream is the scalar output, exactly");
+    expectations.expect(differing * 2 > vectorFrames[1].size(),
+                        "the vector output's y stream is decorrelated from its x stream");
 }
 
 // Field Sample: a field read at one position drives a layer's opacity.

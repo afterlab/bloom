@@ -344,7 +344,9 @@ inline Reading reference(const ProceduralWarpParameters& p, const double px, con
         const auto ny = lx / length;
         const auto sd = dx * nx + dy * ny;
         const auto distance = std::max(p.splitDistance, 0.0);
-        out.step = near(std::abs(sd), distance / 2.0) || near(sd, distance);
+        const auto gap = distance / 2.0;
+        const auto gapRight = p.asymmetric ? std::max(p.oppositeDistance, 0.0) / 2.0 : gap;
+        out.step = near(sd, gap) || near(-sd, gapRight) || near(sd, distance);
         if (p.mirror) {
             if (sd < distance) {
                 out.x = px - 2.0 * (sd - distance) * nx;
@@ -352,15 +354,14 @@ inline Reading reference(const ProceduralWarpParameters& p, const double px, con
             }
             return out;
         }
-        const auto gap = distance / 2.0;
-        if (gap > 0.0 && std::abs(sd) < gap) {
+        if (sd < gap && -sd < gapRight) {
             out.weight = 0.0;
         } else if (sd > gap) {
             out.x = px - gap * nx;
             out.y = py - gap * ny;
-        } else if (sd < -gap) {
-            out.x = px + gap * nx;
-            out.y = py + gap * ny;
+        } else if (sd < -gapRight) {
+            out.x = px + gapRight * nx;
+            out.y = py + gapRight * ny;
         }
         return out;
     }

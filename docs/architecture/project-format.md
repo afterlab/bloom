@@ -996,6 +996,15 @@ does, on the open path only. The node stays at schema 1 and the document schema 
 `monochrome` defaults to off, and the compiler already lowered an unbound role with that default, so the
 plan and every pixel are the same. [Image filters](image-filters.md#film-grain) specifies the node.
 
+#### Procedural Warp Asymmetric Split
+
+Opening a project (#510) binds the optional `bloom.procedural-warp` parameters `asymmetric` (off) and
+`oppositeDistance` (40 px) on a node that lacks them. `migrateLegacyProceduralWarpSplit` rewrites the
+decoded envelope as the Film Grain Monochrome migration does, on the open path only. The node stays at
+schema 1 and the document schema version is unchanged. With `asymmetric` off the lowering and the kernel
+operands are those of the symmetric split, so every pixel is the same, and a node that was never migrated
+(no binding) lowers the same way. [Image filters](image-filters.md) specifies the node.
+
 #### Film Grain Sensor Noise
 
 Opening a project (#565) binds the optional `bloom.film-grain` parameters `mode`, `shadowWeighting`,

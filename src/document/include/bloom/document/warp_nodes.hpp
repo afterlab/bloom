@@ -284,6 +284,12 @@ inline constexpr std::array kProceduralWarp{
     WarpParameterSpec{"splitDistance", Kind::Scalar, 40.0, 0.0, kMaximumWarpLength, {},
                       "Split Distance", 0.0, 400.0, 1.0, 1, "px"},
     WarpParameterSpec{"mirror", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Mirror"},
+    // Asymmetric Split: off, both halves open by Split Distance in all (each by half of it); on, the
+    // half to the left of the line opens by Split Distance and the half to its right by Opposite
+    // Distance. Both are optional: a node saved before them opens with Asymmetric off.
+    WarpParameterSpec{"asymmetric", Kind::Boolean, 0.0, 0.0, 1.0, {}, "Asymmetric"},
+    WarpParameterSpec{"oppositeDistance", Kind::Scalar, 40.0, 0.0, kMaximumWarpLength, {},
+                      "Opposite Distance", 0.0, 400.0, 1.0, 1, "px"},
     // Turbulent and Drizzle.
     WarpParameterSpec{"displacement", Kind::Scalar, 50.0, -kMaximumWarpLength, kMaximumWarpLength,
                       {}, "Displacement", -200.0, 200.0, 0.5, 1, "px"},

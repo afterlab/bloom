@@ -3394,10 +3394,11 @@ BFK_FN vec4 bfk_op_homography(BFK_CTX, int base, vec4 p) {
 //                    in pixels]: with s the distance along the direction from the centre and w = s
 //                    a2, a move of a3 (1 - w^2)^2 along the normal for |w| < 1, none beyond.
 //   9 Split          [a0, a1 the unit normal to the left of the line from the centre to the second
-//                    point, a2 half the split distance, a3 1 with the mirror, a4 the distance]: with
-//                    sd the distance to the line along the normal, the picture on each side is drawn
-//                    a2 away from the line (reading a2 nearer it) and the gap |sd| < a2 has the
-//                    weight 0; with the mirror the side sd < a4 reads the reflection about the line
+//                    point, a2 half the split distance, a3 1 with the mirror, a4 the distance, a5
+//                    half the distance of the right side (a2 unless asymmetric)]: with sd the
+//                    distance to the line along the normal, the picture on the left is drawn a2
+//                    away from the line and on the right a5 (reading that much nearer it) and the
+//                    gap -a5 < sd < a2 has the weight 0; with the mirror the side sd < a4 reads the reflection about the line
 //                    sd = a4.
 //   10 Turbulent     [a0 displacement, a1 pinned edges, a2, a3 half the frame, a4 1 / ease length],
 //                    then the field Noise operation's two blocks (streams 0 and 1: bipolar, in
@@ -3701,14 +3702,19 @@ BFK_FN vec4 bfk_op_procedural_warp(BFK_CTX, int base, vec4 p) {
             return same;
         }
         BFK_P float gap = h1.w;
-        if (gap > 0.0f && abs(sd) < gap)
+        BFK_P float gapRight = h2.z;
+        if (sd < gap && -sd < gapRight)
             return vec4(p.x, p.y, 0.0f, 0.0f);
-        BFK_P float mx = gap * h1.y;
-        BFK_P float my = gap * h1.z;
-        if (sd > gap)
+        if (sd > gap) {
+            BFK_P float mx = gap * h1.y;
+            BFK_P float my = gap * h1.z;
             return vec4(p.x - mx, p.y - my, 1.0f, 0.0f);
-        if (sd < -gap)
+        }
+        if (sd < -gapRight) {
+            BFK_P float mx = gapRight * h1.y;
+            BFK_P float my = gapRight * h1.z;
             return vec4(p.x + mx, p.y + my, 1.0f, 0.0f);
+        }
         return same;
     }
     if (mode == 10) {
@@ -4071,7 +4077,7 @@ BFK_FN vec4 bfk_op_ramp(BFK_CTX, int base, vec4 a) {
 
 // --- The interpreter ----------------------------------------------------------------------------------
 // Operations (bloom/core/field_program.hpp, FieldOp):
-//   0 Coordinate  1 Constant [value]  2 Noise  3 Voronoi  4 Random  5 Pattern  6 Gradient  7 Shape
+//   0 Coordinate  1 Constant [value]  2 Noise (a header flag h3.y adds a second block, stream 1: the value is (x of the first, x of the second, 0, 0))  3 Voronoi  4 Random  5 Pattern  6 Gradient  7 Shape
 //   8 Image  9 Force  10 Math (in0, in1, in2)  11 Remap  12 Transform (in0 coordinate, in1 warp)
 //   13 Swizzle  14 Combine (in0..in3 x; an absent input is the parameter's lane)  15 Offset [dx, dy]
 //   16 Derivative (in0..in3)  17 Cell Centre  18 Arrow (in0 p, in1 centre, in2 v)
@@ -4118,9 +4124,17 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
         case 1:
             v = bfk_data(BFK_CTXA, base);
             break;
-        case 2:
+        case 2: {
             v = bfk_op_noise(BFK_CTXA, base, x0.x, x0.y);
+            vec4 h3 = bfk_data(BFK_CTXA, base + 3);
+            if (h3.y != 0.0f) {
+                // The vector output: the second block (stream 1) follows the first.
+                int octaves = int(bfk_data(BFK_CTXA, base).z);
+                vec4 w = bfk_op_noise(BFK_CTXA, base + 4 + 5 * octaves, x0.x, x0.y);
+                v = vec4(v.x, w.x, 0.0f, 0.0f);
+            }
             break;
+        }
         case 3:
             v = bfk_op_voronoi(BFK_CTXA, base, x0.x, x0.y);
             break;

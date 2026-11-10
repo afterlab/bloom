@@ -536,6 +536,91 @@ void blurNodeReopen() {
     }
 }
 
+// #510: a Procedural Warp saved before Asymmetric Split has neither of its two values. It opens with
+// Asymmetric off and Opposite Distance at its default, every other binding exactly as saved, and the
+// opened document is a valid one (so it renders as the symmetric split it was).
+void proceduralWarpSavedBeforeAsymmetricSplit() {
+    auto initial = document::makeNewProject("Warp Project", "Warp Composition",
+                                            core::RationalTime::fromInteger(10));
+    document::Document owned(std::move(initial.project));
+    const auto before = owned.snapshot();
+    auto draft = owned.draft(before);
+    auto* composition = draft.project().findComposition(initial.initialCompositionId);
+    const auto node = draft.ids().allocateNode();
+    const auto* definition = document::builtInNodeDefinitions().find(document::kProceduralWarpNodeType,
+                                                                     document::kWarpNodeSchemaVersion);
+    if (!node || !definition)
+        throw std::logic_error("warp definition");
+    std::vector<document::ParameterBinding> bindings;
+    for (const auto& parameter : definition->parameters) {
+        // The node as the previous version saved it: no Asymmetric, no Opposite Distance.
+        if (parameter.role == "asymmetric" || parameter.role == "oppositeDistance") {
+            expect(!parameter.required, "Asymmetric and Opposite Distance are optional");
+            continue;
+        }
+        const auto id = draft.ids().allocateParameter();
+        if (!id)
+            throw std::logic_error("warp parameter identity");
+        auto value = parameter.defaultValue;
+        if (parameter.role == "mode")
+            value = std::int64_t{9};
+        if (parameter.role == "splitDistance")
+            value = 72.5;
+        if (!composition->parameters().insert(
+                {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
+            throw std::logic_error("warp parameter inserts");
+        bindings.push_back({parameter.role, *id});
+    }
+    if (!composition->graph().addNode({*node, std::string(document::kProceduralWarpNodeType), std::move(bindings),
+                                       document::kWarpNodeSchemaVersion}))
+        throw std::logic_error("warp node inserts");
+    expect(owned.commit(before.revision(), std::move(draft)).committed(),
+           "a Procedural Warp without the Split values publishes");
+    const auto snapshot = owned.snapshot();
+    const auto settings =
+        document::makeBloomNeutralColorSettingsV1(core::Sha256Digest::fromBytes({}));
+    auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
+                                            {}, memory());
+    expect(static_cast<bool>(archive), "an earlier Procedural Warp passes verified save");
+    if (!archive)
+        return;
+    auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
+    expect(result.outcome() == OpenArchiveOutcome::Opened, "an earlier Procedural Warp reopens");
+    if (result.outcome() != OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto reopened = opened.document->snapshot();
+    const auto* oldComposition = snapshot.project().findComposition(initial.initialCompositionId);
+    const auto* newComposition = reopened.project().findComposition(initial.initialCompositionId);
+    const auto* oldNode = oldComposition->graph().findNode(*node);
+    const auto* newNode = newComposition->graph().findNode(*node);
+    expect(oldNode && newNode, "an earlier Procedural Warp survives reopen");
+    if (!oldNode || !newNode)
+        return;
+    expect(newNode->parameters.size() == oldNode->parameters.size() + 2,
+           "opening binds the two missing values");
+    for (const auto& binding : oldNode->parameters) {
+        const auto* was = oldComposition->parameters().find(binding.parameterId);
+        const auto* is = newComposition->parameters().find(binding.parameterId);
+        expect(was && is && was->source == is->source, "a saved value is exactly as saved");
+    }
+    const auto constantOf = [&](const std::string_view role) -> const document::ParameterValue* {
+        for (const auto& binding : newNode->parameters)
+            if (binding.role == role)
+                if (const auto* parameter = newComposition->parameters().find(binding.parameterId))
+                    if (const auto* constant =
+                            std::get_if<document::ConstantValueSource>(&parameter->source))
+                        return &constant->value;
+        return nullptr;
+    };
+    const auto* asymmetric = constantOf("asymmetric");
+    const auto* opposite = constantOf("oppositeDistance");
+    expect(asymmetric && std::get_if<bool>(asymmetric) && !*std::get_if<bool>(asymmetric),
+           "Asymmetric opens off");
+    expect(opposite && std::get_if<double>(opposite) && *std::get_if<double>(opposite) == 40.0,
+           "Opposite Distance opens at its default");
+}
+
 // #361: Set Alpha and Multiply Alpha with inverted matte selectors (9 Luma Inverted, 7 Green
 // Inverted) and no matte connection save, reopen and validate with exact stored values.
 void matteNodeReopen() {
@@ -680,6 +765,7 @@ int main() {
         layoutAndReopen();
         discreteImageNodesReopen();
         blurNodeReopen();
+        proceduralWarpSavedBeforeAsymmetricSplit();
         matteNodeReopen();
         futureLayoutAttachments();
     } catch (const std::exception& error) {

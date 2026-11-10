@@ -275,7 +275,7 @@ std::optional<std::vector<float>> encodeNoise(const NoiseParameters& p) {
     push(out, typeCode, fractalCode, count, p.flow ? 1.0 : 0.0);
     push(out, p.ridgeOffset, p.ridgeGain, norm, static_cast<double>(period));
     push(out, p.contrast, p.brightness, p.invert ? 1.0 : 0.0, static_cast<double>(p.overflow));
-    push(out, p.bipolar ? 1.0 : 0.0, 0.0, 0.0, 0.0);
+    push(out, p.bipolar ? 1.0 : 0.0, p.paired ? 1.0 : 0.0, 0.0, 0.0);
 
     const auto baseAngle = -p.rotationDegrees / 360.0;
     for (int k = 0; k < count; ++k) {
@@ -364,6 +364,16 @@ std::optional<std::vector<float>> encodeNoise(const NoiseParameters& p) {
         pushWord(out, wordOfInteger(oz));
         pushWord(out, seedKey(p.seed, p.stream, static_cast<std::uint32_t>(k)));
         push(out, alpha, std::max(std::fabs(kx), std::fabs(ky)), 0.0, 0.0);
+    }
+    if (p.paired) {
+        // The vector output: the same noise on stream 1 follows.
+        auto second = p;
+        second.paired = false;
+        second.stream = 1;
+        const auto block = encodeNoise(second);
+        if (!block)
+            return std::nullopt;
+        out.insert(out.end(), block->begin(), block->end());
     }
     return checked(std::move(out));
 }
@@ -766,7 +776,7 @@ std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParam
                             p.magnification, p.feather, p.pull,    p.secondX,
                             p.secondY,     p.pulseRadius,  p.pulseSpeed,   p.bend,
                             p.horizontalDistortion, p.verticalDistortion, p.height,
-                            p.splitDistance, p.displacement, p.noiseSizeX, p.noiseSizeY,
+                            p.splitDistance, p.oppositeDistance, p.displacement, p.noiseSizeX, p.noiseSizeY,
                             p.noiseOffsetX, p.noiseOffsetY, p.complexity, p.evolution};
     for (const auto v : values)
         if (!finite(v))
@@ -883,6 +893,8 @@ std::optional<std::vector<float>> encodeProceduralWarp(const ProceduralWarpParam
             a[2] = 0.5 * distance;
             a[3] = p.mirror ? 1.0 : 0.0;
             a[4] = distance;
+            // The half to the right of the line: the same as the left unless Asymmetric.
+            a[5] = p.asymmetric ? 0.5 * std::max(p.oppositeDistance, 0.0) : a[2];
         }
         break;
     }
@@ -1276,7 +1288,9 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
         const auto octaves = at(0, 2);
         if (!(octaves >= 1.0F) || octaves > static_cast<float>(kMaxNoiseOctaves))
             return 0;
-        return 4U + 5U * static_cast<std::size_t>(octaves);
+        // The vector output: a second block of the same size follows the first.
+        const auto blocks = at(3, 1) != 0.0F ? 2U : 1U;
+        return blocks * (4U + 5U * static_cast<std::size_t>(octaves));
     }
     case FieldOp::Voronoi:
     case FieldOp::Random:

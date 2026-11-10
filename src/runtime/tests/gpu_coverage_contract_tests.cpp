@@ -1842,10 +1842,12 @@ displayProofRunner(const bool customView) {
         using bloom::core::field::FieldOp;
         addField("effect.FieldRasterKernel",
                  {fieldKernel(FieldOp::Noise, 525000, 1), fieldKernel(FieldOp::Image, 525100),
-                  fieldKernel(FieldOp::Ramp, 525200, 0, 4)},
+                  fieldKernel(FieldOp::Ramp, 525200, 0, 4),
+                  fieldKernel(FieldOp::Noise, 525250, 101), fieldKernel(FieldOp::Noise, 525260, 103)},
                  525300,
-                 "production field raster: a fractal noise, an Image field through the atlas and "
-                 "a 4-sample ramp, full frame and ROI");
+                 "production field raster: a fractal noise, the vector output of two noises (both "
+                 "streams in one instruction), an Image field through the atlas and a 4-sample "
+                 "ramp, full frame and ROI");
         addField("effect.MaskDistanceKernel",
                  {bloom::runtime::MaskDistanceKernel{3.0}, bloom::runtime::MaskDistanceKernel{0.5}},
                  526000, "production mask distance: both exact passes over the padded mask");
@@ -2092,6 +2094,13 @@ displayProofRunner(const bool customView) {
                       1},
                   bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::proceduralWarpProgram(base + 3700, 9, 0, 3, 3),
+                      1},
+                  // Asymmetric Split: the two halves open by their own distance.
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3750, 9, 0, 1, 4),
+                      1},
+                  bloom::runtime::FieldRasterKernel{
+                      bloom::field_test_programs::proceduralWarpProgram(base + 3760, 9, 1, 3, 4),
                       1},
                   bloom::runtime::FieldRasterKernel{
                       bloom::field_test_programs::proceduralWarpProgram(base + 3800, 10, 0, 1, 0),

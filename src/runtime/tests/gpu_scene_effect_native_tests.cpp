@@ -2599,6 +2599,16 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                      variant == 1 ? 4U : 1U});
             id += 100;
         }
+    // #647 Field Noise's vector output (both streams in one instruction), two noises, one at the
+    // coverage sampling.
+    for (const int variant : {101, 103}) {
+        kernels.emplace_back("noise vector output " + std::to_string(variant),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::operationProgram(
+                                     bloom::core::field::FieldOp::Noise, id, variant),
+                                 variant == 103 ? 4U : 1U});
+        id += 100;
+    }
     kernels.emplace_back("mask distance", bloom::runtime::MaskDistanceKernel{3.0});
     // #486 Lens Distortion: the programs its lowering builds, the warped image (premultiplied HDR
     // and partial alpha read through the atlas) and the ST map, each in both modes.
@@ -2736,6 +2746,14 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                      1U});
             id += 100;
         }
+        // Asymmetric Split through each filter: the two halves open by their own distance (the odd
+        // variant also has the mirror on, which ignores the second distance).
+        kernels.emplace_back("procedural warp asymmetric split filter " + std::to_string(filter),
+                             bloom::runtime::FieldRasterKernel{
+                                 bloom::field_test_programs::proceduralWarpProgram(
+                                     id, 9, filter, (filter + 1) % 4, 4 + filter % 2, 12, 10),
+                                 1U});
+        id += 100;
         // Every Warp style (the variant picks it) through each filter: four per filter, 0 to 15
         // wrapping onto the 13 styles.
         for (std::int64_t j = 0; j < 4; ++j) {

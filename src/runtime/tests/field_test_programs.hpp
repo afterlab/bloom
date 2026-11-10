@@ -225,8 +225,10 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
                                                    const int variant = 0) {
     Builder b(idBase);
     const auto c = b.add(FieldOp::Coordinate);
-    const auto noise = [&](const int at, const std::int64_t type, const std::int64_t fractal) {
-        return b.add(FieldOp::Noise, {at}, {type, fractal, 7, 0, 0, 0, 3, 0, 0},
+    // `stream` 2 is the vector output (#647): both streams in the one instruction.
+    const auto noise = [&](const int at, const std::int64_t type, const std::int64_t fractal,
+                           const std::int64_t stream = 0) {
+        return b.add(FieldOp::Noise, {at}, {type, fractal, 7, 0, 0, 0, 3, 0, stream},
                      {15.0, 4.0, 2.0, 0.5, 30.0, 1.0, 2.0, 0.25, 0.0, 1.0, 0.0},
                      {Vec2d{6.0, 5.0}, Vec2d{1.5, -2.0}, Vec2d{0.0, 0.0}});
     };
@@ -237,6 +239,10 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
         return b.finish(b.add(FieldOp::Constant, {}, {}, {1.5, -0.25, 0.5, 0.75}),
                         FieldResultKind::Color);
     case FieldOp::Noise:
+        // Variants from 100 are the vector output of variant - 100's noise.
+        if (variant >= 100)
+            return b.finish(noise(c, (variant - 100) % 6, (variant - 100) % 8, 2),
+                            FieldResultKind::Vector);
         return b.finish(noise(c, variant % 6, variant % 8), FieldResultKind::Scalar);
     case FieldOp::Voronoi:
         return b.finish(b.add(FieldOp::Voronoi, {c}, {variant % 5, variant % 3, 11, 2, 0, 0},
@@ -480,7 +486,7 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     Builder b(idBase);
     const auto c = b.add(FieldOp::Coordinate);
     const double k = static_cast<double>(width) / 16.0;
-    std::vector<std::int64_t> choices{mode, 0, 0, 0, 0, 0, width, height, 0, 0, 12, 1};
+    std::vector<std::int64_t> choices{mode, 0, 0, 0, 0, 0, width, height, 0, 0, 12, 1, 0};
     if (mode == 4) {
         choices[1] = variant % 4;
         constexpr std::array<std::int64_t, 4> pins{0, 15, 3, 12};
@@ -493,7 +499,9 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     } else if (mode == 7) {
         choices[8] = variant % 13;
     } else if (mode == 9) {
+        // The mirror on the odd variants; the variants from 4 open the two halves separately.
         choices[9] = variant % 2;
+        choices[12] = variant >= 4 ? 1 : 0;
     } else if (mode == 10) {
         constexpr std::array<std::int64_t, 4> pins{0, 15, 3, 12};
         choices[2] = pins[static_cast<std::size_t>(variant % 4)];
@@ -505,7 +513,7 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     const double amount = variant % 2 == 0 ? 65.0 : -55.0;
     // [radius, angle, falloff, amount, refraction, wavelength, amplitude, phase, speed, direction,
     // interpolation, magnification, feather, pull, pulse radius, pulse speed, bend, horizontal,
-    // vertical, height, split distance, displacement, complexity, evolution]
+    // vertical, height, split distance, displacement, complexity, evolution, opposite distance]
     const std::vector<double> scalars{
         6.0 * k, 160.0, variant % 2 == 0 ? 100.0 : 45.0, amount, 1.4 + 0.3 * static_cast<double>(variant),
         3.5 * k, 1.1 * k, 25.0, 0.0, 70.0, variant % 2 == 0 ? 100.0 : 40.0, 220.0,
@@ -516,7 +524,9 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
         variant % 2 == 0 ? 65.0 : -55.0, variant % 3 == 0 ? 0.0 : 30.0,
         variant % 3 == 0 ? 0.0 : -25.0, 9.0 * k, 2.0 * k, 2.5 * k,
         // Turbulent's complexity and evolution.
-        3.0, 0.35 * static_cast<double>(variant)};
+        3.0, 0.35 * static_cast<double>(variant),
+        // Split's opposite distance (used with the asymmetric choice, 12).
+        5.0 * k};
     std::vector<Vec2d> points{Vec2d{1.5 * k, -1.0 * k}};
     if (mode == 6)
         points.push_back(Vec2d{-3.0 * k, 2.0 * k});

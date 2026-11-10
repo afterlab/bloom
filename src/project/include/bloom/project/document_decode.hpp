@@ -489,6 +489,10 @@ void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope);
 // only.
 void migrateLegacyPathStrokeStamps(DecodedDocumentEnvelope& envelope);
 
+// #510: opening a project binds Procedural Warp's optional Asymmetric (off) and Opposite Distance
+// on a node saved before them, so a Split renders as it did. Open path only.
+void migrateLegacyProceduralWarpSplit(DecodedDocumentEnvelope& envelope);
+
 // #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
 // older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
 inline constexpr std::uint32_t kGradientColorPairsMinor = 39;

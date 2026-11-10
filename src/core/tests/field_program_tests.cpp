@@ -179,6 +179,28 @@ void testNoise(Expectations& e) {
     }
     e.expect(differs == 32, "a seed or stream gives another noise");
 
+    // #647 the vector output: one instruction holding both streams is (stream 0, stream 1, 0, 0),
+    // exactly the two noises read separately, from a valid table; a table cut short of the second
+    // block is not valid.
+    {
+        auto paired = noise(NoiseType::Perlin, NoiseFractal::Fbm);
+        paired.paired = true;
+        const auto both = single(FieldOp::Noise, *field::encodeNoise(paired), field::FieldResultKind::Vector);
+        e.expect(field::validFieldTable(both), "a paired noise is a valid table");
+        bool same = true;
+        for (int k = 0; k < 24 && same; ++k) {
+            const auto x = 17.0 * k - 90.0;
+            const auto y = 9.5 * k - 40.0;
+            const auto v = at(both, x, y);
+            same = v[0] == at(a, x, y)[0] && v[1] == at(c, x, y)[0] && v[2] == 0.0 && v[3] == 0.0;
+        }
+        e.expect(same, "a paired noise is the noise on stream 0 and the noise on stream 1, exactly");
+        auto cut = *field::encodeNoise(paired);
+        cut.resize(cut.size() / 2);
+        e.expect(!field::validFieldTable(single(FieldOp::Noise, cut, field::FieldResultKind::Vector)),
+                 "a paired noise cut short of its second block is refused");
+    }
+
     // A loop of N cycles repeats exactly: phase 0 and phase N are one table.
     for (const auto type : {NoiseType::Perlin, NoiseType::Simplex, NoiseType::Spline}) {
         auto loop = noise(type, NoiseFractal::Dynamic);

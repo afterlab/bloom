@@ -2229,6 +2229,7 @@ int main() {
         testTileMirrorCacheIdentity(expectations);
         testProceduralWarpLowering(expectations);
         testProceduralWarpPixels(expectations);
+        testProceduralWarpSavedBeforeAsymmetricSplit(expectations);
         testProceduralWarpCacheIdentity(expectations);
         testDitherCacheIdentity(expectations);
         testTrackJob(expectations);
@@ -2249,6 +2250,7 @@ int main() {
         testTestCardEveryCardPixels(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);
+        testFieldNoiseVectorOutput(expectations);
         testFieldSampleDrivesAValue(expectations);
         testFieldImageSlotsAndLimits(expectations);
         testColorizeReadsAField(expectations);

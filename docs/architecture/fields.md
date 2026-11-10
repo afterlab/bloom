@@ -204,7 +204,7 @@ cubic smoothstep on [0, 1] (1 with a falloff of 0).
 | Ripple, pulse | With a pulse radius or speed the front `f = pulseRadius + pulseSpeed x seconds` (the time resolved on the host) limits the rings: each ring's amplitude is scaled by `smooth01((f - r) / wavelength)`, so only the rings behind the front move. |
 | Warp | In frame coordinates `u = x / (w / 2)`, `v = y / (h / 2)`, the horizontal and vertical distortion are a perspective, `u1 = u / (1 + 0.5 h cv)`, `v1 = v / (1 + 0.5 vd cu)`, then the style of the 13 (Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist) offsets `(u1, v1)` to `(u2, v2)` by the bend; the move is `((u2 - u) w / 2, (v2 - v) h / 2)`, so a zero bend with no distortion is the identity. |
 | Bend | `w = (distance along the direction from the centre) / (height / 2)`; the move along the direction's normal is `bend x (1 - w^2)^2` for `|w| < 1` and 0 outside. |
-| Split | With `sd` the signed distance to the line (its normal to the left) and `gap` the split distance: a pixel with `sd > gap` reads `gap` nearer the line, one with `sd < -gap` reads it on the other side, and the gap `|sd| < gap` has the weight 0 (a Multiply by the weight swizzle in the program, transparent). With Mirror the side `sd < d` reads the reflection about the line `sd = d`, the other side being kept. |
+| Split | With `sd` the signed distance to the line (its normal to the left), `gapL = splitDistance / 2` and `gapR = oppositeDistance / 2` (`gapR = gapL` unless Asymmetric is on, so the default split is symmetric): a pixel with `sd > gapL` reads `gapL` nearer the line, one with `sd < -gapR` reads `gapR` nearer it on the other side, and the gap `-gapR < sd < gapL` has the weight 0 (a Multiply by the weight swizzle in the program, transparent). With Mirror the side `sd < d` reads the reflection about the line `sd = d`, the other side being kept, and Asymmetric is ignored. The encoder writes `gapR` in the instruction's sixth operand slot (`a5`). |
 | Turbulent | `q = p + displacement x w x (n0, n1)`, `n0, n1` the field Noise operation's streams 0 and 1 (Perlin fractal Brownian, bipolar, `complexity` octaves, `noiseSize` and `noiseOffset` in pixels, evolution in turns) and `w` the product of `smooth01(distance to each pinned edge / ease length)`, the ease length the larger noise size. |
 | Drizzle | Drop `i` of `drops` (at most 64) is placed by `pcg4d` of `(i, 0..2, 0, seed)` as unit values `u0..u2`: its centre `((2 u0 - 1) w / 2, (2 u1 - 1) h / 2)` and age `fract(phase + u2)`. Its ring is at `r = age x radius` and moves the pixels inside it outward by `amplitude (1 - age) smooth01((front - r) / wavelength) sin(-(front - r) / wavelength turns)`; the drops' moves add. |
 
@@ -256,7 +256,7 @@ from full strength at the centre to none at the radius.
 
 | Node | Outputs | Algorithm |
 | --- | --- | --- |
-| Noise | scalar, vector (two decorrelated streams), gradient, curl, image, mask | below |
+| Noise | scalar, vector (two decorrelated streams in one instruction), gradient, curl, image, mask | below |
 | Voronoi | distance, cell id, cell position, direction, edge distance, image, mask | Worley, "A Cellular Texture Basis Function", SIGGRAPH 1996: F1, F2, F2 − F1 over the 3 × 3 neighbourhood (5 × 5 for F2 with jitter above 1); exact edge distance by the two-pass method of Quilez's "Voronoi edges"; Smooth F1 by the exponential smooth minimum; Euclidean, Manhattan and Chebyshev metrics; evolution orbits each feature point and repeats at integers |
 | Random Field | scalar in [0, 1), vector, colour, image, mask | integer hash of the cell (PCG-family mixing, as `bloom.random`); evolution steps to a new pattern each integer, Smooth crossfades; Gaussian by Box–Muller over two hashes |
 | Pattern | scalar, image, mask | Stripes, Checker, Rings, Dots, Grid Lines, Hex, Wave with Sine, Triangle, Square and Saw profiles; edges filtered analytically over the softness (Quilez, "Filterable procedurals"); speed in cycles a second from exact clock time |
@@ -273,6 +273,14 @@ from full strength at the centre to none at the radius.
 | Rasterize Field | image, mask | the raster above; Inspect draws a Heatmap through the ramp, Arrows on a grid, or Streamlines |
 
 ### Noise
+
+**Vector output.** The vector output is the noise on stream 0 in x and the noise on stream 1 in y. It is
+one Noise instruction (choice 8, the stream, is 2) that holds both: its block is followed by a second
+block of the same size and stream 1, flagged by the header's `h3.y`, and its value is `(noise 0,
+noise 1, 0, 0)`. Two instructions would each name the node's parameters, and the evaluator refuses a
+plan in which two instructions share one parameter identity ("Compiled parameter identity is not
+canonical"); one instruction names each once, for keyed values and for the scalar output alike. The scalar
+output and its program are unchanged. (#647)
 
 Types: **Perlin** (Perlin, "Improving Noise", SIGGRAPH 2002: quintic fade, twelve gradients; 3D
 for evolution), **Simplex** (Gustavson, "Simplex noise demystified", 2005, in skewed lattice space),

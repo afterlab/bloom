@@ -170,6 +170,11 @@ struct NoiseParameters final {
     // A salt folded into the seed's key so two noises of one node (the vector output's second
     // component) are decorrelated.
     std::uint32_t stream = 0;
+    // The vector output (#647): the block is followed by a second block, the same noise on stream 1,
+    // and the instruction's value is (this noise, that noise, 0, 0). One instruction holds both, so
+    // each authored operand is claimed once by the plan. encodeNoise writes both blocks (this one's
+    // header flags the second) and the second block's stream is 1.
+    bool paired = false;
     double sizeX = 200.0;
     double sizeY = 200.0;
     double offsetX = 0.0;
@@ -533,7 +538,11 @@ struct ProceduralWarpParameters final {
     double height = 400.0;
     // Split: the distance the two halves are drawn apart, or with the mirror on the offset of the
     // mirror line from the split line.
+    // Asymmetric: the half to the left of the line is drawn splitDistance / 2 away and the half to
+    // its right oppositeDistance / 2; otherwise both are drawn splitDistance / 2 away.
     double splitDistance = 0.0;
+    double oppositeDistance = 0.0;
+    bool asymmetric = false;
     bool mirror = false;
     // Turbulent: the displacement in pixels at a noise value of 1 and the field Noise operation
     // that makes the value: Perlin fractal Brownian motion, bipolar and clipped to [-1, 1], two

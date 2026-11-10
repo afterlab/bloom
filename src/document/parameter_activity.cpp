@@ -183,6 +183,13 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
             return mode != kProceduralWarpBend;
         if (role == "lineStart" || role == "lineEnd" || role == "splitDistance" || role == "mirror")
             return mode != kProceduralWarpSplit;
+        // Asymmetric opens the two halves separately; the mirror has one side only.
+        if (role == "asymmetric")
+            return mode != kProceduralWarpSplit || constantOf(composition, node, "mirror").value_or(0) != 0;
+        if (role == "oppositeDistance")
+            return mode != kProceduralWarpSplit ||
+                   constantOf(composition, node, "mirror").value_or(0) != 0 ||
+                   constantOf(composition, node, "asymmetric").value_or(0) == 0;
         if (role == "displacement" || role == "complexity" || role == "evolution" ||
             role == "noiseSize" || role == "noiseOffset")
             return mode != kProceduralWarpTurbulent;

@@ -44,9 +44,9 @@
 //             frame width, frame height]; scalars [radius, angle, falloff %, amount %,
 //             refraction, wavelength, amplitude, phase, speed, direction, interpolation %,
 //             magnification %, feather, pull %, pulse radius, pulse speed, bend %, horizontal %,
-//             vertical %, height, split distance, displacement, complexity, evolution]; vectors
-//             [centre or line start, pull point or line end, noise size, noise offset], y down;
-//             choices continue [style, mirror, drops, seed]
+//             vertical %, height, split distance, displacement, complexity, evolution, opposite
+//             distance]; vectors [centre or line start, pull point or line end, noise size, noise
+//             offset], y down; choices continue [style, mirror, drops, seed, asymmetric]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
 #include "color_grade_image_effect.hpp"

@@ -219,13 +219,11 @@ int compileFieldNode(FieldBuild& build, const document::NodeRecord& node,
         };
         if (fieldChoice(node, "loop") != 0)
             build.usesTime = true;
-        if (port == "vector") {
-            const auto a = noise(0);
-            const auto b = noise(1);
-            return fieldEmit(build, FieldOp::Combine, {a, b, -1, -1}, {},
-                             {fieldConstant(0.0), fieldConstant(0.0), fieldConstant(0.0),
-                              fieldConstant(0.0)});
-        }
+        // The vector output is one instruction holding both streams (choice 2): an instruction of
+        // its own per stream would each claim the node's parameters, and a plan names every
+        // parameter identity once (#647).
+        if (port == "vector")
+            return noise(2);
         const auto n = noise(0);
         if (port == "gradient")
             return fieldSwizzle(build, n, {1, 2, 4, 4});

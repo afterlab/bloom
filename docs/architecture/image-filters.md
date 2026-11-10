@@ -3064,7 +3064,7 @@ degrees.
 | Magnify | A loupe: a circle or square in which the picture is enlarged about the centre. | Center, Shape, Radius, Magnification (200%), Grow with Magnification (Nothing, Size, Size and Feather), Feather (px, inside the edge). |
 | Warp | A frame-wide shape bent by a **Style** (Arc, Arc Lower, Arc Upper, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist): the classic warp styles, with the bend and the horizontal and vertical distortion working in the frame's normalised coordinates. | Style (Arc), Bend (50%, -100 to 100), Horizontal Distortion and Vertical Distortion (0%, -100 to 100). |
 | Bend | A smooth bump: the picture is shifted along a Direction by a (1 - w^2)^2 profile of the distance from the centre line, so it bows without a kink. | Center, Direction (90 degrees, a dial), Height (400 px, the bump's width), Bend (50%). |
-| Split | Cuts the picture along a line and moves the two halves apart by **Split Distance** (the gap between them is transparent), or with **Mirror** reflects one side of the line onto the other. | Line Start, Line End (points on the pad and the Viewer), Split Distance (40 px), Mirror (off). |
+| Split | Cuts the picture along a line and moves the two halves apart by **Split Distance** (the gap between them is transparent), or with **Mirror** reflects one side of the line onto the other. With **Asymmetric** each half opens by its own distance: the half to the left of the line (from Line Start to Line End) by Split Distance, the half to its right by **Opposite Distance**. | Line Start, Line End (points on the pad and the Viewer), Split Distance (40 px), Mirror (off), Asymmetric (off), Opposite Distance (40 px, read only with Asymmetric on and Mirror off). |
 | Turbulent | Displaces the picture by two decorrelated Perlin fractal noises (the Fields Noise operation, streams 0 and 1), moving along the noise, evolving with time. | Displacement (50 px), Noise Size (100 x 100 px), Noise Offset, Complexity (octaves, 3), Evolution (degrees), Seed (1), Pin Edges. |
 | Drizzle | Rings from up to 64 drops scattered over the frame by a seeded hash, each expanding to **Radius** and fading as it ages (rain on water). | Radius (the longest ring), Drops (12), Wavelength, Amplitude, Phase, Speed, Seed (1). |
 
@@ -3080,6 +3080,14 @@ wavelength (`smooth01((front - r) / wavelength)`); the front is `pulse radius + 
 **Warp, Bend and Split zero points.** Warp with a Bend of 0 and no distortion, Bend with a Bend of 0, Split
 with a Split Distance of 0 and Mirror off, Turbulent with a Displacement of 0 and Drizzle with an
 Amplitude of 0 read every pixel at its own position: the picture passes through exactly.
+
+**Asymmetric Split.** Each half is drawn half of its own distance away from the line, so the gap is
+`(Split Distance + Opposite Distance) / 2` wide, the left half moving `Split Distance / 2` and the right
+half `Opposite Distance / 2`. With Asymmetric off both halves use Split Distance and the picture is the
+symmetric split exactly: the encoder writes the same operands, and a project saved before Asymmetric has
+neither value, opens with them bound off and at their default (see [Project format](project-format.md)),
+and renders as it did. The mirror has one side only, so it ignores Asymmetric. A zero on both sides, with
+Asymmetric on, passes the picture through like the symmetric zero.
 
 **Turbulent keeps its noise inside the node.** The two noises are carried by the one ProceduralWarp
 instruction (two field Noise blocks after its own four vec4, `blockSize` = 4 + 2 x (4 + 5 x octaves)),

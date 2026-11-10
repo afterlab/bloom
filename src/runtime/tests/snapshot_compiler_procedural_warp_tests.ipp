@@ -79,6 +79,8 @@ proceduralWarpReading(const std::unordered_map<std::string, document::ParameterV
     p.height = number("height", 400.0);
     p.splitDistance = number("splitDistance", 40.0);
     p.mirror = values.contains("mirror") && std::get<bool>(values.at("mirror"));
+    p.asymmetric = values.contains("asymmetric") && std::get<bool>(values.at("asymmetric"));
+    p.oppositeDistance = number("oppositeDistance", 40.0);
     p.displacement = number("displacement", 50.0);
     p.seed = values.contains("seed") ? std::get<std::int64_t>(values.at("seed")) : 1;
     p.drops = values.contains("drops") ? std::get<std::int64_t>(values.at("drops")) : 12;
@@ -163,6 +165,12 @@ void testProceduralWarpLowering(Expectations& expectations) {
             "Split with the mirror",
             field_test_programs::proceduralWarpProgram(1, kProceduralWarpSplit, 0, 1, 1, 1920,
                                                        1080));
+    lowered({{"mode", kProceduralWarpSplit}, {"asymmetric", true}},
+            {FieldOp::Coordinate, FieldOp::ProceduralWarp, FieldOp::Image, FieldOp::Swizzle,
+             FieldOp::Math},
+            "Split with its halves opened separately",
+            field_test_programs::proceduralWarpProgram(1, kProceduralWarpSplit, 0, 1, 4, 1920,
+                                                       1080));
     // A mode's own choices reach the instruction: the wave, the pinned edges as a mask (Left and
     // Right is 1 | 2), the polar direction, the shape and the link.
     {
@@ -175,7 +183,7 @@ void testProceduralWarpLowering(Expectations& expectations) {
         const auto* raster = ops.size() == 1 ? lensRaster(*result.plan, ops[0]) : nullptr;
         expectations.expect(raster != nullptr &&
                                 raster->program.instructions[1].choices ==
-                                    std::vector<std::int64_t>{4, 2, 3, 0, 0, 0, 1920, 1080, 0, 0, 12, 1},
+                                    std::vector<std::int64_t>{4, 2, 3, 0, 0, 0, 1920, 1080, 0, 0, 12, 1, 0},
                             "a Wave's shape and pinned edges reach the instruction");
     }
     {
@@ -189,7 +197,7 @@ void testProceduralWarpLowering(Expectations& expectations) {
         const auto* raster = ops.size() == 1 ? lensRaster(*result.plan, ops[0]) : nullptr;
         expectations.expect(raster != nullptr &&
                                 raster->program.instructions[1].choices ==
-                                    std::vector<std::int64_t>{6, 0, 0, 0, 1, 2, 1920, 1080, 0, 0, 12, 1},
+                                    std::vector<std::int64_t>{6, 0, 0, 0, 1, 2, 1920, 1080, 0, 0, 12, 1, 0},
                             "a Magnify's shape and link reach the instruction, another mode's "
                             "choice does not");
     }
@@ -236,6 +244,15 @@ void testProceduralWarpLowering(Expectations& expectations) {
     expectations.expect(!passes({{"mode", std::int64_t{9}}, {"splitDistance", 0.0},
                                  {"mirror", true}}),
                         "a mirror with no distance is a reflection, not a pass-through");
+    expectations.expect(passes({{"mode", std::int64_t{9}}, {"splitDistance", 0.0},
+                                {"asymmetric", true}, {"oppositeDistance", 0.0}}),
+                        "an asymmetric Split of no distance on either side passes through");
+    expectations.expect(!passes({{"mode", std::int64_t{9}}, {"splitDistance", 0.0},
+                                 {"asymmetric", true}, {"oppositeDistance", 30.0}}),
+                        "an asymmetric Split with one side open does not");
+    expectations.expect(passes({{"mode", std::int64_t{9}}, {"splitDistance", 0.0},
+                                {"oppositeDistance", 30.0}}),
+                        "the opposite distance is not read while Asymmetric is off");
     expectations.expect(passes({{"mode", std::int64_t{10}}, {"displacement", 0.0}}),
                         "a Turbulent of no displacement passes through");
     expectations.expect(passes({{"mode", std::int64_t{11}}, {"amplitude", 0.0}}),
@@ -321,6 +338,11 @@ void testProceduralWarpLowering(Expectations& expectations) {
                         "a keyed split line end varies with time");
     expectations.expect(timed({{"mode", std::int64_t{9}}}, "splitDistance", false),
                         "a keyed split distance varies with time");
+    expectations.expect(timed({{"mode", std::int64_t{9}}, {"asymmetric", true}},
+                             "oppositeDistance", false),
+                        "a keyed opposite distance varies with time while Asymmetric is on");
+    expectations.expect(!timed({{"mode", std::int64_t{9}}}, "oppositeDistance", false),
+                        "a keyed opposite distance does not while Asymmetric is off");
     expectations.expect(timed({{"mode", std::int64_t{10}}}, "evolution", false, 0.0, 2.0),
                         "a keyed turbulence evolution varies with time");
     expectations.expect(timed({{"mode", std::int64_t{10}}}, "displacement", false),
@@ -339,6 +361,85 @@ void testProceduralWarpLowering(Expectations& expectations) {
                         "a keyed centre does not move a Polar conversion");
     expectations.expect(!timed({{"mode", std::int64_t{0}}}, "magnification", false),
                         "a keyed magnification does not move a Twirl");
+}
+
+// A Split saved before Asymmetric Split has neither value (they are optional). It compiles to the
+// plan, and renders the frame, of the same node with Asymmetric off, byte for byte; and equal
+// distances with Asymmetric on are the symmetric split too.
+void testProceduralWarpSavedBeforeAsymmetricSplit(Expectations& expectations) {
+    using namespace document;
+    using Values = std::unordered_map<std::string, ParameterValue>;
+    const Values split{{"mode", std::int64_t{9}}, {"splitDistance", 120.0},
+                       {"lineStart", Vec2d{-100.0, 300.0}}, {"lineEnd", Vec2d{200.0, -250.0}},
+                       {"filter", std::int64_t{1}}};
+    // The node as the earlier version saved it: the two bindings and their parameters are gone.
+    auto earlier = proceduralWarpFixture(split);
+    {
+        auto* composition = earlier.recipe.project.findComposition(kCompositionId);
+        auto* node = composition->graph().findNode(earlier.recipe.node);
+        require(node != nullptr, "the earlier Split node exists");
+        const auto before = node->parameters.size();
+        for (const char* role : {"asymmetric", "oppositeDistance"}) {
+            const auto id = earlier.recipe.parameters.at(role);
+            std::erase_if(node->parameters,
+                          [&](const ParameterBinding& binding) { return binding.parameterId == id; });
+            require(composition->parameters().erase(id), "the earlier parameter is removed");
+        }
+        require(node->parameters.size() + 2 == before, "the earlier node lacks the two bindings");
+    }
+    const auto earlierResult = compileRecipe(std::move(earlier.recipe.project));
+    expectations.expect(earlierResult.plan != nullptr,
+                        "a Split saved before Asymmetric Split compiles");
+    if (!earlierResult.plan)
+        return;
+    const auto current = proceduralWarpPlan(split);
+    constexpr std::uint32_t kW = 240;
+    constexpr std::uint32_t kH = 135;
+    const auto expectSame = [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>& a,
+                                const std::shared_ptr<const runtime::CompiledCompositionPlan>& b,
+                                const std::string& what, const std::uint32_t scale = 1) {
+        const auto first = lensEvaluate(a, kW * scale, kH * scale);
+        const auto second = lensEvaluate(b, kW * scale, kH * scale);
+        expectations.expect(first.frame() != nullptr && second.frame() != nullptr,
+                            what + " evaluates");
+        if (!first.frame() || !second.frame())
+            return;
+        std::size_t differing = 0;
+        std::size_t gap = 0;
+        for (std::uint32_t j = 0; j < kH * scale; ++j)
+            for (std::uint32_t i = 0; i < kW * scale; ++i) {
+                const auto x = lensPixel(first.frame()->processImage(), i, j);
+                const auto y = lensPixel(second.frame()->processImage(), i, j);
+                differing += x != y ? 1U : 0U;
+                gap += x[3] == 0.0F ? 1U : 0U;
+            }
+        expectations.expect(differing == 0, what + " is the same frame, bit for bit");
+        expectations.expect(gap > 0, what + ": the frame has a gap, so it is not a pass-through");
+    };
+    expectSame(earlierResult.plan, current, "a Split saved before Asymmetric Split");
+    expectSame(earlierResult.plan, current, "a Split saved before Asymmetric Split, at twice the scale", 2);
+    // Equal distances with Asymmetric on are the same split.
+    Values equal = split;
+    equal["asymmetric"] = true;
+    equal["oppositeDistance"] = 120.0;
+    expectSame(earlierResult.plan, proceduralWarpPlan(equal), "an asymmetric Split of equal distances");
+    // And the opposite distance is not read while Asymmetric is off.
+    Values ignored = split;
+    ignored["oppositeDistance"] = 7.0;
+    expectSame(earlierResult.plan, proceduralWarpPlan(ignored), "a symmetric Split with an opposite distance");
+    // Different distances are a different frame.
+    Values wider = split;
+    wider["asymmetric"] = true;
+    wider["oppositeDistance"] = 10.0;
+    const auto a = lensEvaluate(current, kW, kH);
+    const auto b = lensEvaluate(proceduralWarpPlan(wider), kW, kH);
+    bool differs = false;
+    if (a.frame() && b.frame())
+        for (std::uint32_t j = 0; j < kH && !differs; ++j)
+            for (std::uint32_t i = 0; i < kW && !differs; ++i)
+                differs = lensPixel(a.frame()->processImage(), i, j) !=
+                          lensPixel(b.frame()->processImage(), i, j);
+    expectations.expect(differs, "an asymmetric Split with other distances is another frame");
 }
 
 void testProceduralWarpPixels(Expectations& expectations) {
@@ -507,6 +608,19 @@ void testProceduralWarpPixels(Expectations& expectations) {
                                  mirror ? "a Split mirrored" : "a Split", 1, 25);
         warpDump(mirror ? "frame-procedural-warp-split-mirror" : "frame-procedural-warp-split",
                  split.frame()->processImage(), kW, kH);
+    }
+    // Asymmetric Split: each half of the line opens by its own distance (nothing at all on one side
+    // is allowed), against the reading of the documentation.
+    for (const double opposite : {0.0, 60.0, 260.0}) {
+        const auto split = check({{"mode", std::int64_t{9}}, {"asymmetric", true},
+                                  {"splitDistance", 160.0}, {"oppositeDistance", opposite},
+                                  {"lineStart", Vec2d{-100.0, 300.0}},
+                                  {"lineEnd", Vec2d{200.0, -250.0}}},
+                                 "an asymmetric Split with an opposite distance of " +
+                                     std::to_string(opposite),
+                                 1, 25);
+        if (opposite == 60.0)
+            warpDump("frame-procedural-warp-split-asymmetric", split.frame()->processImage(), kW, kH);
     }
     for (const std::int64_t drops : {1, 12, 40}) {
         const auto drizzle = check({{"mode", std::int64_t{11}}, {"drops", drops}, {"seed", std::int64_t{9}},
@@ -762,6 +876,19 @@ void testProceduralWarpCacheIdentity(Expectations& expectations) {
           {"lineEnd", Vec2d{70.0, -60.0}}},
          {{"center", Vec2d{8.0, 0.0}}, {"radius", 250.0}, {"bend", 10.0}, {"pull", 20.0},
           {"pullPoint", Vec2d{3.0, 3.0}}}},
+        // The symmetric split does not read the opposite distance; an asymmetric one does.
+        {"Split symmetric",
+         {{"mode", std::int64_t{9}}, {"splitDistance", 85.0}, {"lineStart", Vec2d{8.0, 40.0}},
+          {"lineEnd", Vec2d{70.0, -60.0}}},
+         {{"splitDistance", 30.0}, {"asymmetric", true}, {"mirror", true}},
+         {{"oppositeDistance", 12.0}}},
+        {"Split asymmetric",
+         {{"mode", std::int64_t{9}}, {"asymmetric", true}, {"splitDistance", 77.0},
+          {"oppositeDistance", 50.0}, {"lineStart", Vec2d{8.0, 40.0}},
+          {"lineEnd", Vec2d{70.0, -60.0}}},
+         {{"oppositeDistance", 20.0}, {"splitDistance", 30.0}, {"asymmetric", false},
+          {"mirror", true}},
+         {{"center", Vec2d{8.0, 0.0}}, {"radius", 250.0}, {"bend", 10.0}}},
         {"Turbulent",
          {{"mode", std::int64_t{10}}},
          {{"displacement", 20.0}, {"complexity", 5.0}, {"evolution", 0.5},

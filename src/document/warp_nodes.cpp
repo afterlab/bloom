@@ -121,6 +121,11 @@ NodeDefinition proceduralWarpDefinition() {
         ++point;
         definition.inputs.push_back({std::string(role), SocketValueKind::Vector2, false});
     }
+    // Optional, so a node saved before Asymmetric Split still validates and renders symmetric.
+    for (auto& parameter : definition.parameters)
+        if (parameter.schemaKey == warpSchemaKey(kProceduralWarpNodeType, "asymmetric") ||
+            parameter.schemaKey == warpSchemaKey(kProceduralWarpNodeType, "oppositeDistance"))
+            parameter.required = false;
     return definition;
 }
 

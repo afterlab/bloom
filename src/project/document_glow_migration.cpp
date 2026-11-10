@@ -12,6 +12,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/warp_nodes.hpp>
 
 #include <algorithm>
 #include <optional>
@@ -81,6 +82,13 @@ void migrateLegacyFilmGrainMonochrome(DecodedDocumentEnvelope& envelope) {
 void migrateLegacyPathStrokeStamps(DecodedDocumentEnvelope& envelope) {
     bindOptionalParameters(envelope, document::kPathStrokeNodeType,
                            document::kValueNodeSchemaVersion);
+}
+
+// #510: Procedural Warp's Asymmetric and Opposite Distance, off and at their default, so a Split
+// saved before them renders as it did.
+void migrateLegacyProceduralWarpSplit(DecodedDocumentEnvelope& envelope) {
+    bindOptionalParameters(envelope, document::kProceduralWarpNodeType,
+                           document::kWarpNodeSchemaVersion);
 }
 
 } // namespace bloom::project

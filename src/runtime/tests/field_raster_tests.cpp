@@ -117,6 +117,32 @@ runtime::detail::ImageEffectResult raster(const runtime::detail::PreparedColorGr
                                              {}, nullptr);
 }
 
+// #647 the vector output's one instruction holds both streams: it prepares, publishes finite pixels
+// and its two components are the two decorrelated noises.
+void testNoiseVectorOutput() {
+    for (const int variant : {100, 101, 103, 105}) {
+        const auto name = "noise vector output " + std::to_string(variant);
+        const auto program = programs::operationProgram(FieldOp::Noise, 3000, variant);
+        const auto grade = prepare(program);
+        expect(grade.has_value(), name + ": the program prepares");
+        if (!grade)
+            continue;
+        const auto result = raster(*grade);
+        expect(result.image && !result.diagnostic, name + ": the raster publishes");
+        if (!result.image)
+            continue;
+        std::size_t differing = 0;
+        bool finite = true;
+        for (const auto& pixel : result.image->pixels()) {
+            finite = finite && std::isfinite(pixel.red()) && std::isfinite(pixel.green());
+            differing += pixel.red() != pixel.green() ? 1U : 0U;
+        }
+        expect(finite, name + ": the pixels are finite");
+        expect(differing * 2 > result.image->pixels().size(),
+               name + ": the two streams are decorrelated");
+    }
+}
+
 void testEveryOperationRasters() {
     for (const auto op : core::field::kFieldOps)
         for (int variant = 0; variant < 3; ++variant) {
@@ -354,6 +380,7 @@ void testMaskDistanceMatchesBruteForce() {
 int main() {
     try {
         testEveryOperationRasters();
+        testNoiseVectorOutput();
         testRasterIsTheSampledField();
         testImageSlotReadsTheStoredTexels();
         testSamplesModesIdentityBudgetAndCancellation();

@@ -629,16 +629,17 @@ lowerProceduralWarp(const document::NodeRecord& node,
         *filter > kWarpFilterBicubic || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror)
         return fail();
     // The scalars in operand order, each the default of its row until the mode reads it.
-    constexpr std::array<std::string_view, 24> kRoles{
+    constexpr std::array<std::string_view, 25> kRoles{
         "radius",       "angle",      "falloff",   "amount",         "refraction",
         "wavelength",   "amplitude",  "phase",     "speed",          "direction",
         "interpolation", "magnification", "feather", "pull",         "pulseRadius",
         "pulseSpeed",   "bend",       "horizontalDistortion", "verticalDistortion", "height",
-        "splitDistance", "displacement", "complexity", "evolution"};
+        "splitDistance", "displacement", "complexity", "evolution", "oppositeDistance"};
     enum : std::size_t {
         kRadius, kAngle, kFalloff, kAmount, kRefraction, kWavelength, kAmplitude, kPhase, kSpeed,
         kDirection, kInterpolation, kMagnification, kFeather, kPull, kPulseRadius, kPulseSpeed,
-        kBend, kHorizontal, kVertical, kHeight, kSplitDistance, kDisplacement, kComplexity, kEvolution
+        kBend, kHorizontal, kVertical, kHeight, kSplitDistance, kDisplacement, kComplexity, kEvolution,
+        kOppositeDistance
     };
     std::vector<runtime::CompiledScalarParameter> scalars;
     for (const auto role : kRoles) {
@@ -661,7 +662,7 @@ lowerProceduralWarp(const document::NodeRecord& node,
         -> std::optional<runtime::CompiledVec2Parameter> {
         return compiledVec2Parameter(findParameterBinding(node, role));
     };
-    std::vector<std::int64_t> choices(12, 0);
+    std::vector<std::int64_t> choices(13, 0);
     choices[0] = *mode;
     const auto& format = composition_->format();
     choices[6] = static_cast<std::int64_t>(format.width());
@@ -781,7 +782,13 @@ lowerProceduralWarp(const document::NodeRecord& node,
         if (ok)
             vectors = {*start, *end};
         choices[9] = fieldChoice(node, "mirror");
-        identity = ok && choices[9] == 0 && constantIs(scalars[kSplitDistance], 0.0);
+        // Asymmetric (a node saved before it has none: symmetric) opens the right half by its own
+        // distance; the mirror has one side only.
+        choices[12] = choices[9] == 0 ? fieldChoice(node, "asymmetric") : 0;
+        if (ok && choices[12] != 0 && findParameterBinding(node, "oppositeDistance") != nullptr)
+            ok = read({kOppositeDistance});
+        identity = ok && choices[9] == 0 && constantIs(scalars[kSplitDistance], 0.0) &&
+                   (choices[12] == 0 || constantIs(scalars[kOppositeDistance], 0.0));
         break;
     }
     case kProceduralWarpTurbulent: {

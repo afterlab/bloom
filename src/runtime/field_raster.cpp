@@ -158,7 +158,10 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         p.invert = choiceAt(in, 5) != 0;
         p.overflow = enumAt<field::NoiseOverflow>(in, 6);
         p.bipolar = choiceAt(in, 7) != 0;
-        p.stream = static_cast<std::uint32_t>(choiceAt(in, 8));
+        // Stream 2 is the vector output: the noise on streams 0 and 1 in one instruction.
+        const auto stream = choiceAt(in, 8);
+        p.paired = stream == 2;
+        p.stream = p.paired ? 0U : static_cast<std::uint32_t>(stream);
         p.rotationDegrees = scalar(0);
         p.octaves = scalar(1, 6.0);
         p.lacunarity = scalar(2, 2.0);
@@ -467,6 +470,9 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         p.verticalDistortion = scalar(18) / 100.0;
         p.height = scalar(19, 400.0);
         p.splitDistance = scalar(20);
+        // Asymmetric Split: choice 12 and scalar 24, the half to the right of the line's distance.
+        p.asymmetric = choiceAt(in, 12) != 0;
+        p.oppositeDistance = scalar(24);
         p.displacement = scalar(21);
         p.secondX = vector(1).x;
         p.secondY = -vector(1).y;

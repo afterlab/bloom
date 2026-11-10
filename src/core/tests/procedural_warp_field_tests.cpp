@@ -435,6 +435,57 @@ void testSplit(Expectations& e) {
             expectMatches(e, p, std::string("Split ") + (mirror ? "mirror " : "gap ") +
                                     std::to_string(distance));
         }
+    // Asymmetric: the left half opens by its distance and the right by its own, against the
+    // independent reference (including a side that does not open at all).
+    for (const double left : {0.0, 60.0, 140.0})
+        for (const double right : {0.0, 30.0, 90.0}) {
+            auto a = base(ProceduralWarpMode::Split);
+            a.secondX = a.centreX + 120.0;
+            a.secondY = a.centreY + 280.0;
+            a.splitDistance = left;
+            a.oppositeDistance = right;
+            a.asymmetric = true;
+            expectMatches(e, a, "Asymmetric Split left " + std::to_string(left) + " right " +
+                                    std::to_string(right));
+        }
+    // The opposite distance is read only when Asymmetric is on, and equal distances are the symmetric
+    // split exactly (the encoded kernel operands are the same).
+    for (const double distance : {0.0, 40.0, 120.0}) {
+        auto sym = base(ProceduralWarpMode::Split);
+        sym.secondX = sym.centreX + 120.0;
+        sym.secondY = sym.centreY + 280.0;
+        sym.splitDistance = distance;
+        sym.oppositeDistance = 17.0;
+        auto same = sym;
+        same.asymmetric = true;
+        same.oppositeDistance = distance;
+        const auto a = encodeProceduralWarp(sym);
+        const auto b = encodeProceduralWarp(same);
+        e.expect(a && b && *a == *b, "Split: Asymmetric with equal distances encodes the symmetric split " +
+                                         std::to_string(distance));
+    }
+    {
+        auto a = base(ProceduralWarpMode::Split);
+        a.secondX = a.centreX;
+        a.secondY = a.centreY + 100.0;
+        a.splitDistance = 50.0;
+        a.oppositeDistance = 10.0;
+        a.asymmetric = true;
+        const auto table = warpTable(a);
+        if (table) {
+            // The normal of a line going up is to the left (-x): the left side is sd > 0.
+            const auto leftGap = kernelAt(*table, a.centreX - 20.0, a.centreY + 20.0);
+            const auto rightGap = kernelAt(*table, a.centreX + 4.0, a.centreY + 20.0);
+            const auto rightOut = kernelAt(*table, a.centreX + 20.0, a.centreY + 20.0);
+            const auto leftOut = kernelAt(*table, a.centreX - 40.0, a.centreY + 20.0);
+            e.expect(leftGap[2] == 0.0 && rightGap[2] == 0.0,
+                     "Asymmetric Split: the gap spans the left half distance and the right's");
+            e.expect(rightOut[2] == 1.0 && std::abs(rightOut[0] - (a.centreX + 15.0)) < 1.0e-3,
+                     "Asymmetric Split: the right half is drawn half its own distance away");
+            e.expect(leftOut[2] == 1.0 && std::abs(leftOut[0] - (a.centreX - 40.0 + 25.0)) < 1.0e-3,
+                     "Asymmetric Split: the left half is drawn half its own distance away");
+        }
+    }
     // The gap is empty, and two equal points are no line.
     auto p = base(ProceduralWarpMode::Split);
     p.secondX = p.centreX;

@@ -1371,6 +1371,8 @@ void testRecipeCommands(TestContext& test) {
     const auto warpBend = warp.outputId<ParameterId>("parameter.bend");
     const auto warpSplit = warp.outputId<ParameterId>("parameter.splitDistance");
     const auto warpMirror = warp.outputId<ParameterId>("parameter.mirror");
+    const auto warpAsymmetric = warp.outputId<ParameterId>("parameter.asymmetric");
+    const auto warpOpposite = warp.outputId<ParameterId>("parameter.oppositeDistance");
     const auto warpLineEnd = warp.outputId<ParameterId>("parameter.lineEnd");
     const auto warpPullPoint = warp.outputId<ParameterId>("parameter.pullPoint");
     const auto warpNoiseSize = warp.outputId<ParameterId>("parameter.noiseSize");
@@ -1378,13 +1380,15 @@ void testRecipeCommands(TestContext& test) {
     const auto warpDrops = warp.outputId<ParameterId>("parameter.drops");
     const auto warpPulse = warp.outputId<ParameterId>("parameter.pulseRadius");
     if (!warpStyle || !warpBend || !warpSplit || !warpMirror || !warpLineEnd || !warpPullPoint ||
-        !warpNoiseSize || !warpSeed || !warpDrops || !warpPulse)
+        !warpNoiseSize || !warpSeed || !warpDrops || !warpPulse || !warpAsymmetric || !warpOpposite)
         throw std::logic_error("Procedural Warp exposes the identities of its later modes");
     (void)exercise<SetParameterSource>(test, fixture, *warpMode, ConstantValueSource{std::int64_t{11}});
     (void)exercise<SetParameterSource>(test, fixture, *warpStyle, ConstantValueSource{std::int64_t{12}});
     (void)exercise<SetParameterSource>(test, fixture, *warpBend, ConstantValueSource{-100.0});
     (void)exercise<SetParameterSource>(test, fixture, *warpSplit, ConstantValueSource{260.0});
     (void)exercise<SetParameterSource>(test, fixture, *warpMirror, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *warpAsymmetric, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *warpOpposite, ConstantValueSource{260.0});
     (void)exercise<SetParameterSource>(test, fixture, *warpLineEnd,
                                        ConstantValueSource{Vec2d{120.0, -60.0}});
     (void)exercise<SetParameterSource>(test, fixture, *warpPullPoint,
@@ -1400,6 +1404,8 @@ void testRecipeCommands(TestContext& test) {
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpBend,
                                ConstantValueSource{100.5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpSplit,
+                               ConstantValueSource{-1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpOpposite,
                                ConstantValueSource{-1.0});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *warpNoiseSize,
                                ConstantValueSource{Vec2d{0.5, 100.0}});
