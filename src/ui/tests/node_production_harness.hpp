@@ -157,6 +157,8 @@ inline const document::DriverBindingSource* driverFor(const App& app, document::
 struct Composited final {
     bool ok = false;
     bool anyCoverage = false;
+    // The frame's total alpha: a shape that changes size changes it.
+    double alphaSum = 0.0;
     std::array<float, 4> centerPixel{};
 };
 
@@ -197,6 +199,8 @@ inline Composited composite(const App& app,
     for (const auto& pixel : image.pixels())
         if (pixel.alpha() > 0.0F)
             out.anyCoverage = true;
+    for (const auto& pixel : image.pixels())
+        out.alphaSum += static_cast<double>(pixel.alpha());
     return out;
 }
 

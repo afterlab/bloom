@@ -169,6 +169,60 @@ int capture(int argc, char** argv) {
     fixture.clearInteraction();
     session.clearSelection();
 
+    // #644: a Path node card with its keyframe diamond in the three states: constant, on a key and
+    // between keys, then a Linear Gradient card beside it.
+    if (argc > 3 && QString::fromLatin1(argv[3]) == QStringLiteral("path-key")) {
+        const auto addNode = [&](std::string_view type, document::Vec2d at) {
+            commands::Transaction add("Add Node", session.snapshot().revision());
+            add.emplace<commands::AddNode>(composition, std::string(type), at);
+            return session.executeNodeTransaction(std::move(add))
+                .outputId<document::NodeId>(commands::kAddNodeOutput);
+        };
+        const auto path = addNode(document::kPathValueNodeType, {-6000.0, 0.0});
+        const auto gradient = addNode(document::kLinearGradientNodeType, {-6000.0, 260.0});
+        if (!path || !gradient)
+            return 1;
+        document::ParameterId value;
+        for (const auto& binding : session.composition()->graph().findNode(*path)->parameters)
+            if (binding.role == document::kValueParameterRole)
+                value = binding.parameterId;
+        const auto square = [](const double half) {
+            document::PathContour contour;
+            contour.closed = true;
+            for (const auto& point : {document::Vec2d{-half, -half}, document::Vec2d{half, -half},
+                                      document::Vec2d{half, half}, document::Vec2d{-half, half}})
+                contour.anchors.push_back(
+                    {point, std::nullopt, std::nullopt, document::PathAnchorMode::Corner});
+            return document::PathValue::fromContour(contour);
+        };
+        const auto frame = [](const std::int64_t index) {
+            return *core::RationalTime::create(index, 24);
+        };
+        const auto shootCards = [&](const char* state) {
+            sizeArea(*fixture.window, *area, QSize(900, 700));
+            settle();
+            QRectF bounds;
+            for (const auto id : {*path, *gradient})
+                if (auto* card = editor->graphScene()->findNodeItem(id))
+                    bounds = bounds.isNull() ? card->sceneBoundingRect()
+                                             : bounds.united(card->sceneBoundingRect());
+            editor->graphView()->frameRect(bounds.adjusted(-60, -60, 60, 60));
+            settle(120);
+            save(area->grab().toImage(), QStringLiteral("nodes-path-key-%1").arg(state));
+        };
+        (void)session.setParameterValue(value, square(60.0), "Path");
+        (void)session.setCurrentTime(frame(0));
+        shootCards("constant");
+        (void)session.toggleKeyframeForParameter(value);
+        shootCards("on-key");
+        (void)session.setCurrentTime(frame(12));
+        (void)session.toggleKeyframeForParameter(value);
+        (void)session.setParameterValue(value, square(140.0), "Path");
+        (void)session.setCurrentTime(frame(6));
+        shootCards("between-keys");
+        return gFailures == 0 ? 0 : 1;
+    }
+
     // #589: the Path socket beside its neighbors: a Path node driving a Shape Source, with Scalar,
     // Color and String literals alongside it.
     if (argc > 3 && QString::fromLatin1(argv[3]) == QStringLiteral("path-socket")) {

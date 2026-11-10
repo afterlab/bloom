@@ -1017,6 +1017,7 @@ class NodeItem final : public QGraphicsObject {
         valueRows_.clear();
         readOnlyRows_.clear();
         readOnlyLabels_.clear();
+        readOnlyDiamonds_.clear();
         imageDimensions_ = nullptr;
         imageRange_ = nullptr;
         controlRoles_.clear();
@@ -1206,6 +1207,12 @@ class NodeItem final : public QGraphicsObject {
                 label->setMinimumWidth(0);
                 prepareField(label);
                 readOnlyLabels_.push_back(label);
+                // #644: a whole Path or Gradient value is keyable, so its read-only row carries the
+                // same diamond Properties' Value row does; the diamond hides itself for a driven
+                // or otherwise unkeyable parameter.
+                readOnlyDiamonds_.push_back(declaresWholeValue(node, role, registry)
+                                                ? makeCardDiamond(role)
+                                                : nullptr);
             }
         }
         if (imageSource_) {
@@ -1235,6 +1242,7 @@ class NodeItem final : public QGraphicsObject {
                 value->setMinimumWidth(0);
                 prepareField(value);
                 readOnlyLabels_.push_back(value);
+                readOnlyDiamonds_.push_back(nullptr);
             }
         }
         for (auto& row : valueRows_) {
@@ -1251,7 +1259,8 @@ class NodeItem final : public QGraphicsObject {
         if (colorChip_)
             wrapPropertyRow(colorRowLabel_, colorChip_, colorDiamond_);
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
-            wrapPropertyRow(readOnlyRows_[index].first, readOnlyLabels_[index], nullptr);
+            wrapPropertyRow(readOnlyRows_[index].first, readOnlyLabels_[index],
+                            readOnlyDiamonds_[index]);
         // #494: a graphically edited node draws its widget on the card; the widget says which of
         // the rows above show beside it (a linked row always does).
         cardWidget_ = nullptr;
@@ -1280,6 +1289,21 @@ class NodeItem final : public QGraphicsObject {
             std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
         return declared == definition->parameters.end() ||
                declared->schemaKey == document::kTextSizeParameterSchemaKey;
+    }
+
+    // #644: true when the registry declares `role` as a whole Path or Gradient value, the two kinds
+    // whose card row is a read-only summary that still needs its keyframe diamond.
+    [[nodiscard]] static bool declaresWholeValue(const document::NodeRecord& node,
+                                                 const std::string_view role,
+                                                 const document::NodeDefinitionRegistry& registry) {
+        const auto* definition = registry.find(node.typeId, node.schemaVersion);
+        if (definition == nullptr)
+            return false;
+        const auto declared =
+            std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+        return declared != definition->parameters.end() &&
+               (declared->valueKind == document::ParameterValueKind::Path ||
+                declared->valueKind == document::ParameterValueKind::Gradient);
     }
 
     // Builds the generic editor for `role` from the registry's declared kind, or answers false when
@@ -2089,6 +2113,22 @@ class NodeItem final : public QGraphicsObject {
                 readOnlyRows_[readOnlyIndex].first == displayTypeName(binding.role)) {
                 readOnlyRows_[readOnlyIndex].second =
                     parameter == nullptr ? QString{} : parameterText(*parameter);
+                // #644: a keyed whole value reads what it holds at the playhead, not "Animated".
+                if (parameter != nullptr && session_ != nullptr &&
+                    std::holds_alternative<document::AnimationCurveSource>(parameter->source))
+                    if (const auto live = session_->liveValue(parameter->id)) {
+                        if (const auto* path = std::get_if<document::PathValue>(&*live))
+                            readOnlyRows_[readOnlyIndex].second = tr("%1 anchors")
+                                                                      .arg(path->anchorCount());
+                        else if (const auto* gradient =
+                                     std::get_if<document::GradientValue>(&*live))
+                            readOnlyRows_[readOnlyIndex].second =
+                                tr("%1 stops").arg(gradient->stops.size());
+                    }
+                if (auto* diamond = readOnlyDiamonds_[readOnlyIndex]) {
+                    diamond->setParameterId(parameter ? parameter->id : document::ParameterId{});
+                    diamond->refresh();
+                }
                 ++readOnlyIndex;
             }
         }
@@ -2488,6 +2528,7 @@ class NodeItem final : public QGraphicsObject {
     qreal parameterRowsTop_ = kCardHeaderHeight;
     std::map<QString, qreal> parameterSocketY_;
     std::vector<kit::KLabel*> readOnlyLabels_;
+    std::vector<KeyframeDiamond*> readOnlyDiamonds_;
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;

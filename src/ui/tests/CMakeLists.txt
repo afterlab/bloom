@@ -1113,6 +1113,12 @@ target_link_libraries(bloom_node_value_animation_test PRIVATE bloom_ui bloom_run
 bloom_enable_warnings(bloom_node_value_animation_test)
 bloom_add_test(NAME bloom.ui.node-value-animation COMMAND bloom_node_value_animation_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_path_card_key_test path_card_key_tests.cpp)
+target_include_directories(bloom_path_card_key_test PRIVATE ..)
+target_link_libraries(bloom_path_card_key_test PRIVATE bloom_ui bloom_commands bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_path_card_key_test)
+bloom_add_test(NAME bloom.ui.path-card-key COMMAND bloom_path_card_key_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_delete_key_test node_delete_key_tests.cpp)
 target_include_directories(bloom_node_delete_key_test PRIVATE ..)
 target_link_libraries(bloom_node_delete_key_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)

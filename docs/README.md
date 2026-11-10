@@ -66,6 +66,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 - [The Export panel](user-guide/exporting-video.md) — the render queue, outputs, destinations and replacing files.
 - [Denoise & Smooth](user-guide/denoise.md) — Median, Bilateral, Spatial and Temporal noise reduction.
+- [Vector Artwork](user-guide/vector-artwork.md) — keying a Path node from its card, Properties and the timeline.
 - [Four-Color Gradient](user-guide/four-color-gradient.md) — a source blending four colors anchored at four points.
 - [Gaussian Blur and Transform 2D extras](user-guide/blur-and-transform.md) — separate axes, per-channel blur, skew and opacity.
 - [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
