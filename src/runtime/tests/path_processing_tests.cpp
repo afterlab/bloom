@@ -7,11 +7,12 @@
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/render/text_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
-#include "../path_resample.hpp"
-#include "../path_warp.hpp"
-#include <bloom/document/warp_path_nodes.hpp>
+
+#include "path_resample.hpp"
+#include "path_warp.hpp"
 
 #include <algorithm>
 #include <array>

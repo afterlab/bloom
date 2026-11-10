@@ -8,8 +8,8 @@
 // answer: which contour pairs with which, where a closed contour starts, which way it runs, and
 // what the morph looks like half way.
 
-#include "../path_morph.hpp"
-#include "../path_resample.hpp"
+#include "path_morph.hpp"
+#include "path_resample.hpp"
 
 #include <bloom/document/path_value.hpp>
 #include <bloom/runtime/task_scheduler.hpp>

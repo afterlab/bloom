@@ -78,6 +78,8 @@ target_link_libraries(
 target_link_libraries(bloom_runtime_value_graph_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_value_conversion_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_path_processing_test PRIVATE bloom_runtime_evaluator)
+# The shared resample and warp arithmetic is private to src/runtime (path_resample.hpp, path_warp.hpp).
+target_include_directories(bloom_runtime_path_processing_test PRIVATE ..)
 target_link_libraries(bloom_runtime_string_node_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_value_math_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_data_block_reader_test PRIVATE bloom_runtime_evaluator)
@@ -360,6 +362,7 @@ bloom_add_test(NAME bloom.runtime.path-value-migration COMMAND bloom_runtime_pat
 # #597: the alignment step any two path values morph through (pairing, subdivision, start and direction).
 add_executable(bloom_runtime_path_morph_test path_morph_tests.cpp)
 target_link_libraries(bloom_runtime_path_morph_test PRIVATE bloom_runtime_evaluator)
+target_include_directories(bloom_runtime_path_morph_test PRIVATE ..)
 bloom_enable_warnings(bloom_runtime_path_morph_test)
 bloom_enable_strict_floating_point(bloom_runtime_path_morph_test)
 bloom_add_test(NAME bloom.runtime.path_morph COMMAND bloom_runtime_path_morph_test LABELS runtime unit paths TIMEOUT 60)
