@@ -23,10 +23,12 @@
 #include "gpu_route_proof_harness_support.hpp"
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -105,6 +107,9 @@ struct Scenario final {
     Values sourceValues;
     std::string effect; // empty: the source is the node under test
     Values effectValues;
+    // #342: the effect sits inside a Node Group definition (Group Input image1 -> effect -> Group
+    // Output image1) and the source feeds the instance's image1, so the node under test is the group.
+    bool group = false;
 };
 
 [[nodiscard]] std::map<std::string, Scenario> scenarios() {
@@ -137,6 +142,9 @@ struct Scenario final {
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"colorize", true}, {"hue", 200.0}, {"saturation", 1.0}}};
+    // #342: the same Exposure the flat node would be, inside a Node Group whose scalar1 slot drives
+    // the exposure, over a gradient.
+    out["node-group"] = {"bloom.four-color-gradient", {}, "bloom.exposure", {{"amount", 0.0}}, true};
     return out;
 }
 
@@ -215,6 +223,63 @@ layerAndContent(const ui::CompositionSession& session) {
                 return {input->nodeId, edge.source.nodeId};
         }
     return {};
+}
+
+[[nodiscard]] document::ParameterId parameterIn(const ui::CompositionSession& session,
+                                                const document::CompositionId in,
+                                                const document::NodeId node,
+                                                const std::string_view role) {
+    const auto snapshot = session.snapshot();
+    const auto* composition = snapshot.project().findComposition(in);
+    const auto* record = composition != nullptr ? composition->graph().findNode(node) : nullptr;
+    if (record != nullptr)
+        for (const auto& binding : record->parameters)
+            if (binding.role == role)
+                return binding.parameterId;
+    return {};
+}
+
+// A Node Group over `source`: the effect and its driven amount inside a new definition, the source
+// into the instance's image1 and the instance into the Layer's content.
+[[nodiscard]] bool buildNodeGroup(ui::CompositionSession& session, const Scenario& scenario,
+                                  const document::NodeId source, const document::NodeId layer) {
+    const auto main = session.compositionId();
+    const auto instance = addNode(session, std::string(document::kNodeGroupNodeType));
+    if (!instance.isValid())
+        return false;
+    commands::Transaction create("Group", session.snapshot().revision());
+    create.emplace<commands::CreateGroupDefinition>(main, "Tone", instance);
+    const auto made = session.executeNodeTransaction(std::move(create));
+    const auto group = made.outputId<document::CompositionId>(commands::kCreateGroupDefinitionOutput);
+    const auto input =
+        made.outputId<document::NodeId>(commands::kCreateGroupDefinitionInputNodeOutput);
+    const auto output =
+        made.outputId<document::NodeId>(commands::kCreateGroupDefinitionOutputNodeOutput);
+    if (!group || !input || !output)
+        return false;
+    commands::Transaction add("Add", session.snapshot().revision());
+    add.emplace<commands::AddNode>(*group, scenario.effect, document::Vec2d{});
+    const auto effect = session.executeNodeTransaction(std::move(add))
+                            .outputId<document::NodeId>(commands::kAddNodeOutput);
+    if (!effect)
+        return false;
+    commands::Transaction wire("Wire", session.snapshot().revision());
+    wire.emplace<commands::ConnectPorts>(*group, document::OutputPortRef{*input, "image1"},
+                                         document::NodeInputRef{*effect, "input"});
+    wire.emplace<commands::ConnectPorts>(*group, document::OutputPortRef{*effect, "image"},
+                                         document::NodeInputRef{*output, "image1"});
+    wire.emplace<commands::SetParameterSource>(
+        *group, parameterIn(session, *group, *effect, "amount"),
+        document::DriverBindingSource{*input, "scalar1"});
+    if (!runTransaction(session, std::move(wire)))
+        return false;
+    commands::Transaction place("Wire", session.snapshot().revision());
+    place.emplace<commands::ConnectPorts>(main, document::OutputPortRef{source, "image"},
+                                          document::NodeInputRef{instance, "image1"});
+    place.emplace<commands::ConnectPorts>(main, document::OutputPortRef{instance, "image1"},
+                                          document::NodeInputRef{layer, std::string(document::kLayerOutputContentInputPort)});
+    return runTransaction(session, std::move(place)) &&
+           session.setNodeParameterValue(instance, "scalar1", 1.25, QStringLiteral("Set"));
 }
 
 [[nodiscard]] bool setValues(ui::CompositionSession& session, const document::NodeId node,
@@ -502,15 +567,21 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(source.isValid() && setValues(session, source, scenario->sourceValues),
                       "the source node is added");
         document::NodeId last = source;
-        if (!scenario->effect.empty()) {
+        if (scenario->group) {
+            checks.expect(buildNodeGroup(session, *scenario, source, layerNode),
+                          "the Node Group is built, wired and given its exposure");
+            last = {};
+        } else if (!scenario->effect.empty()) {
             const auto effect = addNode(session, scenario->effect);
             checks.expect(effect.isValid() && connect(session, source, effect, "input") &&
                               setValues(session, effect, scenario->effectValues),
                           "the effect node is added and wired");
             last = effect;
         }
-        checks.expect(connect(session, last, layerNode, std::string(document::kLayerOutputContentInputPort)),
-                      "the chain feeds the layer");
+        if (!scenario->group)
+            checks.expect(connect(session, last, layerNode,
+                                  std::string(document::kLayerOutputContentInputPort)),
+                          "the chain feeds the layer");
     }
 
     const auto composition = nodeList(*session.composition());

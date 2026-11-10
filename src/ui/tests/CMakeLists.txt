@@ -2342,7 +2342,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_strict_floating_point(bloom_ui_gpu_node_viewer_evidence_test)
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
                               denoise-temporal blur-separate blur-per-channel transform-skew hue-vibrance
-                              hue-colorize)
+                              hue-colorize node-group)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2353,7 +2353,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     endforeach()
     # #524: the node's frame as the process's first, through the application's lazily resolving
     # viewer stage (no baseline, no tools resolved beforehand).
-    foreach(scenario IN ITEMS four-color-gradient denoise-temporal)
+    foreach(scenario IN ITEMS four-color-gradient denoise-temporal node-group)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.cold-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --cold
