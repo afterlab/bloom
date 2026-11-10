@@ -298,7 +298,7 @@ with it and the morph (#597) gives two contours the same number of points with `
 The command `bloom.node.write-to-path` (node context menu "Write to a Path", MCP, Python
 `bloom.ops.node.write_to_path`, and the same operation id in a `bloom-cli run` script) reads what any Path-producing value node answers at the playhead and
 writes the points into a Path node: a new one beside the source, or an existing constant, or a whole-path
-key at that time on an animated one. A driven Path node is refused. It is one undo step, and the groups
+key at that time on an animated one. A Path node has no input socket, so its value is always a constant or keyed. It is one undo step, and the groups
 and fill rule are kept. The read runs off the UI thread and is cancellable.
 
 ## Reference library

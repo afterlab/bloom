@@ -16,6 +16,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -232,8 +233,13 @@ void PropertiesEditor::configureRegistryRows() {
             if (hasNodeCardWidget(node->typeId))
                 cardWidget_ =
                     makeNodeCardWidget(session_, node->id, node->typeId, false, section->body());
+            // #637: Resample Path draws its card widget (the share and the start offset sliders)
+            // among the rows, after the mode's own control, instead of above them.
+            const bool cardAmongRows =
+                cardWidget_ != nullptr && node->typeId == document::kResamplePathNodeType;
             if (cardWidget_ != nullptr) {
-                section->bodyLayout()->addWidget(cardWidget_);
+                if (!cardAmongRows)
+                    section->bodyLayout()->addWidget(cardWidget_);
                 connect(cardWidget_, &NodeCardWidget::rowsChanged, this,
                         &PropertiesEditor::applyCardWidgetRows);
             }
@@ -327,10 +333,32 @@ void PropertiesEditor::configureRegistryRows() {
             if (registryPanel_)
                 registryPanel_->setProperty("hasValueOutputs", hasValueOutputs);
             int textRowIndex = 3;
-            for (const auto& declared : definition->parameters) {
+            // The definition's own order, except where a node reads better in another (#637).
+            std::vector<const document::ParameterDefinition*> orderedParameters;
+            for (const auto& declared : definition->parameters)
+                orderedParameters.push_back(&declared);
+            if (cardAmongRows) {
+                constexpr std::array<std::string_view, 8> order{
+                    "path", "mode", "count", "gap", "density", "keepCorners", "startOffset", "output"};
+                const auto rank = [&](const document::ParameterDefinition* declared) {
+                    const auto found = std::ranges::find(order, declared->role);
+                    return static_cast<std::size_t>(found - order.begin());
+                };
+                std::ranges::stable_sort(orderedParameters,
+                                         [&](const auto* left, const auto* right) {
+                                             return rank(left) < rank(right);
+                                         });
+            }
+            bool cardPlaced = !cardAmongRows;
+            for (const auto* declaredPointer : orderedParameters) {
+                const auto& declared = *declaredPointer;
                 if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
                     PropertiesRowVisibility::Hidden)
                     continue;
+                if (!cardPlaced && declared.role == "keepCorners") {
+                    section->bodyLayout()->addWidget(cardWidget_);
+                    cardPlaced = true;
+                }
                 // Only these roles already have purpose-built rows. Everything else comes from
                 // the definition, including future source parameters and value-node operands.
                 const bool handcrafted =
@@ -381,6 +409,8 @@ void PropertiesEditor::configureRegistryRows() {
                 registryRows_.push_back(row);
                 connect(section, &kit::KSection::resetRequested, row, [row] { row->reset(); });
             }
+            if (!cardPlaced)
+                section->bodyLayout()->addWidget(cardWidget_);
         }
     }
     if (registryPanel_)

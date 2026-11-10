@@ -107,8 +107,7 @@ const std::string kWriteToPath =
     R"(the node's first. Keys stay whole-path: all points of a path share their key times. )"
     R"(Outputs: node (the Path node written). )"
     R"(Errors: "Node N does not exist"; "Node N has no Path output"; the node's own diagnostic when it )"
-    R"(fails at that time (a count past the Path caps, a bad operand); "Node N is not a Path node"; )"
-    R"("The Path node's value is driven by another node; disconnect it first"; bloom.scripting.cancelled. )"
+    R"(fails at that time (a count past the Path caps, a bad operand); "Node N is not a Path node"; bloom.scripting.cancelled. )"
     R"(Undo: one step removes the new node, or restores the target's value. )"
     R"(MCP example: {"op":"bloom.node.write-to-path","args":{"node":12,"time":0}}.)";
 

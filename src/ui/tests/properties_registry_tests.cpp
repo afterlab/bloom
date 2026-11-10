@@ -57,6 +57,7 @@
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/node_card_widget.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/test_card_widget.hpp>
@@ -1714,6 +1715,77 @@ void groupAndPlotRows() {
     }
 }
 
+// #637 Resample Path in Properties: the Path rows, then Mode, then the one control the mode reads,
+// then (in the card widget, among the rows) the share and the start offset sliders, then Keep corners
+// and Output. In each mode the visible rows run in that order, top to bottom.
+void resamplePathRowOrder() {
+    auto project = document::makeNewProject("Order", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.resize(900, 1500);
+    properties.show();
+    const auto node = addNode(session, document::kResamplePathNodeType);
+    session.selectNode(node);
+    QCoreApplication::processEvents();
+    const auto* record = session.composition()->graph().findNode(node);
+    const auto modeParameter = [&] {
+        for (const auto& binding : record->parameters)
+            if (binding.role == "mode")
+                return binding.parameterId;
+        return document::ParameterId{};
+    }();
+    const auto top = [&](QWidget* widget) {
+        return widget == nullptr || !widget->isVisibleTo(&properties)
+                   ? -1
+                   : widget->mapTo(&properties, QPoint(0, 0)).y();
+    };
+    struct Mode final {
+        std::int64_t stored;
+        const char* control;
+        const char* name;
+    };
+    for (const auto& mode : {Mode{0, "count", "Fixed count"}, Mode{1, "gap", "Gap"},
+                             Mode{2, "density", "By length"}, Mode{3, nullptr, "Percentage"}}) {
+        expect(session.setParameterValue(modeParameter, mode.stored, "Set"),
+               "the resample mode is set");
+        QCoreApplication::processEvents();
+        const auto path = top(row(properties, "path"));
+        const auto modeRow = top(row(properties, "mode"));
+        const auto control = mode.control == nullptr ? modeRow : top(row(properties, mode.control));
+        auto* card = properties.findChild<ui::NodeCardWidget*>();
+        const auto cardTop = top(card);
+        const auto keep = top(row(properties, "keepCorners"));
+        const auto output = top(row(properties, "output"));
+        const std::string name = mode.name;
+        expect(path >= 0 && modeRow > path, (name + ": Mode sits below the Path rows").c_str());
+        expect(control >= modeRow, (name + ": the mode's own control follows Mode").c_str());
+        expect(cardTop > control && keep > cardTop && output > keep,
+               (name + ": the sliders follow the mode's control, then Keep corners, then Output")
+                   .c_str());
+        for (const char* other : {"count", "gap", "density"}) {
+            if (mode.control != nullptr && std::string_view(other) == mode.control)
+                continue;
+            expect(top(row(properties, other)) < 0,
+                   (name + ": a control the mode does not read is not shown").c_str());
+        }
+        // With BLOOM_GRAMMAR_ARTIFACT_DIR set, the panel is written in each mode.
+        const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        if (!directory.isEmpty()) {
+            QDir().mkpath(directory);
+            const QString suffix = QGuiApplication::primaryScreen()->devicePixelRatio() == 1.0
+                                       ? QStringLiteral("dpr1")
+                                       : QStringLiteral("dpr15");
+            if (!properties.grab().save(directory + QStringLiteral("/resample-path-order-mode") +
+                                        QString::number(mode.stored) +
+                                        QStringLiteral("-properties-900-") + suffix +
+                                        QStringLiteral(".png")))
+                std::cerr << "could not write the Resample Path order capture\n";
+        }
+    }
+}
+
 // #564 Frame Rate Hold in Properties: the amount and the seed appear with the irregular cadence, the
 // seed row carries Randomize seed, and every label is shown whole.
 void frameRateHoldRows() {
@@ -2554,6 +2626,7 @@ int main(int argc, char** argv) try {
     warpRows();
     audioEffectRows();
     groupAndPlotRows();
+    resamplePathRowOrder();
     cameraShakeRows();
     matteBlurRows();
     matteKeyRows();

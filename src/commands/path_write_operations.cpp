@@ -55,17 +55,15 @@ OperationResult WriteValueToPath::apply(document::Draft& draft) const {
     if (stored == nullptr)
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "The Path node has no value to write");
-    OperationResult written;
-    if (std::holds_alternative<document::ConstantValueSource>(stored->source))
-        written = SetParameterSource(compositionId_, parameter,
-                                     document::ConstantValueSource{value_})
-                      .apply(draft);
-    else if (std::holds_alternative<document::AnimationCurveSource>(stored->source))
-        written = SetKeyframeAtTimeForParameter(compositionId_, parameter, time_, value_).apply(draft);
-    else
-        return OperationResult::rejected(
-            OperationIssueCode::InvalidValue,
-            "The Path node's value is driven by another node; disconnect it first");
+    // A Path node has no input socket, so its value is never driven by another node: it is a
+    // constant or keyed.
+    const auto written =
+        std::holds_alternative<document::AnimationCurveSource>(stored->source)
+            ? OperationResult(SetKeyframeAtTimeForParameter(compositionId_, parameter, time_, value_)
+                                  .apply(draft))
+            : OperationResult(SetParameterSource(compositionId_, parameter,
+                                                 document::ConstantValueSource{value_})
+                                  .apply(draft));
     if (written.status == OperationStatus::Rejected)
         return written;
     outputs.push_back({std::string(kWriteToPathNodeOutput), node});
