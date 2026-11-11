@@ -73,7 +73,9 @@ VmaAllocationCreateInfo stagingPreferences() {
     info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     return info;
 }
-void actualBufferStorage(GpuDevice& device) {
+// Returns false when the nonlocal case could not run on a device that should have run it.
+[[nodiscard]] bool actualBufferStorage(GpuDevice& device) {
+    bool nonlocalRan = true;
     using namespace vulkan_detail;
     auto state = GpuRendererAccess::state(device);
     bufferRequire(bool(state), "actual staging allocator exists");
@@ -166,8 +168,13 @@ void actualBufferStorage(GpuDevice& device) {
             (memory->memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
             nonlocal |= std::uint32_t{1} << i;
     }
-    if (nonlocal == 0) {
+    if (nonlocal == 0 && device.availableAllocationBudget().unified_memory) {
+        // A unified-memory device has no memory apart from system memory: there is no nonlocal
+        // buffer domain to control, and the device-local one is covered above.
+        std::cout << "NotApplicable: a unified-memory device has no nonlocal buffer domain\n";
+    } else if (nonlocal == 0) {
         std::cout << "NotRun: nonlocal buffer domain control has no compatible HOST_VISIBLE heap\n";
+        nonlocalRan = false;
     } else {
         preferences.memoryTypeBits = nonlocal;
         phase = bufferPhase(device, budget, 1ULL << 20, requirements.size - 1);
@@ -213,6 +220,7 @@ void actualBufferStorage(GpuDevice& device) {
     }
     std::cout << "PASS: actual staging identity/mapping, paired denial zero attempts and backing "
                  "faults\n";
+    return nonlocalRan;
 }
 void rootedBufferTransfers(Expectations& checks, GpuDevice& device,
                            const GpuDeviceCreationOptions& options) {

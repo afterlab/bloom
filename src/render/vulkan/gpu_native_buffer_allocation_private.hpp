@@ -102,6 +102,10 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
     if (state.nativeBufferMemoryTypeMaskForTests != 0)
         remaining &= state.nativeBufferMemoryTypeMaskForTests;
     bool attempted = false;
+    // Heaps whose budget domain already refused this request. Memory types that share a heap share
+    // its budget, so trying the next type in a refused heap would ask the same question again (and
+    // ask the reclaimer again). A unified-memory device offers several types in its one heap.
+    std::uint32_t refusedHeaps = 0;
     const bool mapped = (original.flags & VMA_ALLOCATION_CREATE_MAPPED_BIT) != 0;
     const bool hostVisible =
         mapped ||
@@ -125,6 +129,8 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0)
             continue;
         const auto heap = memory->memoryTypes[selected].heapIndex;
+        if (heap < 32 && (refusedHeaps & (std::uint32_t{1} << heap)) != 0)
+            continue;
         const NativeBufferStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
@@ -141,6 +147,9 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
                                  grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity))
                 state.presentationStorageRefusal = {grant.status, grant.domain,
                                                     grant.revisionAfterOwnRelease, false};
+            if (heap < 32 && (grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity ||
+                              grant.status == GpuProcessingPhaseAdmission::BudgetRefused))
+                refusedHeaps |= std::uint32_t{1} << heap;
             continue;
         }
         token = std::move(*grant.token);

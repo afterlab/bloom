@@ -170,6 +170,7 @@ struct DeviceSelection final {
     VkPhysicalDeviceProperties properties{};
     std::array<std::uint8_t, VK_UUID_SIZE> deviceUuid{};
     std::uint64_t deviceMemoryBytes = 0;
+    bool unifiedMemory = false;
     bool memoryBudgetSupported = false;
     bool portabilitySubset = false;
     // The device advertises the core shaderFloat64 feature. Enabled at device creation only when
@@ -260,8 +261,14 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         memoryProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
         dispatcher->vkGetPhysicalDeviceMemoryProperties2(device, &memoryProperties2);
         std::uint64_t deviceLocalBytes = 0;
+        // Unified memory: the device has no heap of its own apart from system memory, which a
+        // driver reports as every heap being DEVICE_LOCAL (Apple silicon, integrated GPUs).
+        bool unifiedMemory = memoryProperties2.memoryProperties.memoryHeapCount != 0;
         for (std::uint32_t heap = 0; heap < memoryProperties2.memoryProperties.memoryHeapCount;
              ++heap) {
+            unifiedMemory =
+                unifiedMemory && (memoryProperties2.memoryProperties.memoryHeaps[heap].flags &
+                                  VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U;
             // Only DEVICE_LOCAL heaps are summed: this is a bounded device-local fact, never a VRAM
             // or usable-budget claim (integrated GPUs share host memory, and drivers may migrate).
             if ((memoryProperties2.memoryProperties.memoryHeaps[heap].flags &
@@ -282,6 +289,7 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         std::copy(std::begin(idProperties.deviceUUID), std::end(idProperties.deviceUUID),
                   selection.deviceUuid.begin());
         selection.deviceMemoryBytes = deviceLocalBytes;
+        selection.unifiedMemory = unifiedMemory;
         selection.memoryBudgetSupported =
             deviceExtensionAvailable(instance, device, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         selection.portabilitySubset =
@@ -681,6 +689,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
         selection->properties.limits.maxComputeWorkGroupInvocations;
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
     control->deviceLocalBytes = selection->deviceMemoryBytes;
+    control->unifiedMemory = selection->unifiedMemory;
     control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;
     control->calibratedTimestampsEnabled = calibratedExtension != nullptr;

@@ -327,10 +327,12 @@ int main(int argc, char** argv) {
             quarantine(checks, *device.device, source);
             commandReuse(checks, *device.device, source);
         }
-        actualBufferStorage(*device.device);
+        const bool nonlocalRan = actualBufferStorage(*device.device);
         rootedBufferTransfers(checks, *device.device, creation);
         if (checks.failures())
             return 1;
+        if (!nonlocalRan)
+            return options.require_device ? 1 : 77; // A case that did not run is not a pass.
         std::cout
             << "PASS: final RGBA8 display transfer parity/accounting/cancellation/owner lifetime\n";
         return 0;

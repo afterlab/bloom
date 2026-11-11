@@ -219,6 +219,8 @@ struct DeviceAllocatorState final {
     std::uint64_t maxStorageBufferRange = 0;
     // Summed DEVICE_LOCAL heap size, not committed allocator bytes.
     std::uint64_t deviceLocalBytes = 0;
+    // Every memory heap is DEVICE_LOCAL: device memory is system memory.
+    bool unifiedMemory = false;
     // Driver-reported physical device UUID, copied into every live allocation budget.
     std::array<std::uint8_t, 16> deviceUuid{};
     // The allocation sizes handed out with every allocation budget (created on first use).

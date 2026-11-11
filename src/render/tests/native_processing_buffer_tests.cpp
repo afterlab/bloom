@@ -105,7 +105,8 @@ void backingAndRefusal(GpuDevice& device) {
         retire(device, budget, lease);
     }
 }
-void nonlocalBacking(GpuDevice& device) {
+// Returns false when the case could not run on a device that should have been able to run it.
+[[nodiscard]] bool nonlocalBacking(GpuDevice& device) {
     auto state = GpuRendererAccess::state(device);
     const VkPhysicalDeviceMemoryProperties* memory = nullptr;
     vmaGetMemoryProperties(state->allocator, &memory);
@@ -117,8 +118,15 @@ void nonlocalBacking(GpuDevice& device) {
             mask |= std::uint32_t{1} << type;
     }
     if (mask == 0) {
+        // A unified-memory device has no memory apart from system memory, so there is no nonlocal
+        // backing to cover; its host-visible backing is device-local and is covered above.
+        if (device.availableAllocationBudget().unified_memory) {
+            std::cout << "NotApplicable: a unified-memory device has no nonlocal host-visible "
+                         "processing memory\n";
+            return true;
+        }
         std::cout << "NotRun: device has no nonlocal host-visible processing memory type\n";
-        return;
+        return false;
     }
     state->nativeBufferMemoryTypeMaskForTests = mask;
     GpuProcessingPhaseBudget budget(1);
@@ -157,6 +165,7 @@ void nonlocalBacking(GpuDevice& device) {
         retire(device, budget, lease);
     }
     state->nativeBufferMemoryTypeMaskForTests = 0;
+    return true;
 }
 void productionCycles(GpuDevice& device) {
     // Create the input outside the rooted attempt. Only this slice's resident display processing
@@ -293,8 +302,10 @@ int main(int argc, char** argv) {
             return requireDevice ? 1 : 77;
         }
         backingAndRefusal(*device.device);
-        nonlocalBacking(*device.device);
+        const bool nonlocalRan = nonlocalBacking(*device.device);
         productionCycles(*device.device);
+        if (!nonlocalRan)
+            return requireDevice ? 1 : 77; // A case that did not run is not a pass.
         std::cout << "PASS: rooted resident processing buffers, native parity and retirement\n";
         return 0;
     } catch (const std::exception& error) {

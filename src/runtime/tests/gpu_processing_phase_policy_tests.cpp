@@ -303,6 +303,75 @@ void lowMemoryHostFinalAdmission() {
                 final(ancestor).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
             "every finite process domain caps otherwise ample live host capacity");
 }
+// Decision 0039: a unified-memory device has no memory apart from system memory, so its capacity
+// is the smaller of what the driver reports and what the measured pool has left; a device with its
+// own memory keeps the driver's figure whatever the host has.
+void unifiedMemoryDeviceIsBoundedByTheSystemPool() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    MemoryBudgetSample reading;
+    reading.physicalBytes = 16 * gib;
+    reading.machine.availableBytes = 3 * gib;
+    reading.process.source = ProcessMemorySource::MacOsHostOnly;
+    reading.process.status = ProcessMemoryStatus::Unsupported;
+    reading.process.sampledAt = now;
+    MemoryBudgetLedger ledger(reading.physicalBytes, *reading.machine.availableBytes);
+    ledger.beginProcessSampling();
+    auto delivered = ledger.applySample(reading, now);
+
+    GpuProcessingPhasePolicy discrete(2);
+    discrete.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    discrete.applyHostSample(delivered, reading.physicalBytes, now);
+    require(discrete.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                      .device_local_bytes = 16 * gib,
+                                      .available_bytes = 12 * gib}),
+            "a device with its own memory reports");
+    require(discrete.snapshot().reservations.hostCapacityBytes == 3 * gib &&
+                discrete.snapshot().reservations.deviceCapacityBytes == 12 * gib,
+            "a device with its own memory keeps the driver's available figure");
+
+    GpuProcessingPhasePolicy unified(2);
+    unified.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    unified.applyHostSample(delivered, reading.physicalBytes, now);
+    require(unified.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                     .device_local_bytes = 16 * gib,
+                                     .available_bytes = 12 * gib,
+                                     .unified_memory = true}),
+            "a unified-memory device reports");
+    require(unified.snapshot().reservations.deviceCapacityBytes == 3 * gib,
+            "a unified-memory device is bounded by the measured system pool");
+    require(unified.snapshot().reservations.deviceCeilingBytes == 16 * gib,
+            "its ceiling is the pool's ceiling");
+
+    // Host work claims from the same pool: the device's room shrinks with it.
+    auto cpu = reserveHostEvaluationPhase(unified, 1920ULL * 1080, gib,
+                                          GpuProcessingPhaseOutput::FloatFinal);
+    require(cpu.lease != nullptr, "host work is admitted from the pool");
+    const auto hostClaim = unified.snapshot().reservations.totalHostClaimBytes;
+    require(hostClaim != 0 &&
+                unified.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                         .device_local_bytes = 16 * gib,
+                                         .available_bytes = 12 * gib,
+                                         .unified_memory = true}),
+            "the device reports again while host work holds a claim");
+    require(unified.snapshot().reservations.deviceCapacityBytes == 3 * gib - hostClaim,
+            "host claims come out of the unified device's capacity");
+    cpu.lease.reset();
+
+    // A new, smaller sample of the pool lowers the device capacity without a new device report.
+    delivered.machine.availableBytes = gib;
+    delivered.process.sampledAt = now + std::chrono::seconds(1);
+    ++delivered.sampleSerial;
+    unified.applyHostSample(delivered, reading.physicalBytes, delivered.process.sampledAt);
+    require(unified.snapshot().reservations.deviceCapacityBytes == gib,
+            "the unified device's capacity follows the next sample of the pool");
+    // The driver's figure still bounds it when it is the smaller one.
+    require(unified.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                     .device_local_bytes = 16 * gib,
+                                     .available_bytes = gib / 2,
+                                     .unified_memory = true}) &&
+                unified.snapshot().reservations.deviceCapacityBytes == gib / 2,
+            "the driver's figure still bounds a unified device when it is smaller");
+}
 void liveHeadroomDuringCachePressure() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     MemoryBudgetSample reading;
@@ -1315,6 +1384,7 @@ int main(int argc, char** argv) {
         exportFramesClaimTheirPreflightPeak();
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
+        unifiedMemoryDeviceIsBoundedByTheSystemPool();
         rootedBackingReconcilesSampledHostHeadroom();
         adoptedHostBackingCreditsOnlyMaterializedBytes();
         cachedAudioDoesNotHoldRequestSlots();

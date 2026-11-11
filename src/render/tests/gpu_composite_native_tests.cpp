@@ -469,14 +469,15 @@ void testActualAllocationBudget(Expectations& expectations, GpuDevice& device) {
     }
     auto shared = std::make_shared<const GpuImage>(std::move(*resident));
 
-    // 4x4 RGBA32F requests 256 bytes; a 512-byte budget passes the requested check but the actual
-    // VMA allocations (image + axis + status + staging) exceed it.
+    // 4x4 RGBA32F requests 256 bytes; a budget of exactly that passes the requested check but the
+    // actual VMA allocations (image + axis + status + staging) exceed it on every device, whether
+    // or not the device pads the image itself.
     const auto control = bloom::render::GpuRendererAccess::state(device);
     VmaTotalStatistics before{};
     vmaCalculateStatistics(control->allocator, &before);
     const auto stagingBefore = bloom::render::composite_detail::metadataStagingLiveBytes.load();
     const auto tight =
-        composite.composite->beginTranslation({shared, window4, 0.0, 0.0, 1.0F}, 512);
+        composite.composite->beginTranslation({shared, window4, 0.0, 0.0, 1.0F}, 256);
     expectations.expect(tight.code == GpuCompositeDiagnosticCode::OverBudget,
                         "an actual-allocation over-budget request is refused");
     expectations.expect(composite.composite->state() == GpuCompositeJobState::Idle,

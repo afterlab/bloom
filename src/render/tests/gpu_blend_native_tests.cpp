@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -209,12 +210,21 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
     auto shared = std::make_shared<const GpuImage>(std::move(*resident));
     auto sharedDest = std::make_shared<const GpuImage>(std::move(*destResident));
 
-    // 4x4 RGBA32F is 256 requested bytes; an actual VMA allocation is larger, so a 300-byte budget
-    // must be refused.
-    expectations.expect(
-        blend.blend->beginBlend({shared, sharedDest, BlendMode::Multiply}, 300).code ==
-            GpuBlendDiagnosticCode::OverBudget,
-        "an actual-allocation over-budget blend is refused");
+    // 4x4 RGBA32F is 256 requested bytes. Where the device's actual allocation for it is larger
+    // (most pad small images), a budget one byte under the actual size passes the requested check
+    // and must be refused by the actual one. A device that allocates exactly the requested bytes
+    // has no such gap to test.
+    const auto sizes = device.availableAllocationBudget().allocation_sizes;
+    const std::uint64_t actualBytes = sizes && sizes->image ? sizes->image(4, 4) : 0;
+    if (actualBytes > 256) {
+        expectations.expect(
+            blend.blend->beginBlend({shared, sharedDest, BlendMode::Multiply}, actualBytes - 1)
+                    .code == GpuBlendDiagnosticCode::OverBudget,
+            "an actual-allocation over-budget blend is refused");
+    } else {
+        std::cout << "NOTE: this device allocates a 4x4 RGBA32F image in " << actualBytes
+                  << " bytes, its requested size; no actual-allocation gap to refuse\n";
+    }
 
     // Cancel: submit then cancel before polling.
     const auto started = blend.blend->beginBlend({shared, sharedDest, BlendMode::Screen}, kBudget);

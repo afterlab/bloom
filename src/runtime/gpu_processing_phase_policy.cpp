@@ -296,6 +296,13 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                        retiredBytesAtSample);
     else
         budget_.tightenHostCapacity(allowance, true, validUntil);
+    // A unified-memory device's capacity is bounded by this pool (decision 0039): follow it.
+    for (std::size_t slot = 0; slot < deviceCount_; ++slot) {
+        if (devices_[slot].budget.unified_memory) {
+            applyDeviceReportsLocked();
+            break;
+        }
+    }
 }
 void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                                                const std::size_t physicalBytes,
@@ -417,13 +424,34 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
                 current.device_local_bytes > available ? current.device_local_bytes - available : 0;
             available += std::min(ownedLocalNative, physicalRoom);
         }
+        // Unified memory (decision 0039): the device's memory is system memory, one pool. What
+        // the driver calls available does not shrink when the rest of the system fills that
+        // pool, so the device capacity is also bounded by the pool's measured room: the host
+        // capacity less the host claims. The root's own native allocations are already out of
+        // the measured free memory and are still counted in its device claims, so they are
+        // credited here the same way the driver figure credits them above.
+        std::optional<std::uint64_t> unifiedCeiling;
+        if (current.unified_memory) {
+            const auto pool = budget_.snapshot();
+            if (pool.hostCapacityBytes) {
+                const auto ownedNative =
+                    addSaturating(pool.ownedNativeImageBytes, pool.ownedNativeBufferBytes);
+                available =
+                    std::min(available, addSaturating(subtractSaturating(*pool.hostCapacityBytes,
+                                                                         pool.totalHostClaimBytes),
+                                                      ownedNative));
+            }
+            unifiedCeiling = pool.hostCeilingBytes;
+        }
         available = subtractSaturating(available, headroom_.vramBytes);
         minimum = minimum ? std::min(*minimum, available) : available;
         // The most this device could ever give the root (#539): what other programs hold now
         // can come back, so a need within it waits instead of being refused.
-        const auto whole = subtractSaturating(std::max(current.device_local_bytes,
-                                                       current.available_bytes),
-                                              headroom_.vramBytes);
+        auto whole = subtractSaturating(
+            std::max(current.device_local_bytes, current.available_bytes), headroom_.vramBytes);
+        // On unified memory that is never more than the pool's own ceiling.
+        if (unifiedCeiling)
+            whole = std::min(whole, *unifiedCeiling);
         ceiling = ceiling ? std::min(*ceiling, whole) : whole;
     }
     budget_.setDeviceCeiling(ceiling);

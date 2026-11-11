@@ -148,6 +148,12 @@ struct GpuAllocationBudget final {
     GpuAllocationBudgetSource source = GpuAllocationBudgetSource::Unavailable;
     std::uint64_t device_local_bytes = 0;
     std::uint64_t available_bytes = 0;
+    // Unified memory: every memory heap of the device is DEVICE_LOCAL, so the device has no memory
+    // apart from system memory (Apple silicon, integrated GPUs). What the driver calls available
+    // then says nothing about the memory the rest of the system is using; the planner bounds this
+    // budget by the measured system memory as well (docs/decisions/0039). False for a device with
+    // its own memory, whose budget stands alone.
+    bool unified_memory = false;
     // Which physical GPU this live budget describes (all zero when unknown). Owners that share a
     // GPU share its process-wide budget, so ownership credit is applied once per physical device.
     std::array<std::uint8_t, 16> device_uuid{};

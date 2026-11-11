@@ -107,6 +107,25 @@ not proof of equivalent GPU capability or performance on all three. Unavailable 
 retains explicit CPU-fallback provenance. This bounded revisit does not change this ADR's working
 status or its cross-platform acceptance requirement.
 
+### 2026-11-11: MoltenVK enters the intake as a source build
+
+The "pinned MoltenVK distribution" of the decision is now a locked component built from source:
+MoltenVK 1.4.2 from its release archive, with SPIRV-Cross and cereal at the revisions it pins and
+the Vulkan-Headers revision the lock already held (owner decision "Build from source"). Its own
+build fetches those while configuring; Bloom's recipe supplies them from locked archives instead
+and leaves MoltenVK's sources unchanged. The loader, the driver and a driver manifest are packaged
+with every executable on macOS, and Bloom points the loader at that driver for its own process, so
+a device is found with nothing installed and nothing set in the environment.
+
+Metal's fast-math shader compilation is off, in the MoltenVK build and again in the request Bloom
+makes when it creates the instance. With it on, colour transforms, optical flow and vignette did
+not match the CPU reference.
+
+The dependency lock's Apple silicon profile records the deployment target, macOS 13.3. It is the
+oldest release whose system C++ library formats floating-point numbers the way Bloom's canonical
+text needs; reading them goes through `bloom::core::fromChars`. Bloom has been built and run on
+macOS 26 only. [ADR 0039](0039-unified-memory-devices.md) covers memory on Apple silicon.
+
 ## References
 
 - [GPU backend architecture and acceptance gate](../architecture/gpu-backend.md)

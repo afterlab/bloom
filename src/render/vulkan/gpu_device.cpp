@@ -404,6 +404,7 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
     }
     auto& control = *impl_->control;
     result.device_local_bytes = control.deviceLocalBytes;
+    result.unified_memory = control.unifiedMemory;
     result.device_uuid = control.deviceUuid;
     try {
         if (!control.allocationSizes)

@@ -71,6 +71,10 @@ namespace bloom::render::vulkan_detail {
     if (state.nativeImageMemoryTypeMaskForTests != 0)
         remaining &= state.nativeImageMemoryTypeMaskForTests;
     bool allocationAttempted = false;
+    // Heaps whose budget domain already refused this request. Memory types that share a heap share
+    // its budget, so trying the next type in a refused heap would ask the same question again (and
+    // ask the reclaimer again). A unified-memory device offers several types in its one heap.
+    std::uint32_t refusedHeaps = 0;
     while (remaining != 0) {
         preferred.memoryTypeBits = remaining;
         std::uint32_t selected = 0;
@@ -83,6 +87,8 @@ namespace bloom::render::vulkan_detail {
             break;
         remaining &= ~bit;
         const auto heap = memory->memoryTypes[selected].heapIndex;
+        if (heap < 32 && (refusedHeaps & (std::uint32_t{1} << heap)) != 0)
+            continue;
         const NativeImageStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
@@ -106,6 +112,9 @@ namespace bloom::render::vulkan_detail {
                                  grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity))
                 state.presentationStorageRefusal = {grant.status, grant.domain,
                                                     grant.revisionAfterOwnRelease, true};
+            if (heap < 32 && (grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity ||
+                              grant.status == GpuProcessingPhaseAdmission::BudgetRefused))
+                refusedHeaps |= std::uint32_t{1} << heap;
             continue;
         } // A denied domain must not hide a covered compatible fallback.
         token = std::move(*grant.token);
