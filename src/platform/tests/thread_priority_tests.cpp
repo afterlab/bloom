@@ -68,7 +68,8 @@ int main() {
         linuxScope();
 #else
         const bloom::platform::IdleThreadPriorityScope idle;
-        static_cast<void>(idle.cpuIdle());
+        expect(idle.cpuIdle() == idle.ioIdle(),
+               "one background state lowers the CPU and I/O priority together");
 #endif
     });
     worker.join();

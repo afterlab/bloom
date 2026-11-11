@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -96,6 +97,14 @@ hashRecoveryArchive(const std::filesystem::path& path) {
     return hasher.finalize();
 }
 
+// The archive's modification time as written into the ownership record: the file clock's own tick
+// count. One standard library counts those ticks in a 128-bit integer that streams cannot format;
+// 64 bits hold every time a file system reports.
+[[nodiscard]] std::int64_t
+ownershipStamp(const std::filesystem::file_time_type writtenAt) noexcept {
+    return static_cast<std::int64_t>(writtenAt.time_since_epoch().count());
+}
+
 [[nodiscard]] bool writeOwnership(const std::filesystem::path& recoveryPath,
                                   const std::optional<ProjectDisplayPath>& projectPath) noexcept {
     try {
@@ -125,7 +134,7 @@ hashRecoveryArchive(const std::filesystem::path& path) {
             std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
             output << "BLOOM-RECOVERY-OWNER-1\n";
             output.write(hex.data(), hex.size());
-            output << '\n' << writtenAt.time_since_epoch().count() << '\n';
+            output << '\n' << ownershipStamp(writtenAt) << '\n';
             output.write(ownedPath.data(), static_cast<std::streamsize>(ownedPath.size()));
             output.flush();
             output.close();
@@ -185,12 +194,12 @@ readOwnership(const std::filesystem::path& recoveryPath, const core::Sha256Diges
             std::string(digest.toLowercaseHex().data(), core::kSha256HexCharacters)) {
         return std::nullopt;
     }
-    decltype(writtenAt.time_since_epoch().count()) stamp{};
+    std::int64_t stamp{};
     const auto stampText = std::string_view(record).substr(digestEnd + 1, stampEnd - digestEnd - 1);
     const auto parsed =
         std::from_chars(stampText.data(), stampText.data() + stampText.size(), stamp);
     if (parsed.ec != std::errc{} || parsed.ptr != stampText.data() + stampText.size() ||
-        stamp != writtenAt.time_since_epoch().count()) {
+        stamp != ownershipStamp(writtenAt)) {
         return std::nullopt;
     }
     const auto pathBytes = std::string_view(record).substr(stampEnd + 1);

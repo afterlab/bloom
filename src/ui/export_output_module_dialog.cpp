@@ -451,8 +451,10 @@ void OutputModuleDialog::showSettings(const document::ExportOutputSettings& sett
     includeAudio_->setChecked(settings.includeAudio);
     cachedFrames_->setChecked(settings.useCachedFrames);
     normalizeLoudness_->setChecked(settings.loudness.has_value());
-    loudnessTarget_->setIntegerValue(std::llround(settings.loudness.value_or({}).targetLufs));
-    truePeak_->setIntegerValue(std::llround(settings.loudness.value_or({}).truePeakDbtp));
+    // Named, not value_or({}): one standard library declines to deduce the braced default.
+    const auto loudness = settings.loudness.value_or(document::ExportLoudness{});
+    loudnessTarget_->setIntegerValue(std::llround(loudness.targetLufs));
+    truePeak_->setIntegerValue(std::llround(loudness.truePeakDbtp));
     qualityLeft_->setRowVisible(normalizeLoudness_, movie || format == ExportFormat::Wav);
     updateLoudnessRows(format);
     numbering_->setVisible(image);

@@ -173,7 +173,8 @@ void State::poll() noexcept {
         const long double elapsed = static_cast<long double>((values[2] - values[0]) & mask) *
                                     static_cast<long double>(result.timestampPeriodNanoseconds);
         if (query != VK_SUCCESS || values[1] == 0 || values[3] == 0 || ambiguous ||
-            !std::isfinite(elapsed) || elapsed >= std::numeric_limits<std::uint64_t>::max()) {
+            !std::isfinite(elapsed) ||
+            elapsed >= static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
             result.status = GpuQueueTimingStatus::Failed;
         } else {
             result.nanoseconds = static_cast<std::uint64_t>(elapsed);

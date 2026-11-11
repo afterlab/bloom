@@ -24,6 +24,9 @@
 
 namespace {
 
+// The fixture below needs the packaged shader tools, like the support header it calls into; a
+// build without them compiles only the explicit skip in run().
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
 // One non-UI sampling owner, independent of Tasks admission. It outlives every service,
 // scheduler and borrowed stage; no process-global ledger or settings are changed.
 struct SampledServiceRoot final {
@@ -87,6 +90,7 @@ bloom::document::Snapshot snapshotFor(const bloom::runtime::CompiledCompositionP
     bloom::document::Document document(std::move(project));
     return document.snapshot();
 }
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 int run(const int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);

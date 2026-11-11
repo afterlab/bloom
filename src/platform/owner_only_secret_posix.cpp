@@ -11,8 +11,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#if defined(__linux__)
-#include <sys/random.h>
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/random.h> // getrandom on Linux, getentropy on macOS
 #endif
 
 namespace bloom::platform {

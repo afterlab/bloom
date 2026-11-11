@@ -287,9 +287,11 @@ dpxAttemptFor(const output::OutputPresetV1 preset,
                  "older than the lock; rebuild it)\n";
     return false;
 }
-void dpxOracle(const std::shared_ptr<const runtime::ProcessFrame>& shared,
-               output::ExportResourceLedgerV1& ledger, const std::filesystem::path& directory,
-               const OCIO::ConstConfigRcPtr& config) {
+// Called only when the build has the encode tests (BLOOM_OUTPUT_ENCODE_TESTS).
+[[maybe_unused]] void dpxOracle(const std::shared_ptr<const runtime::ProcessFrame>& shared,
+                                output::ExportResourceLedgerV1& ledger,
+                                const std::filesystem::path& directory,
+                                const OCIO::ConstConfigRcPtr& config) {
     if (!workerHasDpxEncoder())
         return;
     using Preset = output::OutputPresetV1;

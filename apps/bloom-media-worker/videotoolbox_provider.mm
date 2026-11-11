@@ -903,12 +903,12 @@ provider::Payload Encoder::call(const provider::MessageKind kind, const provider
                             const auto setAside =
                                 frameCount / provider::kVideoToleranceSetAsideDivisor;
                             std::uint64_t above = 0;
-                            for (auto error = histogram.size(); error-- > 0;) {
-                                above += histogram[error];
+                            for (auto magnitude = histogram.size(); magnitude-- > 0;) {
+                                above += histogram[magnitude];
                                 if (above > setAside) {
                                     qc.percentileMaximumError =
                                         std::max(qc.percentileMaximumError,
-                                                 static_cast<std::uint32_t>(error));
+                                                 static_cast<std::uint32_t>(magnitude));
                                     break;
                                 }
                             }

@@ -1269,8 +1269,10 @@ int viewerAtSize(const std::filesystem::path& svg, const std::uint32_t width,
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::filesystem::path loader;
     std::filesystem::path svg;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
+    // Read only by the GPU route (BLOOM_UI_SVG_ARTWORK_ROUTES_GPU); parsed either way so the
+    // arguments mean the same in every build.
+    [[maybe_unused]] std::uint32_t width = 0;
+    [[maybe_unused]] std::uint32_t height = 0;
     std::vector<char*> forwarded{argv[0]};
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];

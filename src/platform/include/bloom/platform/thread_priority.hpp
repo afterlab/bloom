@@ -39,10 +39,14 @@ class IdleThreadPriorityScope final {
   private:
     bool cpuIdle_ = false;
     bool ioIdle_ = false;
+#if defined(__linux__)
+    // Linux only: whether the destructor restores the CPU policy, and the previous state (CPU
+    // policy, its priority and the I/O priority value). The other platforms leave their background
+    // state with one call and keep nothing.
     bool restoreCpu_ = true;
-    // The previous Linux state: CPU policy, its priority and the I/O priority value.
     int previousPolicy_ = 0;
     int previousPriority_ = 0;
     int previousIoPriority_ = 0;
+#endif
 };
 } // namespace bloom::platform

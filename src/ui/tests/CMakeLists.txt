@@ -1612,6 +1612,10 @@ foreach(scale IN ITEMS 1 1.5 2)
         LABELS "ui;media;integration" TIMEOUT 60)
 endforeach()
 
+# The tests from here on write real OpenEXR fixtures. Resolve the package where it is first used,
+# not only inside the Vulkan block further down, so the targets exist on every platform.
+bloom_find_dependency(OpenEXR)
+
 # #364 Cryptomatte UI: the Properties layer picker and matte list, the Viewer matte preview and the
 # Viewer eyedropper on a real multi-rank Cryptomatte EXR generated in-test.
 add_executable(bloom_cryptomatte_ui_test cryptomatte_ui_tests.cpp)
@@ -2299,8 +2303,6 @@ bloom_add_test(
 # QT_QPA_PLATFORM=offscreen; the supervisor passes
 # --loader/--require-device for the real native gate, and --require-device fails closed.
 if(BLOOM_UI_VULKAN_AVAILABLE)
-    bloom_find_dependency(OpenEXR)
-
     add_executable(bloom_ui_gpu_resident_service_chain_test
         gpu_resident_service_chain_tests.cpp
         gpu_service_chain_fixture.hpp

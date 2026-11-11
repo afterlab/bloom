@@ -10,6 +10,8 @@
 #include <random>
 #else
 #include <cstdlib>
+
+#include <unistd.h> // mkdtemp on macOS; glibc declares it in <stdlib.h>
 #endif
 
 namespace bloom::platform {

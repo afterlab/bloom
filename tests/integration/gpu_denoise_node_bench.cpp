@@ -183,11 +183,12 @@ std::vector<Case> cases() {
         for (const auto& [modeName, mode] : {std::pair{"median", std::int64_t{0}},
                                              std::pair{"bilateral", std::int64_t{1}},
                                              std::pair{"spatial", std::int64_t{2}}}) {
-            add(std::string("denoise-") + modeName + "-" + name,
+            add(
+                std::string("denoise-") + modeName + "-" + name,
                 std::string("bloom.denoise ") + modeName + " (radius " + name + ")",
                 std::string("gaussian-blur-") + name,
-                [beauty, mode = mode, value = radius](Doc& doc) {
-                    doc.denoise(doc.solid(beauty), mode, value);
+                [beauty, denoiseMode = mode, value = radius](Doc& doc) {
+                    doc.denoise(doc.solid(beauty), denoiseMode, value);
                 },
                 "radius", static_cast<std::int64_t>(radius));
         }

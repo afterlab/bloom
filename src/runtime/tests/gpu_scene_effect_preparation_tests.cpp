@@ -405,7 +405,8 @@ void testFailClosed(Expectations& expectations, const std::string& from, const s
     }
 }
 
-#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+// Used by the file-based LUT cases, which run where the LUT helper process exists.
+#if defined(BLOOM_GPUSHADER_TOOLS_DIR) && defined(__linux__)
 [[nodiscard]] std::size_t countOcioCommands(const bloom::runtime::PreparedGpuScene& scene) {
     std::size_t count = 0;
     for (const auto& command : scene.commands()) {

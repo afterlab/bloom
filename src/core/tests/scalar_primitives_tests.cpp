@@ -814,7 +814,7 @@ template <typename T> void testTrigonometryAndPower(Expectations& expectations) 
         return result.hasValue() &&
                std::abs(*result.value() - expected) <= T{4} * std::numeric_limits<T>::epsilon();
     };
-    const T pi = T{3.14159265358979323846L};
+    const T pi = static_cast<T>(3.14159265358979323846L);
     expectations.expect(
         hasValue(evaluate(ScalarPrimitive::Sine, std::array<T, 1>{T{0}}), T{0}) &&
             hasSignedZero(evaluate(ScalarPrimitive::Sine, std::array<T, 1>{-T{0}}), true) &&
@@ -864,10 +864,11 @@ template <typename T> void testLogExpTangentAndDegrees(Expectations& expectation
     expectations.expect(
         hasValue(one(ScalarPrimitive::Log, T{1}), T{0}) &&
             closeTo(one(ScalarPrimitive::Log, std::exp(T{1})), T{1}, ulps) &&
-            closeTo(one(ScalarPrimitive::Log, T{100}), T{4.605170185988092L}, T{4} * ulps) &&
+            closeTo(one(ScalarPrimitive::Log, T{100}), static_cast<T>(4.605170185988092L),
+                    T{4} * ulps) &&
             hasValue(one(ScalarPrimitive::Exp, T{0}), T{1}) &&
-            closeTo(one(ScalarPrimitive::Exp, T{1}), T{2.718281828459045L}, ulps) &&
-            closeTo(one(ScalarPrimitive::Exp, T{-1}), T{0.36787944117144233L}, ulps),
+            closeTo(one(ScalarPrimitive::Exp, T{1}), static_cast<T>(2.718281828459045L), ulps) &&
+            closeTo(one(ScalarPrimitive::Exp, T{-1}), static_cast<T>(0.36787944117144233L), ulps),
         "log and exp hit their reference points, exactly at the identities");
     expectations.expect(
         hasError(one(ScalarPrimitive::Log, T{-1}), ScalarEvaluationError::OutsideDomain) &&
@@ -877,18 +878,18 @@ template <typename T> void testLogExpTangentAndDegrees(Expectations& expectation
             hasValue(one(ScalarPrimitive::Exp, T{-1000}), T{0}),
         "log reports a negative value and the zero pole, exp reports overflow and underflows to zero");
     // Degrees land on their exact answers; the radians forms stay radians.
-    expectations.expect(
-        hasValue(one(ScalarPrimitive::SineDegrees, T{0}), T{0}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{30}), T{0.5}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{90}), T{1}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{180}), T{0}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{270}), T{-1}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{-90}), T{-1}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{390}), T{0.5}) &&
-            hasValue(one(ScalarPrimitive::SineDegrees, T{-330}), T{0.5}) &&
-            hasSignedZero(one(ScalarPrimitive::SineDegrees, -T{0}), true) &&
-            closeTo(one(ScalarPrimitive::SineDegrees, T{45}), T{0.7071067811865476L}, ulps),
-        "sine takes degrees and is exact at the angles an artist types");
+    expectations.expect(hasValue(one(ScalarPrimitive::SineDegrees, T{0}), T{0}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{30}), T{0.5}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{90}), T{1}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{180}), T{0}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{270}), T{-1}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{-90}), T{-1}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{390}), T{0.5}) &&
+                            hasValue(one(ScalarPrimitive::SineDegrees, T{-330}), T{0.5}) &&
+                            hasSignedZero(one(ScalarPrimitive::SineDegrees, -T{0}), true) &&
+                            closeTo(one(ScalarPrimitive::SineDegrees, T{45}),
+                                    static_cast<T>(0.7071067811865476L), ulps),
+                        "sine takes degrees and is exact at the angles an artist types");
     expectations.expect(
         hasValue(one(ScalarPrimitive::CosineDegrees, T{0}), T{1}) &&
             hasValue(one(ScalarPrimitive::CosineDegrees, T{60}), T{0.5}) &&
@@ -904,7 +905,8 @@ template <typename T> void testLogExpTangentAndDegrees(Expectations& expectation
             hasValue(one(ScalarPrimitive::TangentDegrees, T{45}), T{1}) &&
             hasValue(one(ScalarPrimitive::TangentDegrees, T{-45}), T{-1}) &&
             hasValue(one(ScalarPrimitive::TangentDegrees, T{225}), T{1}) &&
-            closeTo(one(ScalarPrimitive::TangentDegrees, T{60}), T{1.7320508075688772L}, ulps * T{2}) &&
+            closeTo(one(ScalarPrimitive::TangentDegrees, T{60}),
+                    static_cast<T>(1.7320508075688772L), ulps * T{2}) &&
             hasError(one(ScalarPrimitive::TangentDegrees, T{90}),
                      ScalarEvaluationError::DivideByZero) &&
             hasError(one(ScalarPrimitive::TangentDegrees, T{-90}),
@@ -912,7 +914,7 @@ template <typename T> void testLogExpTangentAndDegrees(Expectations& expectation
             hasError(one(ScalarPrimitive::TangentDegrees, T{270}),
                      ScalarEvaluationError::DivideByZero),
         "tangent takes degrees, is exact at 45 and reports the poles at the odd multiples of 90");
-    const T pi = T{3.14159265358979323846L};
+    const T pi = static_cast<T>(3.14159265358979323846L);
     expectations.expect(
         hasValue(one(ScalarPrimitive::Tangent, T{0}), T{0}) &&
             closeTo(one(ScalarPrimitive::Tangent, pi / T{4}), T{1}, ulps) &&

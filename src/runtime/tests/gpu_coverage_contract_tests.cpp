@@ -1089,9 +1089,9 @@ displayProofRunner(const bool customView) {
           std::tuple{"feature.layer.time.shared_upstream", LayerTimeAxis::SharedUpstream, 111300}})
         add(id, GpuCoverageFixtureCriterion::Prepared,
             "src/runtime layer time production scene preparation",
-            [axis = axis, base = base] {
+            [timeAxis = axis, idBase = base] {
                 return runBuilder(bloom::gpu_coverage_plans::layerTimePlan(
-                    axis, static_cast<std::uint64_t>(base)));
+                    timeAxis, static_cast<std::uint64_t>(idBase)));
             });
     add("feature.matte.invert", GpuCoverageFixtureCriterion::Prepared,
         "src/render ImageCombineV1 native + image combine production scene preparation", [] {
@@ -1503,8 +1503,8 @@ displayProofRunner(const bool customView) {
             add(
                 id, GpuCoverageFixtureCriterion::Prepared,
                 "src/runtime color grade image effect tests",
-                [runGrades, curveKind, curve = curve, points = points, base = base] {
-                    return runGrades({curveKind(curve, points)}, base,
+                [runGrades, curveKind, kind = curve, curvePoints = points, idBase = base] {
+                    return runGrades({curveKind(kind, curvePoints)}, idBase,
                                      "production Curves: one curve kind over an HDR, signed, "
                                      "partial-alpha gradient, full frame and ROI");
                 },
