@@ -162,8 +162,8 @@ if(APPLE)
     endif()
 
     # Self-contained .app: copy the Qt frameworks (and plugins) the desktop needs beside the
-    # executable, then give the finished bundle one ad hoc signature over everything inside it
-    # (no Developer ID signing; an ad hoc signature is what a local build can carry). Optional --
+    # executable, then give the finished bundle its ad hoc signature (macos/sign_bundle.cmake; no
+    # Developer ID signing, an ad hoc signature is what a local build can carry). Optional --
     # it requires Qt's macdeployqt, which is present in a normal Qt install but not in a headless
     # CI checkout that only links Qt -- so the target appears only when found.
     get_target_property(bloom_qmake Qt6::qmake IMPORTED_LOCATION)
@@ -174,8 +174,8 @@ if(APPLE)
             add_custom_target(
                 bloom-deploy-macos
                 COMMAND "${BLOOM_MACDEPLOYQT}" "$<TARGET_BUNDLE_DIR:bloom>" -always-overwrite
-                COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:bloom>"
-                COMMAND codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:bloom>"
+                COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/sign_bundle.cmake"
                 DEPENDS bloom
                 COMMENT "Bundling Qt into Bloom.app with macdeployqt and signing it ad hoc"
                 VERBATIM
