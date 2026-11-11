@@ -2276,6 +2276,27 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Issue #648: exports stay on the device while the Viewer and a RAM preview hold their frames and
+# the document takes many small revisions: rounds of edits, a RAM preview fill and two exports
+# straight after one another at 512x288, each compared with the CPU reference export. The CPU half
+# always runs; the GPU half runs with a Vulkan loader and a qualified device and prints NotRun
+# otherwise (--require-device fails instead).
+add_executable(bloom_ui_viewer_export_revisions_test viewer_export_revisions_tests.cpp)
+target_link_libraries(bloom_ui_viewer_export_revisions_test PRIVATE bloom_ui bloom_host)
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_export_revisions_test
+        PRIVATE BLOOM_UI_EXPORT_REVISIONS_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_export_revisions_test)
+endif()
+bloom_enable_warnings(bloom_ui_viewer_export_revisions_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_export_revisions
+    COMMAND bloom_ui_viewer_export_revisions_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 600
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Issue #343: imported SVG artwork (1,200 elements, a keyed path, gradient, clip, nested groups)
 # through the Viewer, a cold and warm RAM preview at Half, and the still, range and movie export
 # routes. The CPU half always runs; the GPU half runs with a Vulkan loader and a qualified device
