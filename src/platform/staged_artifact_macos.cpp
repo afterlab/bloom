@@ -31,6 +31,16 @@ namespace bloom::platform::detail {
 
 namespace {
 
+// Flushes `descriptor` to the storage device. fsync on macOS only hands the data to the drive,
+// which may still hold it in its own cache; F_FULLFSYNC asks the drive to write that cache out as
+// well. A file system that does not implement it (some network volumes) gets fsync, which is all
+// it offers.
+[[nodiscard]] bool flushToDevice(const int descriptor) noexcept {
+    if (::fcntl(descriptor, F_FULLFSYNC) == 0)
+        return true;
+    return ::fsync(descriptor) == 0;
+}
+
 class FileDescriptor final {
   public:
     FileDescriptor() noexcept = default;
@@ -508,7 +518,7 @@ class MacLease final : public StagedArtifactLeaseState {
         if (target_.shared->shouldFail(StagedArtifactFaultPoint::StageFlush)) {
             return failOperation(StagedArtifactError::FaultInjected);
         }
-        if (::fsync(descriptor_.get()) != 0) {
+        if (!flushToDevice(descriptor_.get())) {
             return failOperation(StagedArtifactError::StageFlushFailed);
         }
         if (!revalidateStage()) {
@@ -623,7 +633,7 @@ class MacLease final : public StagedArtifactLeaseState {
         ownsStageName_ = false;
         const bool injectedDurabilityFailure =
             target_.shared->shouldFail(StagedArtifactFaultPoint::ParentDurability);
-        if (injectedDurabilityFailure || ::fsync(target_.parentDescriptor.get()) != 0) {
+        if (injectedDurabilityFailure || !flushToDevice(target_.parentDescriptor.get())) {
             return finishPublication(
                 {.outcome = StagedArtifactPublicationOutcome::PublishedWithDurabilityWarning,
                  .error = injectedDurabilityFailure ? StagedArtifactError::FaultInjected
