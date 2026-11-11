@@ -439,6 +439,52 @@ void testVectorLeaves(Expectations& expectations, GpuSceneExecutor& executor,
                      "shape fill native coverage", false, true);
         base += 100;
     }
+    // #641: rounded corners with a radius of several pixels, on the integer grid and off it, at
+    // full scale and at a proxy.
+    for (const double radius : {4.0, 8.0, 10.5}) {
+        for (const auto& position :
+             {bloom::document::Vec2d{32.0, 20.0}, bloom::document::Vec2d{31.5, 19.5},
+              bloom::document::Vec2d{30.3, 21.7}}) {
+            for (const bool proxy : {false, true}) {
+                ShapeFixtureValues values;
+                values.kind = bloom::document::ShapeKind::Rectangle;
+                values.size = {41.0, 27.0};
+                values.cornerRadius = radius;
+                values.fillColor = Color4d{0.7, 0.2, 0.1, 0.8};
+                const auto plan = vectorLeafPlan(format(64, 40), makeShape(values, base),
+                                                 LayerValues{.position = position}, base);
+                auto request = requestFor(*plan);
+                if (proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(32, 20);
+                    request.resolution = ProxyResolution{*extent.value()};
+                }
+                expectParity(expectations, executor, oracle, plan, request,
+                             "rounded rectangle native coverage", false, true);
+                base += 100;
+            }
+        }
+    }
+    // The same at HD size, far from the origin, where a coordinate has fewer fraction bits.
+    for (const auto& position :
+         {bloom::document::Vec2d{1400.0, 700.0}, bloom::document::Vec2d{1400.3, 700.7}}) {
+        for (const bool proxy : {false, true}) {
+            ShapeFixtureValues values;
+            values.kind = bloom::document::ShapeKind::Rectangle;
+            values.size = {801.0, 601.0};
+            values.cornerRadius = 60.0;
+            values.fillColor = Color4d{0.7, 0.2, 0.1, 0.8};
+            const auto plan = vectorLeafPlan(format(1920, 1080), makeShape(values, base),
+                                             LayerValues{.position = position}, base);
+            auto request = requestFor(*plan);
+            if (proxy) {
+                const auto extent = bloom::render::ImageExtent::create(960, 540);
+                request.resolution = ProxyResolution{*extent.value()};
+            }
+            expectParity(expectations, executor, oracle, plan, request,
+                         "rounded rectangle native coverage at HD size", false, true);
+            base += 100;
+        }
+    }
     for (const double opacity : {1.0, 0.65}) {
         ShapeFixtureValues values;
         values.kind = bloom::document::ShapeKind::Ellipse;
