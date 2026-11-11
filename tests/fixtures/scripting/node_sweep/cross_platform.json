@@ -1,0 +1,7 @@
+{
+ "comment": "Node types whose GPU frame may differ between platforms, each with the documented tolerance that allows it. Every platform's own sweep holds the node to that gate against the CPU reference, and the CPU reference itself must be the same everywhere.",
+ "nodes": {
+  "bloom.auto-exposure": "The device evaluates the exposure curve with its own pow(); the frame is held to the 2e-6 gate against the CPU reference (docs/architecture/gpu-backend.md), not to bit equality between devices.",
+  "bloom.vignette": "The device evaluates the falloff with its own transcendental functions; the frame is held to the 2e-6 gate against the CPU reference (docs/architecture/gpu-backend.md), not to bit equality between devices."
+ }
+}

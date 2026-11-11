@@ -27,6 +27,44 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
         LABELS scripting mcp integration
         # Measured 21-25 s alone: 13 cases each start bloom-mcp, which enumerates the GPU (~1.2 s).
         TIMEOUT 120)
+    # The node sweep (tests/fixtures/scripting/node_sweep): every registered node type with an image output rendered on
+    # the GPU and on the CPU reference, compared, and held to the committed baseline for this
+    # platform. The types come from the registry at run time, so a new node is swept without
+    # editing the test. Without a GPU device the sweep is reported as not run, never as passed.
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" bloom_sweep_processor)
+    if(bloom_sweep_processor MATCHES "^(arm64|aarch64)$")
+        set(bloom_sweep_processor "arm64")
+    elseif(bloom_sweep_processor MATCHES "^(x86_64|amd64)$")
+        set(bloom_sweep_processor "x86_64")
+    endif()
+    if(APPLE)
+        set(bloom_sweep_platform "macos-${bloom_sweep_processor}")
+    elseif(WIN32)
+        set(bloom_sweep_platform "windows-${bloom_sweep_processor}")
+    else()
+        set(bloom_sweep_platform "linux-${bloom_sweep_processor}")
+    endif()
+    set(bloom_sweep "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/node_sweep")
+    bloom_add_test(NAME bloom.sweep.nodes
+        COMMAND "${Python3_EXECUTABLE}" -I "${bloom_sweep}/node_sweep.py"
+            --mcp $<TARGET_FILE:bloom-mcp>
+            --baseline "${bloom_sweep}/baselines/${bloom_sweep_platform}.json"
+        LABELS sweep gpu native integration
+        # Two bloom-mcp processes per node type, about a hundred types.
+        TIMEOUT 3600)
+    set_tests_properties(bloom.sweep.nodes PROPERTIES SKIP_RETURN_CODE 77)
+    # The sweep's own rules (an undeclared node fails, baselines disagree), without a device.
+    bloom_add_test(NAME bloom.sweep.self-test
+        COMMAND "${Python3_EXECUTABLE}" -I "${bloom_sweep}/node_sweep.py" --self-test
+        LABELS sweep unit)
+    # The platforms' baselines against each other: one CPU reference everywhere, and a GPU frame
+    # that differs only for a node cross_platform.json lists.
+    bloom_add_test(NAME bloom.sweep.baselines
+        COMMAND "${Python3_EXECUTABLE}" -I "${bloom_sweep}/node_sweep.py"
+            --compare "${bloom_sweep}/baselines/linux-x86_64.json"
+                      "${bloom_sweep}/baselines/macos-arm64.json"
+            --cross-platform "${bloom_sweep}/cross_platform.json"
+        LABELS sweep unit)
     # Defects an agent found live-testing the MCP server, each pinned at the protocol level.
     bloom_add_test(NAME bloom.mcp.agent-feedback
         COMMAND "${Python3_EXECUTABLE}" -I

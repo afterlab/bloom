@@ -1,0 +1,599 @@
+{
+ "extent": [
+  640,
+  360
+ ],
+ "frame": 3,
+ "nodes": {
+  "bloom.adjustment": {
+   "cpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "gpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.alpha-association": {
+   "cpu": "sha256:e606a24c344ed27b634365299cbdf02d62bd9302bf271a67d2461aecc6e6f0cd",
+   "gpu": "sha256:e606a24c344ed27b634365299cbdf02d62bd9302bf271a67d2461aecc6e6f0cd",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.alpha-contour": {
+   "cpu": "sha256:c9be5893b6df7b295ac41b8927819395fc933b04f905f2ea4aa5f946824e6096",
+   "gpu": "sha256:c9be5893b6df7b295ac41b8927819395fc933b04f905f2ea4aa5f946824e6096",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.audio-spectrum": {
+   "cpu": "sha256:c9be9b931966518f9b1ab95125401d599caef33b6884b22094b58fcd18505773",
+   "gpu": "sha256:c9be9b931966518f9b1ab95125401d599caef33b6884b22094b58fcd18505773",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.audio-waveform": {
+   "cpu": "sha256:42f17c00c3187b053007b1bb85ed71388e3f2ad1df63bfde28f39cc259384b41",
+   "gpu": "sha256:42f17c00c3187b053007b1bb85ed71388e3f2ad1df63bfde28f39cc259384b41",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.auto-exposure": {
+   "cpu": "sha256:1bae2bb296f34d6587632f5cfa11d356c5493a1db241c420895eaaa104179932",
+   "gpu": "sha256:ed564d1dd043ddbf4f683fbebbcc0c2d9e20a7f34447a43c084a4513f5d94748",
+   "parity": "within-gate",
+   "route": "gpu"
+  },
+  "bloom.box-blur": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.camera-shake": {
+   "cpu": "sha256:daaffb5118fd10ac38720d6fe54976fe7e539226c08e0ee5ae7b4e4092bf0575",
+   "gpu": "sha256:daaffb5118fd10ac38720d6fe54976fe7e539226c08e0ee5ae7b4e4092bf0575",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.channel-pass": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.channel-shuffle": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.checker-source": {
+   "cpu": "sha256:a16c482bab9c1a7e3960e505a0fff93d5d626fb217a9be29b9a12dbca747c294",
+   "gpu": "sha256:a16c482bab9c1a7e3960e505a0fff93d5d626fb217a9be29b9a12dbca747c294",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.chromatic-aberration": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.codec-degrade": {
+   "cpu": "sha256:a6af5027998a1dd2719fdb1b45942116982621399cfaa84a57834eea07b94a58",
+   "gpu": "sha256:a6af5027998a1dd2719fdb1b45942116982621399cfaa84a57834eea07b94a58",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.color-matrix": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.colorize": {
+   "cpu": "sha256:7a8465ae142b80e5bea9ab200f2f35a91b9c2d04da864197f5abcb01454594a6",
+   "gpu": "sha256:7a8465ae142b80e5bea9ab200f2f35a91b9c2d04da864197f5abcb01454594a6",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.combine-channels": {
+   "cpu": "sha256:19805cd5179ef54b3b4e8cf99a34e4dad53a51790b21c8c88a36d309012478e2",
+   "gpu": "sha256:19805cd5179ef54b3b4e8cf99a34e4dad53a51790b21c8c88a36d309012478e2",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.composition-source": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.corner-pin": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.crop": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.curves": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.denoise": {
+   "cpu": "sha256:52d79add755e8c28834c530c00ded698df3bfe91f62a3e608f9885e944c6ab81",
+   "gpu": "sha256:52d79add755e8c28834c530c00ded698df3bfe91f62a3e608f9885e944c6ab81",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.depth-fog": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.directional-blur": {
+   "cpu": "sha256:313dfdd046c1fb2845e4cfdd1e5a88bcf649efd91c104b4967bc3bcc473e90e4",
+   "gpu": "sha256:313dfdd046c1fb2845e4cfdd1e5a88bcf649efd91c104b4967bc3bcc473e90e4",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.displace": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.dither": {
+   "cpu": "sha256:ce43bea032fd70021de6ed232b5b3bd4f4884939e2f7ec0eeb7f87783d610488",
+   "gpu": "sha256:ce43bea032fd70021de6ed232b5b3bd4f4884939e2f7ec0eeb7f87783d610488",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.drop-shadow": {
+   "cpu": "sha256:83ce8dbf83ba29b4b78e107c5594dcccefcf9fc40397faa762c6c7f4cef2ed6b",
+   "gpu": "sha256:83ce8dbf83ba29b4b78e107c5594dcccefcf9fc40397faa762c6c7f4cef2ed6b",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.echo": {
+   "cpu": "sha256:39f041600c2317e57cb5c252b959fc049d680d06d945fdc81fe0f05e8eb767b7",
+   "gpu": "sha256:39f041600c2317e57cb5c252b959fc049d680d06d945fdc81fe0f05e8eb767b7",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.edge-extend": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.exposure": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-gradient": {
+   "cpu": "sha256:390000e0370ed300c1f52c6398a4dc714c40059b0e230b9e390cdf96d59478ca",
+   "gpu": "sha256:390000e0370ed300c1f52c6398a4dc714c40059b0e230b9e390cdf96d59478ca",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-noise": {
+   "cpu": "sha256:d637c2acece0947aa756492a987f1f4e519ecd32c0d54d1baca4c1a7a239a992",
+   "gpu": "sha256:d637c2acece0947aa756492a987f1f4e519ecd32c0d54d1baca4c1a7a239a992",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-pattern": {
+   "cpu": "sha256:56569245fad930d14a914363289518727d5fad76b1288ca98d3905de8f72142d",
+   "gpu": "sha256:56569245fad930d14a914363289518727d5fad76b1288ca98d3905de8f72142d",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-random": {
+   "cpu": "sha256:d4107d2c6b2a9661d223fc8a3ac4fbe0784b4910a82a69cd85807ccce7b54cc3",
+   "gpu": "sha256:d4107d2c6b2a9661d223fc8a3ac4fbe0784b4910a82a69cd85807ccce7b54cc3",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-rasterize": {
+   "cpu": "sha256:d0d522a8867b5c651553c49e024e758739297e5be4982f3a813c4e35629191f6",
+   "gpu": "sha256:d0d522a8867b5c651553c49e024e758739297e5be4982f3a813c4e35629191f6",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-shape-distance": {
+   "cpu": "sha256:ecbec6060b5ee8f5ecc7371b95dcd36cfe7cf79ef9bf93c3660ff7f4bb9aa8e9",
+   "gpu": "sha256:ecbec6060b5ee8f5ecc7371b95dcd36cfe7cf79ef9bf93c3660ff7f4bb9aa8e9",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.field-voronoi": {
+   "cpu": "sha256:14001e3da4094937e54b3cb0ca09b8776c5588c46e8fe48467704dc26045adef",
+   "gpu": "sha256:14001e3da4094937e54b3cb0ca09b8776c5588c46e8fe48467704dc26045adef",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.film-grain": {
+   "cpu": "sha256:fedf525be98cbaad195a881f9f78ea7ff95c50c4557892b5751aa719db1ebf30",
+   "gpu": "sha256:fedf525be98cbaad195a881f9f78ea7ff95c50c4557892b5751aa719db1ebf30",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.fit": {
+   "cpu": "sha256:991bc1b3767d541945f1aac86067b8e04a5815f4a8bbfa42d1279c2b77e7a869",
+   "gpu": "sha256:991bc1b3767d541945f1aac86067b8e04a5815f4a8bbfa42d1279c2b77e7a869",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.flip": {
+   "cpu": "sha256:fa842d466dbc7675c3a6476eba801107e4a88c51f7f67e099a6e24c9e483b097",
+   "gpu": "sha256:fa842d466dbc7675c3a6476eba801107e4a88c51f7f67e099a6e24c9e483b097",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.four-color-gradient": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.frame-rate-hold": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.gaussian-blur": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.glow": {
+   "cpu": "sha256:39ca2d99154e896966264b9f17e25af4c1a40a4fe8bccd25e138ceb03a6dccfd",
+   "gpu": "sha256:39ca2d99154e896966264b9f17e25af4c1a40a4fe8bccd25e138ceb03a6dccfd",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.grade": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.histogram": {
+   "cpu": "sha256:40666ee94fe6663dd5fc6bef2d4c6504fa02e56431a8d987feab4253e3752503",
+   "gpu": "sha256:40666ee94fe6663dd5fc6bef2d4c6504fa02e56431a8d987feab4253e3752503",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.hue-saturation": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.image-clamp": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.image-compare": {
+   "cpu": "sha256:d0d522a8867b5c651553c49e024e758739297e5be4982f3a813c4e35629191f6",
+   "gpu": "sha256:d0d522a8867b5c651553c49e024e758739297e5be4982f3a813c4e35629191f6",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.image-map-range": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.image-math": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.image-mix": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.image-source": {
+   "cpu": "sha256:92e19682170153d13307725a2630bac594922f586d3b7fe60fa070827405d4ad",
+   "gpu": "sha256:92e19682170153d13307725a2630bac594922f586d3b7fe60fa070827405d4ad",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.inner-glow": {
+   "cpu": "sha256:955ab14e21bea9d86b86bb5a6ec8cf61fb22c9942afa391ea76365d3fa69f923",
+   "gpu": "sha256:955ab14e21bea9d86b86bb5a6ec8cf61fb22c9942afa391ea76365d3fa69f923",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.inner-shadow": {
+   "cpu": "sha256:31c4bea93057d8f36b24995b2e844d00485ed3b2a6709f93dda6b429e89fb1bb",
+   "gpu": "sha256:31c4bea93057d8f36b24995b2e844d00485ed3b2a6709f93dda6b429e89fb1bb",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.invert": {
+   "cpu": "sha256:01f74f1033ce2fcb17ccccf13ff8ff71cab62030596106fcb6f95fcef2636100",
+   "gpu": "sha256:01f74f1033ce2fcb17ccccf13ff8ff71cab62030596106fcb6f95fcef2636100",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.layer-output": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.layer-stack": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.lens-distortion": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.lens-flare": {
+   "cpu": "sha256:d165bd4a7dff5e44c82d7120149ac393efeddfc41ba3571a5700aa16e55a3bfb",
+   "gpu": "sha256:d165bd4a7dff5e44c82d7120149ac393efeddfc41ba3571a5700aa16e55a3bfb",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.levels": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.light-rays": {
+   "cpu": "sha256:bb353b4f64b2aa81f6ecfa450a767bea83f8aa856cd5447592093716b4ab1370",
+   "gpu": "sha256:bb353b4f64b2aa81f6ecfa450a767bea83f8aa856cd5447592093716b4ab1370",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.light-wrap": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.linear-gradient": {
+   "cpu": "sha256:222dd4c2385015fd8f87ca3fa900cf855b041cda488296d19a3624a87f5d4407",
+   "gpu": "sha256:222dd4c2385015fd8f87ca3fa900cf855b041cda488296d19a3624a87f5d4407",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.motion-blur": {
+   "cpu": "sha256:55086d10422b5d4b393247769412887b0759a6afa4a775de38a8260ba10419fc",
+   "gpu": "sha256:55086d10422b5d4b393247769412887b0759a6afa4a775de38a8260ba10419fc",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.multiply": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.multiply-alpha": {
+   "cpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "gpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.ocio-colour-space-transform": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.ocio-file-transform": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.offset": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.optical-flow": {
+   "cpu": "sha256:d0d522a8867b5c651553c49e024e758739297e5be4982f3a813c4e35629191f6",
+   "gpu": "sha256:d0d522a8867b5c651553c49e024e758739297e5be4982f3a813c4e35629191f6",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.optical-flow-motion-blur": {
+   "cpu": "sha256:e87096d4c8ed78417657603bab0f30200f26ae9b63d98645761e3db9989fd038",
+   "gpu": "sha256:e87096d4c8ed78417657603bab0f30200f26ae9b63d98645761e3db9989fd038",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.pad": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.procedural-warp": {
+   "cpu": "sha256:671f33c0459df63a3304b28ded7c807a19a988b87b7cd547cc0207409a9a474a",
+   "gpu": "sha256:671f33c0459df63a3304b28ded7c807a19a988b87b7cd547cc0207409a9a474a",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.quantize": {
+   "cpu": "sha256:006afc3dc970c347f3e3ffbf28dd76c3fb5274ed1202f740f66a8f1064185234",
+   "gpu": "sha256:006afc3dc970c347f3e3ffbf28dd76c3fb5274ed1202f740f66a8f1064185234",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.radial-gradient": {
+   "cpu": "sha256:2be8cba8173965d86fb15390a4b51aeec04b1af3b79028d79035702b2a9ebee9",
+   "gpu": "sha256:2be8cba8173965d86fb15390a4b51aeec04b1af3b79028d79035702b2a9ebee9",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.reroute": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.resize": {
+   "cpu": "sha256:991bc1b3767d541945f1aac86067b8e04a5815f4a8bbfa42d1279c2b77e7a869",
+   "gpu": "sha256:991bc1b3767d541945f1aac86067b8e04a5815f4a8bbfa42d1279c2b77e7a869",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.rolling-shutter": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.rotate-90": {
+   "cpu": "sha256:290feffb703d9cd8b61bd1ab4d0fd55b1c61dffa710ccb15d4f6522020ef1354",
+   "gpu": "sha256:290feffb703d9cd8b61bd1ab4d0fd55b1c61dffa710ccb15d4f6522020ef1354",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.separate-channels": {
+   "cpu": "sha256:22064c94a28d73b31ff3662856405167b50cb77b2c1fb2a2b30ae65fb7999e94",
+   "gpu": "sha256:22064c94a28d73b31ff3662856405167b50cb77b2c1fb2a2b30ae65fb7999e94",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.set-alpha": {
+   "cpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "gpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.shape-source": {
+   "cpu": "sha256:a85d852cb30797cf20885e85ed7f3397acc7fa52f9e25f10f4c279f6a0281399",
+   "gpu": "sha256:a85d852cb30797cf20885e85ed7f3397acc7fa52f9e25f10f4c279f6a0281399",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.sharpen": {
+   "cpu": "sha256:4f189ae7a8cf94c9977f31934eb26b5560c3e290e8605104a39213cf1328f766",
+   "gpu": "sha256:4f189ae7a8cf94c9977f31934eb26b5560c3e290e8605104a39213cf1328f766",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.solid-source": {
+   "cpu": "sha256:92b00537840c5b29b197d4deb276976516c5c90bb18e49540db619d06f048a06",
+   "gpu": "sha256:92b00537840c5b29b197d4deb276976516c5c90bb18e49540db619d06f048a06",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.spin-blur": {
+   "cpu": "sha256:6c9cefc9e0381c45a44a63b5a325b54c7d48d06354498fb0668dc18c6b630c46",
+   "gpu": "sha256:6c9cefc9e0381c45a44a63b5a325b54c7d48d06354498fb0668dc18c6b630c46",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.st-map": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.stabilize": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.test-card": {
+   "cpu": "sha256:6a89f4c7ebf66ab50cec64637dd89039a48d6365a4ae75def717365dbe802552",
+   "gpu": "sha256:6a89f4c7ebf66ab50cec64637dd89039a48d6365a4ae75def717365dbe802552",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.text-source": {
+   "cpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "gpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.tile-mirror": {
+   "cpu": "sha256:9b25f71cfbb9ce9866c1fe56b140b919853319e3d1d0b09a984c3dba484c4788",
+   "gpu": "sha256:9b25f71cfbb9ce9866c1fe56b140b919853319e3d1d0b09a984c3dba484c4788",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.tone-map": {
+   "cpu": "sha256:d12560758a9385ca50d5fc10585aa5cc951140f9c0fb96d515b3bbf3c9146bb2",
+   "gpu": "sha256:d12560758a9385ca50d5fc10585aa5cc951140f9c0fb96d515b3bbf3c9146bb2",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.transform-2d": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.vector-artwork": {
+   "cpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "gpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.vector-motion-blur": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.video-source": {
+   "cpu": "sha256:999514f69a99013e84c569a087c8d866124a5c5322e0a8b41269e3d2ede3384c",
+   "gpu": "sha256:999514f69a99013e84c569a087c8d866124a5c5322e0a8b41269e3d2ede3384c",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.vignette": {
+   "cpu": "sha256:039e036469c09f0e5c524d9a99ec9e0004a68b36fd6b03c102860ee4f09d78ca",
+   "gpu": "sha256:039e036469c09f0e5c524d9a99ec9e0004a68b36fd6b03c102860ee4f09d78ca",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.z-defocus": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.zoom-blur": {
+   "cpu": "sha256:bc8c5188d60100f61064e9e0e96527cd39dedd3f69832b2f1d838da6f359189a",
+   "gpu": "sha256:bc8c5188d60100f61064e9e0e96527cd39dedd3f69832b2f1d838da6f359189a",
+   "parity": "identical",
+   "route": "gpu"
+  }
+ },
+ "schema": 1,
+ "source": "bloom.four-color-gradient"
+}
