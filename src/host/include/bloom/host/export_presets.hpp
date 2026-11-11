@@ -3,7 +3,6 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/export_queue.hpp>
-#include <bloom/media/provider/encode_session.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_analysis.hpp>
 
