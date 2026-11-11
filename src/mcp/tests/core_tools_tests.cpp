@@ -147,7 +147,8 @@ struct Live final {
     // No export queue unless `exports` binds one (as in a window that has not created one).
     explicit Live(mcp::McpLiveUiPort ui, std::optional<mcp::McpExportAccess> exports = {},
                   std::filesystem::path captures = {},
-                  std::shared_ptr<host::GpuExportProvider> fileProvider = {}) {
+                  std::shared_ptr<host::GpuExportProvider> fileProvider = {},
+                  const mcp::McpMessageLimits limits = mcp::kMcpMessageLimits) {
         host.replace({events, session->publicationCoordinator(), session->artifactCoordinator()},
                      {.renderSource = session->renderSourceSnapshot(),
                       .context = session->operationContext(),
@@ -171,7 +172,7 @@ struct Live final {
             .captureDirectory = std::move(captures),
             .ui = std::move(ui),
             .serverVersion = "test",
-            .limits = mcp::kMcpMessageLimits});
+            .limits = limits});
         protocol = core->openSession();
         static_cast<void>(send(R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{)"
                                R"("protocolVersion":"2025-11-25","capabilities":{},)"
@@ -1746,7 +1747,10 @@ void exportAcceptsEveryListedPreset() {
         requested = settings;
         return mcp::McpUiResult{};
     };
-    Live server(std::move(port), std::move(exports), folder);
+    // A short destination-check wait, so the case below that never gets its check stays quick.
+    auto limits = mcp::kMcpMessageLimits;
+    limits.destinationCheckWait = std::chrono::milliseconds(2000);
+    Live server(std::move(port), std::move(exports), folder, {}, limits);
     live = &server;
     const scripting::LiveSessionCommitter committer{
         .execute =
@@ -1915,6 +1919,54 @@ void exportAcceptsEveryListedPreset() {
     }
     expect(h264Mp4 && needAces > 0 && done.size() == onAces.size() && walked >= 6,
            "the walk covered builtin:h264-mp4 and every other preset");
+
+    // A slow destination check (a slow volume, or a platform that samples later): export.start
+    // waits for the check that is already running and answers with the real availability, so a
+    // client never has to retry. A check that outlasts the wait is the typed refusal, and the
+    // same call succeeds once the check has answered.
+    const auto queued = [&](const std::string& stem) {
+        const auto added = transact(
+            R"({"op":"bloom.export.add-job","args":{"composition":1,"range":"frame","first":0,)"
+            R"("outputs":["{\"preset\":\"builtin:png-sequence\",\"destination\":{\"path\":\")" +
+            (folder / (stem + ".png")).string() + R"(\",\"overwrite\":\"replace\"}}"]}})");
+        const auto job = outputId(added, "exportJob");
+        expect(job != 0, "the queue accepts the " + stem + " job: " + added);
+        return job;
+    };
+    const auto ran = [&](const std::uint64_t job) {
+        const auto waited =
+            call("export.wait", R"({"job":)" + std::to_string(job) + R"(,"timeoutMs":20000})");
+        // "done" or "done-with-warnings": the job ran, it was not merely left idle.
+        return contains(waited, R"("finished":true)") && contains(waited, R"("state":"done)");
+    };
+    fake->setDestinationCheckDelay(std::chrono::milliseconds(300));
+    if (const auto job = queued("slow-check"); job != 0) {
+        fake->push({});
+        const auto started = call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
+        expect(contains(started, R"("isError":false)") &&
+                   !contains(started, "DestinationCheckPending") && ran(job),
+               "export.start waits for a slow destination check: " + started);
+    }
+    if (const auto job = queued("slow-check-all"); job != 0) {
+        fake->push({});
+        const auto started = call("export.start-all", "{}");
+        expect(contains(started, R"("isError":false)") && ran(job),
+               "export.start-all waits for a slow destination check and starts that job: " +
+                   started);
+    }
+    fake->setDestinationCheckDelay(std::chrono::minutes(10));
+    if (const auto job = queued("stuck-check"); job != 0) {
+        const auto refusedStart = call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
+        expect(contains(refusedStart, R"("isError":true)") &&
+                   contains(refusedStart, "DestinationCheckPending"),
+               "a destination check that outlasts the wait is the typed refusal: " + refusedStart);
+        fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
+        fake->push({});
+        const auto started = call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
+        expect(contains(started, R"("isError":false)") && ran(job),
+               "the same job starts once its check has answered: " + started);
+    }
+    fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
 
     const auto unknown =
         call("export", R"({"composition":1,"frame":0,"preset":"builtin:no-such-preset",)"

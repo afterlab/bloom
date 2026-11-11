@@ -363,6 +363,72 @@ void waitForQueue(McpServerCore::State& core, std::optional<host::ExportQueueSub
     }
 }
 
+// export.start and export.start-all. A destination check that is still running would refuse the
+// start with DestinationCheckPending although the answer is moments away, and how soon depends on
+// the platform and the volume. So the request worker waits for the check, never the owner
+// thread: it reads `pending` on the owner, sleeps on the queue's subscription between reads, and
+// issues the command on the same owner turn that found nothing pending. The wait ends at
+// `limits.destinationCheckWait` or when the request is cancelled; at the limit the command is
+// issued anyway and answers with the typed refusal.
+template <typename Pending, typename Issue>
+yyjson_mut_val* startWhenChecked(McpServerCore::State& core, Json& out, const std::stop_token& stop,
+                                 const Pending& pending, const Issue& issue) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + core.dependencies.limits.destinationCheckWait;
+    std::optional<host::ExportQueueSubscription> sub;
+    std::uint64_t observed = 0;
+    while (true) {
+        yyjson_mut_val* result = nullptr;
+        bool missing = false;
+        const bool last = std::chrono::steady_clock::now() >= deadline;
+        onOwner(
+            core,
+            [&](host::ExportQueueService* queue, std::uint64_t) {
+                if (queue == nullptr) {
+                    missing = true;
+                    return;
+                }
+                if (core.dependencies.exports.callerIsOwner)
+                    queue->pump();
+                if (!last && pending(*queue->snapshot())) {
+                    if (!sub && !core.dependencies.exports.callerIsOwner) {
+                        auto subscribed = queue->subscribe();
+                        if (subscribed.status == host::ExportQueueSubscribeStatus::Accepted) {
+                            sub.emplace(std::move(subscribed.subscription));
+                            observed = sub->serial();
+                        }
+                    }
+                    return;
+                }
+                result = commandValue(out, issue(*queue));
+            },
+            stop);
+        if (missing)
+            noQueue();
+        if (result != nullptr)
+            return result;
+        if (stop.stop_requested())
+            throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+        // Wake at the limit even if the queue publishes nothing.
+        std::stop_source wake;
+        bloom::core::StoppableWorkerThread timer(
+            [&wake, deadline](const std::stop_token& cancelTimer) {
+                std::mutex mutex;
+                std::condition_variable_any idle;
+                std::unique_lock lock(mutex);
+                idle.wait_until(lock, cancelTimer, deadline, [] { return false; });
+                wake.request_stop();
+            });
+        const std::stop_callback forward(stop, [&wake] { wake.request_stop(); });
+        waitForQueue(core, sub, observed, wake.get_token());
+    }
+}
+
+[[nodiscard]] bool startAwaitsDestinationCheck(const host::ExportJobView& job) {
+    const auto& start = job.commands[host::ExportCommand::Start];
+    return !start && start.code == host::ExportUnavailableCode::DestinationCheckPending;
+}
+
 } // namespace
 
 WorkerLimitArguments workerLimitArguments(yyjson_val* arguments) {
@@ -707,11 +773,19 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         while (auto* item = yyjson_arr_iter_next(&iterator))
             jobs.push_back(host::ExportJobId::fromRaw(identifier(item)));
         call.summary = std::to_string(jobs.size()) + " job(s)";
-        return command([&](host::ExportQueueService& queue) {
-            return queue.start(jobs, limits.any() ? std::optional(applyWorkerLimits(
-                                                        queue.workerLimits(), limits))
-                                                  : std::nullopt);
-        });
+        return startWhenChecked(
+            core, out, stop,
+            [&](const host::ExportQueueSnapshot& snapshot) {
+                return std::ranges::any_of(snapshot.jobs, [&](const host::ExportJobView& job) {
+                    return std::ranges::find(jobs, job.id) != jobs.end() &&
+                           startAwaitsDestinationCheck(job);
+                });
+            },
+            [&](host::ExportQueueService& queue) {
+                return queue.start(jobs, limits.any() ? std::optional(applyWorkerLimits(
+                                                            queue.workerLimits(), limits))
+                                                      : std::nullopt);
+            });
     }
     case McpTool::ExportStartAll: {
         WorkerLimitArguments limits;
@@ -719,11 +793,18 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
             members(arguments, {"workerMemoryCapBytes", "workerThreads"});
             limits = workerLimitArguments(arguments);
         }
-        return command([&](host::ExportQueueService& queue) {
-            return queue.startAll(limits.any() ? std::optional(applyWorkerLimits(
-                                                     queue.workerLimits(), limits))
-                                               : std::nullopt);
-        });
+        return startWhenChecked(
+            core, out, stop,
+            [](const host::ExportQueueSnapshot& snapshot) {
+                return std::ranges::any_of(snapshot.jobs, [](const host::ExportJobView& job) {
+                    return job.record.enabled && startAwaitsDestinationCheck(job);
+                });
+            },
+            [&](host::ExportQueueService& queue) {
+                return queue.startAll(
+                    limits.any() ? std::optional(applyWorkerLimits(queue.workerLimits(), limits))
+                                 : std::nullopt);
+            });
     }
     case McpTool::ExportStopAll:
         if (arguments)

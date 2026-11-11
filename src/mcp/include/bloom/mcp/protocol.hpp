@@ -33,6 +33,9 @@ struct McpMessageLimits final {
     std::uint32_t renderFrames = 10000;
     // Command events retained for the `events` tool.
     std::size_t retainedCommandEvents = 1024;
+    // How long export.start and export.start-all wait for a destination check that is already
+    // running before they answer DestinationCheckPending.
+    std::chrono::milliseconds destinationCheckWait{10000};
 };
 
 inline constexpr McpMessageLimits kMcpMessageLimits{};

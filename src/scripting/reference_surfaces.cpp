@@ -732,8 +732,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
         bool readOnlyCall;
     };
     constexpr std::array<QueueTool, 14> queue{{
-        {"export.start", "Start export queue jobs, as the Export panel's Start does.", false},
-        {"export.start-all", "Start every enabled export queue job.", false},
+        {"export.start",
+         "Start export queue jobs, as the Export panel's Start does. If a destination is still "
+         "being checked, the call waits for the check (up to 10 seconds) before it answers; "
+         "DestinationCheckPending means the check took longer, so call again.",
+         false},
+        {"export.start-all",
+         "Start every enabled export queue job. Waits for destination checks as export.start "
+         "does.",
+         false},
         {"export.pause", "Pause a rendering export job at the next frame boundary.", false},
         {"export.resume", "Resume a paused export job.", false},
         {"export.stop", "Stop an export job.", false},

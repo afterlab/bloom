@@ -240,8 +240,22 @@ std::unique_ptr<ExportRun> FakeExportRunBackend::start(ExportJobRunnerDependenci
     return std::make_unique<FakeRun>(std::move(request), script);
 }
 
+void FakeExportRunBackend::setDestinationCheckDelay(const std::chrono::milliseconds delay) {
+    {
+        const std::scoped_lock lock(mutex_);
+        checkDelay_ = delay;
+    }
+    checkDelayChanged_.notify_all();
+}
+
 ExportDestinationSample
 FakeExportRunBackend::sampleDestination(const ExportDestinationSampleRequest& request) {
+    {
+        std::unique_lock lock(mutex_);
+        const auto delay = checkDelay_;
+        if (delay.count() > 0)
+            checkDelayChanged_.wait_for(lock, delay, [&] { return checkDelay_.count() == 0; });
+    }
     ExportDestinationSample sample;
     sample.firstPath = request.firstPath;
     sample.lastPath = request.lastPath;

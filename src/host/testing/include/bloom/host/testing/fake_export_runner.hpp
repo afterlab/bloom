@@ -2,6 +2,8 @@
 
 #include <bloom/host/export_job_runner.hpp>
 
+#include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -52,6 +54,9 @@ class FakeExportRunBackend final : public ExportRunBackend {
     // path and `generation`; bump the generation to simulate an external change.
     void setExisting(const std::filesystem::path& firstPath, std::uint64_t generation = 1);
     void clearExisting(const std::filesystem::path& firstPath);
+    // Every destination check takes this long from now on; zero (the default) also releases the
+    // checks that are waiting. Simulates a slow volume.
+    void setDestinationCheckDelay(std::chrono::milliseconds delay);
     [[nodiscard]] std::size_t runsStarted() const;
     // The worker limits each started run was given, in start order.
     [[nodiscard]] std::vector<ExportWorkerLimits> startedLimits() const;
@@ -65,6 +70,8 @@ class FakeExportRunBackend final : public ExportRunBackend {
     mutable std::mutex mutex_;
     std::deque<FakeExportScript> scripts_;
     std::map<std::filesystem::path, std::uint64_t> existing_;
+    std::chrono::milliseconds checkDelay_{0};
+    std::condition_variable checkDelayChanged_;
     std::size_t started_ = 0;
     std::vector<ExportWorkerLimits> limits_;
 };
