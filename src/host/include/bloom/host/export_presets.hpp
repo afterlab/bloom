@@ -309,10 +309,13 @@ withExplicitExportView(document::ExportOutputSettings settings,
 [[nodiscard]] document::ExportOutputSettings
 withExplicitExportView(document::ExportOutputSettings settings,
                        std::span<const color::DisplayViewEntry> displays);
-// The display/view list of the project's built-in colour configuration; empty when it does not
-// resolve. Resolving parses the configuration, so callers keep the result while the settings stay.
+// The display/view list of the project's colour configuration; empty when it does not resolve.
+// Resolving parses the configuration (an external one in the supervised helper, which may
+// block), so callers keep the result while the settings stay. `projectDirectory` is where a
+// project-relative config archive is looked for.
 [[nodiscard]] std::vector<color::DisplayViewEntry>
-exportDisplayViews(const document::ColorSettings& project);
+exportDisplayViews(const document::ColorSettings& project,
+                   const std::filesystem::path& projectDirectory = {});
 // Project-dependent requirements: ACES names need the pinned built-in ACES CG config; names the
 // built-in neutral config does not have are missing.
 [[nodiscard]] ExportAvailability

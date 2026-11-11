@@ -1,4 +1,5 @@
 #include <atomic>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/host/bloom_neutral_profile.hpp>
@@ -215,7 +216,16 @@ void savedColorIntent() {
     require(relativeComposition != nullptr, "Relative OCIO composition exists");
     const auto relativeIntent =
         scripting::captureRenderColorIntent(relativeSource, *relativeComposition);
-    require(relativeIntent.has_value() && relativeIntent->ocioConfigUri == "color/config.ocioz" &&
+    // The intent carries the archive as a resolvable location: its kind and the path under the
+    // project folder, the same text the export queue carries.
+    require(relativeIntent.has_value(), "Headless capture keeps a relative OCIO archive intent");
+    const auto relativeLocation = color::parseOcioConfigLocation(relativeIntent->ocioConfigUri);
+    require(relativeLocation.kind == color::OcioConfigLocatorKind::ProjectRelativeArchive &&
+                relativeLocation.value ==
+                    (relativeSource.assetBaseDirectory / "color/config.ocioz")
+                        .lexically_normal()
+                        .string() &&
+                relativeLocation.context.empty() &&
                 relativeIntent->ocioConfigRevision == core::Sha256Digest{},
             "Headless capture preserves relative OCIO locator instead of empty Neutral intent");
 }

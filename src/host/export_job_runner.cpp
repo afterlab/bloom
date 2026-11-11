@@ -7,6 +7,7 @@
 #include "export_output_drivers.hpp"
 #include "export_queue_values.hpp"
 
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/project.hpp>
 
@@ -14,19 +15,35 @@
 
 namespace bloom::host {
 
+std::string ocioConfigIntentLocation(const document::OcioConfigReference& reference,
+                                     const std::filesystem::path& projectDirectory) {
+    color::OcioConfigLocation location;
+    const auto& locator = reference.locator;
+    if (const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&locator)) {
+        // A built-in reads no file and takes no context: its intent text is its URI alone.
+        return builtIn->uri;
+    }
+    if (const auto* relative = std::get_if<document::ProjectRelativeOciozLocator>(&locator)) {
+        location.kind = color::OcioConfigLocatorKind::ProjectRelativeArchive;
+        location.value = projectDirectory.empty()
+                             ? relative->path
+                             : (projectDirectory / relative->path).lexically_normal().string();
+    } else if (const auto* archive = std::get_if<document::ExternalOciozLocator>(&locator)) {
+        location.kind = color::OcioConfigLocatorKind::ExternalArchive;
+        location.value = archive->uri;
+    } else if (const auto* external = std::get_if<document::ExternalOcioConfigLocator>(&locator)) {
+        location.kind = color::OcioConfigLocatorKind::ExternalLooseConfig;
+        location.value = external->uri;
+    }
+    for (const auto& variable : reference.contextVariables)
+        location.context.push_back({variable.name, variable.value});
+    return color::ocioConfigLocationText(location);
+}
+
 std::optional<runtime::EvaluationColorIntent>
-exportColorIntent(const document::ColorSettings& settings,
-                  const document::Composition& composition) {
-    const auto& locator = settings.ocioConfig.locator;
-    std::string_view uri;
-    if (const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&locator))
-        uri = builtIn->uri;
-    else if (const auto* relative = std::get_if<document::ProjectRelativeOciozLocator>(&locator))
-        uri = relative->path;
-    else if (const auto* archive = std::get_if<document::ExternalOciozLocator>(&locator))
-        uri = archive->uri;
-    else if (const auto* external = std::get_if<document::ExternalOcioConfigLocator>(&locator))
-        uri = external->uri;
+exportColorIntent(const document::ColorSettings& settings, const document::Composition& composition,
+                  const std::filesystem::path& projectDirectory) {
+    const auto uri = ocioConfigIntentLocation(settings.ocioConfig, projectDirectory);
     const runtime::EvaluationColorIntent borrowed{
         .workingColorSpaceId = composition.workingColorSpaceId()
                                    ? std::string_view(*composition.workingColorSpaceId())
@@ -189,7 +206,8 @@ ExportJobRunner::ExportJobRunner(ExportJobRunnerDependencies dependencies,
         s.phase = ExportJobRunPhase::Finished;
         return;
     }
-    s.colorIntent = exportColorIntent(s.request.colorSettings, *composition);
+    s.colorIntent =
+        exportColorIntent(s.request.colorSettings, *composition, s.request.assetBaseDirectory);
     if (!s.colorIntent) {
         s.failure = detail::exportFailure(ExportFailureCode::Internal, "export.color-intent",
                                           "The export color intent could not be captured");

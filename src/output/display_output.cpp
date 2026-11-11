@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/output/display_output.hpp>
 
 namespace bloom::output {
@@ -11,8 +12,8 @@ resolveOutputDisplayConfigV1(const runtime::EvaluationColorIntent& intent) {
         revision == color::kBloomNeutralV1ConfigDigest ? color::kBloomNeutralV1ConfigUri
         : intent.ocioConfigUri == runtime::kBloomNeutralOcioConfigUri ? color::kAcesCgV1ConfigUri
                                                                       : intent.ocioConfigUri;
-    auto resolution = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, uri,
-                                                revision, intent.workingColorSpaceId);
+    // An external config resolves through the supervised helper.
+    auto resolution = color::resolveOcioConfig(uri, revision, intent.workingColorSpaceId);
     return std::move(resolution).takeResolved();
 }
 OutputDisplayViewV1 outputDisplayViewV1(const std::span<const color::DisplayViewEntry> displays,

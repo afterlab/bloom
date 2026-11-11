@@ -5,6 +5,7 @@
 
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
 
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_image.hpp>
@@ -458,10 +459,14 @@ GpuDisplayColorBinding gpuDisplayColorBindingForIntent(const EvaluationColorInte
                                                        const std::string_view display,
                                                        const std::string_view view) noexcept {
     GpuDisplayColorBinding binding;
-    binding.locatorKind = color::OcioConfigLocatorKind::BloomBuiltIn;
     const std::string_view uri =
         intent.ocioConfigUri.empty() ? color::kBloomNeutralV1ConfigUri : intent.ocioConfigUri;
     binding.locatorValue = std::string(uri);
+    try {
+        binding.locatorKind = color::parseOcioConfigLocation(uri).kind;
+    } catch (...) {
+        binding.locatorKind = color::OcioConfigLocatorKind::BloomBuiltIn;
+    }
     binding.expectedRevision =
         intent.ocioConfigRevision == core::Sha256Digest{} && uri == color::kBloomNeutralV1ConfigUri
             ? color::kBloomNeutralV1ConfigDigest

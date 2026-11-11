@@ -8,6 +8,7 @@
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
@@ -130,9 +131,10 @@ GpuDisplayProgramResult GpuDisplayProgramService::prepare(const GpuDisplayColorB
             }
         }
         if (config == nullptr) {
-            auto resolution =
-                color::resolveOcioBuiltIn(binding.locatorKind, binding.locatorValue,
-                                          binding.expectedRevision, binding.workingColorSpaceId);
+            // The binding's value is the intent's location text: an external config resolves
+            // through the supervised helper, which also reflects its GPU program.
+            auto resolution = color::resolveOcioConfig(
+                binding.locatorValue, binding.expectedRevision, binding.workingColorSpaceId);
             if (!resolution.ready()) {
                 result.error = GpuDisplayProgramError::ConfigUnavailable;
                 result.diagnostic = "the requested OCIO config/working space did not resolve";

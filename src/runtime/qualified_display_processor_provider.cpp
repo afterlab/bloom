@@ -39,8 +39,11 @@ registryDiagnostic(const bloom::color::OcioBuiltInResolutionResult& result) {
             "bloom.runtime.qualified-display-processor.registry-requires-helper",
             "The Bloom Neutral display configuration locator requires the supervised OCIO helper",
             "",
-            "The supervised OCIO helper is not yet implemented; this locator kind is not "
-            "reachable for the embedded built-in.");
+            "This locator kind resolves through the supervised OCIO helper and is not reachable "
+            "for the embedded built-in.");
+    case OcioBuiltInRegistryOutcome::MissingResource:
+        return diagnostic("bloom.runtime.qualified-display-processor.registry-missing-resource",
+                          "A file the display configuration references is missing");
     case OcioBuiltInRegistryOutcome::Invalid:
         switch (result.invalidReason()) {
         case OcioBuiltInInvalidReason::ParseFailed:
@@ -64,6 +67,10 @@ registryDiagnostic(const bloom::color::OcioBuiltInResolutionResult& result) {
                 "bloom.runtime.qualified-display-processor.registry-display-view-ambiguous",
                 "The embedded Bloom Neutral display configuration has no unambiguous display/"
                 "view mapping");
+        case OcioBuiltInInvalidReason::ResourceTableLimitExceeded:
+            return diagnostic(
+                "bloom.runtime.qualified-display-processor.registry-resource-limit",
+                "The OCIO configuration exceeds Bloom's bounded resource limits");
         case OcioBuiltInInvalidReason::DisplayViewEnumerationLimitExceeded:
             return diagnostic(
                 "bloom.runtime.qualified-display-processor.registry-display-view-limit",

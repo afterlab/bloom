@@ -1,5 +1,6 @@
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 
+#include "ocio_config_protocol.hpp"
 #include "ocio_internal.hpp"
 #include <bloom/core/floating_point.hpp>
 
@@ -25,8 +26,12 @@ class CpuColorSpaceProcessor::Impl final {
   public:
     explicit Impl(OCIO::ConstCPUProcessorRcPtr processor) noexcept
         : processor_(std::move(processor)) {}
+    explicit Impl(std::shared_ptr<const detail::RemoteRgbProcessor> remote) noexcept
+        : remote_(std::move(remote)) {}
 
     OCIO::ConstCPUProcessorRcPtr processor_;
+    // Set instead of processor_ for a config that lives in the supervised helper.
+    std::shared_ptr<const detail::RemoteRgbProcessor> remote_;
 };
 
 CpuColorSpaceProcessor::CpuColorSpaceProcessor(std::unique_ptr<Impl> impl,
@@ -47,9 +52,53 @@ CpuColorSpaceProcessor::prepare(const ResolvedBloomNeutralConfig& config,
             {}, !validId(fromId) ? OcioColorSpaceProcessorError::InvalidColorSpaceId
                                  : OcioColorSpaceProcessorError::MissingWorkingColorSpace);
     }
-    const auto& ocioConfig = config.impl().config();
     const std::string from(fromId);
     const std::string working(toWorkingSpaceId);
+    if (const auto& remote = config.impl().remote()) {
+        try {
+            if (from != working && !core::supportsReferenceFloatingPointEnvironment<float>()) {
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::UnsupportedFloatingPointEnvironment);
+            }
+            const auto built = remote->buildProcessor(
+                static_cast<std::uint32_t>(detail::ConfigProcessorKind::ColorSpace), from, working);
+            switch (static_cast<detail::ConfigProcessorError>(built.error)) {
+            case detail::ConfigProcessorError::None:
+                break;
+            case detail::ConfigProcessorError::MissingSource:
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::MissingInputColorSpace);
+            case detail::ConfigProcessorError::SourceIsData:
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::InputColorSpaceIsData);
+            case detail::ConfigProcessorError::MissingDestination:
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::MissingWorkingColorSpace);
+            case detail::ConfigProcessorError::DestinationIsData:
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::WorkingColorSpaceInvalid);
+            case detail::ConfigProcessorError::CpuUnavailable:
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::CpuProcessorUnavailable);
+            default:
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::TransformBuildFailed);
+            }
+            if (!built.identity && !built.processor) {
+                return OcioColorSpaceProcessorResult(
+                    {}, OcioColorSpaceProcessorError::TransformBuildFailed);
+            }
+            auto result = std::shared_ptr<const CpuColorSpaceProcessor>(new CpuColorSpaceProcessor(
+                built.identity ? nullptr : std::make_unique<Impl>(built.processor),
+                config.expectedRevision(), from, working, built.identity));
+            return OcioColorSpaceProcessorResult(std::move(result),
+                                                 OcioColorSpaceProcessorError::None);
+        } catch (const std::exception&) {
+            return OcioColorSpaceProcessorResult(
+                {}, OcioColorSpaceProcessorError::TransformBuildFailed);
+        }
+    }
+    const auto& ocioConfig = config.impl().config();
     try {
         const auto input = ocioConfig->getColorSpace(from.c_str());
         if (!input)
@@ -98,6 +147,16 @@ bool CpuColorSpaceProcessor::apply(std::span<std::array<float, 4>> pixels) const
     if (!core::supportsReferenceFloatingPointEnvironment<float>())
         return false;
     try {
+        if (!identity_ && impl_->remote_) {
+            for (const auto& pixel : pixels) {
+                if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) ||
+                    !std::isfinite(pixel[2]))
+                    return false;
+            }
+            // The helper applies each pixel as below and rejects a non-finite result.
+            return pixels.empty() ||
+                   impl_->remote_->apply({pixels.front().data(), pixels.size() * 4}, false);
+        }
         for (auto& pixel : pixels) {
             if (!std::isfinite(pixel[0]) || !std::isfinite(pixel[1]) || !std::isfinite(pixel[2]))
                 return false;

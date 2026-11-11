@@ -109,17 +109,24 @@ ImageStatus applyBloomNeutralDisplayChunk(const PreparedCpuDisplayProcessorHandl
     // over the 4-float scratch buffer, so OCIO's own code addresses only the R/G/B floats and
     // never sees or writes the 4th (alpha) float of each pixel -- alpha is therefore untouched by
     // construction (step 4), not by a separate copy-back step.
-    const auto& cpuProcessor = handle.impl().cpuProcessor();
-    try {
-        constexpr auto floatBytes = static_cast<std::ptrdiff_t>(sizeof(float));
-        OCIO::PackedImageDesc desc(scratchRgba.data(), static_cast<long>(n), 1L, 3L,
-                                   OCIO::BIT_DEPTH_F32, floatBytes, floatBytes * 4,
-                                   floatBytes * 4 * static_cast<std::ptrdiff_t>(n));
-        cpuProcessor->apply(desc);
-    } catch (const OCIO::Exception&) {
-        return codeError(ImageErrorCode::InvalidState);
-    } catch (const std::exception&) {
-        return codeError(ImageErrorCode::InvalidState);
+    if (const auto& remote = handle.impl().remoteForward()) {
+        // A helper-token lease: the same packed RGB application runs in the supervised helper.
+        if (!remote->apply(scratchRgba, true)) {
+            return codeError(ImageErrorCode::InvalidState);
+        }
+    } else {
+        const auto& cpuProcessor = handle.impl().cpuProcessor();
+        try {
+            constexpr auto floatBytes = static_cast<std::ptrdiff_t>(sizeof(float));
+            OCIO::PackedImageDesc desc(scratchRgba.data(), static_cast<long>(n), 1L, 3L,
+                                       OCIO::BIT_DEPTH_F32, floatBytes, floatBytes * 4,
+                                       floatBytes * 4 * static_cast<std::ptrdiff_t>(n));
+            cpuProcessor->apply(desc);
+        } catch (const OCIO::Exception&) {
+            return codeError(ImageErrorCode::InvalidState);
+        } catch (const std::exception&) {
+            return codeError(ImageErrorCode::InvalidState);
+        }
     }
 
     // Steps 5-6: reject non-finite processor RGB output; pack the declared straight-rgba8 sRGB

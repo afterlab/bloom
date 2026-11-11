@@ -4,7 +4,9 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/host/export_job_runner.hpp>
 #include <bloom/output/display_output.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -481,12 +483,24 @@ ExportAvailability exportPlatformAvailability(const document::ExportOutputSettin
     return available();
 }
 
-std::vector<color::DisplayViewEntry> exportDisplayViews(const document::ColorSettings& project) {
+std::vector<color::DisplayViewEntry>
+exportDisplayViews(const document::ColorSettings& project,
+                   const std::filesystem::path& projectDirectory) {
+    if (project.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
+        return {};
     const auto* builtIn =
         std::get_if<document::BuiltInOcioConfigLocator>(&project.ocioConfig.locator);
-    if (builtIn == nullptr ||
-        project.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
-        return {};
+    if (builtIn == nullptr) {
+        // A project-relative archive, an external archive or an external loose config: its
+        // displays come from the supervised helper.
+        auto resolution = color::resolveOcioConfig(
+            ocioConfigIntentLocation(project.ocioConfig, projectDirectory),
+            project.ocioConfig.expectedRevision.digest, project.processColorSpaceId);
+        const auto config = std::move(resolution).takeResolved();
+        if (!config.has_value())
+            return {};
+        return {config->displays().begin(), config->displays().end()};
+    }
     // An unpinned (zero) revision names the built-in's own content, as the render resolves it.
     auto revision = project.ocioConfig.expectedRevision.digest;
     if (revision == core::Sha256Digest{}) {

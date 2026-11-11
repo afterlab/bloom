@@ -16,8 +16,9 @@
 // resolves the immutable Bloom Neutral v1 payload and OCIO 2.5's pinned ACES 1.3 CG built-in,
 // per
 // docs/architecture/color-management.md's "Durable OCIO Configuration Identity" and "Supervised
-// OCIO Execution" (Bloom Neutral is the sole in-process trust class; every other locator kind
-// remains routed to the not-yet-implemented bloom-color-worker helper). This header exposes only
+// OCIO Execution" (the built-ins are the sole in-process trust class; every other locator kind
+// is resolved through the supervised bloom-color-worker helper by resolveOcioConfig in
+// ocio_config_resolution.hpp). This header exposes only
 // Bloom value types; OpenColorIO's Config/ColorSpace/Processor types never appear here (contract
 // "CPU Display Processor Boundary": "OCIO classes, exceptions, pointers, and enums remain
 // private").
@@ -26,8 +27,7 @@ namespace bloom::color {
 
 // The four locator kinds named in color-management.md's "Durable OCIO Configuration Identity"
 // table, in that table's order. Only BloomBuiltIn is implemented by this in-process registry;
-// the other three name real, planned locator kinds that this version routes honestly to the
-// helper rather than silently reporting Missing or Invalid for them.
+// the other three are resolved through the supervised helper and are never parsed here.
 enum class OcioConfigLocatorKind : std::uint8_t {
     BloomBuiltIn = 1,
     ProjectRelativeArchive = 2,
@@ -49,13 +49,32 @@ enum class OcioBuiltInRegistryOutcome : std::uint8_t {
     // not expose the exact unambiguous interop-ID mappings this registry requires. See
     // invalidReason() for the specific cause.
     Invalid,
-    // locatorKind names a real, planned locator kind (project-relative/external archive, or
-    // external loose config) that this in-process registry never resolves. Those inputs are
-    // supervised-helper-only per docs/architecture/color-management.md's "Supervised OCIO
-    // Execution"; the not-yet-implemented bloom-color-worker helper is the pending route. This is
-    // a distinct, honestly-named state -- never collapsed into Missing or Invalid.
+    // locatorKind names a project-relative archive, an external archive or an external loose
+    // config. Those inputs are supervised-helper-only per docs/architecture/color-management.md's
+    // "Supervised OCIO Execution": this in-process registry never resolves them (resolveOcioConfig
+    // in ocio_config_resolution.hpp does, through bloom-color-worker), and that resolution reports
+    // this state when the helper could not serve the request; helperError() says why. This is a
+    // distinct, honestly-named state -- never collapsed into Missing or Invalid.
     LocatorKindRequiresHelper,
+    // The config exists and parses, but a file it references is absent from the archive or the
+    // loose root. Only a helper-resolved config reports it.
+    MissingResource,
 };
+
+// Why the supervised helper could not serve a request. Meaningful only when outcome() ==
+// LocatorKindRequiresHelper; raw exit codes stay secondary provenance.
+enum class OcioHelperError : std::uint8_t {
+    None,
+    // This target cannot prove the helper's confinement, memory ceiling and kill deadline, or the
+    // helper executable is absent. External configs are unavailable here, never parsed in-process.
+    HelperUnavailable,
+    HelperProtocolViolation,
+    HelperMemoryLimit,
+    HelperDeadline,
+    HelperCancelled,
+    HelperTerminated,
+};
+[[nodiscard]] std::string_view ocioHelperErrorName(OcioHelperError error) noexcept;
 
 enum class OcioBuiltInInvalidReason : std::uint8_t {
     // Meaningful only when outcome() == Invalid; None otherwise.
@@ -68,10 +87,17 @@ enum class OcioBuiltInInvalidReason : std::uint8_t {
     DisplayViewEnumerationLimitExceeded,
     WorkingColorSpaceMissing,
     WorkingColorSpaceNotSceneLinear,
+    // A loose config's root holds more candidate files, or more bytes, than one sealed resource
+    // table may carry, or an archive is larger than the helper accepts.
+    ResourceTableLimitExceeded,
 };
 
 class ResolvedBloomNeutralConfig;
 class OcioBuiltInResolutionResult;
+namespace detail {
+// Private construction access for this library's own resolvers (ocio_internal.hpp).
+struct OcioConfigAccess;
+} // namespace detail
 
 struct OcioColorSpaceInfo final {
     std::string id;
@@ -230,6 +256,7 @@ class ResolvedBloomNeutralConfig final {
     [[nodiscard]] const Impl& impl() const&& = delete;
 
   private:
+    friend struct detail::OcioConfigAccess;
     friend OcioBuiltInResolutionResult
     resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind, std::string_view,
                                  const core::Sha256Digest&) noexcept;
@@ -277,6 +304,8 @@ class [[nodiscard]] OcioBuiltInResolutionResult final {
     [[nodiscard]] explicit operator bool() const noexcept { return ready(); }
     // Meaningful only when outcome() == Invalid.
     [[nodiscard]] OcioBuiltInInvalidReason invalidReason() const noexcept { return invalidReason_; }
+    // Meaningful only when outcome() == LocatorKindRequiresHelper.
+    [[nodiscard]] OcioHelperError helperError() const noexcept { return helperError_; }
     // The recomputed kind-1 content revision, when it could be computed (Ready and Changed).
     [[nodiscard]] const std::optional<core::Sha256Digest>& recomputedRevision() const& noexcept {
         return recomputedRevision_;
@@ -292,6 +321,7 @@ class [[nodiscard]] OcioBuiltInResolutionResult final {
     }
 
   private:
+    friend struct detail::OcioConfigAccess;
     friend OcioBuiltInResolutionResult
     resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind, std::string_view,
                                  const core::Sha256Digest&) noexcept;
@@ -304,6 +334,7 @@ class [[nodiscard]] OcioBuiltInResolutionResult final {
 
     OcioBuiltInRegistryOutcome outcome_;
     OcioBuiltInInvalidReason invalidReason_ = OcioBuiltInInvalidReason::None;
+    OcioHelperError helperError_ = OcioHelperError::None;
     std::optional<core::Sha256Digest> recomputedRevision_;
     std::optional<ResolvedBloomNeutralConfig> resolved_;
 };

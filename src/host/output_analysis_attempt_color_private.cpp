@@ -2,6 +2,7 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/output/display_output.hpp>
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
@@ -30,6 +31,8 @@ mapRegistryOutcome(const color::OcioBuiltInRegistryOutcome outcome) noexcept {
     case color::OcioBuiltInRegistryOutcome::Invalid:
         return output::PngRgba8SrgbColorResolutionStateV1::Invalid;
     case color::OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper:
+        break; // the caller reports the helper as an unavailable adapter.
+    case color::OcioBuiltInRegistryOutcome::MissingResource:
         return output::PngRgba8SrgbColorResolutionStateV1::MissingResource;
     }
     return output::PngRgba8SrgbColorResolutionStateV1::Missing;
@@ -127,11 +130,24 @@ resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const prov
             }
         }
 
-        const auto locator =
-            neutralWorkingSpace ? color::kBloomNeutralV1ConfigUri : color::kAcesCgV1ConfigUri;
+        // A project-relative archive, an external archive and an external loose config resolve
+        // through the supervised helper from the intent's own location; the built-ins as before.
+        const bool fileConfig = color::parseOcioConfigLocation(intent.ocioConfigUri).kind !=
+                                color::OcioConfigLocatorKind::BloomBuiltIn;
+        const auto locator = fileConfig            ? intent.ocioConfigUri
+                             : neutralWorkingSpace ? color::kBloomNeutralV1ConfigUri
+                                                   : color::kAcesCgV1ConfigUri;
         auto resolution =
-            color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, locator,
-                                      expectedRevision, intent.workingColorSpaceId);
+            color::resolveOcioConfig(locator, expectedRevision, intent.workingColorSpaceId);
+        if (resolution.outcome() == color::OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper) {
+            // frame-output.md: a configuration whose helper cannot run is an adapter-execution
+            // failure, not a color-resolution state.
+            return ColorResolutionOutcomeV1{
+                .colorResolution = output::PngRgba8SrgbColorResolutionStateV1::Ready,
+                .adapter = output::OutputAnalysisAdapterStateV1::Unavailable,
+                .display = {},
+                .gpuDisplayCommand = {}};
+        }
         if (!resolution.ready()) {
             return ColorResolutionOutcomeV1{
                 .colorResolution = mapRegistryOutcome(resolution.outcome()),

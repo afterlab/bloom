@@ -179,12 +179,17 @@ target_sources(
         ocio_gpu_program_transport.hpp
         ocio_gpu_program_worker.cpp
         ocio_gpu_program_worker.hpp
+        ocio_config_protocol.hpp
+        ocio_config_session.cpp
+        ocio_config_session.hpp
+        ocio_config_resolution.cpp
         ocio_internal.hpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
             include/bloom/color/ocio_builtin_registry.hpp
+            include/bloom/color/ocio_config_resolution.hpp
             include/bloom/color/ocio_cpu_color_space_processor.hpp
             include/bloom/color/ocio_cpu_file_transform_processor.hpp
             include/bloom/color/ocio_cpu_display_processor.hpp
@@ -315,9 +320,16 @@ bloom_enable_strict_floating_point(bloom_color_video)
 # OCIO shader-reflection codec with the host so neither duplicates the extraction logic; it only
 # ever links OCIO and the portable render value header, never a native device.
 add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp ocio_gpu_program_extract.cpp
-    ocio_gpu_program_serialize.cpp)
-target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_platform_process OpenColorIO::OpenColorIO)
-target_include_directories(bloom-color-worker PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../render/include")
+    ocio_gpu_program_serialize.cpp
+    # The config request group: the helper describes an external config with the registry's own
+    # rules, so both sides agree on working spaces, displays and synthesized inputs.
+    ocio_config_worker.cpp ocio_config_worker.hpp ocio_config_protocol.hpp
+    ocio_builtin_registry.cpp ocio_camera_log_inputs.cpp)
+target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_color bloom_platform_process OpenColorIO::OpenColorIO)
+target_include_directories(bloom-color-worker PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../render/include"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(bloom-color-worker
+    PRIVATE "BLOOM_COLOR_OCIO_TARGET_TRIPLE=\"${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_SYSTEM_NAME}\"")
 bloom_enable_warnings(bloom-color-worker)
 bloom_enable_strict_floating_point(bloom-color-worker)
 target_link_libraries(bloom_color_ocio PRIVATE bloom_platform_process)
@@ -333,6 +345,16 @@ if(BUILD_TESTING)
     # Reusable OCIO GPU program extraction (S0). Links the real OCIO CPU oracle and, when the
     # pinned prefix tools are present, compiles the wrapper fixture offline with glslangValidator
     # and spirv-val. No native device is touched; that is the next lane.
+    # #465: external configs through the supervised helper, compared with the reference.
+    add_executable(bloom_color_ocio_config_resolution_test tests/ocio_config_resolution_tests.cpp)
+    target_link_libraries(bloom_color_ocio_config_resolution_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
+    target_include_directories(bloom_color_ocio_config_resolution_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_color_ocio_config_resolution_test)
+    bloom_add_test(NAME bloom.color.ocio-config-resolution
+        COMMAND bloom_color_ocio_config_resolution_test
+        TIMEOUT 180
+        LABELS unit color ocio security)
+
     find_program(bloom_ocio_gpu_glslang_validator
         NAMES glslangValidator
         HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"

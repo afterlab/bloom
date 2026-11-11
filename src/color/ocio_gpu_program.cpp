@@ -1,5 +1,6 @@
 #include <bloom/color/ocio_gpu_program.hpp>
 
+#include "ocio_config_protocol.hpp"
 #include "ocio_gpu_program_extract.hpp"
 #include "ocio_gpu_program_serialize.hpp"
 #include "ocio_gpu_program_worker.hpp"
@@ -96,6 +97,55 @@ extract(const OCIO::ConstProcessorRcPtr& processor, const render::OcioGpuProgram
                     limits);
 }
 
+// The same extraction for a config that lives in the supervised helper: the helper builds the
+// processor of the recipe, reflects its program and returns the bounded serialization, which is
+// revalidated here against the same limits before it is accepted.
+[[nodiscard]] render::OcioGpuProgramResult
+extractRemote(const detail::RemoteOcioConfig& remote, const detail::ConfigProcessorKind kind,
+              const std::string_view a, const std::string_view b,
+              const render::OcioGpuProgramStage stage, const std::string_view semanticsId,
+              std::vector<std::byte> semanticBytes, const core::Sha256Digest& configRevision,
+              const render::OcioGpuProgramLimits& limits) {
+    auto error = render::OcioGpuProgramError::ShaderExtractionFailed;
+    const auto bytes = remote.extractGpuProgram(static_cast<std::uint32_t>(kind), a, b, stage,
+                                                semanticsId, limits, error);
+    if (bytes.empty()) {
+        return render::OcioGpuProgramResult::failure(
+            error == render::OcioGpuProgramError::None
+                ? render::OcioGpuProgramError::ShaderExtractionFailed
+                : error);
+    }
+    auto deserialized = detail::deserializeOcioGpuProgram(bytes, limits);
+    if (!deserialized.succeeded() || !deserialized.program.has_value()) {
+        return render::OcioGpuProgramResult::failure(deserialized.error);
+    }
+    auto program = std::move(*deserialized.program);
+    if (program.semanticsId != std::string(semanticsId) || program.stage != stage) {
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::ShaderExtractionFailed);
+    }
+    return finalize(std::move(program), std::move(semanticBytes), configRevision, limits);
+}
+
+// A transform built only from trusted parameters reads nothing from the project's config, so for
+// a config that lives in the helper it is built against OpenColorIO's raw config here.
+[[nodiscard]] OCIO::ConstConfigRcPtr trustedConfig(const ResolvedBloomNeutralConfig& resolved) {
+    const auto& config = resolved.impl().config();
+    return config ? config : OCIO::Config::CreateRaw();
+}
+
+// Whether `id` names a color space of the resolved config. A config in the helper is asked
+// through its description, which lists its non-data spaces.
+[[nodiscard]] bool hasColorSpace(const ResolvedBloomNeutralConfig& resolved,
+                                 const std::string_view id, const bool nonData) {
+    if (const auto& config = resolved.impl().config()) {
+        const auto space = config->getColorSpace(std::string(id).c_str());
+        return space && (!nonData || !space->isData());
+    }
+    return std::ranges::any_of(resolved.colorSpaces(),
+                               [&](const auto& space) { return space.id == id; });
+}
+
 } // namespace
 
 namespace {
@@ -114,6 +164,21 @@ buildDisplayProgram(const ResolvedBloomNeutralConfig& resolved, const std::strin
         });
     if (entry == resolved.displays().end()) {
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
+    }
+    if (const auto& remote = resolved.impl().remote()) {
+        try {
+            std::vector<std::byte> semanticBytes;
+            appendText(semanticBytes, resolved.processColorSpaceId());
+            appendText(semanticBytes, display);
+            appendText(semanticBytes, view);
+            appendText(semanticBytes, entry->colourSpaceId);
+            return extractRemote(*remote, detail::ConfigProcessorKind::DisplayForward, display,
+                                 view, stage, semanticsId, std::move(semanticBytes),
+                                 resolved.expectedRevision(), limits);
+        } catch (const std::exception&) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::TransformBuildFailed);
+        }
     }
     const auto& config = resolved.impl().config();
     try {
@@ -167,6 +232,26 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, const std:
                           const render::OcioGpuProgramLimits& limits) noexcept {
     if (!validId(fromId) || !validId(toId)) {
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
+    }
+    if (const auto& remote = resolved.impl().remote()) {
+        try {
+            if (fromId == toId) {
+                return render::OcioGpuProgramResult::failure(
+                    hasColorSpace(resolved, fromId, true)
+                        ? render::OcioGpuProgramError::IdentityTransform
+                        : render::OcioGpuProgramError::UnsupportedColorSpace);
+            }
+            std::vector<std::byte> semanticBytes;
+            appendText(semanticBytes, fromId);
+            appendText(semanticBytes, toId);
+            // The helper answers UnsupportedColorSpace for a missing or data space.
+            return extractRemote(*remote, detail::ConfigProcessorKind::ColorSpace, fromId, toId,
+                                 render::OcioGpuProgramStage::ProcessEffect, kOcioGpuCstSemanticsId,
+                                 std::move(semanticBytes), resolved.expectedRevision(), limits);
+        } catch (const std::exception&) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::TransformBuildFailed);
+        }
     }
     const auto& config = resolved.impl().config();
     try {
@@ -229,7 +314,7 @@ buildOcioGpuProgramForPointwiseAffine(const ResolvedBloomNeutralConfig& resolved
                                 0.0,
                                 1.0};
         transform->setMatrix(matrix);
-        const auto processor = resolved.impl().config()->getProcessor(
+        const auto processor = trustedConfig(resolved)->getProcessor(
             OCIO::Context::Create(), transform, OCIO::TRANSFORM_DIR_FORWARD);
         if (!processor) {
             return render::OcioGpuProgramResult::failure(
@@ -277,14 +362,10 @@ render::OcioGpuProgramResult buildOcioGpuProgramForFileTransform(
             return render::OcioGpuProgramResult::failure(
                 render::OcioGpuProgramError::InvalidRequest);
         }
-        {
-            const auto& config = resolved.impl().config();
-            const auto process = config->getColorSpace(std::string(processSpaceId).c_str());
-            const auto working = config->getColorSpace(std::string(workingSpaceId).c_str());
-            if (!process || !working || process->isData() || working->isData()) {
-                return render::OcioGpuProgramResult::failure(
-                    render::OcioGpuProgramError::UnsupportedColorSpace);
-            }
+        if (!hasColorSpace(resolved, processSpaceId, true) ||
+            !hasColorSpace(resolved, workingSpaceId, true)) {
+            return render::OcioGpuProgramResult::failure(
+                render::OcioGpuProgramError::UnsupportedColorSpace);
         }
 #if !defined(__linux__) && !defined(__APPLE__)
         // No confinement/process-supervision primitive: never parse LUT bytes in-process.
@@ -338,9 +419,9 @@ buildOcioGpuProgramForExposureContrast(const ResolvedBloomNeutralConfig& resolve
     if (!validId(sourceId) || !std::isfinite(exposure) || !std::isfinite(contrast)) {
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     }
-    const auto& config = resolved.impl().config();
     try {
-        if (!config->getColorSpace(std::string(sourceId).c_str())) {
+        const auto config = trustedConfig(resolved);
+        if (!hasColorSpace(resolved, sourceId, false)) {
             return render::OcioGpuProgramResult::failure(
                 render::OcioGpuProgramError::UnsupportedColorSpace);
         }
@@ -385,9 +466,9 @@ render::OcioGpuProgramResult buildOcioGpuProgramForLut3d(
                 render::OcioGpuProgramError::UnsupportedResourceForm);
         }
     }
-    const auto& config = resolved.impl().config();
     try {
-        if (!config->getColorSpace(std::string(sourceId).c_str())) {
+        const auto config = trustedConfig(resolved);
+        if (!hasColorSpace(resolved, sourceId, false)) {
             return render::OcioGpuProgramResult::failure(
                 render::OcioGpuProgramError::UnsupportedColorSpace);
         }

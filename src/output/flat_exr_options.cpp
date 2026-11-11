@@ -1,5 +1,6 @@
 #include "flat_exr_preset_contract.hpp"
 #include <OpenEXR/openexr_compression.h>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/output/flat_exr_options.hpp>
 
 #include <cmath>
@@ -78,8 +79,8 @@ PreparedFlatExrOutputV1::prepare(const runtime::EvaluationColorIntent& source,
                          : source.ocioConfigUri == runtime::kBloomNeutralOcioConfigUri
                              ? color::kAcesCgV1ConfigUri
                              : source.ocioConfigUri;
-        auto resolved = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, uri,
-                                                  revision, source.workingColorSpaceId);
+        // An external config resolves through the supervised helper (#465).
+        auto resolved = color::resolveOcioConfig(uri, revision, source.workingColorSpaceId);
         auto config = std::move(resolved).takeResolved();
         if (!config)
             return {};

@@ -2,6 +2,7 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/media/video/colour.hpp>
 
 #include <algorithm>
@@ -56,8 +57,9 @@ resolveInputColorConfig(const EvaluationColorIntent& intent) {
             return std::nullopt;
         revision = *computed;
     }
-    auto resolved = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, uri,
-                                              revision, intent.workingColorSpaceId);
+    // A built-in resolves in-process; a project-relative archive, an external archive and an
+    // external loose config through the supervised helper.
+    auto resolved = color::resolveOcioConfig(uri, revision, intent.workingColorSpaceId);
     if (!resolved.ready())
         return std::nullopt;
     return std::move(resolved).takeResolved();

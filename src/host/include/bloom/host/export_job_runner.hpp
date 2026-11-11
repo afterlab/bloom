@@ -246,11 +246,21 @@ class ExportJobRunner final : public ExportRun {
     std::unique_ptr<State> state_;
 };
 
+// The text an evaluation colour intent carries for the project's OCIO config
+// (color::ocioConfigLocationText): a built-in's URI unchanged; for a project-relative archive, an
+// external archive and an external loose config the file's location and the project's context
+// variables, which color::resolveOcioConfig opens through the supervised helper. A
+// project-relative archive is joined to `projectDirectory`; with no directory (an unsaved
+// project) it names no file and resolves Missing.
+[[nodiscard]] std::string ocioConfigIntentLocation(const document::OcioConfigReference& reference,
+                                                   const std::filesystem::path& projectDirectory);
+
 // The evaluation colour intent of `composition` under `settings` (the working space, the selected
-// OCIO config URI and pinned revision), captured so it owns its strings.
+// OCIO config location and pinned revision), captured so it owns its strings. `projectDirectory`
+// is where a project-relative config archive is looked for.
 [[nodiscard]] std::optional<runtime::EvaluationColorIntent>
-exportColorIntent(const document::ColorSettings& settings,
-                  const document::Composition& composition);
+exportColorIntent(const document::ColorSettings& settings, const document::Composition& composition,
+                  const std::filesystem::path& projectDirectory = {});
 
 // The frames a job renders now; nullopt when the composition is missing, has no frame mapping,
 // or a custom/frame range lies outside it.

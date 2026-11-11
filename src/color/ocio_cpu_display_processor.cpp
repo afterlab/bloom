@@ -1,5 +1,6 @@
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 
+#include "ocio_config_protocol.hpp"
 #include "ocio_internal.hpp"
 #include <bloom/color/display_processor_identity.hpp>
 
@@ -28,10 +29,11 @@ using bloom::color::ResolvedBloomNeutralConfig;
 // color-management.md's "Qualified Display Intent And Identity").
 [[nodiscard]] std::optional<bloom::color::DisplayProcessorIdentityV1>
 buildIdentity(const ResolvedBloomNeutralConfig& resolved, const std::string_view displayName,
-              const std::string_view viewName, const std::string_view outputColorSpaceId) {
+              const std::string_view viewName, const std::string_view outputColorSpaceId,
+              const std::span<const DisplayProcessorContextVariableV1View> contextVariables = {}) {
     const DisplayProcessorIdentityV1InputView input{
         .expectedOcioRevision = resolved.expectedRevision(),
-        .contextVariables = {},
+        .contextVariables = contextVariables,
         .sourceColorSpaceId = resolved.processColorSpaceId(),
         .displayName = displayName,
         .viewName = viewName,
@@ -115,22 +117,56 @@ convertColor(const OCIO::ConstCPUProcessorRcPtr& processor, bloom::core::Color4d
                                 static_cast<double>(rgb[2]), value.alpha};
 }
 
+// The same conversion through a processor that lives in the supervised helper.
+[[nodiscard]] std::optional<bloom::core::Color4d>
+convertColor(const std::shared_ptr<const bloom::color::detail::RemoteRgbProcessor>& processor,
+             bloom::core::Color4d value, const bool clampDisplay) noexcept {
+    if (!processor || !value.isValid() ||
+        !bloom::core::supportsReferenceFloatingPointEnvironment<float>() ||
+        !bloom::core::supportsReferenceFloatingPointEnvironment<double>()) {
+        return std::nullopt;
+    }
+    const std::array channels{value.red, value.green, value.blue};
+    std::array<float, 4> rgba{0.0F, 0.0F, 0.0F, 1.0F};
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (std::abs(channels[i]) > static_cast<double>(std::numeric_limits<float>::max()))
+            return std::nullopt;
+        rgba[i] = static_cast<float>(channels[i]);
+    }
+    if (!processor->apply(rgba, false))
+        return std::nullopt;
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (!std::isfinite(rgba[i]))
+            return std::nullopt;
+        if (clampDisplay)
+            rgba[i] = std::clamp(rgba[i], 0.0F, 1.0F);
+    }
+    return bloom::core::Color4d{static_cast<double>(rgba[0]), static_cast<double>(rgba[1]),
+                                static_cast<double>(rgba[2]), value.alpha};
+}
+
 } // namespace
 
 namespace bloom::color {
 
 std::optional<core::Color4d>
 PreparedCpuDisplayProcessorHandle::referenceToDisplay(const core::Color4d value) const noexcept {
+    if (lease_.kind() == DisplayProcessorLeaseKind::HelperToken)
+        return convertColor(impl_->remoteForward(), value, true);
     return convertColor(impl_->cpuProcessor(), value, true);
 }
 
 std::optional<core::Color4d> PreparedCpuDisplayProcessorHandle::referenceToDisplayLinear(
     const core::Color4d value) const noexcept {
+    if (lease_.kind() == DisplayProcessorLeaseKind::HelperToken)
+        return convertColor(impl_->remoteForward(), value, false);
     return convertColor(impl_->cpuProcessor(), value, false);
 }
 
 std::optional<core::Color4d>
 PreparedCpuDisplayProcessorHandle::displayToReference(const core::Color4d value) const noexcept {
+    if (lease_.kind() == DisplayProcessorLeaseKind::HelperToken)
+        return convertColor(impl_->remoteInverse(), value, false);
     return convertColor(impl_->inverseProcessor(), value, false);
 }
 
@@ -166,6 +202,52 @@ OcioBuildProcessorResult buildCpuDisplayProcessorForView(const ResolvedBloomNeut
         });
     if (entry == resolved.displays().end()) {
         return OcioBuildProcessorResult(OcioBuildProcessorError::DisplayViewNotFound);
+    }
+    if (const auto& remote = resolved.impl().remote()) {
+        // A supervised external config: both processors are built and stay in the helper.
+        try {
+            const auto forward = remote->buildProcessor(
+                static_cast<std::uint32_t>(detail::ConfigProcessorKind::DisplayForward),
+                displayName, viewName);
+            const auto inverse = remote->buildProcessor(
+                static_cast<std::uint32_t>(detail::ConfigProcessorKind::DisplayInverse),
+                displayName, viewName);
+            const auto cpuUnavailable =
+                static_cast<std::uint32_t>(detail::ConfigProcessorError::CpuUnavailable);
+            if (forward.error == cpuUnavailable || inverse.error == cpuUnavailable)
+                return OcioBuildProcessorResult(OcioBuildProcessorError::GetCpuProcessorFailed);
+            if (forward.error != 0 || inverse.error != 0 || !forward.processor ||
+                !inverse.processor)
+                return OcioBuildProcessorResult(OcioBuildProcessorError::GetProcessorFailed);
+            std::vector<DisplayProcessorContextVariableV1View> variables;
+            for (const auto& variable : remote->context())
+                variables.push_back({variable.name, variable.value});
+            auto identity =
+                buildIdentity(resolved, displayName, viewName, entry->colourSpaceId, variables);
+            if (!identity.has_value())
+                return OcioBuildProcessorResult(
+                    OcioBuildProcessorError::IdentityConstructionFailed);
+            const auto& helper = remote->description();
+            DisplayProcessorExecutionProvenance provenance{
+                .ocioVersion = helper.ocioVersion,
+                .compilerId = helper.compilerId,
+                .compilerVersion = helper.compilerVersion,
+                .targetTriple = helper.targetTriple,
+                .processorCacheId = forward.cacheId,
+                .displayName = std::string(displayName),
+                .viewName = std::string(viewName),
+                .dependencyLockDigest = std::nullopt,
+                .qualifiedPrefixDigest = std::nullopt,
+            };
+            auto impl = std::make_unique<PreparedCpuDisplayProcessorHandle::Impl>(
+                forward.processor, inverse.processor);
+            PreparedCpuDisplayProcessorHandle handle(std::move(impl), std::move(*identity),
+                                                     std::move(provenance),
+                                                     DisplayProcessorLease::helperToken());
+            return OcioBuildProcessorResult(std::move(handle));
+        } catch (const std::exception&) {
+            return OcioBuildProcessorResult(OcioBuildProcessorError::GetProcessorFailed);
+        }
     }
     const auto& config = resolved.impl().config();
 

@@ -114,19 +114,8 @@ captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
     if (!source.colorSettings.has_value())
         return std::nullopt;
     const auto& settings = *source.colorSettings;
-    std::string_view uri;
-    if (const auto* builtIn =
-            std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator))
-        uri = builtIn->uri;
-    else if (const auto* relativeArchive =
-                 std::get_if<document::ProjectRelativeOciozLocator>(&settings.ocioConfig.locator))
-        uri = relativeArchive->path;
-    else if (const auto* externalArchive =
-                 std::get_if<document::ExternalOciozLocator>(&settings.ocioConfig.locator))
-        uri = externalArchive->uri;
-    else if (const auto* externalConfig =
-                 std::get_if<document::ExternalOcioConfigLocator>(&settings.ocioConfig.locator))
-        uri = externalConfig->uri;
+    // The same text the export queue carries, so both routes resolve the same config.
+    const auto uri = host::ocioConfigIntentLocation(settings.ocioConfig, source.assetBaseDirectory);
     const auto& working = composition.workingColorSpaceId();
     return runtime::captureEvaluationColorIntent(
         {.workingColorSpaceId = working.has_value()

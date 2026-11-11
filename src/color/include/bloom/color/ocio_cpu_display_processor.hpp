@@ -38,12 +38,10 @@ struct DisplayProcessorExecutionProvenance final {
                            const DisplayProcessorExecutionProvenance&) = default;
 };
 
-// The lease-vs-helper-token distinction as a closed variant (design decision 4: "Model the
-// lease-vs-helper-token distinction as a closed variant NOW (helper arm unimplemented, typed as
-// such) so the helper chapter slots in without an API break"). Only the InProcess arm has a
-// public factory in this version; HelperToken names the real, planned arm for supervised external
-// configs and is intentionally unreachable until the helper chapter adds its factory and opaque
-// token payload.
+// The lease-vs-helper-token distinction as a closed variant. InProcess is a qualified built-in
+// whose OCIO processor lives in this process. HelperToken is a processor of a supervised external
+// config: it lives in bloom-color-worker, and the handle holds an opaque token that is valid only
+// while that helper serves (docs/architecture/color-management.md, "Supervised OCIO Execution").
 enum class DisplayProcessorLeaseKind : std::uint8_t {
     InProcess = 1,
     HelperToken = 2,
@@ -53,6 +51,9 @@ class DisplayProcessorLease final {
   public:
     [[nodiscard]] static constexpr DisplayProcessorLease inProcess() noexcept {
         return DisplayProcessorLease(DisplayProcessorLeaseKind::InProcess);
+    }
+    [[nodiscard]] static constexpr DisplayProcessorLease helperToken() noexcept {
+        return DisplayProcessorLease(DisplayProcessorLeaseKind::HelperToken);
     }
 
     [[nodiscard]] constexpr DisplayProcessorLeaseKind kind() const noexcept { return kind_; }

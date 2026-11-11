@@ -1,6 +1,8 @@
 #include "lut_preflight.hpp"
 #include "lut_worker_ipc.hpp"
 #include "lut_worker_protocol.hpp"
+#include "ocio_config_protocol.hpp"
+#include "ocio_config_worker.hpp"
 #include "ocio_gpu_program_extract.hpp"
 #include "ocio_gpu_program_serialize.hpp"
 #include <OpenColorIO/OpenColorIO.h>
@@ -331,6 +333,10 @@ int main() {
             return 1;
         OCIO::ConstCPUProcessorRcPtr cpu;
         bool identity = false;
+        // The config request group (ocio_config_protocol.hpp). A helper serves one group: once a
+        // config command arrived, the LUT commands below are refused, and the reverse.
+        detail::ConfigWorker configs;
+        bool servesConfig = false;
         std::uint64_t nonce = 0;
         while (true) {
             detail::LutPacket message{};
@@ -345,6 +351,13 @@ int main() {
                 error = detail::lutConnect(descriptorSocket.get(), message[5], message[6])
                             ? LutError::None
                             : LutError::HelperUnavailable;
+            } else if (message[2] >= detail::kConfigCommandBegin &&
+                       message[2] <= detail::kConfigCommandLast && nonce >= 2 &&
+                       (servesConfig || nonce == 2)) {
+                servesConfig = true;
+                error = configs.handle(message, descriptorSocket.get(), &confine, payload);
+            } else if (servesConfig) {
+                error = LutError::HelperProtocolViolation;
             } else if (message[2] == detail::kLutCommandBuildCpu && nonce == 2) {
                 error = build(message, cpu, descriptorSocket.get(), identity);
                 payload = cpu && (identity || cpu->isIdentity()) ? 1 : 0;
