@@ -12,6 +12,8 @@ install(TARGETS bloom-mcp RUNTIME DESTINATION bin)
 # compilation works out of the box; an unqualified or CPU-stub build gets a typed definition.
 include(BloomGpuShaderTools)
 bloom_package_gpu_shader_tools(bloom-mcp)
+# macOS has no system Vulkan: package the locked loader and driver beside the executable.
+bloom_package_vulkan_runtime(bloom-mcp)
 
 if(BUILD_TESTING)
     find_package(Python3 QUIET COMPONENTS Interpreter)

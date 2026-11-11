@@ -14,6 +14,8 @@ endif()
 # works out of the box; an unqualified or CPU-stub build gets a typed unavailable definition.
 include(BloomGpuShaderTools)
 bloom_package_gpu_shader_tools(bloom-cli)
+# macOS has no system Vulkan: package the locked loader and driver beside the executable.
+bloom_package_vulkan_runtime(bloom-cli)
 
 if(BUILD_TESTING)
     include(BloomTesting)

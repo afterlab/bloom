@@ -1,0 +1,59 @@
+{
+  "name": "moltenvk",
+  "version": "1.4.2",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/MoltenVK/tar.gz/refs/tags/v1.4.2",
+    "archiveSha256": "sha256:6864db532f1dbbdb621a8d0ec13f24edae318fd9269dd3dd0cdff791334bb1cb",
+    "archiveSizeBytes": 1260733,
+    "retrievedAt": "2026-11-11",
+    "commit": "db66022459ffb663aa2b50f6b018bc2e124f5edf",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/moltenvk/provenance.md",
+      "sha256": "sha256:49821f4a2348c9882939a12d5d14d70b48e0fb05fa4e89e55db6407ccc5d4da9"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/moltenvk/LICENSE",
+        "sha256": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/moltenvk/review.md",
+      "sha256": "sha256:b4e95aee0f3028416f6b30573a76e4e597b0f505c4e5163e1607580989019328"
+    },
+    "reviewedAt": "2026-11-11"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "cereal",
+      "relationship": "build"
+    },
+    {
+      "name": "spirv-cross",
+      "relationship": "link"
+    },
+    {
+      "name": "vulkan-headers",
+      "relationship": "build"
+    }
+  ],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-11",
+    "record": {
+      "path": "dependencies/licenses/moltenvk/security.md",
+      "sha256": "sha256:659f38d39623d8301d093d8594cd8b857b38f53f8321653bba355fdf3b527490"
+    },
+    "vulnerabilities": []
+  }
+}

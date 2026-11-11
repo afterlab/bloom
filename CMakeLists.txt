@@ -35,6 +35,7 @@ include(CTest)
 include(BloomQuality)
 include(BloomWarnings)
 include(BloomDependencyPrefix)
+include(BloomVulkanRuntime)
 
 # Dependency-prefix consumption is implemented, so an explicit mode is required: 'qualified'
 # validates the reviewed lock and resolves dependency packages only from the superbuild prefix;

@@ -1311,6 +1311,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_pipeline_cache.cpp
         vulkan/gpu_pipeline_cache_private.hpp
         vulkan/gpu_device_bootstrap.cpp
+        vulkan/gpu_packaged_runtime.cpp
+        vulkan/gpu_packaged_runtime.hpp
         vulkan/gpu_device_private.hpp
         vulkan/gpu_display_transfer.cpp
         vulkan/gpu_oracle_readback.cpp

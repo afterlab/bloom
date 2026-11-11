@@ -105,6 +105,18 @@
     ]
   },
   "componentBuilds": {
+    "cereal": {
+      "linkage": "header-only",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.cereal"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "dav1d": {
       "linkage": "static",
       "cmakeOptions": [],
@@ -640,6 +652,51 @@
       ],
       "conformanceFixtureSets": []
     },
+    "moltenvk": {
+      "linkage": "shared",
+      "cmakeOptions": [
+        {
+          "name": "MOLTEN_VK_WITH_CCACHE",
+          "value": "OFF"
+        },
+        {
+          "name": "MVK_BUILD_SHADER_CONVERTER_TOOL",
+          "value": "OFF"
+        },
+        {
+          "name": "MVK_CONFIG_LOG_LEVEL",
+          "value": "warn"
+        },
+        {
+          "name": "MVK_EXCLUDE_CEREAL",
+          "value": "OFF"
+        },
+        {
+          "name": "MVK_EXCLUDE_SPIRV_TOOLS",
+          "value": "ON"
+        },
+        {
+          "name": "MVK_USE_METAL_PRIVATE_API",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.moltenvk-fast-math",
+          "state": "disabled",
+          "reason": "Metal fast-math shader compilation reorders and contracts floating-point arithmetic; GPU results are compared with the CPU reference, so the build default is MVK_CONFIG_FAST_MATH_ENABLED=0 (never)"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.moltenvk"
+      ],
+      "shippingRoles": [
+        "data",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "nanobind": {
       "linkage": "static",
       "cmakeOptions": [
@@ -892,6 +949,71 @@
       "cmakeOptions": [],
       "featureDecisions": [],
       "capabilities": [],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "spirv-cross": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "SPIRV_CROSS_CLI",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_CPP",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_C_API",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_GLSL",
+          "value": "ON"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_HLSL",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_MSL",
+          "value": "ON"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_REFLECT",
+          "value": "ON"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_ENABLE_UTIL",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_NAMESPACE_OVERRIDE",
+          "value": "MVK_spirv_cross"
+        },
+        {
+          "name": "SPIRV_CROSS_SHARED",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_CROSS_SKIP_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "SPIRV_CROSS_STATIC",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.spirv-cross"
+      ],
       "shippingRoles": [
         "license"
       ],

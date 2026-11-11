@@ -82,6 +82,11 @@ if(BLOOM_APP_BUNDLED_VULKAN_LOADER)
     )
 endif()
 
+# macOS has no system Vulkan: the locked loader and the MoltenVK driver go inside the bundle
+# (Contents/Frameworks) with the driver manifest in Contents/Resources/vulkan/icd.d. main.cpp asks
+# the renderer for that loader.
+bloom_package_vulkan_runtime(bloom)
+
 if(APPLE)
     # Self-contained .app: copy the Qt frameworks (and plugins) the desktop needs beside the
     # executable. Optional -- it requires Qt's macdeployqt, which is present in a normal Qt install

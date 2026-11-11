@@ -1,4 +1,5 @@
 #include "gpu_device_private.hpp"
+#include "gpu_packaged_runtime.hpp"
 #include "gpu_pipeline_cache_private.hpp"
 
 #include <bloom/core/telemetry_counters.hpp>
@@ -305,9 +306,31 @@ void VKAPI_PTR countDeviceMemoryFree(VmaAllocator, std::uint32_t, VkDeviceMemory
 
 } // namespace
 
+std::filesystem::path packagedVulkanLoaderPath() {
+#if defined(__APPLE__)
+    return vulkan_detail::packagedVulkanLoader();
+#else
+    return {};
+#endif
+}
+
 GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& options) {
+#if defined(__APPLE__)
+    // macOS has no system Vulkan: with no loader named, use the one packaged with this image, and
+    // have the loader use the driver packaged with it (see gpu_packaged_runtime.hpp).
+    std::filesystem::path resolvedLoader = options.loader_path;
+    if (resolvedLoader.empty()) {
+        resolvedLoader = vulkan_detail::packagedVulkanLoader();
+    }
+    if (!resolvedLoader.empty()) {
+        vulkan_detail::usePackagedVulkanDriver(resolvedLoader);
+    }
+    const std::string loaderPath =
+        resolvedLoader.empty() ? std::string(kDefaultLoaderName) : resolvedLoader.string();
+#else
     const std::string loaderPath = options.loader_path.empty() ? std::string(kDefaultLoaderName)
                                                                : options.loader_path.string();
+#endif
     vulkan_detail::DynamicLibrary loader(loaderPath.c_str());
     if (!loader.isOpen()) {
         return {nullptr,
@@ -399,8 +422,37 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
         instanceExtensions.push_back("VK_KHR_surface_maintenance1");
     }
 
+#if defined(__APPLE__)
+    // Metal compiles shaders with fast math unless told otherwise, which reorders and contracts
+    // floating-point arithmetic; Bloom's GPU results are compared with a CPU reference, so it asks
+    // the driver for exact arithmetic. The setting is addressed to MoltenVK by name and is read
+    // only by it. A setting given at instance creation takes precedence over the driver's
+    // environment variable, so the result does not depend on the user's environment.
+    static constexpr std::int32_t kMetalFastMathNever = 0;
+    VkLayerSettingEXT metalFastMath{};
+    metalFastMath.pLayerName = "MoltenVK";
+    metalFastMath.pSettingName = "MVK_CONFIG_FAST_MATH_ENABLED";
+    metalFastMath.type = VK_LAYER_SETTING_TYPE_INT32_EXT;
+    metalFastMath.valueCount = 1;
+    metalFastMath.pValues = &kMetalFastMathNever;
+    VkLayerSettingsCreateInfoEXT driverSettings{};
+    driverSettings.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+    driverSettings.settingCount = 1;
+    driverSettings.pSettings = &metalFastMath;
+    const bool driverSettingsAvailable =
+        instanceExtensionAvailable(context, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+    if (driverSettingsAvailable) {
+        instanceExtensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+    }
+#endif
+
     vk::InstanceCreateInfo instanceInfo;
     instanceInfo.pApplicationInfo = &applicationInfo;
+#if defined(__APPLE__)
+    if (driverSettingsAvailable) {
+        instanceInfo.pNext = &driverSettings;
+    }
+#endif
     instanceInfo.enabledExtensionCount = static_cast<std::uint32_t>(instanceExtensions.size());
     instanceInfo.ppEnabledExtensionNames =
         instanceExtensions.empty() ? nullptr : instanceExtensions.data();

@@ -1,5 +1,7 @@
 include_guard(GLOBAL)
 
+include(BloomVulkanRuntime)
+
 function(bloom_add_test)
     set(options)
     set(one_value_args NAME TIMEOUT WORKING_DIRECTORY)
@@ -25,6 +27,11 @@ function(bloom_add_test)
     if(TARGET "${ARG_COMMAND}" AND NOT BLOOM_ENABLE_TEST_CLANG_TIDY)
         set_property(TARGET "${ARG_COMMAND}" PROPERTY CXX_CLANG_TIDY "")
     endif()
+
+    # macOS has no system Vulkan; a test program finds the locked loader and driver beside itself
+    # the way a packaged executable does. Nothing happens on other platforms.
+    list(GET ARG_COMMAND 0 bloom_test_program)
+    bloom_stage_test_vulkan_runtime("${bloom_test_program}")
 
     if(ARG_LABELS)
         set_tests_properties("${ARG_NAME}" PROPERTIES LABELS "${ARG_LABELS}")

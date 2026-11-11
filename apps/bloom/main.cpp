@@ -334,6 +334,13 @@ int main(int argc, char* argv[]) try {
                                   .filePath(QStringLiteral(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR
                                                            "/" BLOOM_BUNDLED_VULKAN_LOADER_NAME))
                                   .toStdString());
+#elif defined(BLOOM_PACKAGED_VULKAN_RUNTIME)
+    // macOS: the loader and driver packaged inside the bundle.
+    if (auto packagedLoader = bloom::render::packagedVulkanLoaderPath(); !packagedLoader.empty()) {
+        bundledNativeLoader = true;
+        gpuPreviewDisplayOptions.enabled = true;
+        gpuPreviewDisplayOptions.loaderPath = std::move(packagedLoader);
+    }
 #endif
     // Ordinary widget composition provides panel/window clipping. Scene/display preparation
     // remains genuinely GPU; one asynchronous final transfer supplies immutable painted pixels.

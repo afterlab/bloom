@@ -1,0 +1,46 @@
+{
+  "name": "cereal",
+  "version": "a56bad8bbb770ee266e930c95d37fff2a5be7fea",
+  "source": {
+    "url": "https://codeload.github.com/USCiLab/cereal/tar.gz/a56bad8bbb770ee266e930c95d37fff2a5be7fea",
+    "archiveSha256": "sha256:12e10fb541270632f6683286ce8c7e8c321fe4addb53fa91ed498b95c1758f93",
+    "archiveSizeBytes": 386830,
+    "retrievedAt": "2026-11-11",
+    "commit": "a56bad8bbb770ee266e930c95d37fff2a5be7fea",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/cereal/provenance.md",
+      "sha256": "sha256:c4e70e4495278b3c2230169a09da1b8cbc87652cb3ce4140508738827bba726b"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/cereal/LICENSE",
+        "sha256": "sha256:58604a126af6a671ea390ee3d5b3e42228aa59b2858fb7af1d5b20b31739ccbb"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/cereal/review.md",
+      "sha256": "sha256:350b727773d0213fc85a706c924bb00936dc1aa0c31c40cd0f7d34b3c8f81d15"
+    },
+    "reviewedAt": "2026-11-11"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-11",
+    "record": {
+      "path": "dependencies/licenses/cereal/security.md",
+      "sha256": "sha256:34008aceec3e6b8d15a0d846e38e26751cc58a8a93ae87dd53acfab1a7078b08"
+    },
+    "vulnerabilities": []
+  }
+}

@@ -127,6 +127,8 @@ GpuSurfaceSupportResult GpuDevice::validateBorrowedSurface(const GpuBorrowedSurf
             "Bloom was built without Vulkan dependencies; presentation is unavailable"};
 }
 
+std::filesystem::path packagedVulkanLoaderPath() { return {}; }
+
 GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions&) {
     return {nullptr,
             {GpuDiagnosticCode::BackendNotBuilt,

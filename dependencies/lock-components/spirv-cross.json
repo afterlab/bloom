@@ -1,0 +1,62 @@
+{
+  "name": "spirv-cross",
+  "version": "6c09849fe88c48eaed08413aa022aaa136a3a057",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/SPIRV-Cross/tar.gz/6c09849fe88c48eaed08413aa022aaa136a3a057",
+    "archiveSha256": "sha256:b81b9956289950570953738e666a031ca32ff64e4fc925eba89f227c42109518",
+    "archiveSizeBytes": 2007157,
+    "retrievedAt": "2026-11-11",
+    "commit": "6c09849fe88c48eaed08413aa022aaa136a3a057",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/spirv-cross/provenance.md",
+      "sha256": "sha256:9c85f2c73d10ce68f801db6f2c979b942bc9c3d1696d7993ab76f4963e267c63"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "(Apache-2.0 OR MIT) AND Apache-2.0 AND MIT AND CC-BY-4.0 AND LicenseRef-KhronosFreeUse",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/spirv-cross/LICENSE",
+        "sha256": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "path": "dependencies/licenses/spirv-cross/LICENSES/Apache-2.0.txt",
+        "sha256": "sha256:44b0a56e80b41a1b0a6bd1292515e806539fd97b30be54c2719e6c763190ab57"
+      },
+      {
+        "path": "dependencies/licenses/spirv-cross/LICENSES/CC-BY-4.0.txt",
+        "sha256": "sha256:b89aeb7c2a164a0576786dd2a8b57f2fb628b23981f0a06bd77e2f99a9befa0f"
+      },
+      {
+        "path": "dependencies/licenses/spirv-cross/LICENSES/LicenseRef-KhronosFreeUse.txt",
+        "sha256": "sha256:fbeaca472f4f70e276dd1106ca5097435967a22ad6c1d8200aef7ad9f70aaf3f"
+      },
+      {
+        "path": "dependencies/licenses/spirv-cross/LICENSES/MIT.txt",
+        "sha256": "sha256:8f25018489d6fe0dec34a352314c38dc146247b7de65735790f4398a92afa84b"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/spirv-cross/review.md",
+      "sha256": "sha256:2848158dbf0c9189601a643f0e6abb330b782ca15c3568596b8115604116a524"
+    },
+    "reviewedAt": "2026-11-11"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-11",
+    "record": {
+      "path": "dependencies/licenses/spirv-cross/security.md",
+      "sha256": "sha256:3b0b7529ee380e6da3feca7c21fab9ae50cd6404e94b1d9ec107cbd1ce74264c"
+    },
+    "vulnerabilities": []
+  }
+}

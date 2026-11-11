@@ -258,8 +258,15 @@ struct GpuBufferAllocationResult final {
     explicit operator bool() const noexcept { return hasValue(); }
 };
 
+// The Vulkan loader packaged with this executable on macOS, which has no system loader: the one
+// GpuDevice::create opens when no loader is named. Empty when none is packaged, in a build without
+// the Vulkan backend, and on every other platform. For callers that hand a loader path to another
+// component.
+[[nodiscard]] std::filesystem::path packagedVulkanLoaderPath();
+
 // Explicit loader override for controlled tests and diagnostics. Production callers leave this
-// empty and receive the platform loader name; no workspace or build path is ever hardcoded.
+// empty and receive the platform loader (on macOS, the packaged one); no workspace or build path
+// is ever hardcoded.
 struct GpuDeviceCreationOptions final {
     std::filesystem::path loader_path;
     // Optional presentation bootstrap. The default (false / None) reproduces the compute-only
