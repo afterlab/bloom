@@ -77,7 +77,11 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" -I
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_parity_ops.py"
             $<TARGET_FILE:bloom-mcp>
-        LABELS scripting mcp integration)
+        LABELS scripting mcp integration
+        # Takes about 11 s alone (each case starts bloom-mcp), so the default 30 s left less
+        # than a threefold margin and a loaded runner timed it out. It has no timed assertions
+        # of its own: under a twentyfold slowdown it passes in about 150 s (#379).
+        TIMEOUT 240)
     # The agent surfaces describe themselves alike and read back what they write.
     if(BLOOM_BUILD_PYTHON)
         set(bloom_reference_python "${CMAKE_BINARY_DIR}/python")
