@@ -380,6 +380,32 @@ void ExportEditor::confirmReplacements(const std::vector<document::ExportJobId>&
     });
 }
 
+void ExportEditor::offerSoftwareEncoder(const document::ExportJobId job, const document::ExportOutputId output,
+                                        const QString& reason) {
+    const auto snapshot = adapter_->snapshot();
+    const auto* view = findOutput(findView(snapshot.get(), job), output);
+    if (view == nullptr || view->record.settings.encoder == document::ExportEncoderPreference::Software)
+        return;
+    kit::KConfirmSpec spec;
+    spec.title = tr("Encoder");
+    spec.objectName = QStringLiteral("exportSoftwareEncoderConfirm");
+    spec.tone = kit::KPromptTone::Question;
+    spec.heading = tr("Render with Bloom's FFmpeg encoder instead?");
+    spec.detail = reason;
+    spec.acceptText = tr("Use FFmpeg");
+    spec.rejectText = tr("Cancel");
+    spec.defaultRole = kit::KDialog::Role::Reject;
+    auto settings = view->record.settings;
+    settings.encoder = document::ExportEncoderPreference::Software;
+    QPointer<ExportEditor> self(this);
+    kit::confirm(*this, spec, [self, job, output, settings](const kit::KDialog::Role role) {
+        if (self == nullptr || role != kit::KDialog::Role::Accept)
+            return;
+        self->report(self->adapter_->editOutput(job, output, outputEdit([&](auto& edit) { edit.settings = settings; })));
+        self->startJob(job);
+    });
+}
+
 void ExportEditor::startAll() {
     const auto snapshot = adapter_->snapshot();
     if (!snapshot)

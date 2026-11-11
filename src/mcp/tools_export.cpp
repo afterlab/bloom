@@ -393,6 +393,16 @@ host::ExportWorkerLimits applyWorkerLimits(host::ExportWorkerLimits base,
     return base;
 }
 
+std::optional<document::ExportEncoderPreference> encoderArgument(yyjson_val* arguments) {
+    auto* value = member(arguments, "encoder");
+    if (!value)
+        return std::nullopt;
+    const auto parsed = document::parseExportEncoder(string(value, 16));
+    if (!parsed)
+        throw InvalidInput("encoder is automatic, software or hardware");
+    return parsed;
+}
+
 std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments) {
     auto* target = member(arguments, "loudnessLufs");
     auto* peak = member(arguments, "truePeakDbtp");

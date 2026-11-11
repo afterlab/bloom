@@ -426,12 +426,19 @@ ExportHardwareRoute exportHardwareRoute(const document::ExportOutputSettings& se
     const bool nvencServes = (h264 && encoders.nvencH264) ||
                              (hevc && (main10 ? encoders.nvencHevcMain10 : encoders.nvencHevc));
     const bool vaapiHevc = encoders.vaapiHevc && (!main10 || encoders.vaapiHevcMain10);
+    using Platform = media::provider::PlatformEncoderV1;
+    const bool prores = settings.format == ExportFormat::ProResMov;
+    const auto platform = preference == Preference::Software   ? Platform::Skipped
+                          : preference == Preference::Hardware ? Platform::Required
+                          : prores                             ? Platform::Required
+                                                               : Platform::Preferred;
     return {.nvenc = preference != Preference::Software && nvencServes,
             .vaapi = (hevc && (preference == Preference::Hardware ||
                                (preference == Preference::Automatic && vaapiHevc))) ||
                      (h264 && (preference == Preference::Hardware ||
                                (preference == Preference::Automatic && !softwareH264 &&
-                                encoders.vaapiH264)))};
+                                encoders.vaapiH264))),
+            .platformEncoder = platform};
 }
 
 bool exportPreservationFits(const output::OutputPreservationStateV1 actual,

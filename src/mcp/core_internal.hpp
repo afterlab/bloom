@@ -232,6 +232,9 @@ struct WorkerLimitArguments final {
 // Reads loudnessLufs (-40..-5) and truePeakDbtp (-12..0, default -1) of an audio-carrying export
 // (#570). Absent when loudnessLufs is not given; truePeakDbtp alone is refused. Throws InvalidInput.
 [[nodiscard]] std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments);
+// The optional `encoder` argument of render and export: "automatic", "software" or "hardware".
+[[nodiscard]] std::optional<document::ExportEncoderPreference>
+encoderArgument(yyjson_val* arguments);
 // {targetLufs, truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, finalMeasured,
 // finalLufs, finalTruePeakDbtp, limiterReductionDb}; a level that was not measurable (silence) is
 // null.

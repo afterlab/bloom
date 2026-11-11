@@ -3,6 +3,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/export_queue.hpp>
+#include <bloom/media/provider/encode_session.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_analysis.hpp>
 
@@ -157,6 +158,15 @@ struct ExportEncoderStatus final {
 struct ExportHardwareRoute final {
     bool nvenc = false;
     bool vaapi = false;
+    // The platform's own encoder (the system encoder on macOS; nothing elsewhere).
+    //   ProRes, Automatic: required. When it refuses, the export stops and the artist is asked
+    //     whether to use the FFmpeg ProRes encoder; it is never substituted silently (owner
+    //     decision, 2026-11-11).
+    //   H.264, Automatic: preferred, with the bundled software encoder as the silent fallback.
+    //   Software: skipped, so the bundled FFmpeg encoder is used.
+    //   Hardware: required.
+    media::provider::PlatformEncoderV1 platformEncoder =
+        media::provider::PlatformEncoderV1::Preferred;
     friend bool operator==(const ExportHardwareRoute&, const ExportHardwareRoute&) = default;
 };
 [[nodiscard]] ExportHardwareRoute

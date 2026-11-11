@@ -74,6 +74,12 @@ void ExportQueueAdapter::handleEvents() {
         if (event.sequence <= lastEventSequence_)
             continue;
         lastEventSequence_ = event.sequence;
+        if (const auto* refused = std::get_if<host::ExportJobFailed>(&event.payload);
+            refused != nullptr && refused->reason.output.has_value() &&
+            refused->reason.diagnosticCode == "export.encoder.platform-refused")
+            Q_EMIT softwareEncoderOffered(static_cast<qulonglong>(refused->job.value()),
+                                          static_cast<qulonglong>(refused->reason.output->value()),
+                                          text(refused->reason.reason));
         if (feedback_ == nullptr)
             continue;
         if (const auto* done = std::get_if<host::ExportJobSucceeded>(&event.payload)) {

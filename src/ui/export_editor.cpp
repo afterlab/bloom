@@ -189,6 +189,10 @@ ExportEditor::ExportEditor(CompositionSession& session, ExportQueueAdapter* cons
         else
             pendingSelection_ = jobId(job);
     });
+    connect(adapter_, &ExportQueueAdapter::softwareEncoderOffered, this,
+            [this](const qulonglong job, const qulonglong output, const QString& reason) {
+                offerSoftwareEncoder(jobId(job), document::ExportOutputId::fromRaw(output), reason);
+            });
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
         // Composition names, rates and the active composition read from the project.
         shownRevision_ = ~std::uint64_t{0};

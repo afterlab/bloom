@@ -76,6 +76,8 @@ struct EncodeSessionV1::State {
     std::unique_ptr<HostProtocol> protocol;
     std::uint64_t session = 1, sequence = 0;
     std::optional<Unavailable> terminal;
+    // The platform encoder is the only route of this attempt, and whether it refused.
+    bool platformRequired = false, platformRefused = false;
     explicit State(EncodeSessionOptionsV1 o, platform::ProcessCancellation c)
         : options(std::move(o)), cancel(std::move(c)) {}
     // A worker that vanished mid-session is reaped here so the error names how it ended.
@@ -91,12 +93,12 @@ struct EncodeSessionV1::State {
     std::optional<platform::ProcessMemory> sampleMemory() {
         if (!process)
             return std::nullopt;
-        const auto memory = options.memorySampler ? options.memorySampler(process->processId())
-                                                  : process->memory();
+        const auto memory =
+            options.memorySampler ? options.memorySampler(process->processId()) : process->memory();
         if (memory) {
             report.measured = true;
-            report.peakResidentBytes =
-                std::max({report.peakResidentBytes, memory->residentBytes, memory->peakResidentBytes});
+            report.peakResidentBytes = std::max(
+                {report.peakResidentBytes, memory->residentBytes, memory->peakResidentBytes});
         }
         return memory;
     }
@@ -316,7 +318,8 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
     std::vector<EncodeRoute> routes;
     // The platform media framework first (ADR 0035). Windows has a Media Foundation slot with no
     // provider yet; it reports NotInstalled and FFmpeg serves the encode.
-    if (const auto native = nativeMediaProviderId(); !native.empty()) {
+    if (const auto native = nativeMediaProviderId();
+        !native.empty() && s.options.platformEncoder != PlatformEncoderV1::Skipped) {
         EncodeRoute route;
         route.id = std::string(native);
         route.native = true;
@@ -352,18 +355,25 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
         route.hello = ffmpegHandshake(false);
         routes.push_back(std::move(route));
     }
+    const MediaOperationV1 operation{
+        MediaDirectionV1::Encode,
+        mediaCodecFamilyV1(settings.videoCodec.empty() ? settings.audioCodec : settings.videoCodec),
+        settings.container};
+    // A required platform encoder that is installed and declares the encode is the only route.
+    if (s.options.platformEncoder == PlatformEncoderV1::Required && !routes.empty() &&
+        routes.front().native && regularFileExists(routes.front().executable) &&
+        declaresMediaOperationV1(routes.front().hello, operation)) {
+        routes.resize(1);
+        s.platformRequired = true;
+    }
     std::vector<MediaProviderCandidateV1> candidates;
     candidates.reserve(routes.size());
     for (const auto& route : routes)
         candidates.push_back({route.id, route.native,
                               [&route] { return regularFileExists(route.executable); },
-                              [&route](const MediaOperationV1& operation) {
-                                  return declaresMediaOperationV1(route.hello, operation);
+                              [&route](const MediaOperationV1& declared) {
+                                  return declaresMediaOperationV1(route.hello, declared);
                               }});
-    const MediaOperationV1 operation{
-        MediaDirectionV1::Encode,
-        mediaCodecFamilyV1(settings.videoCodec.empty() ? settings.audioCodec : settings.videoCodec),
-        settings.container};
     const MediaProviderChainV1 chain(std::move(candidates));
     const auto result = chain.run<std::monostate>(
         operation,
@@ -375,10 +385,13 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
             return std::monostate{};
         },
         s.provenance);
-    if (const auto* error = std::get_if<Unavailable>(&result))
+    if (const auto* error = std::get_if<Unavailable>(&result)) {
+        s.platformRefused = s.platformRequired && mediaFallbackPermittedV1(*error);
         return *error;
+    }
     return std::nullopt;
 }
+bool EncodeSessionV1::platformEncoderRefused() const noexcept { return state_->platformRefused; }
 std::optional<Unavailable> EncodeSessionV1::video(FrameProduct frame) {
     return state_->post(MessageKind::Frame, std::move(frame));
 }

@@ -295,6 +295,14 @@ is not declared by this provider and goes to FFmpeg.
   4444 profiles. The system encoder writes a 4444 stream without an alpha channel when every
   frame is opaque; such a stream is compared with an opaque picture.
 
+- **Who encodes.** The export's encoder setting decides
+  (`host::exportHardwareRoute`, `EncodeSessionOptionsV1::platformEncoder`). Automatic: ProRes is
+  made by the system encoder only, and an export it cannot make stops with
+  `export.encoder.platform-refused` instead of being made by another encoder; the export queue
+  then asks whether to render it with Bloom's FFmpeg encoder, and a scripted or MCP export
+  passes `encoder: "software"` to choose that. H.264 tries the system encoder and continues with
+  FFmpeg. Software: the system encoder is skipped. Hardware: the system encoder is required.
+
 A build without the FFmpeg package has no macOS encoder, because the conversion and the check are
 libswscale's.
 

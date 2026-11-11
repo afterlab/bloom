@@ -73,10 +73,12 @@ struct NvencEncodeProbeV1 {
 [[nodiscard]] NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable = {});
 // Whether the supervised media worker executable exists for this build. Worker threads only.
 [[nodiscard]] bool mediaWorkerAvailableV1();
+// `platformEncoder` is false when the export will not use the platform's own encoder (macOS, the
+// encoder set to software); the ProRes note then names FFmpeg.
 [[nodiscard]] media::provider::Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, media::provider::EncodeSettingsV1 settings,
                      std::shared_ptr<const PreparedOutputDisplayV1> display = {},
-                     std::uint64_t lookEffects = 0);
+                     std::uint64_t lookEffects = 0, bool platformEncoder = true);
 [[nodiscard]] media::provider::Result<media::provider::FrameProduct>
 prepareMediaRgba16V1(const render::Rgba32fImage& image, media::provider::Rational pts,
                      const platform::ProcessCancellation& cancellation = {},

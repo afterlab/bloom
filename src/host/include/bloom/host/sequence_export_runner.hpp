@@ -75,6 +75,9 @@ struct SequenceExportRequestV1 {
     // to the bundled software encoders silently.
     bool hardware = false;
     bool nvenc = false;
+    // How the platform's own encoder takes part (macOS; see ExportHardwareRoute).
+    media::provider::PlatformEncoderV1 platformEncoder =
+        media::provider::PlatformEncoderV1::Preferred;
     std::uint32_t sampleRate = 48000;
     std::string pcmCodec = "pcm_s16le", bwfDescription;
     std::filesystem::path assetBaseDirectory;
@@ -155,6 +158,9 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     // #453: the destination exists and the overwrite policy does not let this export replace it,
     // or it changed after it was checked or confirmed. Nothing was replaced.
     Destination,
+    // The platform's own encoder was required and refused the export before any frame was
+    // encoded; the bundled FFmpeg encoder was not substituted.
+    PlatformEncoder,
 };
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;

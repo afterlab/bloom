@@ -68,6 +68,8 @@ class CompositionOutputStreamV1 final {
     // True after an audio source failed to read or decode for the mix (#428): the failure that
     // writeFrame returned belongs to the audio source stage, not the encoder.
     [[nodiscard]] bool audioSourceFailed() const noexcept;
+    // The failure is the required platform encoder refusing the encode (EncodeSessionV1).
+    [[nodiscard]] bool platformEncoderRefused() const noexcept;
     // #570: the measured and delivered loudness of a normalizing export, once every audio block has
     // been written; absent otherwise.
     [[nodiscard]] std::optional<AudioLoudnessReportV1> loudnessReport() const;

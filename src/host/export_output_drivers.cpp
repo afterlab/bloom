@@ -1586,6 +1586,7 @@ class MediaDriver final : public DriverBase {
             .audio = settings.format == ExportFormat::Wav || settings.includeAudio,
             .hardware = hardware_,
             .nvenc = nvenc_,
+            .platformEncoder = route.platformEncoder,
             .sampleRate = settings.audioSampleRate,
             .pcmCodec = settings.format == ExportFormat::Wav ? profile : "pcm_s16le",
             .bwfDescription = {},
@@ -1820,6 +1821,16 @@ class MediaDriver final : public DriverBase {
                                         ? "The composition could not be compiled for export"
                                         : "The composition could not be compiled for export. " +
                                               detail));
+            case SequenceExportFailureStageV1::PlatformEncoder:
+                // Owner decision, 2026-11-11: the FFmpeg ProRes encoder is never substituted
+                // silently. The panel reads this diagnostic code and asks; a script sets the
+                // output's encoder to "software".
+                log(runtime::DiagnosticSeverity::Error, "export.encoder.platform-refused", detail);
+                return fail(failure(
+                    ExportFailureCode::EncoderUnavailable, "export.encoder.platform-refused",
+                    "This computer's own encoder refused the export (" + detail +
+                        "). Bloom's FFmpeg encoder can export it instead: set the output's "
+                        "encoder to Software and render again."));
             case SequenceExportFailureStageV1::Unclassified:
                 break;
             }

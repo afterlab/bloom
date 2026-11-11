@@ -318,6 +318,39 @@ void tests(const std::filesystem::path& directory) {
         test::check(unavailable && unavailable->reason == Error::Unavailable,
                     "DPX profile outside the closed set is unavailable");
     }
+    // The platform encoder's part in an encode it declares (owner decision, 2026-11-11: FFmpeg is
+    // never substituted for the system ProRes encoder silently).
+    {
+        EncodeSettingsV1 prores;
+        prores.width = 64;
+        prores.height = 48;
+        // Skipped: the bundled FFmpeg worker encodes, and nothing was passed over or tried.
+        EncodeSessionOptionsV1 skipped;
+        skipped.platformEncoder = PlatformEncoderV1::Skipped;
+        MediaProviderProvenanceV1 served;
+        (void)run(prores, directory / "platform-skipped.mov", std::move(skipped), &served);
+        test::check(served.provider == kFfmpegProviderId && served.fallbacks.empty(),
+                    "a skipped platform encoder leaves the export to the FFmpeg worker");
+        EncodeSessionOptionsV1 required;
+        required.platformEncoder = PlatformEncoderV1::Required;
+#if defined(__APPLE__)
+        // Required: an export the system encoder refuses (ProRes is video range only) fails, and
+        // says that the refusal is the platform encoder's.
+        auto fullRange = prores;
+        fullRange.colour.range = 2;
+        EncodeSessionV1 session(std::move(required));
+        const auto refused = session.begin(fullRange);
+        test::check(refused && refused->reason == Error::Unavailable &&
+                        session.platformEncoderRefused(),
+                    "a required platform encoder that refuses is not replaced by FFmpeg");
+        (void)session.close();
+#else
+        // Without a platform encoder the requirement has nothing to apply to.
+        (void)run(prores, directory / "platform-required.mov", std::move(required), &served);
+        test::check(served.provider == kFfmpegProviderId,
+                    "requiring a platform encoder changes nothing where there is none");
+#endif
+    }
     // H.264 ships with Bloom (owner, 2026-10-31): the bundled OpenH264 encodes it with nothing
     // installed, in MOV with PCM and in MP4 with AAC.
     settings = {};

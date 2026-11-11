@@ -42,6 +42,9 @@ struct RenderRequest final {
     host::ExportWorkerLimits workerLimits = {};
     // #570: normalize the audio of a movie or WAV preset to this loudness.
     std::optional<document::ExportLoudness> loudness = std::nullopt;
+    // Who encodes a movie preset (document::ExportEncoderPreference); see
+    // host::exportHardwareRoute.
+    document::ExportEncoderPreference encoder = document::ExportEncoderPreference::Automatic;
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not

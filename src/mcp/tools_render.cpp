@@ -244,10 +244,11 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
              "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
-             "truePeakDbtp"},
+             "truePeakDbtp", "encoder"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
+    const auto encoder = encoderArgument(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
     const auto requestedText = string(member(arguments, "destination"));
@@ -297,7 +298,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         throw InvalidInput("Use export for media presets and encoding settings");
     if (still && (member(arguments, "profile") || member(arguments, "audio") ||
                   member(arguments, "sampleRate") || member(arguments, "loudnessLufs") ||
-                  member(arguments, "truePeakDbtp") || workerLimits.any()))
+                  member(arguments, "truePeakDbtp") || encoder || workerLimits.any()))
         throw InvalidInput("Still presets do not accept media encoding or worker settings");
     // #453: nothing is replaced unless overwrite is "replace". Headless has no confirmation, so
     // "ask" (the default) refuses like "refuse". Every file the render would write is checked: each
@@ -378,6 +379,16 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         // reference path is the fallback otherwise.
         media::provider::EncodeSessionOptionsV1 worker;
         worker.memoryCapBytes = workerLimits.memoryCapBytes.value_or(0);
+        // The same rule the export queue applies (host::exportHardwareRoute): ProRes is made by
+        // the platform's own encoder where there is one, and by Bloom's only when asked.
+        using Preference = document::ExportEncoderPreference;
+        using Platform = media::provider::PlatformEncoderV1;
+        const auto preference = encoder.value_or(Preference::Automatic);
+        const auto platformEncoder =
+            preference == Preference::Software   ? Platform::Skipped
+            : preference == Preference::Hardware ? Platform::Required
+            : *preset == output::OutputPresetV1::ProResMovV1 ? Platform::Required
+                                                             : Platform::Preferred;
         host::SequenceExportRunnerV1 runner(
             scheduler, compiler, *session.publicationCoordinator(), *session.artifactCoordinator(),
             ledger,
@@ -390,6 +401,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
              .preset = *preset,
              .profile = profile,
              .audio = member(arguments, "audio") ? boolean(member(arguments, "audio")) : true,
+             .platformEncoder = platformEncoder,
              .sampleRate = static_cast<std::uint32_t>(rate),
              .pcmCodec = *preset == output::OutputPresetV1::PcmWavV1 ? profile : "pcm_s16le",
              .bwfDescription = {},
@@ -427,6 +439,14 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                 throw ToolFailure(McpToolErrorCode::PreflightBlocked,
                                   destination.filename().string() +
                                       " exists or changed. Pass overwrite=replace to replace it.");
+            if (runner.result()->failureStage ==
+                host::SequenceExportFailureStageV1::PlatformEncoder)
+                throw ToolFailure(McpToolErrorCode::PreflightBlocked,
+                                  "The system's encoder could not make this file" +
+                                      (runner.result()->failure
+                                           ? " (" + runner.result()->failure->detail + ")"
+                                           : std::string()) +
+                                      ". Pass encoder=software to use Bloom's FFmpeg encoder.");
             throw std::runtime_error(runner.result()->failure ? runner.result()->failure->detail
                                                               : "Export was not published");
         }
@@ -476,10 +496,11 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
              "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
-             "truePeakDbtp"},
+             "truePeakDbtp", "encoder"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
+    const auto encoder = encoderArgument(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
     const auto requested = string(member(arguments, "destination"));
@@ -501,7 +522,7 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         throw InvalidInput("Use export for media presets and encoding settings");
     if (found->still && (member(arguments, "profile") || member(arguments, "audio") ||
                          member(arguments, "sampleRate") || member(arguments, "loudnessLufs") ||
-                  member(arguments, "truePeakDbtp") || workerLimits.any()))
+                  member(arguments, "truePeakDbtp") || encoder || workerLimits.any()))
         throw InvalidInput("Still presets do not accept media encoding or worker settings");
     auto preset = host::builtInExportPreset(found->builtIn);
     if (!preset)
@@ -522,6 +543,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     }
     if (auto* audio = member(arguments, "audio"))
         request.settings.includeAudio = boolean(audio);
+    if (encoder)
+        request.settings.encoder = *encoder;
     if (loudness) {
         if (request.settings.includeAudio == false && member(arguments, "audio"))
             throw InvalidInput("Loudness normalization needs audio");

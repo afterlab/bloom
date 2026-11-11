@@ -612,6 +612,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .unit = "dBTP",
           .range = "-12..0",
           .defaultValue = "-1"},
+         {.name = "encoder",
+          .type = "string",
+          .summary = "Who encodes a movie. On macOS, automatic makes ProRes with the system's "
+                     "encoder and fails if it cannot; software uses Bloom's FFmpeg encoder; "
+                     "hardware fails without a system or GPU encoder.",
+          .defaultValue = "automatic",
+          .choices = {{"automatic", "The system's encoder for ProRes, the best available otherwise"},
+                      {"software", "Bloom's FFmpeg encoder"},
+                      {"hardware", "A system or GPU encoder, or the export fails"}}},
          {.name = "overwrite",
           .type = "string",
           .summary = "What to do when a file exists. Over MCP, ask behaves as refuse; pass "

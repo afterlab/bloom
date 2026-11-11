@@ -458,7 +458,7 @@ class Protocol(unittest.TestCase):
                 'composition': 1, 'frame': 12, 'preset': 'TiffRgba16SrgbV1',
                 'destination': str(destination)})])
             result = responses[-1]['result']
-            if sys.platform != 'linux':
+            if sys.platform not in ('linux', 'darwin'):
                 self.assertTrue(result['isError'], result)  # The MEDIA-4 worker fallback.
                 return
             self.assertFalse(result['isError'], result)
@@ -492,15 +492,40 @@ class Protocol(unittest.TestCase):
                 tool(3, 'export', {'composition': 2, 'first': 0, 'last': 1,
                     'preset': 'ProResMovV1', 'audio': False, 'destination': str(destination)})])
             result = responses[-1]['result']
-            if sys.platform != 'linux':
+            if sys.platform not in ('linux', 'darwin'):
                 self.assertTrue(result['isError'], result)  # The MEDIA-4 worker fallback.
                 return
             self.assertFalse(result['isError'], result)
             content = result['structuredContent']
             self.assertEqual(content['publishedFrames'], 2)
-            self.assertIn('not an Apple-authorized', content['preservationReport'])
+            # macOS makes ProRes with the system's encoder; elsewhere Bloom's FFmpeg encoder does.
+            system = sys.platform == 'darwin'
+            self.assertIn('native Apple implementation' if system else 'not an Apple-authorized',
+                          content['preservationReport'])
             self.assertEqual(content['files'][0]['digest'],
                              'sha256:' + hashlib.sha256(destination.read_bytes()).hexdigest())
+
+    def test_export_encoder_choice(self):
+        # encoder=software makes the same movie with Bloom's FFmpeg encoder on every platform that
+        # exports, including macOS, where the default is the system's encoder (issue #455).
+        if sys.platform not in ('linux', 'darwin'):
+            return
+        with tempfile.TemporaryDirectory(prefix='bloom-mcp-encoder-') as directory:
+            destination = pathlib.Path(directory) / 'software.mov'
+            responses = exchange([INIT, READY, tool(2, 'transact', {
+                'expectedRevision': 0, 'operations': [{'op': 'bloom.composition.add', 'args': {
+                    'name': 'Export', 'width': 256, 'height': 128, 'duration': [2, 1]}}]}),
+                tool(3, 'export', {'composition': 2, 'first': 0, 'last': 1,
+                    'preset': 'ProResMovV1', 'audio': False, 'encoder': 'software',
+                    'destination': str(destination)}),
+                tool(4, 'export', {'composition': 2, 'first': 0, 'last': 1,
+                    'preset': 'ProResMovV1', 'audio': False, 'encoder': 'fastest',
+                    'destination': str(destination)})])
+            result = responses[-2]['result']
+            self.assertFalse(result['isError'], result)
+            self.assertIn('not an Apple-authorized',
+                          result['structuredContent']['preservationReport'])
+            self.assertIn('error', responses[-1], responses[-1])
 
 
 if __name__ == '__main__':

@@ -110,6 +110,10 @@ class ExportEditor final : public QWidget, public EditorChromeProvider {
     // (kit::confirm) before anything starts.
     void startAll();
     void startJob(document::ExportJobId job);
+    // This computer's own encoder refused `output`: asks whether to render it with Bloom's
+    // FFmpeg encoder instead, and on Yes sets the output's encoder to Software and starts the job.
+    void offerSoftwareEncoder(document::ExportJobId job, document::ExportOutputId output,
+                              const QString& reason);
 
     // The Current Render strip.
     [[nodiscard]] QString currentRenderText() const;

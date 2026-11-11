@@ -494,6 +494,9 @@ std::optional<AudioLoudnessReportV1> CompositionOutputStreamV1::loudnessReport()
 bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
     return state_->audioSourceFailed;
 }
+bool CompositionOutputStreamV1::platformEncoderRefused() const noexcept {
+    return state_->encoder->platformEncoderRefused();
+}
 const Handshake& CompositionOutputStreamV1::handshake() const {
     return state_->encoder->handshake();
 }

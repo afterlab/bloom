@@ -909,6 +909,33 @@ void retiredTransientJobs() {
         expect(contains(still, "-32602"), "a still preset refuses a loudness target: " + still);
     }
 
+    // The encoder choice over MCP (issue #455): the three values are accepted for a movie, and
+    // anything else, or any value on a still, is refused.
+    {
+        const auto movie = (captures / "encoder.mov").string();
+        const auto call = [&](const std::string& extra) {
+            return server.call("export", R"({"composition":1,"frame":0,"preset":"ProResMovV1",)"
+                                         R"("overwrite":"replace","destination":")" +
+                                             movie + R"(")" + extra + "}");
+        };
+        for (const auto& choice : {"automatic", "software", "hardware"}) {
+            fake->push({});
+            const auto accepted = call(std::string(R"(,"encoder":")") + choice + R"(")");
+            expect(contains(accepted, R"("isError":false)"),
+                   std::string("export accepts encoder ") + choice + ": " + accepted);
+        }
+        for (const auto& bad : {R"(,"encoder":"fastest")", R"(,"encoder":2)"}) {
+            const auto refused = call(bad);
+            expect(contains(refused, "-32602"), std::string("refused: ") + bad + " " + refused);
+        }
+        const auto still =
+            server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                                  R"("destination":")" +
+                                      (captures / "encoder.png").string() +
+                                      R"(","encoder":"software"})");
+        expect(contains(still, "-32602"), "a still preset refuses an encoder choice: " + still);
+    }
+
     // Issue #581: worker limits and the worker memory report over MCP.
     {
         constexpr std::uint64_t mib = std::uint64_t{1} << 20U;

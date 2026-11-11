@@ -26,6 +26,18 @@ struct EncodeWorkerMemoryV1 {
     // The session ended because the worker stayed at the cap with nothing left to finish.
     bool capReached = false;
 };
+// How the platform media framework's encoder (ADR 0035; the system encoder on macOS) takes part
+// in an encode it declares. It has no effect where no such provider is installed or it does not
+// declare the codec and container.
+enum class PlatformEncoderV1 : std::uint8_t {
+    // First, with the bundled FFmpeg worker as the silent fallback.
+    Preferred = 1,
+    // Only: when it refuses, begin() fails and platformEncoderRefused() is true. Nothing else is
+    // substituted without the caller asking for it.
+    Required = 2,
+    // Not at all: the bundled FFmpeg worker encodes.
+    Skipped = 3,
+};
 struct EncodeSessionOptionsV1 {
     // The FFmpeg worker. Empty selects the installed worker beside the application, else this
     // build tree's worker. The platform media framework's worker is always located by the host.
@@ -34,6 +46,7 @@ struct EncodeSessionOptionsV1 {
     // Try the NVIDIA NVENC generation first (ADR 0036): NVENC, then VA-API when `vaapi`, then the
     // bundled software encoders. A computer without an NVIDIA driver falls through silently.
     bool nvenc = false;
+    PlatformEncoderV1 platformEncoder = PlatformEncoderV1::Preferred;
     std::chrono::milliseconds timeout{120000};
     std::function<void(std::int64_t)> launched;
     // ADR 0033 section 16: the host's staged artifact. The worker writes the container into it
@@ -79,6 +92,9 @@ class EncodeSessionV1 final {
     // The serving provider's handshake and the selection provenance (diagnostics only).
     [[nodiscard]] const Handshake& handshake() const;
     [[nodiscard]] const MediaProviderProvenanceV1& provenance() const;
+    // begin() failed because the platform encoder was Required and refused the encode; the
+    // bundled FFmpeg worker was not tried (PlatformEncoderV1::Skipped selects it).
+    [[nodiscard]] bool platformEncoderRefused() const noexcept;
     [[nodiscard]] static std::string defaultWorker();
     // The worker's measured memory so far (peak over the samples taken at each product, at finish
     // and when the session ends); valid after the worker has gone.

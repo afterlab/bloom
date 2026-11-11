@@ -252,6 +252,10 @@ class ExportQueueAdapter final : public QObject {
     void revealRequested();
     // A new job exists and should be selected by a panel showing the queue.
     void jobAdded(qulonglong job);
+    // An output failed because this computer's own encoder refused it and Bloom's FFmpeg encoder
+    // was not substituted (owner decision, 2026-11-11). A panel showing the queue asks the artist
+    // whether to use it; `reason` is the failure's sentence.
+    void softwareEncoderOffered(qulonglong job, qulonglong output, const QString& reason);
     // The Remedy for an unavailable encoder: the existing H.264 consent / locate flow, or the
     // project colour settings, opened by the composition root.
     void remedyRequested(int remedy);

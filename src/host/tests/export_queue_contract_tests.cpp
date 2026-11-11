@@ -185,12 +185,31 @@ int main() {
                        "HEVC Main 10 takes VA-API when VA-API opened Main 10");
     auto forced = hevc10;
     forced.encoder = document::ExportEncoderPreference::Hardware;
-    failures += expect(host::exportHardwareRoute(forced, eightBit) == Route{false, true},
+    using Platform = media::provider::PlatformEncoderV1;
+    failures += expect(host::exportHardwareRoute(forced, eightBit) ==
+                           Route{false, true, Platform::Required},
                        "Hardware still asks VA-API for Main 10 and falls back if refused");
     auto software = hevc8;
     software.encoder = document::ExportEncoderPreference::Software;
-    failures += expect(host::exportHardwareRoute(software, tenBit) == Route{false, false},
+    failures += expect(host::exportHardwareRoute(software, tenBit) ==
+                           Route{false, false, Platform::Skipped},
                        "Software takes no hardware encoder");
+    // The platform's own encoder (macOS): ProRes requires it unless the output asks for the
+    // software encoder, so FFmpeg is never substituted for it silently; H.264 prefers it.
+    document::ExportOutputSettings prores;
+    prores.format = document::ExportFormat::ProResMov;
+    failures += expect(host::exportHardwareRoute(prores, eightBit).platformEncoder ==
+                           Platform::Required,
+                       "ProRes requires the platform encoder by default");
+    prores.encoder = document::ExportEncoderPreference::Software;
+    failures += expect(host::exportHardwareRoute(prores, eightBit).platformEncoder ==
+                           Platform::Skipped,
+                       "ProRes with the software encoder skips the platform encoder");
+    document::ExportOutputSettings h264;
+    h264.format = document::ExportFormat::H264Mp4;
+    failures += expect(host::exportHardwareRoute(h264, eightBit).platformEncoder ==
+                           Platform::Preferred,
+                       "H.264 prefers the platform encoder and may fall back");
 
     host::ExportPreset preset;
     preset.id = std::string(host::kExportDefaultVideoPresetId);

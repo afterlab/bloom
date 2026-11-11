@@ -139,7 +139,7 @@ NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable) {
 Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
                      std::shared_ptr<const PreparedOutputDisplayV1> display,
-                     std::uint64_t lookEffects) {
+                     std::uint64_t lookEffects, const bool platformEncoder) {
     const bool prores = preset == OutputPresetV1::ProResMovV1;
     const bool dnx = preset == OutputPresetV1::DnxhrMxfV1;
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
@@ -176,8 +176,9 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
     result.settings = std::move(settings);
     result.determinism = encodeDeterminism(result.settings);
     result.toleranceProfile = encodeTolerance(result.settings);
+    const char* const proresNote = platformEncoder ? kProResExportNote : kProResFfmpegExportNote;
     if (prores)
-        result.implementationNote = kProResExportNote;
+        result.implementationNote = proresNote;
     if (h264)
         result.implementationNote = "Review deliverable — not for archival";
     if (hevc)
@@ -211,7 +212,7 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
          {F::Metadata, S::Equivalent,
           "Exact rational cadence, duration, stream layout; optional BWF description"},
          {F::ExternalDependencies, S::ExternalReference,
-          prores ? kProResExportNote
+          prores ? proresNote
                  : "FFmpeg worker; same-provider reopen; no independent delivery verification"}}};
     if (!pcm) {
         if (!display)

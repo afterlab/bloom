@@ -368,7 +368,8 @@ struct detail::SequenceExportWorkV1 {
                 "Output display processor unavailable", Error::Unavailable);
         analysis =
             std::make_unique<output::MediaOutputAnalysisV1>(checked(output::analyzeMediaOutputV1(
-                request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan))));
+                request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan),
+                request.platformEncoder != media::provider::PlatformEncoderV1::Skipped)));
         if (!settings().videoCodec.empty() && analysis->display != nullptr)
             mediaDisplay =
                 std::make_shared<OutputMediaDisplayCommandV1>(analysis->display, colorIntent());
@@ -412,6 +413,7 @@ struct detail::SequenceExportWorkV1 {
             target = std::make_unique<output::OutputAnalysisAttemptTargetV1>(attempt.target());
         if (!encoder) {
             auto worker = request.worker;
+            worker.platformEncoder = request.platformEncoder;
             worker.stagedOutput = stageForStreaming(artifacts);
             const auto origin =
                 required(FrameRangeRunnerV1::timeForFrame(request.range, request.range.firstFrame),
@@ -432,6 +434,8 @@ struct detail::SequenceExportWorkV1 {
         const auto written = [this](std::optional<Unavailable> failure) {
             if (failure && encoder->audioSourceFailed())
                 failureStage = SequenceExportFailureStageV1::AudioSource;
+            if (failure && encoder->platformEncoderRefused())
+                failureStage = SequenceExportFailureStageV1::PlatformEncoder;
             checked(std::move(failure));
         };
         const auto& media = attempt.gpuMediaDisplay();

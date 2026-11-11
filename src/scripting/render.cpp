@@ -215,6 +215,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     output.settings.includeAudio = !document::isImageExportFormat(*format);
     if (output.settings.includeAudio)
         output.settings.loudness = request.loudness;
+    output.settings.encoder = request.encoder;
     if (*format == document::ExportFormat::Dpx)
         output.settings.codecProfile =
             request.preset == output::OutputPresetV1::DpxRgb16V1 ? "16bit" : "10bit";
