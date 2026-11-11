@@ -1531,7 +1531,7 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
     case ColorGradeKind::Histogram:
         program.functionName = "bloom_histogram";
         program.resourcePrefix = "bloom_histogram_";
-        program.semanticsId = "bloom.render.histogram.v1";
+        program.semanticsId = "bloom.render.histogram.v2";
         break;
     case ColorGradeKind::Statistics:
         program.functionName = "bloom_statistics";

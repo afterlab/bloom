@@ -2351,7 +2351,7 @@ Alpha Contours over a curved Shape Source and a Text Source through the document
 Image out, `image`: a bar graph of how many pixels of the input's data window have each value. It takes
 no effect mask, because it publishes a graph and not the input changed. It lowers to the three
 `HistogramKernel` passes below, which share one grade kind (`ColorGradeKind::Histogram`) and one GPU
-program (`bloom.render.histogram.v1`).
+program (`bloom.render.histogram.v2`).
 
 | Role | Default | Domain |
 |---|---|---|
@@ -2375,7 +2375,8 @@ region.
 **The graph** is `bins` wide and `height` tall at the input's origin, on a scene-linear background of
 0.02 with an opaque alpha. A channel's bar at a bin has the height `count / tallest * height`, where
 the tallest is the largest count of any counted channel and bin (Logarithmic: `log2(1 + count) /
-log2(1 + tallest)`), and the row it ends in is covered by its fraction. Red, green and blue bars are
+log2(1 + tallest)`, with the logarithm described under "On the CPU and the GPU"), and the row it ends
+in is covered by its fraction. Red, green and blue bars are
 drawn in their own colors; luminance and alpha in gray; the channels are added over the background, so
 overlapping bars of the three channels go to white. With nothing counted the graph is the background.
 
@@ -2393,8 +2394,22 @@ graph.
 **On the CPU and the GPU.** `applyHistogram` and the GPU program run the same binary32 operations in
 the same order over the same table (`-ffp-contract=off`; the program's arithmetic is `precise`). The
 counts are whole numbers below 2^24 in `Bin`, and `Sum` adds them in a fixed order, so the two agree
-exactly; the plot's division is correctly rounded on both and only a logarithmic scale takes each
-backend's own `log2`, which agrees to within its last bits (2e-6 relative on color, alpha exact). The
+exactly; the plot's division is correctly rounded on both, so a linear graph agrees exactly too.
+
+A logarithmic graph takes `bloom::core::specifiedLog2` on both, not the C library's `log2` or the
+device's. A bar's last row is covered by the fractional part of `share * height`, so a difference in
+the last bit of a logarithm is multiplied by the graph's height: two libraries, or a library and a
+GPU, each accurate to a unit in the last place, drew visibly different edges (3e-6 against a 2e-6
+gate on Apple silicon), and nothing made two processors' libraries agree either. `specifiedLog2` is a
+fixed sequence of binary32 operations (`src/core/include/bloom/core/specified_log2.hpp`), compiled
+without contraction on the CPU and `precise` in the program, so every processor and every GPU draws
+the same bits. It is not correctly rounded: over the whole numbers a count can be (1 to 2^24) it is
+within 0.56 units in the last place of the true logarithm and equal to the correctly rounded value
+for 99.4% of them, it is exactly 0 at 1 and exact at powers of two, and it never decreases. That
+moves a bar's edge by less than one ten-thousandth of a pixel at the tallest graph, far below
+anything the graph shows. Table flag 8 selects it; flag 2, the graph drawn with each backend's own
+`log2`, is retired and refused, so a logarithmic graph's passes have a new identity and no frame
+cached from the earlier arithmetic is served. The
 graph stays on the GPU: the three passes are resident dispatches over the frame and its counts, the
 tile counts are never read back, and the only readback is the composition's final image.
 Because a GPU has no atomic counter here, each `Bin` pixel counts its tile's pixels against its own

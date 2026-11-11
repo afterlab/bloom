@@ -4,9 +4,9 @@
 // applied. Three passes share one table and one program: a count of the pixels of each tile of the
 // frame in each bin, the sum of those tile counts, and the plot of the sums. The CPU reference
 // (applyHistogram) and the GPU program (histogramProgramText) run the same binary32 operations in
-// the same order over the same table, so the counts, which are whole numbers, agree exactly; the
-// plot's logarithm is each backend's own, so a logarithmic graph agrees to within its last bits.
-// docs/architecture/image-filters.md, "Histogram", is the specification.
+// the same order over the same table, so the counts, which are whole numbers, agree exactly, and so
+// does the plot: a logarithmic graph takes bloom::core::specifiedLog2 on both, not a library's
+// log2. docs/architecture/image-filters.md, "Histogram", is the specification.
 
 #include "color_grade_image_effect.hpp"
 
@@ -29,12 +29,13 @@ struct ImageEffectResult;
 enum class HistogramStage : std::uint8_t { Bin = 0, Sum = 1, Plot = 2 };
 
 // The table without geometry (kHistogramPreparedFloats):
-//   0 stage  1 grid (Bin)  2 bins  3 graph height  4 flags (1 straight, 2 logarithmic, 4 empty range)
+//   0 stage  1 grid (Bin)  2 bins  3 graph height  4 flags (1 straight, 8 logarithmic, 4 empty range)
 //   5 range minimum  6 range maximum  7 bins per unit of the range  8 counted channels (1..4)
 //   9..12 the source of each counted channel (HistogramSource)  16..27 the color of each, r g b
 // and, with the geometry of the image the pass follows (kHistogramProgramFloats),
 //   32 source width  33 source height  34 tile width  35 tile height  36 tiles across  37 tiles down
 //   38 output width  39 output height  40 groups of three bins per channel
+// Flag 2 was the logarithmic graph drawn with each backend's own log2; it is retired and refused.
 inline constexpr std::size_t kHistogramPreparedFloats = 32;
 inline constexpr std::size_t kHistogramProgramFloats = 48;
 inline constexpr std::int64_t kHistogramMaxChannels = 4;

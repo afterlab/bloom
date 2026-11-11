@@ -1,8 +1,9 @@
 // #349 Histogram. docs/architecture/image-filters.md, "Histogram", is the specification.
 //
 // The pixel arithmetic is subtractions, multiplications, floors, comparisons, correctly rounded
-// divisions, additions of whole numbers and, for a logarithmic graph, the logarithm of base two, in
-// one fixed order. The counts are whole numbers below 2^24 in every pass but the sum, which adds them
+// divisions, additions of whole numbers and, for a logarithmic graph, bloom::core::specifiedLog2
+// (a logarithm of base two made of the same operations on every processor and GPU), in one fixed
+// order. The counts are whole numbers below 2^24 in every pass but the sum, which adds them
 // in a fixed order, so the CPU reference and the GPU program count identically.
 
 #include "histogram_image_effect.hpp"
@@ -11,6 +12,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "image_effect.hpp"
 
+#include <bloom/core/specified_log2.hpp>
 #include <bloom/document/image_math_parameters.hpp>
 
 #include <algorithm>
@@ -35,7 +37,10 @@ constexpr std::array<std::array<float, 3>, 5> kSourceColors{{{1.0F, 0.0F, 0.0F},
 constexpr std::size_t kSources = 9;
 constexpr std::size_t kColors = 16;
 constexpr std::size_t kFlagStraight = 1;
-constexpr std::size_t kFlagLogarithmic = 2;
+// 2 was the logarithmic graph drawn with each backend's own log2. It is retired and refused, so a
+// table made for it never reads as one made for the specified logarithm.
+constexpr std::size_t kFlagRetiredLogarithmic = 2;
+constexpr std::size_t kFlagLogarithmic = 8;
 constexpr std::size_t kFlagEmpty = 4;
 
 ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) {
@@ -240,7 +245,8 @@ bool validHistogramProgramData(const std::vector<float>& d) noexcept {
         return v >= low && v <= high && v == std::floor(v);
     };
     if (!whole(d[0], 0.0F, 2.0F) || !whole(d[2], 3.0F, 4096.0F) || !whole(d[3], 1.0F, 4096.0F) ||
-        !whole(d[4], 0.0F, 7.0F) || !whole(d[8], 1.0F, 4.0F))
+        !whole(d[4], 0.0F, 15.0F) || flag(d.data(), kFlagRetiredLogarithmic) ||
+        !whole(d[8], 1.0F, 4.0F))
         return false;
     for (std::size_t i = 0; i < static_cast<std::size_t>(d[8]); ++i)
         if (!whole(d[kSources + i], 0.0F, 4.0F))
@@ -251,10 +257,12 @@ bool validHistogramProgramData(const std::vector<float>& d) noexcept {
 
 const std::string& histogramProgramText() {
     // The same binary32 operations as applyHistogram: precise subtractions, products and sums, the
-    // wrapper's correctly rounded division and no fused multiply-add. The counts are whole numbers.
+    // wrapper's correctly rounded division, the specified logarithm and no fused multiply-add. The
+    // counts are whole numbers.
     static const std::string text = std::string(R"GLSL(
 layout(set = 0, binding = 0, std430) readonly buffer BloomHistogramData { vec4 values[]; } bloom_histogram_data;
 precise float bloom_ocio_cpu_div(float a, float b);
+precise float bloom_specified_log2(float x);
 float bhg(int i) { return bloom_histogram_data.values[i >> 2][i & 3]; }
 int bhg_bin(float v) {
  if (isnan(v) || isinf(v)) { return -1; }
@@ -336,7 +344,7 @@ vec4 bloom_histogram(ivec2 c) {
   return vec4(s0, s1, s2, 1.0);
  }
  if (c.x >= outW || c.y >= outH) { return vec4(0.0, 0.0, 0.0, 1.0); }
- bool logarithmic = (int(bhg(4)) & 2) != 0;
+ bool logarithmic = (int(bhg(4)) & 8) != 0;
  float peak = 0.0;
  for (int channel = 0; channel < channels; ++channel) {
   for (int g = 0; g < groups; ++g) {
@@ -355,7 +363,7 @@ vec4 bloom_histogram(ivec2 c) {
    if (logarithmic) {
     precise float above = 1.0 + count;
     precise float top = 1.0 + peak;
-    share = bloom_ocio_cpu_div(log2(above), log2(top));
+    share = bloom_ocio_cpu_div(bloom_specified_log2(above), bloom_specified_log2(top));
    } else {
     share = bloom_ocio_cpu_div(count, peak);
    }
@@ -370,7 +378,7 @@ vec4 bloom_histogram(ivec2 c) {
  }
  return vec4(color, 1.0);
 }
-)GLSL");
+)GLSL") + std::string(core::specifiedLog2Glsl());
     return text;
 }
 
@@ -557,7 +565,7 @@ ImageEffectResult applyHistogram(const PreparedColorGrade& grade,
                             if (logarithmic) {
                                 const float above = 1.0F + count;
                                 const float top = 1.0F + peak;
-                                share = std::log2(above) / std::log2(top);
+                                share = core::specifiedLog2(above) / core::specifiedLog2(top);
                             } else {
                                 share = count / peak;
                             }

@@ -19,6 +19,7 @@ target_sources(
         file_uri.cpp
         float_chars.cpp
         safe_parse.cpp
+        specified_log2.cpp
         telemetry_counters.cpp
         worker_thread.cpp
     PUBLIC
@@ -44,6 +45,7 @@ target_sources(
             include/bloom/core/safe_parse.hpp
             include/bloom/core/scalar_primitives.hpp
             include/bloom/core/sha256.hpp
+            include/bloom/core/specified_log2.hpp
             include/bloom/core/telemetry_counters.hpp
             include/bloom/core/utf8.hpp
             include/bloom/core/file_uri.hpp
@@ -231,6 +233,16 @@ if(BUILD_TESTING)
         NAME bloom.core.float-chars
         COMMAND bloom_core_float_chars_test
         LABELS unit text primitives
+    )
+
+    add_executable(bloom_core_specified_log2_test tests/specified_log2_tests.cpp)
+    target_link_libraries(bloom_core_specified_log2_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_specified_log2_test)
+    bloom_enable_strict_floating_point(bloom_core_specified_log2_test)
+    bloom_add_test(
+        NAME bloom.core.specified-log2
+        COMMAND bloom_core_specified_log2_test
+        LABELS unit primitives
     )
 
     add_executable(bloom_core_safe_parse_test tests/safe_parse_tests.cpp)
