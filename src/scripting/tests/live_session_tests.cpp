@@ -221,10 +221,9 @@ void savedColorIntent() {
     require(relativeIntent.has_value(), "Headless capture keeps a relative OCIO archive intent");
     const auto relativeLocation = color::parseOcioConfigLocation(relativeIntent->ocioConfigUri);
     require(relativeLocation.kind == color::OcioConfigLocatorKind::ProjectRelativeArchive &&
-                relativeLocation.value ==
-                    (relativeSource.assetBaseDirectory / "color/config.ocioz")
-                        .lexically_normal()
-                        .string() &&
+                relativeLocation.value == (relativeSource.assetBaseDirectory / "color/config.ocioz")
+                                              .lexically_normal()
+                                              .string() &&
                 relativeLocation.context.empty() &&
                 relativeIntent->ocioConfigRevision == core::Sha256Digest{},
             "Headless capture preserves relative OCIO locator instead of empty Neutral intent");

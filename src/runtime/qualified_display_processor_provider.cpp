@@ -68,9 +68,8 @@ registryDiagnostic(const bloom::color::OcioBuiltInResolutionResult& result) {
                 "The embedded Bloom Neutral display configuration has no unambiguous display/"
                 "view mapping");
         case OcioBuiltInInvalidReason::ResourceTableLimitExceeded:
-            return diagnostic(
-                "bloom.runtime.qualified-display-processor.registry-resource-limit",
-                "The OCIO configuration exceeds Bloom's bounded resource limits");
+            return diagnostic("bloom.runtime.qualified-display-processor.registry-resource-limit",
+                              "The OCIO configuration exceeds Bloom's bounded resource limits");
         case OcioBuiltInInvalidReason::DisplayViewEnumerationLimitExceeded:
             return diagnostic(
                 "bloom.runtime.qualified-display-processor.registry-display-view-limit",
