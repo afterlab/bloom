@@ -771,6 +771,61 @@ kill deadline, handle isolation, and orphan-free shutdown, external OCIO capabil
 `HelperUnavailable`, `HelperProtocolViolation`, `HelperMemoryLimit`, `HelperDeadline`,
 `HelperCancelled`, and `HelperTerminated`; raw exit codes remain secondary provenance.
 
+#### The config request group as implemented
+
+`color::resolveOcioConfig` (`bloom/color/ocio_config_resolution.hpp`) resolves any location a
+project can reference. A built-in resolves in-process as before. For a project-relative archive,
+an external archive and an external loose config it does the following, on Linux:
+
+- The host opens the file without following symbolic links and copies it into one sealed shared
+  file: the archive itself (at most 256 MiB, and it must start with a zip local file header), or
+  for a loose config the resource table of every candidate regular file under the directory that
+  holds `config.ocio`. Candidates are found by name and size only, at most 16 directories deep; a
+  symbolic link or a file larger than one resource may be is not a candidate. More than 2048
+  candidates, or more than 256 MiB in all, is `Invalid` with `ResourceTableLimitExceeded`.
+- An archive's revision is computed from those sealed bytes before any helper starts, so a changed
+  archive is `Changed` without one.
+- One `bloom-color-worker` is launched per config with a 512 MiB address-space ceiling. It
+  receives the working space and the project's context variables, enters its confinement, and
+  only then reads the sealed bytes. A loose config is served to OpenColorIO from the table: a path
+  that is not a supplied key does not exist, and an absolute path or one that leaves the root is
+  never asked of the file system. An archive is read by OpenColorIO from the sealed descriptor.
+- The helper builds one context: the config's search path, its declared `environment` defaults,
+  then the project's variables. Nothing comes from the process environment. It resolves every file
+  the config's color spaces, looks, view transforms and named transforms name. A name that
+  resolves to no supplied resource makes the config `MissingResource`. The keys that were found,
+  with `config.ocio`, are the consumed set. After the open the table serves only that set.
+- The host accepts the consumed set only if every key was supplied, the keys are strictly ordered
+  and `config.ocio` is among them, and computes the loose revision from the same sealed bytes. A
+  file the config does not read is therefore not part of its revision, and a file another context
+  reads is not part of this context's.
+- The helper describes the config with the registry's own rules (working space proven scene
+  linear, displays and views enumerated, Bloom's synthesized input spaces added), so a Ready
+  external config is the same `ResolvedBloomNeutralConfig` value as a built-in. Its processors are
+  tokens: the CPU display processor carries a `HelperToken` lease, and the color-space and input
+  processors and the display and color-space GPU programs are built in the helper from the same
+  recipes the in-process path uses. Pixels cross in sealed slabs of at most 16 MiB; the host reads
+  a result once, checks it is finite and keeps its own alpha.
+- Deadlines are 5 seconds for start and handshake, 30 seconds for the parse and for each
+  processor or GPU-program build, and 10 seconds for a slab. Expiry, a malformed or out-of-order
+  message or a helper that ended fails the session for good, terminates the helper and
+  invalidates its tokens. A non-finite pixel fails that call only.
+- A Ready config is kept with its helper, at most four at a time, and answered again without a
+  new parse while the size, modification time and identity of its file (for a loose config: of
+  every candidate) are unchanged. `color::releaseExternalOcioConfigs` ends the kept helpers.
+
+Export, headless render, flat EXR conversion, PNG, TIFF and video display output, input color
+conversion and the GPU display program resolve the project's config through this one entry. The
+color intent carries the location as text (`color::ocioConfigLocationText`): a built-in's URI
+unchanged, otherwise the file's location, its kind and the context variables, so a different
+context is a different cache key.
+
+Not covered by this version: macOS and Windows report `HelperUnavailable` for the three file
+kinds (their confinement is not wired to the config group); the resolution takes no cancellation
+callback, so a caller cannot interrupt a parse before its deadline; the Viewer, thumbnails and
+the color pickers still resolve built-ins only; and Project Settings, Python and MCP cannot yet
+select an external config, only keep one a project already references.
+
 ## Configuration Resolution States
 
 Resolution returns one structured state and diagnostics:
@@ -1033,9 +1088,10 @@ structured diagnostics, task behavior, and resource budgets are acceptance evide
 - Projects persist only qualified references and digests; color payload embedding is outside v1.
 - A config that cannot resolve the exact process and requested output identities fails closed; no
   ambient or approximate fallback is production-qualified.
-- This document is an accepted implementation contract. The OCIO adapter, built-in registry,
-  supervised helper, qualification profiles, cache, and hostile-input gates remain pending Batch 7
-  implementation.
+- This document is an accepted implementation contract. The OCIO adapter and built-in registry
+  are implemented, and so is the supervised helper for external configs on Linux (see "The config
+  request group as implemented"). Qualification profiles and the helper on macOS and Windows
+  remain pending.
 
 Primary references:
 

@@ -13,8 +13,10 @@ publication job), the interactive frame-export command with explicit digest appr
 constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance, and
 the PNG export path end to end (attempt color preparation, prepared-stream production, and the
 export command's preset choice) are implemented. MEDIA-4 enables TIFF through the isolated worker
-and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. The supervised external-config
-helper and non-built-in locator kinds remain pending color-side work.
+and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. A project-relative archive, an
+external archive and an external loose OCIO config resolve through the supervised helper on Linux
+for every output path (color-management.md, "The config request group as implemented"); on macOS
+and Windows they are refused as an unavailable adapter.
 
 The GPU final-render route uses an explicitly owned, cheap-to-construct
 `bloom::host::GpuExportProvider`. Still, range and video requests within one application/server
@@ -1157,8 +1159,8 @@ verified atomically published PNG or EXR.
 This document is an accepted implementation contract. The version 1 output adapters, preset
 conversion, staged-format verification, the publication coordinator, the general GPU output-color
 production context, and large-frame (6000x4000) GPU export described here are implemented, with
-locally verified native execution. Still pending: a supervised external-config color helper and
-non-built-in locator kinds.
+locally verified native execution. External OCIO configs go through the supervised color helper
+on Linux; the helper on macOS and Windows is still pending.
 
 Primary references:
 
