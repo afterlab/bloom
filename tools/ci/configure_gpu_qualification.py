@@ -43,6 +43,9 @@ def main():
             targets += ["bloom_dependency_vulkan-headers", "bloom_dependency_vulkan-memory-allocator",
                         "bloom_dependency_vulkan-loader", "bloom_dependency_glslang",
                         "bloom_dependency_spirv-tools"]
+            if sys.platform == "darwin":
+                # macOS has no system Vulkan driver: the device is the locked MoltenVK.
+                targets.append("bloom_dependency_moltenvk")
         subprocess.run(["cmake", "--build", str(directory), "--config", "Release", "--parallel",
                         str(args.jobs), "--target", *targets], check=True)
     else:
