@@ -298,6 +298,62 @@ struct FrameEvidence final {
     return true;
 }
 
+// The same evidence for a host-painted frame. The frame's pixels are already on the host (the one
+// final display transfer the route makes), so every pixel is compared with the CPU oracle, not a
+// sample of them, under the same rule: within one code per color channel and alpha exactly. The
+// recorded samples are the same bounded coordinates the resident evidence records; no sparse
+// readback runs, so its totals stay zero.
+[[nodiscard]] inline bool buildHostPaintedFrameEvidence(const PreparedPreviewFrame& gpuFrame,
+                                                        const PreparedPreviewFrame& cpuFrame,
+                                                        FrameEvidence& out, std::string& detail) {
+    out = FrameEvidence{};
+    if (gpuFrame.provenance().provider != runtime::PreviewDisplayProvider::GpuPreparedPacked ||
+        gpuFrame.provenance().gpuPreparedPacked == nullptr) {
+        detail = "the frame is not a GPU-prepared host-painted frame";
+        return false;
+    }
+    const auto gpuView = gpuFrame.displayBufferView();
+    const auto cpuView = cpuFrame.displayBufferView();
+    if (!gpuView.has_value() || !cpuView.has_value()) {
+        detail = "a frame has no display buffer";
+        return false;
+    }
+    if (gpuView->displayWindow != cpuView->displayWindow ||
+        gpuView->pixels.size() != cpuView->pixels.size() || cpuView->pixels.empty()) {
+        detail = "the GPU-prepared display buffer and the CPU oracle differ in extent";
+        return false;
+    }
+    const auto width = cpuView->displayWindow.extent().width();
+    const auto channelDelta = [](const std::uint8_t a, const std::uint8_t b) {
+        return std::abs(static_cast<int>(a) - static_cast<int>(b));
+    };
+    for (std::size_t index = 0; index < cpuView->pixels.size(); ++index) {
+        const auto cpu = cpuView->pixels[index];
+        const auto gpu = gpuView->pixels[index];
+        if (channelDelta(gpu.red, cpu.red) > 1 || channelDelta(gpu.green, cpu.green) > 1 ||
+            channelDelta(gpu.blue, cpu.blue) > 1 || gpu.alpha != cpu.alpha) {
+            detail = "the GPU-prepared pixel differs from the CPU oracle at (" +
+                     std::to_string(index % width) + "," + std::to_string(index / width) + ")";
+            return false;
+        }
+    }
+    const auto coordinates = selectSampleCoordinates(cpuFrame);
+    if (coordinates.empty()) {
+        detail = "no sample coordinates were available";
+        return false;
+    }
+    for (const auto& coordinate : coordinates) {
+        const auto offset = static_cast<std::size_t>(coordinate.y) * width + coordinate.x;
+        out.samples.push_back(SparseSample{coordinate.x, coordinate.y, cpuView->pixels[offset],
+                                           gpuView->pixels[offset]});
+    }
+    out.oraclePixelCount = cpuView->pixels.size();
+    CanonicalWriter frameWriter;
+    encodeFrameIdentity(gpuFrame, frameWriter);
+    out.identityHex = sha256Hex(frameWriter.bytes());
+    return true;
+}
+
 [[nodiscard]] inline std::string evidenceDigest(const std::span<const FrameEvidence> evidence) {
     CanonicalWriter writer;
     writer.text("bloom.gpu.route.evidence.v2");
@@ -381,6 +437,38 @@ publishPreviewProof(const std::filesystem::path& directory, const std::string_vi
     proof.readbackSubmissions = 0;
     proof.payloads = 0;
     proof.transferredBytes = 0;
+    proof.evidenceDigest = std::move(evidenceDigestValue);
+    const auto issues = runtime::validateGpuRouteExecutionProof(proof);
+    if (!issues.empty()) {
+        return {false, issues.front().detail};
+    }
+    const auto status = bloom::gpu_route_proof_io::writeRouteProof(directory, nonce, proof);
+    if (status != RouteProofIoStatus::Ok) {
+        return {false, std::string{bloom::gpu_route_proof_io::routeProofIoStatusName(status)}};
+    }
+    return {true, {}};
+}
+
+// The host-painted preview proof: the same captured values plus the final display transfers the
+// route made, one per verified frame, and the bytes they moved. The typed validation refuses it on
+// a platform that presents the resident frame.
+[[nodiscard]] inline ProofWriteResult publishHostPaintedPreviewProof(
+    const std::filesystem::path& directory, const std::string_view nonce,
+    const std::string_view routeId, const GpuRouteHarnessKind harness,
+    const std::uint64_t deviceOwnershipEpoch, const std::uint64_t coldDispatches,
+    const std::uint64_t verifiedFrames, const std::uint64_t displayTransfers,
+    const std::uint64_t transferredBytes, std::string processIdentityDigest,
+    std::string evidenceDigestValue) {
+    GpuRouteExecutionProof proof;
+    proof.routeId = std::string{routeId};
+    proof.harness = harness;
+    proof.processIdentityDigest = std::move(processIdentityDigest);
+    proof.deviceOwnershipEpoch = std::to_string(deviceOwnershipEpoch);
+    proof.nativeDispatches = coldDispatches;
+    proof.verifiedFrames = verifiedFrames;
+    proof.readbackSubmissions = displayTransfers;
+    proof.payloads = displayTransfers;
+    proof.transferredBytes = transferredBytes;
     proof.evidenceDigest = std::move(evidenceDigestValue);
     const auto issues = runtime::validateGpuRouteExecutionProof(proof);
     if (!issues.empty()) {

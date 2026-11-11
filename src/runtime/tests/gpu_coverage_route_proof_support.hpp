@@ -138,6 +138,86 @@ inline void routeProofSinkRejectsFakes(std::vector<std::string>& failures) {
     if (!sink.proofs().empty()) {
         failures.push_back("route-proof sink retained a rejected proof");
     }
+    // The host-painted preview proofs: accepted only where the platform paints the preview on the
+    // host, and only with exactly one final display transfer per verified frame.
+    using bloom::runtime::GpuPreviewRouteDisplay;
+    using bloom::runtime::GpuRouteHarnessKind;
+    const auto firstIssue = [](const bloom::runtime::GpuRouteExecutionProof& proof,
+                               const GpuPreviewRouteDisplay display) {
+        const auto issues = bloom::runtime::validateGpuRouteExecutionProof(proof, display);
+        return issues.empty() ? GpuCoverageContractIssue::None : issues.front().issue;
+    };
+    const auto expectIssue = [&](const bloom::runtime::GpuRouteExecutionProof& proof,
+                                 const GpuPreviewRouteDisplay display,
+                                 const GpuCoverageContractIssue expected,
+                                 const std::string_view name) {
+        if (firstIssue(proof, display) != expected) {
+            failures.push_back("route-proof host-painted: '" + std::string{name} +
+                               "' did not validate as expected");
+        }
+    };
+    auto painted = representativeRouteProof();
+    painted.harness = GpuRouteHarnessKind::ViewerPreviewHostPainted;
+    painted.verifiedFrames = 3;
+    painted.readbackSubmissions = 3;
+    painted.payloads = 3;
+    painted.transferredBytes = 3U * 4096U;
+    expectIssue(painted, GpuPreviewRouteDisplay::HostPainted, GpuCoverageContractIssue::None,
+                "one transfer per frame on a host-painting platform");
+    expectIssue(painted, GpuPreviewRouteDisplay::Resident,
+                GpuCoverageContractIssue::RouteProofHarnessMismatch,
+                "host-painted proof on a resident platform");
+    auto paintedRam = painted;
+    paintedRam.routeId = "route.preview.ram_preview";
+    paintedRam.harness = GpuRouteHarnessKind::RamPreviewHostPainted;
+    expectIssue(paintedRam, GpuPreviewRouteDisplay::HostPainted, GpuCoverageContractIssue::None,
+                "RAM preview one transfer per frame");
+    auto paintedWrongRoute = painted;
+    paintedWrongRoute.harness = GpuRouteHarnessKind::RamPreviewHostPainted;
+    expectIssue(paintedWrongRoute, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofHarnessMismatch,
+                "host-painted harness for the other route");
+    auto paintedNoTransfer = painted;
+    paintedNoTransfer.readbackSubmissions = 0;
+    paintedNoTransfer.payloads = 0;
+    paintedNoTransfer.transferredBytes = 0;
+    expectIssue(paintedNoTransfer, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofExcessReadback,
+                "host-painted proof without its transfers");
+    auto paintedExtra = painted;
+    paintedExtra.readbackSubmissions = 4;
+    expectIssue(paintedExtra, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofExcessReadback,
+                "host-painted proof with an extra readback");
+    auto paintedFewer = painted;
+    paintedFewer.readbackSubmissions = 2;
+    paintedFewer.payloads = 2;
+    expectIssue(paintedFewer, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofExcessReadback,
+                "host-painted proof with a frame that was not transferred");
+    auto paintedTwoPayloads = painted;
+    paintedTwoPayloads.payloads = 6;
+    expectIssue(paintedTwoPayloads, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofExcessReadback,
+                "host-painted proof with two payloads per frame");
+    auto paintedNoBytes = painted;
+    paintedNoBytes.transferredBytes = 0;
+    expectIssue(paintedNoBytes, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofMissingTransferredBytes,
+                "host-painted proof without transferred bytes");
+    auto paintedNoDispatch = painted;
+    paintedNoDispatch.nativeDispatches = 0;
+    expectIssue(paintedNoDispatch, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofNoNativeDispatch,
+                "host-painted proof with no native dispatch");
+    // The resident proof keeps its rule on both kinds of platform.
+    auto residentReadback = representativeRouteProof();
+    residentReadback.readbackSubmissions = 1;
+    expectIssue(residentReadback, GpuPreviewRouteDisplay::HostPainted,
+                GpuCoverageContractIssue::RouteProofExcessReadback,
+                "resident proof with a readback on a host-painting platform");
+    expectIssue(representativeRouteProof(), GpuPreviewRouteDisplay::Resident,
+                GpuCoverageContractIssue::None, "resident proof on a resident platform");
     std::cout << "NEGATIVE route-proof: eighteen generic/fake/type-invalid/policy proofs rejected; "
                  "sink retains none\n";
 }

@@ -28,14 +28,44 @@ enum class GpuRouteHarnessKind : std::uint8_t {
     SequenceRangeExport,
     VideoExport,
     HeadlessScripted,
+    // The same two preview routes on a platform that has no native presentation surface: the scene
+    // and the display transform are prepared on the device, one final RGBA8 transfer per frame
+    // hands the display image to the host, and the widget paints it. Appended, so the stored
+    // values of the kinds above do not change.
+    ViewerPreviewHostPainted,
+    RamPreviewHostPainted,
 };
+
+// How a platform puts a preview frame on screen. Resident: the frame stays on the device and is
+// presented through a native surface, with no transfer at all. HostPainted: the frame is prepared
+// on the device and transferred once for the widget to paint.
+enum class GpuPreviewRouteDisplay : std::uint8_t { Resident, HostPainted };
+
+// The display the preview route proofs of this platform are held to. macOS has no native
+// presentation surface for the resident route, so its preview proofs are the host-painted ones;
+// every other platform proves the resident route and a host-painted proof is refused there.
+[[nodiscard]] constexpr GpuPreviewRouteDisplay gpuPreviewRouteDisplay() noexcept {
+#if defined(__APPLE__)
+    return GpuPreviewRouteDisplay::HostPainted;
+#else
+    return GpuPreviewRouteDisplay::Resident;
+#endif
+}
+
+[[nodiscard]] constexpr bool
+gpuRouteHarnessIsHostPainted(const GpuRouteHarnessKind harness) noexcept {
+    return harness == GpuRouteHarnessKind::ViewerPreviewHostPainted ||
+           harness == GpuRouteHarnessKind::RamPreviewHostPainted;
+}
 
 [[nodiscard]] constexpr std::string_view
 gpuRouteHarnessRouteId(const GpuRouteHarnessKind harness) noexcept {
     switch (harness) {
     case GpuRouteHarnessKind::ViewerPreview:
+    case GpuRouteHarnessKind::ViewerPreviewHostPainted:
         return "route.preview.viewer";
     case GpuRouteHarnessKind::RamPreview:
+    case GpuRouteHarnessKind::RamPreviewHostPainted:
         return "route.preview.ram_preview";
     case GpuRouteHarnessKind::StillFrameExport:
         return "route.export.still_frame";
@@ -51,8 +81,9 @@ gpuRouteHarnessRouteId(const GpuRouteHarnessKind harness) noexcept {
     return {};
 }
 
-// Preview routes are readback-free by construction; only a final-render route may read the
-// composited image back at the codec/file boundary.
+// Resident preview routes are readback-free by construction; only a final-render route may read
+// the composited image back at the codec/file boundary. A host-painted preview proof is held to
+// its own rule in validateGpuRouteExecutionProof: exactly one final display transfer per frame.
 [[nodiscard]] constexpr bool gpuRouteAllowsFinalReadback(const std::string_view routeId) noexcept {
     return routeId == "route.export.still_frame" || routeId == "route.export.sequence_range" ||
            routeId == "route.export.video" || routeId == "route.export.headless_scripted";
@@ -116,8 +147,11 @@ gpuRouteProofDigestIsCanonicalSha256(const std::string_view digest) noexcept {
     return true;
 }
 
+// `display` is the platform's preview display; it is a parameter so both rules can be exercised
+// on any host.
 [[nodiscard]] inline std::vector<GpuCoverageContractDiagnostic>
-validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof) {
+validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof,
+                               const GpuPreviewRouteDisplay display = gpuPreviewRouteDisplay()) {
     std::vector<GpuCoverageContractDiagnostic> issues;
     if (proof.routeId.empty() || proof.harness == GpuRouteHarnessKind::None) {
         issues.push_back({GpuCoverageContractIssue::RouteProofEmptyOrGeneric,
@@ -137,6 +171,13 @@ validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof) {
         issues.push_back(
             {GpuCoverageContractIssue::RouteProofHarnessMismatch,
              "route proof for '" + proof.routeId + "' was produced by a different harness"});
+    }
+    const bool hostPainted = gpuRouteHarnessIsHostPainted(proof.harness);
+    if (hostPainted && display != GpuPreviewRouteDisplay::HostPainted) {
+        issues.push_back({GpuCoverageContractIssue::RouteProofHarnessMismatch,
+                          "route proof for '" + proof.routeId +
+                              "' is a host-painted preview proof on a platform that presents the "
+                              "resident frame"});
     }
     if (!gpuRouteProofDigestIsCanonicalSha256(proof.processIdentityDigest) ||
         !gpuRouteProofDigestIsCanonicalSha256(proof.evidenceDigest) ||
@@ -159,6 +200,23 @@ validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof) {
                               "' recorded no verified frame with real per-frame identity"});
     }
     const bool finalRender = gpuRouteAllowsFinalReadback(proof.routeId);
+    if (!finalRender && hostPainted) {
+        // Exactly one final display transfer per verified frame, one payload each, and the bytes
+        // it moved. Anything more is a scene readback; anything less is not this route.
+        if (proof.readbackSubmissions != proof.verifiedFrames ||
+            proof.payloads != proof.verifiedFrames) {
+            issues.push_back({GpuCoverageContractIssue::RouteProofExcessReadback,
+                              "host-painted preview route proof '" + proof.routeId +
+                                  "' did not record exactly one final display transfer and one "
+                                  "payload per verified frame"});
+        }
+        if (proof.transferredBytes == 0) {
+            issues.push_back({GpuCoverageContractIssue::RouteProofMissingTransferredBytes,
+                              "host-painted preview route proof '" + proof.routeId +
+                                  "' omits transferred-byte evidence"});
+        }
+        return issues;
+    }
     if (!finalRender) {
         if (proof.readbackSubmissions != 0 || proof.payloads != 0 || proof.transferredBytes != 0) {
             issues.push_back({GpuCoverageContractIssue::RouteProofExcessReadback,

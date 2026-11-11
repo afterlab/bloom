@@ -296,17 +296,22 @@ because it breaks parity with the CPU reference. A Metal device has one memory p
 the system; Bloom plans against it with its own budget
 ([GPU backend](gpu-backend.md)).
 
-What was measured, on an Apple M4 running macOS 26 (2026-11-11), in a qualified build at the
+What was measured, on an Apple M4 running macOS 26 (2026-11-12), in a qualified build at the
 13.3 deployment target:
 
 - The GPU coverage contract and the native acceptance pass with the contract's exception lists
-  unchanged.
+  unchanged and all six render routes proven. The acceptance needs the desktop build, because
+  the two preview route proofs are written by harnesses that drive the Viewer and RAM preview.
 - `bloom.sweep.nodes` renders all 98 node types that have an image output and a buildable graph
   on the GPU: 97 are bit-identical to the CPU reference and Auto Exposure is within the
   documented 2e-6 gate.
 - The Viewer uses the adopted preview route (prepared on the GPU, painted through the widget).
   The resident presentation route needs a Wayland surface and is not built for macOS; no Metal
-  surface route exists.
+  surface route exists. The route proof contract therefore holds the macOS preview proofs to
+  the host-painted rule: every frame prepared on the device and equal to the CPU reference in
+  every pixel, exactly one final display transfer per frame, no other readback and no frame on
+  the CPU path. Every other platform proves the resident route, and a host-painted proof is
+  refused there.
 
 Not measured: any macOS release from 13.3 to 25, and an Intel Mac. The deployment target says
 where the binaries are allowed to start, not where they were tested.

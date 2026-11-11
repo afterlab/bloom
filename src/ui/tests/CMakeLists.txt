@@ -1264,6 +1264,48 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# The preview route proofs of a platform that prepares the preview on the device and paints it on
+# the host (macOS; gpuPreviewRouteDisplay() in the route proof contract). They need no native
+# presentation surface and no Qt Vulkan feature, so they are built outside the Vulkan block. Each is
+# a CTest fixture setup the runtime native acceptance gate requires: nonce setup -> writers -> gate.
+# Other platforms prove the resident route with the harnesses in the Vulkan block below.
+if(APPLE AND BLOOM_RENDER_ENABLE_VULKAN AND TARGET Vulkan::Headers)
+    add_executable(bloom_ui_gpu_host_painted_preview_route_proof_test
+        gpu_host_painted_preview_route_proof_tests.cpp
+        gpu_route_proof_harness_support.hpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_host_painted_preview_route_proof_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/src/runtime"
+                ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_host_painted_preview_route_proof_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_host_painted_preview_route_proof_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_host_painted_preview_route_proof_test)
+    foreach(bloom_host_painted_route IN ITEMS viewer ram-preview)
+        if(bloom_host_painted_route STREQUAL "viewer")
+            set(bloom_host_painted_fixture gpu_route_proof_viewer)
+            set(bloom_host_painted_test bloom.ui.gpu_viewer_host_painted_route_proof)
+        else()
+            set(bloom_host_painted_fixture gpu_route_proof_ram)
+            set(bloom_host_painted_test bloom.ui.gpu_ram_preview_host_painted_route_proof)
+        endif()
+        bloom_add_test(
+            NAME ${bloom_host_painted_test}
+            COMMAND bloom_ui_gpu_host_painted_preview_route_proof_test
+                    --route ${bloom_host_painted_route}
+                    --proof-dir "${PROJECT_BINARY_DIR}/gpu-route-proofs"
+                    ${bloom_ram_preview_vulkan_loader_args}
+            LABELS ui gpu route-proof
+            TIMEOUT 300
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        )
+        set_tests_properties(${bloom_host_painted_test}
+            PROPERTIES FIXTURES_REQUIRED gpu_route_proofs
+                       FIXTURES_SETUP ${bloom_host_painted_fixture})
+    endforeach()
+endif()
+
 # Task CACHEFIX-1: the byte accounting every cache in the process owes, exercised at the scale of
 # the 38 GB incident (200 synthetic 4K RGBA32F frames) and checked against the process's own RSS.
 # Links bloom_ui for Qt and the media/runtime cache libraries it pulls in; deliberately not the
