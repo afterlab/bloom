@@ -91,11 +91,12 @@ using bloom::runtime::media_executor_test::runScene;
     return worst;
 }
 
-void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluator& evaluator,
-           const std::filesystem::path& directory, const document::AssetRecord& asset,
-           const GpuSceneOcioContext& ocioContext, const std::uint64_t idBase,
-           const std::string& name, const bool aces, const bloom::core::RationalTime time = {},
-           const std::size_t expectedPasses = 1, const double pixelAspect = 1.0) {
+[[maybe_unused]] void
+check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluator& evaluator,
+      const std::filesystem::path& directory, const document::AssetRecord& asset,
+      const GpuSceneOcioContext& ocioContext, const std::uint64_t idBase, const std::string& name,
+      const bool aces, const bloom::core::RationalTime time = {},
+      const std::size_t expectedPasses = 1, const double pixelAspect = 1.0) {
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = directory;
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
@@ -158,10 +159,10 @@ void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluato
 // #448: one executor and one scene cache, the same plan identity re-prepared after only the
 // footage pixel aspect changed. The prepared output key must change and the warm cache must not
 // serve the square frame for the 2:1 one; each native frame matches its own CPU oracle.
-void checkAspectChange(Expectations& expectations, GpuDevice& device,
-                       CpuCompositionEvaluator& evaluator, const std::filesystem::path& directory,
-                       const document::AssetRecord& asset, const GpuSceneOcioContext& ocioContext,
-                       const std::uint64_t idBase) {
+[[maybe_unused]] void
+checkAspectChange(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluator& evaluator,
+                  const std::filesystem::path& directory, const document::AssetRecord& asset,
+                  const GpuSceneOcioContext& ocioContext, const std::uint64_t idBase) {
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = directory;
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
@@ -214,7 +215,7 @@ void checkAspectChange(Expectations& expectations, GpuDevice& device,
 }
 
 // A 4x6 premultiplied RGBA field pattern: even rows and odd rows differ.
-[[nodiscard]] std::vector<ExrPixel> fieldPixels(const float shift) {
+[[nodiscard, maybe_unused]] std::vector<ExrPixel> fieldPixels(const float shift) {
     std::vector<ExrPixel> pixels;
     for (int y = 0; y < 6; ++y)
         for (int x = 0; x < 4; ++x) {

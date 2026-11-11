@@ -124,13 +124,13 @@ inline void writeMultilayerExr(const std::filesystem::path& path, const int widt
     file.writePixels(height);
 }
 
-void writeExrRgba(const std::filesystem::path& path, const int width, const int height,
-                  const std::vector<ExrPixel>& pixels) {
+[[maybe_unused]] void writeExrRgba(const std::filesystem::path& path, const int width,
+                                   const int height, const std::vector<ExrPixel>& pixels) {
     writeExrRgbaWithChromaticities(path, width, height, pixels, Imf::Chromaticities());
 }
 
-[[nodiscard]] document::AssetRecord imageAsset(const std::filesystem::path& path,
-                                               const std::string& name, const std::uint64_t rawId) {
+[[nodiscard, maybe_unused]] document::AssetRecord
+imageAsset(const std::filesystem::path& path, const std::string& name, const std::uint64_t rawId) {
     const auto probe = bloom::media::probeImage(path);
     if (!probe.value.has_value()) {
         throw std::logic_error("EXR fixture could not be probed: " + probe.diagnostic);

@@ -94,7 +94,7 @@ void keyStops(Fixture& fixture) {
 }
 
 // A genuinely cancelled token, taken from a scheduler task that is cancelled while it runs.
-[[nodiscard]] runtime::CancellationToken cancelledToken() {
+[[nodiscard, maybe_unused]] runtime::CancellationToken cancelledToken() {
     using namespace runtime;
     TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
     config.cpuWorkerCount = 1;

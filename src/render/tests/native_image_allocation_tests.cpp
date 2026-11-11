@@ -234,6 +234,12 @@ void nonlocalDomains(GpuDevice& device) {
             mask |= std::uint32_t{1} << type;
     }
     if (mask == 0) {
+        // A unified-memory device has no memory apart from system memory, so there is no nonlocal
+        // image domain to cover; its device-local domain is covered by the cases above.
+        if (device.availableAllocationBudget().unified_memory) {
+            std::cout << "NotApplicable: a unified-memory device has no nonlocal image domain\n";
+            return;
+        }
         std::cout << "NotRun: actual device has no nonlocal image domain\n";
         return;
     }

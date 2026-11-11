@@ -784,3 +784,28 @@ target_include_directories(bloom_render_final_pixel_storage_test PRIVATE "${PROJ
 bloom_enable_warnings(bloom_render_final_pixel_storage_test)
 bloom_enable_strict_floating_point(bloom_render_final_pixel_storage_test)
 bloom_add_test(NAME bloom.render.final_pixel_storage COMMAND bloom_render_final_pixel_storage_test LABELS unit render memory)
+
+# The tests above that include the render module's private Vulkan headers take the Vulkan-Hpp and
+# allocator headers from the dependency prefix's include directory. A developer-system build has
+# no such variable, and on a platform with no system Vulkan headers (macOS) they are found only
+# through the package targets, so those are named as well. Where the headers are already on the
+# include path this adds nothing.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    foreach(bloom_render_private_vulkan_test IN ITEMS
+            bloom_render_gpu_affine_cost_test
+            bloom_render_gpu_affine_test
+            bloom_render_gpu_blend_test
+            bloom_render_gpu_composite_test
+            bloom_render_gpu_display_transfer_test
+            bloom_render_gpu_output_color_readback_fault_test
+            bloom_render_gpu_output_color_readback_test
+            bloom_render_gpu_point_resample_fault_test
+            bloom_render_gpu_point_resample_test
+            bloom_render_gpu_presentation_target_test
+            bloom_render_gpu_process_readback_test)
+        if(TARGET ${bloom_render_private_vulkan_test})
+            target_link_libraries(${bloom_render_private_vulkan_test}
+                PRIVATE Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+        endif()
+    endforeach()
+endif()
