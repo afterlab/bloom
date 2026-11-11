@@ -89,8 +89,10 @@ struct OutputAnalysisAttemptGpuProvenanceV1 final {
     // frame. Never empty for a CPU frame: a fallback always carries its reason (#553).
     std::string cpuFallbackReason;
 
+    // True only for a frame the device produced. A frame that took the CPU reference path carries
+    // its reason and is never a GPU frame, whatever the evaluator's status says (#648).
     [[nodiscard]] bool gpuEvaluated() const noexcept {
-        return status == runtime::GpuProcessFrameStatus::Evaluated;
+        return status == runtime::GpuProcessFrameStatus::Evaluated && cpuFallbackReason.empty();
     }
     friend bool operator==(const OutputAnalysisAttemptGpuProvenanceV1&,
                            const OutputAnalysisAttemptGpuProvenanceV1&) = default;

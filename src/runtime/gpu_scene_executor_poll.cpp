@@ -74,6 +74,15 @@ compositeStatusRejected(const render::GpuCompositeDiagnostic& diagnostic) noexce
     return diagnostic.code == render::GpuBlendDiagnosticCode::StatusFlagRejected;
 }
 
+// A window as "[x,y widthxheight]", or "none".
+[[nodiscard]] std::string describeWindow(const std::optional<render::ImageWindow>& window) {
+    if (!window)
+        return "none";
+    return "[" + std::to_string(window->originX()) + "," + std::to_string(window->originY()) +
+           " " + std::to_string(window->extent().width()) + "x" +
+           std::to_string(window->extent().height()) + "]";
+}
+
 } // namespace
 
 GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage produced) {
@@ -114,9 +123,25 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
     }
     if (step.command != kInvalidGpuSceneCommand &&
         !descriptorMatches(scene->commands()[step.command], produced, inputImage, backdropImage)) {
+        // #648: the message carries what was expected and what was produced, so a report of it
+        // names the command kind and the window that differs. The leading sentence is unchanged.
+        const auto expected =
+            gpu_scene_executor_detail::expectedDescriptorOf(*scene, step.command, 0);
+        std::string detail = "; step kind " + std::to_string(static_cast<unsigned>(step.kind)) +
+                             ", command kind " +
+                             std::to_string(scene->commands()[step.command].index());
+        detail += "; expected data " +
+                  (expected ? describeWindow(expected->data) : std::string("unknown")) +
+                  " display " + (expected ? describeWindow(expected->display) : std::string("unknown"));
+        detail += "; produced data " + describeWindow(produced.dataWindow()) + " display " +
+                  describeWindow(produced.displayWindow());
+        if (inputImage != nullptr)
+            detail += "; input display " + describeWindow(inputImage->displayWindow());
+        if (backdropImage != nullptr)
+            detail += "; backdrop display " + describeWindow(backdropImage->displayWindow());
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DescriptorMismatch,
                               "a native image descriptor did not match scene command " +
-                                  std::to_string(step.command));
+                                  std::to_string(step.command) + detail);
     }
     const std::uint64_t actual = produced.allocationBytes();
     if (actual >

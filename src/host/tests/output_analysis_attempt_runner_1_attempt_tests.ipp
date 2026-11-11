@@ -285,6 +285,14 @@ void testGpuExportProviderDisabledFallback(Expectations& expectations) {
     output::ExportResourceLedgerV1 ledger;
     auto request = requestFor(directory.path() / "disabled.exr");
     request.gpuProvider = provider;
+    request.owner = {.kind = runtime::TaskOwnerKind::Export,
+                     .id = runtime::TaskOwnerId::fromRaw(4107)};
+    // #648: the diagnostic line is read back below.
+    std::ostringstream logged;
+    struct RestoreLog final {
+        std::streambuf* previous;
+        ~RestoreLog() { std::clog.rdbuf(previous); }
+    } restoreLog{std::clog.rdbuf(logged.rdbuf())};
     auto begin =
         host::beginOutputAnalysisAttemptV1(scheduler, coordinator, ledger, std::move(request));
     expectations.expect(static_cast<bool>(begin), "provider-disabled: begin submits the attempt");
@@ -314,4 +322,24 @@ void testGpuExportProviderDisabledFallback(Expectations& expectations) {
                             provenance->cpuFallbackReason.find("disabled") != std::string::npos,
                         "provider-disabled: the CPU frame names why it left the GPU (" +
                             (provenance ? provenance->cpuFallbackReason : std::string{}) + ")");
+    // #648: the log line for a CPU reference frame says when it happened and which request and
+    // frame time it belongs to, so every line can be matched to its render.
+    const std::string line = logged.str();
+    const std::regex stamped(
+        R"(Bloom export: frame taking the CPU reference path: )"
+        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z request=export:4107 time=-?\d+/\d+: status )");
+    expectations.expect(std::regex_search(line, stamped),
+                        "provider-disabled: the CPU reference line carries a UTC time, the "
+                        "request and the frame time (" +
+                            line + ")");
+    expectations.expect(provenance.has_value() && !provenance->gpuEvaluated(),
+                        "provider-disabled: the frame is not counted as a GPU frame");
+    // A frame that took the CPU reference path is never a GPU frame, whatever status the
+    // evaluator reported: an export's CPU frame count is the frames that carry a reason.
+    host::OutputAnalysisAttemptGpuProvenanceV1 labelled;
+    labelled.status = runtime::GpuProcessFrameStatus::Evaluated;
+    expectations.expect(labelled.gpuEvaluated(), "an evaluated frame with no reason is a GPU frame");
+    labelled.cpuFallbackReason = "the GPU evaluation returned no frame";
+    expectations.expect(!labelled.gpuEvaluated(),
+                        "an evaluated status with a CPU fallback reason is a CPU frame");
 }

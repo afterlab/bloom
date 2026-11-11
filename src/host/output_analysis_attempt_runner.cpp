@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <iostream>
 #include <limits>
 #include <new>
@@ -226,6 +228,42 @@ translateBuildFailure(const BuildOutcomeV1& outcome) {
         break;
     }
     return {OutputAnalysisAttemptStageV1::Analyzing, false, std::monostate{}};
+}
+
+[[nodiscard]] const char* ownerKindName(const runtime::TaskOwnerKind kind) noexcept {
+    switch (kind) {
+    case runtime::TaskOwnerKind::Application:
+        return "application";
+    case runtime::TaskOwnerKind::Project:
+        return "project";
+    case runtime::TaskOwnerKind::Composition:
+        return "composition";
+    case runtime::TaskOwnerKind::PanelRequest:
+        return "panel";
+    case runtime::TaskOwnerKind::Export:
+        return "export";
+    }
+    return "unknown";
+}
+
+// The current UTC time to the millisecond, as 2026-01-02T03:04:05.678Z, for diagnostics.
+[[nodiscard]] std::string utcTimestamp() {
+    const auto now = std::chrono::system_clock::now();
+    const auto seconds = std::chrono::floor<std::chrono::seconds>(now);
+    const auto milliseconds =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - seconds).count();
+    const std::time_t time = std::chrono::system_clock::to_time_t(seconds);
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &time);
+#else
+    gmtime_r(&time, &utc);
+#endif
+    std::array<char, 40> text{};
+    std::snprintf(text.data(), text.size(), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                  utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
+                  utc.tm_sec, static_cast<int>(milliseconds));
+    return text.data();
 }
 
 [[nodiscard]] runtime::TaskOwner attemptOwner(const runtime::TaskOwner requested) noexcept {
@@ -493,6 +531,12 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto assetBaseDirectory = state_->request.assetBaseDirectory;
         auto fallbackEvaluator = state_->request.fallbackEvaluator;
 
+        const auto requestOwner = attemptOwner(state_->request.owner);
+        const std::string requestLabel =
+            std::string("request=") + ownerKindName(requestOwner.kind) + ":" +
+            std::to_string(requestOwner.id.value()) + " time=" +
+            std::to_string(evaluation.time.numerator()) + "/" +
+            std::to_string(evaluation.time.denominator());
         runtime::TaskRequest cpuRequest(
             "Analyze a frame export attempt", attemptOwner(state_->request.owner),
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
@@ -505,7 +549,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
              gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
              forceCpuFallback, outputColorCommand = std::move(outputColorCommand),
              mediaDisplay = std::move(mediaDisplay), displayName = state_->request.displayName,
-             viewName = state_->request.viewName](
+             viewName = state_->request.viewName, requestLabel](
                 runtime::TaskContext& context) mutable -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -593,8 +637,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                     << '\n';
                             return admissionFailure(gpuOutcome.diagnostic.code);
                         }
+                        // #648: the line names when it happened and which request and frame
+                        // time it belongs to, so each one can be matched to its render.
                         if (gpuOutcome.status != runtime::GpuProcessFrameStatus::Evaluated)
                             std::clog << "Bloom export: frame taking the CPU reference path: "
+                                      << utcTimestamp() << " " << requestLabel << ": "
                                       << "status " << static_cast<int>(gpuOutcome.status)
                                       << ", code " << static_cast<int>(gpuOutcome.diagnostic.code)
                                       << ": " << gpuOutcome.diagnostic.message << '\n';
@@ -674,7 +721,10 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                              gpuProvenance.cpuFallbackReason.empty())
                         gpuProvenance.cpuFallbackReason = "no usable GPU device";
                     if (gpuProvenance.cpuFallbackReason.empty())
-                        gpuProvenance.cpuFallbackReason = "the GPU evaluator is not available";
+                        gpuProvenance.cpuFallbackReason =
+                            gpuProvenance.status == runtime::GpuProcessFrameStatus::Evaluated
+                                ? "the GPU evaluation returned no frame"
+                                : "the GPU evaluator is not available";
                     if (context.isCancellationRequested()) {
                         return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                     }

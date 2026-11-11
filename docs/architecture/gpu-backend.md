@@ -1496,6 +1496,25 @@ partway through an output with mixed hidden semantics.
 - Preview fallback or reduced precision: expose it in viewer status. Strict final output does not
   degrade silently.
 
+### Export provenance and the CPU-reference diagnostic
+
+An export frame that leaves the GPU for the CPU reference path is reported in three places that
+must agree: the frame's provenance carries the reason, the export's `cpuReferenceFrames` counts
+it, and one log line names it. A frame counts as a GPU frame only when the device produced it:
+an evaluator status of `Evaluated` with a CPU fallback reason, such as an evaluation that
+returned no frame, is a CPU reference frame (#648). The log line is
+
+```
+Bloom export: frame taking the CPU reference path: <UTC time> request=<owner kind>:<owner id> time=<n>/<d>: status <s>, code <c>: <message>
+```
+
+where the time is ISO 8601 to the millisecond, the request is the task owner of the render (an
+export job's run, a capture, a scripted render) and `time` is the frame's composition time as a
+rational number of seconds. Each line can therefore be matched to the render it belongs to. A
+descriptor mismatch (`a native image descriptor did not match scene command N`) continues with
+the step and command kind, the expected and the produced data and display windows, and the
+input or backdrop display window it was checked against.
+
 ### Processing-phase admission by measured capacity and actual need
 
 One neutral `GpuProcessingPhasePolicy` is explicitly injected by the application, export and
