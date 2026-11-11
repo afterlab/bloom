@@ -1903,7 +1903,13 @@ and retained/quarantined submission ownership. A logical terminal result or time
 proof. A final executor's terminal `Failure`/`OverBudget` may release its phase only when no device
 loss, unretired executor submission, owner drain or output-color submission remains. The device's
 independent unproven-submission latch still prevents release; an unknown failure supplies no such
-proof. Capacity updates preserve held leases/counts; measured zero refuses new admission. Bounded
+proof. A final evaluator's idle owner thread advances the retirement a frame left behind: it polls
+the executor, the output color stage and the display-only uploader, and once their fences are
+observed it proves the leftover phase retired and returns its claims to the root. Retirement does
+not wait for the next admitted request, which a root with no room beside the leftover phase would
+never admit; a failed upload's resident image, a quarantined readback's phase alias and a failed
+output color job's retained inputs are released at that same proof. Capacity updates preserve held
+leases/counts; measured zero refuses new admission. Bounded
 readiness and external-capacity-release retries retain one active/newest intent, avoid retrying on
 own disposal, cancel safely on shutdown, and preserve warm exact-cache reuse when no new phase is
 needed. They do not create a polling loop or silently move GPU work to CPU.
