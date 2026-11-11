@@ -41,14 +41,21 @@
     "copyrightFiles": [],
     "noticeFiles": [],
     "sourceObligation": "none",
-    "modified": false,
+    "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/spirv-cross/review.md",
-      "sha256": "sha256:2848158dbf0c9189601a643f0e6abb330b782ca15c3568596b8115604116a524"
+      "sha256": "sha256:c54edab3a840c7620d152b20d7dfbfb71bd07e98f7f78037fe60b89276afff87"
     },
     "reviewedAt": "2026-11-11"
   },
-  "patches": [],
+  "patches": [
+    {
+      "path": "dependencies/patches/spirv-cross/0001-msl-keep-the-sign-of-a-zero-product.patch",
+      "sha256": "sha256:a54491dc3c3ed9466e70979ce7aadb864d6d57a669b609a08e0b88e86142f031",
+      "applyOrder": 0,
+      "reason": "Metal backend: add negative zero in the no-contraction multiply helpers so a product of negative zero keeps its sign"
+    }
+  ],
   "dependencies": [],
   "profileBuilds": [],
   "securityReview": {

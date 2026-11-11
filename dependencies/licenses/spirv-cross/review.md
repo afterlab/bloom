@@ -14,7 +14,19 @@ Reviewed: 2026-11-11
   and the documentation (CC-BY-4.0) are neither compiled nor shipped. The per-file mapping is the
   upstream `.reuse/dep5`.
 - Linkage is `static`: the objects become part of `libMoltenVK.dylib`. `sourceObligation: none`;
-  `modified: false` with an empty patch set. The only role recorded is `license`.
+  `modified: true` with the one patch below. The only role recorded is `license`.
+
+## Patches
+
+`dependencies/patches/spirv-cross/0001-msl-keep-the-sign-of-a-zero-product.patch` changes only
+`spirv_msl.cpp`, in the helper functions the Metal backend writes for a multiply that SPIR-V
+decorates `NoContraction`. The helper computed `fma(l, r, 0)` so the Metal compiler could not fuse
+the multiply with a neighboring add, and adding positive zero turns a product of negative zero into
+positive zero. The patched helpers add negative zero, which leaves every value as it is, so a
+no-contraction multiply gives the result Vulkan specifies. Bloom compares GPU results with a CPU
+reference bit for bit, and its sample conversion shader reached the difference with a negative-zero
+half-float sample. The patch is `Apache-2.0 OR MIT` like the file it changes, and the superbuild
+applies it to the extracted locked archive before MoltenVK is built.
 
 ## Feature Minimization
 

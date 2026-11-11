@@ -1,0 +1,47 @@
+Bloom: keep the sign of a zero product in the Metal no-contraction multiply helpers.
+
+A multiply that SPIR-V decorates NoContraction is written for Metal as a call to a helper that
+computes fma(l, r, 0), so the Metal compiler cannot fuse it with a neighboring add. Adding
+positive zero is not neutral: in round-to-nearest, (-0) + (+0) is +0, so a product that is
+negative zero (-0 * 1, or a negative value that underflows) came back as positive zero, where
+Vulkan's multiply gives negative zero. The neutral addend is negative zero: x + (-0) is x for
+every x, including both zeros. The scalar and vector helper now adds negative zero, and the
+matrix helpers start their sums from it.
+
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -6405,14 +6405,14 @@
+ 			statement("template<typename T>");
+ 			statement("[[clang::optnone]] T spvFMul(T l, T r)");
+ 			begin_scope();
+-			statement("return fma(l, r, T(0));");
++			statement("return fma(l, r, T(-0.0));");
+ 			end_scope();
+ 			statement("");
+ 
+ 			statement("template<typename T, int Cols, int Rows>");
+ 			statement("[[clang::optnone]] vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)");
+ 			begin_scope();
+-			statement("vec<T, Cols> res = vec<T, Cols>(0);");
++			statement("vec<T, Cols> res = vec<T, Cols>(-0.0);");
+ 			statement("for (uint i = Rows; i > 0; --i)");
+ 			begin_scope();
+ 			statement("vec<T, Cols> tmp(0);");
+@@ -6429,7 +6429,7 @@
+ 			statement("template<typename T, int Cols, int Rows>");
+ 			statement("[[clang::optnone]] vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)");
+ 			begin_scope();
+-			statement("vec<T, Rows> res = vec<T, Rows>(0);");
++			statement("vec<T, Rows> res = vec<T, Rows>(-0.0);");
+ 			statement("for (uint i = Cols; i > 0; --i)");
+ 			begin_scope();
+ 			statement("res = fma(m[i - 1], vec<T, Rows>(v[i - 1]), res);");
+@@ -6444,7 +6444,7 @@
+ 			statement("matrix<T, RCols, LRows> res;");
+ 			statement("for (uint i = 0; i < RCols; i++)");
+ 			begin_scope();
+-			statement("vec<T, RCols> tmp(0);");
++			statement("vec<T, RCols> tmp(-0.0);");
+ 			statement("for (uint j = 0; j < LCols; j++)");
+ 			begin_scope();
+ 			statement("tmp = fma(vec<T, RCols>(r[i][j]), l[j], tmp);");

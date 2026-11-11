@@ -6,8 +6,8 @@
 # does not run that: projects/moltenvk/CMakeLists.txt supplies the same dependencies from locked
 # archives and then adds MoltenVK's source tree unchanged.
 #
-#   SPIRV-Cross      at the revision MoltenVK pins; compiled into libMoltenVK (static), a source-only
-#                    provider here like spirv-headers
+#   SPIRV-Cross      at the revision MoltenVK pins, with the reviewed patch below; compiled into
+#                    libMoltenVK (static), a source-only provider here like spirv-headers
 #   cereal           at the revision MoltenVK pins; headers only, for the pipeline cache
 #   Vulkan-Headers   MoltenVK pins the revision the lock already holds as vulkan-headers, so it
 #                    builds against that component in the prefix
@@ -44,7 +44,15 @@ set(BLOOM_CEREAL_SHA256
 # The vulkan-headers component's commit (vulkan-headers.cmake builds its release tag).
 set(BLOOM_MOLTENVK_VULKAN_HEADERS_COMMIT e3b1eec08173d6b825cd3ac88c885a63b621504a)
 
-# Source-only providers: acquired and extracted, never configured, built or installed.
+# Reviewed source patch (dependencies/patches/spirv-cross/, recorded in the lock with its digest).
+# The translator wrote a no-contraction multiply for Metal as fma(l, r, +0), which turns a product
+# of negative zero into positive zero; Bloom's GPU results are compared bit for bit with a CPU
+# reference, so the helper adds negative zero instead.
+set(BLOOM_SPIRV_CROSS_PATCH
+    "${CMAKE_CURRENT_LIST_DIR}/../../patches/spirv-cross/0001-msl-keep-the-sign-of-a-zero-product.patch")
+find_program(BLOOM_SPIRV_CROSS_PATCH_PROGRAM NAMES patch REQUIRED)
+
+# Source-only providers: acquired, extracted and patched, never configured, built or installed.
 ExternalProject_Add(bloom_dependency_spirv-cross
     URL "${BLOOM_SPIRV_CROSS_URL}"
     URL_HASH SHA256=${BLOOM_SPIRV_CROSS_SHA256}
@@ -52,6 +60,8 @@ ExternalProject_Add(bloom_dependency_spirv-cross
     DOWNLOAD_NAME spirv-cross-${BLOOM_SPIRV_CROSS_COMMIT}.tar.gz
     DOWNLOAD_NO_PROGRESS ON
     DOWNLOAD_EXTRACT_TIMESTAMP ON
+    PATCH_COMMAND "${BLOOM_SPIRV_CROSS_PATCH_PROGRAM}" -p1 --forward --batch
+        --input=${BLOOM_SPIRV_CROSS_PATCH}
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND ""
