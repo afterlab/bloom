@@ -21,10 +21,19 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #endif
+#ifdef __APPLE__
+#include <atomic>
+#include <cstdint>
+#include <sandbox.h>
+#include <sstream>
+#include <sys/resource.h>
+#include <vector>
+#endif
 
 namespace {
 using namespace bloom::color;
 namespace OCIO = OCIO_NAMESPACE;
+#if defined(__linux__) || defined(__APPLE__)
 #ifdef __linux__
 // The helper receives only anonymous sealed files. Landlock denies access to the filesystem;
 // seccomp denies networking, child creation, execution, and process-memory/signal access.
@@ -74,6 +83,71 @@ bool confine() {
 #endif
 }
 
+// OpenColorIO reads a LUT by path; the sealed descriptor has one under /proc.
+OCIO::ConstProcessorRcPtr lutProcessor(const detail::LutFd& file, const std::vector<std::byte>&,
+                                       const OCIO::FileTransformRcPtr& transform) {
+    const auto path = "/proc/self/fd/" + std::to_string(file.get());
+    transform->setSrc(path.c_str());
+    return OCIO::Config::CreateRaw()->getProcessor(transform);
+}
+#else
+// The helper receives only unnamed files. The system sandbox's pure-computation profile then
+// denies every file open, every connection, child creation and signals to other processes; what
+// stays possible is reading, writing and mapping the descriptors it already holds and receiving
+// more over the connected descriptor socket. The file-size limit bounds what it can write through
+// them. sandbox_init is deprecated without a public replacement for a process that confines
+// itself; it is the same entry the system's own sandboxed tools use.
+bool confine() {
+    const rlim_t largest = detail::kMaximumGpuProgramBytes;
+    const rlimit fileSize{largest, largest};
+    if (::setrlimit(RLIMIT_FSIZE, &fileSize) != 0)
+        return false;
+    char* error = nullptr;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    const bool confined = ::sandbox_init(kSBXProfilePureComputation, SANDBOX_NAMED, &error) == 0;
+    if (error != nullptr)
+        ::sandbox_free_error(error);
+#pragma clang diagnostic pop
+    return confined;
+}
+
+// The confined helper cannot open a path, so OpenColorIO gets the LUT through its own interface
+// for configurations that are not on disk: a raw configuration whose one file is these bytes. The
+// name has no extension, as the descriptor path on Linux has none, so OpenColorIO detects the
+// format from the content in the same way.
+class LutBytes final : public OCIO::ConfigIOProxy {
+  public:
+    LutBytes(std::string config, const std::vector<std::byte>& bytes) : config_(std::move(config)) {
+        lut_.resize(bytes.size());
+        std::memcpy(lut_.data(), bytes.data(), bytes.size());
+        static std::atomic<std::uint64_t> serial{0};
+        hash_ = "bloom-lut-" + std::to_string(++serial);
+    }
+    std::vector<std::uint8_t> getLutData(const char* const path) const override {
+        return path != nullptr && std::string_view(path) == kName ? lut_
+                                                                  : std::vector<std::uint8_t>{};
+    }
+    std::string getConfigData() const override { return config_; }
+    std::string getFastLutFileHash(const char*) const override { return hash_; }
+    static constexpr const char* kName = "bloom-lut";
+
+  private:
+    std::string config_;
+    std::vector<std::uint8_t> lut_;
+    std::string hash_;
+};
+OCIO::ConstProcessorRcPtr lutProcessor(const detail::LutFd&, const std::vector<std::byte>& bytes,
+                                       const OCIO::FileTransformRcPtr& transform) {
+    std::ostringstream raw;
+    OCIO::Config::CreateRaw()->serialize(raw);
+    const auto config =
+        OCIO::Config::CreateFromConfigIOProxy(std::make_shared<LutBytes>(raw.str(), bytes));
+    transform->setSrc(LutBytes::kName);
+    return config->getProcessor(transform);
+}
+#endif
+
 LutError build(const detail::LutPacket& message, OCIO::ConstCPUProcessorRcPtr& cpu,
                const int descriptorSocket, bool& identity) {
     if (!message[4] || message[4] > kMaximumLutBytes || message[8] < 1 || message[8] > 4 ||
@@ -95,14 +169,12 @@ LutError build(const detail::LutPacket& message, OCIO::ConstCPUProcessorRcPtr& c
         if (checked != LutError::None)
             return checked;
         auto transform = OCIO::FileTransform::Create();
-        const auto path = "/proc/self/fd/" + std::to_string(file.get());
-        transform->setSrc(path.c_str());
         constexpr std::array interpolation{OCIO::INTERP_LINEAR, OCIO::INTERP_TETRAHEDRAL,
                                            OCIO::INTERP_BEST};
         transform->setInterpolation(interpolation[message[9]]);
         transform->setDirection(message[10] == 0 ? OCIO::TRANSFORM_DIR_FORWARD
                                                  : OCIO::TRANSFORM_DIR_INVERSE);
-        const auto processor = OCIO::Config::CreateRaw()->getProcessor(transform);
+        const auto processor = lutProcessor(file, bytes, transform);
         // OCIO auto-detects the sealed descriptor's format. Check its unoptimized operations
         // as well as the declared-format preflight before admitting a CPU processor.
         const auto group = processor->createGroupTransform();
@@ -156,14 +228,12 @@ LutError extractGpuProgram(const detail::LutPacket& message, const int descripto
             return checked;
         }
         auto transform = OCIO::FileTransform::Create();
-        const auto path = "/proc/self/fd/" + std::to_string(input.get());
-        transform->setSrc(path.c_str());
         constexpr std::array interpolation{OCIO::INTERP_LINEAR, OCIO::INTERP_TETRAHEDRAL,
                                            OCIO::INTERP_BEST};
         transform->setInterpolation(interpolation[request.interpolation]);
         transform->setDirection(request.direction == 0 ? OCIO::TRANSFORM_DIR_FORWARD
                                                        : OCIO::TRANSFORM_DIR_INVERSE);
-        const auto processor = OCIO::Config::CreateRaw()->getProcessor(transform);
+        const auto processor = lutProcessor(input, bytes, transform);
         const auto group = processor->createGroupTransform();
         for (int index = 0; index < group->getNumTransforms(); ++index) {
             const auto& operation = group->getTransform(index);
@@ -250,13 +320,13 @@ LutError applySlab(const detail::LutPacket& message, const OCIO::ConstCPUProcess
 } // namespace
 
 int main() {
-#ifndef __linux__
+#if !defined(__linux__) && !defined(__APPLE__)
     return 1;
 #else
     try {
         if (!bloom::platform::processWorkerBootstrap())
             return 1;
-        detail::LutFd descriptorSocket(::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0));
+        detail::LutFd descriptorSocket(detail::lutHelperSocket());
         if (descriptorSocket.get() < 0)
             return 1;
         OCIO::ConstCPUProcessorRcPtr cpu;
@@ -272,9 +342,7 @@ int main() {
             LutError error = LutError::HelperProtocolViolation;
             std::uint64_t payload = 0;
             if (message[2] == detail::kLutCommandHello && nonce == 1) {
-                const auto address = detail::lutSocketAddress(message[5], message[6]);
-                error = ::connect(descriptorSocket.get(),
-                                  reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0
+                error = detail::lutConnect(descriptorSocket.get(), message[5], message[6])
                             ? LutError::None
                             : LutError::HelperUnavailable;
             } else if (message[2] == detail::kLutCommandBuildCpu && nonce == 2) {

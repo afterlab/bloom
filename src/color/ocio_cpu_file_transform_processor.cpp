@@ -8,6 +8,10 @@
 #include <bloom/platform/process_supervisor.hpp>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include <mutex>
 #include <thread>
 
@@ -32,15 +36,31 @@ LutError processError(const platform::ProcessFailure failure) {
     }
     return LutError::HelperProtocolViolation;
 }
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 std::string workerPath() {
     std::error_code error;
+#ifdef __linux__
     const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
     if (!error) {
         const auto installed = executable.parent_path() / "../libexec/bloom/bloom-color-worker";
         if (std::filesystem::is_regular_file(installed, error))
             return installed.lexically_normal().string();
     }
+#else
+    // Beside the executable: an application bundle's Contents/MacOS, or a tool's own directory.
+    std::uint32_t size = 0;
+    static_cast<void>(::_NSGetExecutablePath(nullptr, &size));
+    std::string buffer(size + 1U, '\0');
+    if (::_NSGetExecutablePath(buffer.data(), &size) == 0) {
+        buffer.resize(std::char_traits<char>::length(buffer.c_str()));
+        const auto executable = std::filesystem::weakly_canonical(buffer, error);
+        if (!error) {
+            const auto installed = executable.parent_path() / "bloom-color-worker";
+            if (std::filesystem::is_regular_file(installed, error))
+                return installed.string();
+        }
+    }
+#endif
 #ifdef BLOOM_COLOR_WORKER
     return BLOOM_COLOR_WORKER;
 #else
@@ -57,7 +77,7 @@ class CpuFileTransformProcessor::Impl final {
     // Listed for the Profiler while the colour worker lives (#423).
     core::telemetry::HelperProcessRegistration listed;
     mutable std::atomic_flag busy = ATOMIC_FLAG_INIT;
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     int descriptorSocket = -1;
     ~Impl() {
         if (descriptorSocket >= 0)
@@ -115,7 +135,7 @@ CpuFileTransformProcessor::prepare(const LutFile& file, const LutInterpolation i
         return {{}, LutError::MalformedFile};
     if (cancellation && cancellation())
         return {{}, LutError::HelperCancelled};
-#ifndef __linux__
+#if !defined(__linux__) && !defined(__APPLE__)
     return {{}, LutError::HelperUnavailable};
 #else
     const auto scratch = detail::LutReservation::acquire(kMaximumLutBytes);
@@ -130,12 +150,8 @@ CpuFileTransformProcessor::prepare(const LutFile& file, const LutInterpolation i
         return {{}, LutError::HelperMemoryLimit};
     static std::atomic<std::uint64_t> generations{0};
     const auto generation = ++generations;
-    detail::LutFd listener(::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
-    const auto address =
-        detail::lutSocketAddress(static_cast<std::uint64_t>(::getpid()), generation);
-    if (listener.get() < 0 ||
-        ::bind(listener.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
-        ::listen(listener.get(), 1) != 0)
+    detail::LutListener listener(static_cast<std::uint64_t>(::getpid()), generation);
+    if (!listener.valid())
         return {{}, LutError::HelperUnavailable};
     platform::ProcessOptions options;
     options.executable = workerPath();
@@ -154,13 +170,9 @@ CpuFileTransformProcessor::prepare(const LutFile& file, const LutInterpolation i
     if (const auto error = impl->exchange(hello, std::chrono::seconds(5), cancellation);
         error != LutError::None)
         return {{}, error};
-    impl->descriptorSocket =
-        ::accept4(listener.get(), nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
-    ucred peer{};
-    socklen_t peerSize = sizeof(peer);
+    impl->descriptorSocket = listener.accept();
     if (impl->descriptorSocket < 0 ||
-        ::getsockopt(impl->descriptorSocket, SOL_SOCKET, SO_PEERCRED, &peer, &peerSize) != 0 ||
-        peer.pid != impl->worker->processId())
+        !detail::lutPeerIs(impl->descriptorSocket, impl->worker->processId()))
         return {{}, LutError::HelperProtocolViolation};
     detail::LutFd resource(detail::sharedFile());
     if (resource.get() < 0 || !detail::writeFd(resource.get(), file.bytes) ||
@@ -189,7 +201,7 @@ CpuFileTransformProcessor::prepare(const LutFile& file, const LutInterpolation i
 
 LutError CpuFileTransformProcessor::apply(std::span<std::array<float, 4>> pixels,
                                           const std::function<bool()>& cancellation) const {
-#ifndef __linux__
+#if !defined(__linux__) && !defined(__APPLE__)
     (void)pixels;
     (void)cancellation;
     return LutError::HelperUnavailable;

@@ -3,11 +3,15 @@
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <cstdint>
 #include <span>
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
+#ifdef __APPLE__
+#include <string>
+#include <vector>
 #endif
 
 namespace bloom::color::detail {
@@ -67,7 +71,7 @@ struct LutGpuProgramReply final {
     std::uint64_t programBytes = 0;
 };
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 class LutFd final {
   public:
     explicit LutFd(int value = -1) : value_(value) {}
@@ -104,6 +108,7 @@ inline std::uint64_t inode(const int fd) {
     struct stat value{};
     return ::fstat(fd, &value) == 0 ? static_cast<std::uint64_t>(value.st_ino) : 0;
 }
+#ifdef __linux__
 inline int sharedFile() { return ::memfd_create("bloom-lut", MFD_CLOEXEC | MFD_ALLOW_SEALING); }
 inline bool sealExtent(const int fd) {
     return ::fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK) == 0;
@@ -122,5 +127,52 @@ inline bool validSharedFile(const int fd, const std::uint64_t expectedInode,
            (!sealed || (seals & (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK)) ==
                            (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK));
 }
+#else
+// macOS has no anonymous sealed file. A shared file here is a file in the user's private temporary
+// directory that is unlinked before anything is written, so it has no name and lives only as long
+// as its descriptors. Nothing seals its size or content, so neither side trusts the other to
+// leave it alone:
+//   - the host reads a result once, an exact byte count, into its own memory and validates that
+//     copy; a helper that shrinks, grows or rewrites the file gets a short read or a rejected
+//     payload, never a second look at changed bytes;
+//   - the helper copies an input into its own memory before it parses it;
+//   - the helper lowers its own file-size limit before it touches untrusted bytes, so a
+//     compromised helper cannot fill the disk through a descriptor it was given.
+//
+// The private temporary directory of the user, with its trailing slash; empty when unavailable.
+inline std::string lutPrivateDirectory() {
+    std::vector<char> buffer(1024);
+    const auto length = ::confstr(_CS_DARWIN_USER_TEMP_DIR, buffer.data(), buffer.size());
+    if (length == 0 || length > buffer.size())
+        return {};
+    return std::string(buffer.data());
+}
+inline int sharedFile() {
+    auto path = lutPrivateDirectory();
+    if (path.empty())
+        return -1;
+    path += "bloom-lut-XXXXXX";
+    const int fd = ::mkstemp(path.data());
+    if (fd < 0)
+        return -1;
+    const bool anonymous = ::unlink(path.c_str()) == 0 && ::fcntl(fd, F_SETFD, FD_CLOEXEC) == 0;
+    if (!anonymous) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+// There is nothing to seal; see above for what stands in for it.
+inline bool sealExtent(const int) { return true; }
+inline bool sealInput(const int) { return true; }
+// A regular file with no name, of the announced size and identity.
+inline bool validSharedFile(const int fd, const std::uint64_t expectedInode,
+                            const std::uint64_t bytes, const bool) {
+    struct stat info{};
+    return ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_nlink == 0 &&
+           info.st_size >= 0 && static_cast<std::uint64_t>(info.st_size) == bytes &&
+           static_cast<std::uint64_t>(info.st_ino) == expectedInode;
+}
+#endif
 #endif
 } // namespace bloom::color::detail

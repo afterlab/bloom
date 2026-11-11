@@ -406,7 +406,7 @@ void testFailClosed(Expectations& expectations, const std::string& from, const s
 }
 
 // Used by the file-based LUT cases, which run where the LUT helper process exists.
-#if defined(BLOOM_GPUSHADER_TOOLS_DIR) && defined(__linux__)
+#if defined(BLOOM_GPUSHADER_TOOLS_DIR) && (defined(__linux__) || defined(__APPLE__))
 [[nodiscard]] std::size_t countOcioCommands(const bloom::runtime::PreparedGpuScene& scene) {
     std::size_t count = 0;
     for (const auto& command : scene.commands()) {
@@ -776,7 +776,7 @@ void testRealRecipes(Expectations& expectations) {
     static_cast<void>(onlyMerges);
 }
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 void testRealFileTransform(Expectations& expectations, const std::string& working,
                            const std::string& process) {
     const auto base = std::filesystem::temp_directory_path() / "bloom_gpu_effect_test";
@@ -877,7 +877,7 @@ int main() {
         testRealLumaKey(expectations);
         testRealColorGrades(expectations);
         testRealRecipes(expectations);
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
         testRealFileTransform(expectations, from, to);
 #endif
 #else

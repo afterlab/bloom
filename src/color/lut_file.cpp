@@ -8,7 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -183,7 +183,7 @@ LutFile readLutFile(const std::filesystem::path& path, const std::function<bool(
         return result;
     }
     try {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
         const int descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
         if (descriptor < 0) {
             result.error = LutError::MissingFile;
@@ -193,6 +193,14 @@ LutFile readLutFile(const std::filesystem::path& path, const std::function<bool(
             int fd;
             ~Close() { ::close(fd); }
         } close{descriptor};
+        // The same two timestamps under each system's names for them.
+#ifdef __linux__
+        const auto modified = [](const struct stat& info) { return info.st_mtim; };
+        const auto changed = [](const struct stat& info) { return info.st_ctim; };
+#else
+        const auto modified = [](const struct stat& info) { return info.st_mtimespec; };
+        const auto changed = [](const struct stat& info) { return info.st_ctimespec; };
+#endif
         struct stat before{};
         if (::fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) || before.st_size <= 0) {
             result.error = LutError::MalformedFile;
@@ -224,10 +232,10 @@ LutFile readLutFile(const std::filesystem::path& path, const std::function<bool(
         }
         struct stat after{};
         if (::fstat(descriptor, &after) != 0 || before.st_size != after.st_size ||
-            before.st_mtim.tv_sec != after.st_mtim.tv_sec ||
-            before.st_mtim.tv_nsec != after.st_mtim.tv_nsec ||
-            before.st_ctim.tv_sec != after.st_ctim.tv_sec ||
-            before.st_ctim.tv_nsec != after.st_ctim.tv_nsec) {
+            modified(before).tv_sec != modified(after).tv_sec ||
+            modified(before).tv_nsec != modified(after).tv_nsec ||
+            changed(before).tv_sec != changed(after).tv_sec ||
+            changed(before).tv_nsec != changed(after).tv_nsec) {
             result.error = LutError::ChangedFile;
             return result;
         }

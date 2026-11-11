@@ -1640,7 +1640,7 @@ void testLookBypass() {
 }
 
 void testFileTransform() {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     const auto directory = std::filesystem::current_path() / "color3-effect-fixtures";
     std::filesystem::create_directories(directory);
     struct Cleanup final {

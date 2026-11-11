@@ -286,7 +286,7 @@ render::OcioGpuProgramResult buildOcioGpuProgramForFileTransform(
                     render::OcioGpuProgramError::UnsupportedColorSpace);
             }
         }
-#ifndef __linux__
+#if !defined(__linux__) && !defined(__APPLE__)
         // No confinement/process-supervision primitive: never parse LUT bytes in-process.
         (void)limits;
         (void)cancellation;

@@ -287,10 +287,10 @@ void testResourceAndIdentityMutations(Expectations& expectations) {
     }
 }
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 // --- File-transform LUT fixtures, written to a scratch directory at runtime. -------------------
-// Linux-only: these fixtures feed the isolated-worker parsing cases below, which a non-Linux build
-// must not run in-process.
+// Only where the LUT helper exists (Linux and macOS): these fixtures feed the isolated-worker
+// parsing cases below, which a build without the helper must not run in-process.
 
 void writeCube1d(const std::filesystem::path& path) {
     std::ofstream file(path);
@@ -602,7 +602,7 @@ int main() {
     testResourceAndIdentityMutations(expectations);
     bloom::color::gpu_program_test::testSerializationRoundTrip(expectations);
     bloom::color::gpu_program_test::testPerSamplerSamplingAdapter(expectations);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     auto resolution = neutralConfig();
     auto neutral = std::move(resolution).takeResolved();
     if (!neutral.has_value()) {

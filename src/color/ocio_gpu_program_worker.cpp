@@ -11,6 +11,9 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include <memory>
 #include <string>
 #include <system_error>
@@ -20,7 +23,7 @@ namespace bloom::color::detail {
 namespace {
 using Clock = std::chrono::steady_clock;
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 [[nodiscard]] LutError processError(const platform::ProcessFailure failure) {
     switch (failure.code) {
     case platform::ProcessError::Unavailable:
@@ -42,12 +45,28 @@ using Clock = std::chrono::steady_clock;
 
 [[nodiscard]] std::string workerPath() {
     std::error_code error;
+#ifdef __linux__
     const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
     if (!error) {
         const auto installed = executable.parent_path() / "../libexec/bloom/bloom-color-worker";
         if (std::filesystem::is_regular_file(installed, error))
             return installed.lexically_normal().string();
     }
+#else
+    // Beside the executable: an application bundle's Contents/MacOS, or a tool's own directory.
+    std::uint32_t size = 0;
+    static_cast<void>(::_NSGetExecutablePath(nullptr, &size));
+    std::string buffer(size + 1U, '\0');
+    if (::_NSGetExecutablePath(buffer.data(), &size) == 0) {
+        buffer.resize(std::char_traits<char>::length(buffer.c_str()));
+        const auto executable = std::filesystem::weakly_canonical(buffer, error);
+        if (!error) {
+            const auto installed = executable.parent_path() / "bloom-color-worker";
+            if (std::filesystem::is_regular_file(installed, error))
+                return installed.string();
+        }
+    }
+#endif
 #ifdef BLOOM_COLOR_WORKER
     return BLOOM_COLOR_WORKER;
 #else
@@ -96,7 +115,7 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         result.error = LutError::HelperCancelled;
         return result;
     }
-#ifndef __linux__
+#if !defined(__linux__) && !defined(__APPLE__)
     result.error = LutError::HelperUnavailable;
     return result;
 #else
@@ -111,11 +130,8 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         return result;
     }
     const auto generation = nextLutGeneration();
-    LutFd listener(::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
-    const auto address = lutSocketAddress(static_cast<std::uint64_t>(::getpid()), generation);
-    if (listener.get() < 0 ||
-        ::bind(listener.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
-        ::listen(listener.get(), 1) != 0) {
+    LutListener listener(static_cast<std::uint64_t>(::getpid()), generation);
+    if (!listener.valid()) {
         result.error = LutError::HelperUnavailable;
         return result;
     }
@@ -159,13 +175,8 @@ FileTransformGpuExtraction extractFileTransformGpuProgram(
         result.error = error;
         return result;
     }
-    LutFd descriptorSocket(
-        ::accept4(listener.get(), nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK));
-    ucred peer{};
-    socklen_t peerSize = sizeof(peer);
-    if (descriptorSocket.get() < 0 ||
-        ::getsockopt(descriptorSocket.get(), SOL_SOCKET, SO_PEERCRED, &peer, &peerSize) != 0 ||
-        peer.pid != worker->processId()) {
+    LutFd descriptorSocket(listener.accept());
+    if (descriptorSocket.get() < 0 || !lutPeerIs(descriptorSocket.get(), worker->processId())) {
         result.error = LutError::HelperProtocolViolation;
         return result;
     }

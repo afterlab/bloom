@@ -26,7 +26,7 @@ void cube(const std::filesystem::path& path, const float gain) {
                      << static_cast<float>(b) * gain << '\n';
 }
 void testFormatsAndRefusals([[maybe_unused]] const std::filesystem::path& root) {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     const auto testFormat = [&root](const char* name, const std::string& contents) {
         const auto path = root / name;
         {
@@ -165,7 +165,7 @@ int main() {
         const auto path = root / "identity.cube";
         cube(path, 1);
         const auto file = readLutFile(path);
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
         expect(file.error == LutError::None, "identity cube passes bounded preflight");
         auto result = CpuFileTransformProcessor::prepare(file, LutInterpolation::Linear,
                                                          LutDirection::Forward);

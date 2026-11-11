@@ -689,7 +689,7 @@ void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     }
 }
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                       const std::string& working, const std::string& process) {
     const auto base = std::filesystem::temp_directory_path() / "bloom_gpu_effect_native";
@@ -4950,7 +4950,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runMotionBlur(expectations, device, cache);
     runFrameRateHold(expectations, device, cache);
     runSharpens(expectations, device, cache);
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
     runFileTransform(expectations, device, cache, from, to);
 #endif
 }
