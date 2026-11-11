@@ -2,6 +2,7 @@
 #include "fake_provider.hpp"
 #elif defined(BLOOM_VIDEOTOOLBOX_WORKER)
 #include "videotoolbox_provider.hpp"
+#include "videotoolbox_reader.hpp"
 #include <bloom/media/provider/videotoolbox_manifest.hpp>
 #else
 #include "ffmpeg_provider.hpp"
@@ -53,10 +54,32 @@ int main(int argc, char** argv) {
     (void)argv;
     const auto handshake = fake::handshake();
 #elif defined(BLOOM_VIDEOTOOLBOX_WORKER)
-    (void)argc;
-    (void)argv;
+    // A retained reader holds the host's captured source (fd 4) for its lifetime and, with an
+    // arena, returns frames through shared memory (fd 6), as the FFmpeg worker does.
+    bool frameArena = false;
+    for (int i = 1; i < argc; ++i) {
+        const auto argument = std::string_view(argv[i]);
+        if (argument == "--retained-video")
+            retainedVideo = true;
+        else if (argument == "--frame-arena")
+            frameArena = true;
+        else
+            return 2;
+    }
+    if (frameArena && !retainedVideo)
+        return 2;
+    if (frameArena) {
+        auto opened = bloom::platform::WorkerFrameArena::open();
+        auto* mapped = std::get_if<std::unique_ptr<bloom::platform::WorkerFrameArena>>(&opened);
+        if (!mapped)
+            return 2;
+        arena = std::move(*mapped);
+    }
     const auto handshake = provider::videoToolboxHandshake(videotoolbox::hardwareEncodeAvailable());
     videotoolbox::Encoder encoder;
+    // One reader for the process: the opened source, its sample tables and the decoder stay
+    // between calls.
+    videotoolbox::Reader reader;
 #else
     bool hardware = false;
     bool hardwareDecode = false;
@@ -172,7 +195,7 @@ int main(int argc, char** argv) {
 #elif defined(BLOOM_VIDEOTOOLBOX_WORKER)
             auto payload =
                 message->kind == provider::MessageKind::Call
-                    ? videotoolbox::call(std::get<provider::CallRequest>(message->payload))
+                    ? reader.call(std::get<provider::CallRequest>(message->payload))
                     : encoder.call(message->kind, message->payload);
 #else
             auto payload =

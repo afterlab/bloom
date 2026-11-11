@@ -4,6 +4,7 @@
 #import <Foundation/Foundation.h>
 
 #include "videotoolbox_provider.hpp"
+#include "videotoolbox_reader.hpp"
 
 #include <bloom/media/provider/protocol.hpp>
 #include <bloom/media/provider/videotoolbox_manifest.hpp>
@@ -98,10 +99,11 @@ bloom::media::provider::Rational reduced(std::int64_t numerator, std::int64_t de
 
 void testProbeAndDecode(const std::string& path) {
     using namespace bloom::media;
+    videotoolbox::Reader reader;
     provider::CallRequest probeRequest;
     probeRequest.capability.role = provider::Role::Probe;
     probeRequest.source = path;
-    auto probePayload = videotoolbox::call(probeRequest);
+    auto probePayload = reader.call(probeRequest);
     const auto* probe = std::get_if<provider::ProbeResult>(&probePayload);
     check(probe != nullptr && !probe->streams.empty(), "probe returns a stream");
     if (probe != nullptr && !probe->streams.empty()) {
@@ -116,7 +118,7 @@ void testProbeAndDecode(const std::string& path) {
     decodeRequest.capability.codec = "h264";
     decodeRequest.source = path;
     decodeRequest.frame = 1;
-    auto framePayload = videotoolbox::call(decodeRequest);
+    auto framePayload = reader.call(decodeRequest);
     const auto* frame = std::get_if<provider::FrameProduct>(&framePayload);
     check(frame != nullptr && frame->planes.size() == 3, "decode returns three planes");
     if (frame != nullptr && !frame->planes.empty()) {
@@ -136,7 +138,7 @@ void testProbeAndDecode(const std::string& path) {
     missingStream.capability.codec = "h264";
     missingStream.source = path;
     missingStream.stream = 5;
-    auto missingPayload = videotoolbox::call(missingStream);
+    auto missingPayload = reader.call(missingStream);
     check(std::get_if<provider::Unavailable>(&missingPayload) != nullptr,
           "a nonexistent stream is refused");
 }

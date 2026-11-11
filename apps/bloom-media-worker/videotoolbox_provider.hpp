@@ -7,8 +7,7 @@
 
 namespace bloom::media::videotoolbox {
 
-// Encode/mux via AVAssetWriter + VideoToolbox. Implemented in a later slice; until then every
-// encode call returns a typed Unavailable rather than a silent or partial result.
+// Encode and mux through AVAssetWriter and VideoToolbox. Reading is videotoolbox_reader.hpp.
 class Encoder final {
   public:
     Encoder();
@@ -21,9 +20,6 @@ class Encoder final {
     struct State;
     std::unique_ptr<State> state_;
 };
-
-// Read path: Probe, DemuxIndex, VideoDecode, AudioDecode and ReopenDecode via AVFoundation.
-[[nodiscard]] provider::Payload call(const provider::CallRequest& request);
 
 [[nodiscard]] bool hardwareEncodeAvailable();
 

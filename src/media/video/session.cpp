@@ -235,6 +235,9 @@ struct VideoDecodeSession::State {
             o.capacity = 1;
             o.timeout = std::chrono::seconds(30);
             o.launched = workerLaunched;
+            // The native reader reads the captured source as well, and keeps its decoder between
+            // frames of one capture.
+            o.retainedVideo = true;
             nativePool = std::make_unique<MediaWorkerPool>(std::move(o));
         }
 #if defined(__linux__)
@@ -351,7 +354,7 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         const auto& hello = state_->nativeHello;
         if (const auto found = declared(hello); found != hello.declarations.end()) {
             auto reply = callWorker(*state_->nativePool, *found, source, stream, position, count,
-                                    cancel, nullptr, false);
+                                    cancel, snapshot, retainWorker);
             const auto* error = std::get_if<Unavailable>(&reply);
             if (error == nullptr || !mediaFallbackPermittedV1(*error))
                 return reply;

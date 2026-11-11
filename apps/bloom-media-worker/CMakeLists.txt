@@ -163,8 +163,10 @@ endif()
 
 if(APPLE)
     # The platform provider generation: the Apple-framework VideoToolbox/AVFoundation provider, first
-    # in the macOS chain ahead of the bundled FFmpeg worker. It links system frameworks only and
-    # installs into its own generation directory inside the bundle.
+    # in the macOS chain ahead of the bundled FFmpeg worker. It installs into its own generation
+    # directory inside the bundle. AVFoundation and VideoToolbox describe, decode and encode; with
+    # the FFmpeg package present the worker also links its libswscale and libavutil, for the one
+    # sample layout conversion that has to equal the FFmpeg worker's (videotoolbox_layout.hpp).
     target_sources(bloom_media_provider
                    PRIVATE "${PROJECT_SOURCE_DIR}/src/media/provider/videotoolbox_manifest.cpp")
     target_compile_definitions(bloom_media_provider PRIVATE
@@ -173,13 +175,22 @@ if(APPLE)
         BLOOM_VIDEOTOOLBOX_FIXTURE_ID="${bloom_media_build_digest}"
         BLOOM_VIDEOTOOLBOX_ENCODE_FIXTURE_ID="${bloom_media_build_digest}"
         BLOOM_MEDIA_OS="${CMAKE_SYSTEM_NAME}" BLOOM_MEDIA_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
-    add_library(bloom_media_videotoolbox_worker_provider STATIC videotoolbox_provider.mm)
+    add_library(bloom_media_videotoolbox_worker_provider STATIC
+                videotoolbox_provider.mm videotoolbox_reader.mm videotoolbox_layout.cpp)
+    set_source_files_properties(videotoolbox_reader.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_include_directories(bloom_media_videotoolbox_worker_provider
                                PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(bloom_media_videotoolbox_worker_provider
-        PRIVATE bloom_media_provider
+        PRIVATE bloom_media_provider bloom_platform_process
                 "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
-                "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation")
+                "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation"
+                "-framework CoreGraphics" "-framework CoreAudio")
+    if(bloom_ffmpeg_worker)
+        target_compile_definitions(bloom_media_videotoolbox_worker_provider
+                                   PRIVATE BLOOM_VIDEOTOOLBOX_LAYOUT_CONVERSION)
+        target_link_libraries(bloom_media_videotoolbox_worker_provider
+                              PRIVATE FFmpeg::swscale FFmpeg::avutil)
+    endif()
     bloom_enable_warnings(bloom_media_videotoolbox_worker_provider)
     target_compile_options(bloom_media_videotoolbox_worker_provider
                            PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
@@ -188,6 +199,13 @@ if(APPLE)
     target_link_libraries(bloom-media-videotoolbox-worker
         PRIVATE bloom_media_provider bloom_media_videotoolbox_worker_provider bloom_platform_process)
     bloom_enable_warnings(bloom-media-videotoolbox-worker)
+    if(bloom_ffmpeg_worker)
+        # The FFmpeg worker's private libraries: beside this worker in the build tree, in the
+        # neighboring generation directory once installed.
+        set_target_properties(bloom-media-videotoolbox-worker PROPERTIES
+                              BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH_USE_LINK_PATH FALSE
+                              INSTALL_RPATH "@loader_path/lib;@loader_path/../ffmpeg-v1/lib")
+    endif()
     target_compile_definitions(bloom_media_worker_host PRIVATE
         BLOOM_NATIVE_WORKER_BUILD="$<TARGET_FILE:bloom-media-videotoolbox-worker>")
     install(TARGETS bloom-media-videotoolbox-worker
@@ -205,6 +223,10 @@ if(APPLE)
         bloom_enable_warnings(bloom_media_videotoolbox_test)
         target_compile_options(bloom_media_videotoolbox_test
                                PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
+        if(bloom_ffmpeg_worker)
+            set_target_properties(bloom_media_videotoolbox_test PROPERTIES
+                                  BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        endif()
         bloom_add_test(NAME bloom.media.videotoolbox COMMAND bloom_media_videotoolbox_test
                        LABELS unit media)
 
@@ -301,6 +323,30 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     bloom_add_test(NAME bloom.media.generate-video-fixtures COMMAND bloom_media_generate_fixtures
                    "${CMAKE_CURRENT_BINARY_DIR}/fixtures" LABELS unit media TIMEOUT 30)
     set_tests_properties(bloom.media.generate-video-fixtures PROPERTIES FIXTURES_SETUP media3)
+    if(APPLE AND bloom_ffmpeg_worker)
+        # The macOS reader against the FFmpeg reader on the same files, in one process (#371).
+        add_executable(bloom_media_videotoolbox_parity_test tests/videotoolbox_parity_tests.mm)
+        set_source_files_properties(tests/videotoolbox_parity_tests.mm
+                                    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_include_directories(bloom_media_videotoolbox_parity_test
+                                   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_link_libraries(bloom_media_videotoolbox_parity_test
+            PRIVATE bloom_media_provider bloom_media_videotoolbox_worker_provider
+                    bloom_media_ffmpeg_worker_provider
+                    "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
+                    "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation")
+        set_target_properties(bloom_media_videotoolbox_parity_test PROPERTIES
+                              BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        bloom_enable_warnings(bloom_media_videotoolbox_parity_test)
+        target_compile_options(bloom_media_videotoolbox_parity_test
+                               PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
+        bloom_add_test(NAME bloom.media.videotoolbox-parity
+                       COMMAND bloom_media_videotoolbox_parity_test
+                               "${CMAKE_CURRENT_BINARY_DIR}/fixtures"
+                               "${CMAKE_CURRENT_BINARY_DIR}/parity-scratch"
+                       LABELS unit media TIMEOUT 180)
+        set_tests_properties(bloom.media.videotoolbox-parity PROPERTIES FIXTURES_REQUIRED media3)
+    endif()
     bloom_add_test(NAME bloom.media.ffmpeg COMMAND bloom_media_ffmpeg_test
                    "${CMAKE_CURRENT_BINARY_DIR}/fixtures" LABELS unit media security TIMEOUT 120)
     set_tests_properties(bloom.media.ffmpeg PROPERTIES FIXTURES_REQUIRED media3)

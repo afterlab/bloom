@@ -225,6 +225,49 @@ evidence (tool, version, pipeline and the ProRes implementation note follow the 
 and in `FrameDecodeProvenance`; it is diagnostics, never artist text. `PlatformNotSupported` is no
 longer produced.
 
+### The macOS reader (issue #371)
+
+On macOS, AVFoundation describes a QuickTime or MPEG-4 file and VideoToolbox decodes it
+(`apps/bloom-media-worker/videotoolbox_reader.mm`). The reader is written so that a project does
+not change with the provider that opened its footage:
+
+- **Source.** The worker reads the host's captured snapshot through its inherited descriptor,
+  opened by its descriptor path with the media type stated (macOS 14 and later; an older system
+  hands a captured source to FFmpeg). A retained worker keeps the opened source, its sample tables
+  and its decoder between frames of one capture.
+- **Description.** Streams are numbered in the file's track order, so the ids are the FFmpeg
+  worker's. Codec and profile names, pixel format names, rate, frame count, duration, timecode and
+  the color tags are reported in the FFmpeg worker's vocabulary; a tag the file does not carry is
+  reported as unspecified, and an H.264 stream that does not declare its range is reported with an
+  undeclared range (read from its sequence parameter set, because the framework's own description
+  says "video range" for both).
+- **Frames.** Frame N is the Nth frame in presentation order, found in the track's sample table and
+  decoded from the sync sample before it; no time-based seek is involved. The decoder returns the
+  stream's own sampling, depth and range (never 8-bit 4:2:0 or RGB for a deeper stream), and the
+  planes cross through the same libswscale call, with the same settings, as the FFmpeg worker's.
+  Matrix, range and transfer are applied afterwards by Bloom's color conversion, as for any frame.
+- **Audio.** A request for `samples` sample frames from sample frame `frame` returns exactly that
+  block, however many decoded buffers it spans.
+- **What it does not read.** Containers other than QuickTime and MPEG-4, codecs other than H.264,
+  HEVC and ProRes, interlaced, rotated, mirrored and non-square-pixel pictures, variable frame
+  cadence, edits other than one leading trim, and audio with more than two channels are refused
+  whole at probe with the reason, and FFmpeg serves that source. The reason is recorded in
+  `FrameDecodeProvenance::nativeFallback`.
+
+`bloom.media.videotoolbox-parity` runs both readers in one process on the generated fixtures and on
+HEVC Main and Main 10 files written by the system encoder. H.264 and HEVC decoding is defined to
+the bit, and the test requires every described field and every frame to equal the FFmpeg reader's
+exactly. ProRes is the accepted exception (owner decision, 2026-11-11: the Apple decoder is used
+for ProRes and may differ from Linux): the description must be equal, and the frames must lie
+within `prores-decode-v1`, a bound of one code value of a 10-bit signal (64 of 65535 in the 16-bit
+samples that cross the worker boundary). The fixtures measure at most 48. The profile is used by
+nothing else. The contract's 16-bit 4:4:4 fixtures with alpha are ProRes 4444 files, so on macOS
+their frames come from the Apple decoder.
+
+The worker links the bundled FFmpeg's libswscale and libavutil for that one layout conversion. A
+developer build without the FFmpeg package has no such conversion, and its reader serves only
+limited-range 8-bit 4:2:0 video.
+
 Worker generations sit beside the application: `libexec/bloom/media/<generation>/` on Linux,
 `Bloom.app/Contents/libexec/bloom/media/<generation>/` on macOS, and
 `<Bloom.exe dir>\media\<generation>\` on Windows, located from the executable the operating

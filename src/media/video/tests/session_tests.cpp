@@ -471,8 +471,18 @@ void colourInterpretation(const std::filesystem::path& directory) {
         video::VideoDecodeSession session(directory / name);
         const auto probe = std::get<provider::ProbeResult>(session.probe());
         const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
-        check(std::holds_alternative<Frame>(decoded) && std::get<Frame>(decoded)->colour == tags,
-              "color fixtures carry their tags through decode");
+        const bool carried =
+            std::holds_alternative<Frame>(decoded) && std::get<Frame>(decoded)->colour == tags;
+        if (!carried) {
+            std::cerr << name << ": ";
+            if (const auto* frame = std::get_if<Frame>(&decoded))
+                std::cerr << "decoded tags " << (*frame)->colour.primaries << ','
+                          << (*frame)->colour.transfer << ',' << (*frame)->colour.matrix << ','
+                          << (*frame)->colour.range << '\n';
+            else
+                std::cerr << std::get<provider::Unavailable>(decoded).detail << '\n';
+        }
+        check(carried, "color fixtures carry their tags through decode");
     }
     // The untagged HD fixture: no primaries, transfer or matrix survive decode, and the frame
     // converts under the assumed Rec.709 interpretation instead of being refused.
