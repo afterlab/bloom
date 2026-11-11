@@ -58,13 +58,13 @@ temporalPlan(const TemporalValues& values = {}, const std::uint64_t idBase = 514
     const auto vec2 = [](const std::uint64_t id, const double x, const double y) {
         return CompiledVec2Parameter{ParameterId::fromRaw(id), Vec2d{x, y}};
     };
-    // A partial-alpha HDR block over an HDR checker. Its even size keeps its edges on whole pixels
-    // of the half-size proxy case.
+    // A partial-alpha HDR block over an HDR checker. Its odd size ends inside a pixel of the
+    // half-size proxy case, so the window also holds a partly covered edge (#641).
     const auto block = OperationIndex::fromRaw(operations.size());
     operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 1),
                                           {ParameterId::fromRaw(idBase + 2),
                                            core::Color4d{1.6, 0.4, 0.2, 0.75}},
-                                          scalar(idBase + 3, 8.0), scalar(idBase + 4, 6.0)});
+                                          scalar(idBase + 3, 9.0), scalar(idBase + 4, 7.0)});
     CompiledVec2Parameter translate = vec2(idBase + 5, 6.0, 8.0);
     if (!values.still) {
         // Two pixels right a frame.

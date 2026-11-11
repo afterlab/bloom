@@ -4914,6 +4914,8 @@ void runSharpens(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
     }
 }
 
+#include "gpu_scene_proxy_edge_native_tests.ipp"
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runBatchedChains(expectations, device, cache);
@@ -4941,6 +4943,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runFilmGrains(expectations, device, cache);
     runDithers(expectations, device, cache);
     runCodecDegrades(expectations, device, cache);
+    runProxyEdges(expectations, device, cache);
     runTemporalDenoise(expectations, device, cache);
     runAutoExposures(expectations, device, cache);
     runHistograms(expectations, device, cache);
