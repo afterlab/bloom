@@ -1267,6 +1267,11 @@ OperationResult SetKeyframeAtTimeForParameter::apply(document::Draft& draft) con
     auto result = setValueAtTime(draft, *composition, source->curveId, time_, value_);
     if (result.status != OperationStatus::Rejected)
         result.outputs.insert(result.outputs.begin(), created.begin(), created.end());
+    // #643: making the constant animated already changed the project, even when the seeded key
+    // holds exactly the value keyed here. Reporting that as no-change discarded the draft, so a
+    // key equal to the constant was never created.
+    if (result.status == OperationStatus::NoChange && !created.empty())
+        result.status = OperationStatus::Applied;
     return result;
     });
 }

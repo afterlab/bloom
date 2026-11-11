@@ -1643,6 +1643,54 @@ void fieldTestArguments() {
            "a path value reaches the parameter and is judged by its kind: " + result);
 }
 
+// #643: a key whose value equals the parameter's constant still creates the key, and a constant
+// set to the value it already holds succeeds as a no-change instead of being refused.
+void keyEqualToDefault() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                           R"("name":"Solid","color":[1,0,0,1]}})");
+    expect(contains(result, R"("isError":false)"), "the solid fixture applies: " + result);
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    const auto opacity = firstMatch(nodes, R"re("opacity":(\d+))re");
+    expect(!opacity.empty(), "the layer's opacity parameter is addressable: " + nodes);
+    if (opacity.empty())
+        return;
+    // Opacity is 1 by default.
+    const auto before = revisionOf(server);
+    result = transact(R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" +
+                      opacity + R"(,"value":1.0}})");
+    expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)") &&
+               !contains(result, "bloom.scripting.command-rejected") &&
+               revisionOf(server) == before,
+           "a constant equal to the current value succeeds and changes nothing: " + result);
+    result = transact(
+        R"({"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,)"
+        R"("parameter":)" +
+        opacity + R"(,"time":0,"value":1.0}})");
+    const auto keyframesQuery =
+        R"({"kind":"keyframes","composition":1,"parameter":)" + opacity + "}";
+    auto keyframes = server.call("query", keyframesQuery);
+    expect(contains(result, R"("succeeded":true)") && outputId(result, "keyframe") != 0 &&
+               revisionOf(server) != before &&
+               !firstMatch(keyframes, R"re("keyframe":(\d+))re").empty(),
+           "a key equal to the default is created: " + result + keyframes);
+    result = transact(
+        R"({"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,)"
+        R"("parameter":)" +
+        opacity + R"(,"time":12,"value":0.0}})");
+    keyframes = server.call("query", keyframesQuery);
+    std::size_t keys = 0;
+    for (std::size_t at = keyframes.find(R"("keyframe":)"); at != std::string::npos;
+         at = keyframes.find(R"("keyframe":)", at + 1))
+        ++keys;
+    expect(contains(result, R"("succeeded":true)") && keys == 2,
+           "the later key joins the key at the default, so the value animates: " + keyframes);
+}
+
 // #541: a Colorize's gradient is set as {"stops": [{position, color}]} and reads back the same way.
 void gradientReadBack() {
     Headless server;
@@ -2313,6 +2361,7 @@ int main() {
         svgFootageWarningQuery();
         fieldTestArguments();
         gradientReadBack();
+        keyEqualToDefault();
         curvesAutoAnchors();
         lockedLayerRule();
         parityTools();

@@ -310,6 +310,23 @@ class PythonApi(unittest.TestCase):
         self.assertTrue(bloom.ops.layer.set_shy(True, layer=layer)['succeeded'])
         self.assertTrue(bloom.data.layers(composition).get(layer).shy)
 
+    def test_key_equal_to_the_default_is_created(self):
+        """#643: a key equal to the constant exists, and the same constant again is not refused."""
+        bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))
+        composition = bloom.context.composition
+        opacity = bloom.data.nodes(composition)[-1].parameters['opacity']
+        curves_before = len(bloom.data.curves(composition))
+        # Opacity is 1 by default: the same constant succeeds and changes nothing.
+        self.assertTrue(bloom.ops.parameter.set_source(opacity, value=1.0)['succeeded'])
+        self.assertEqual(len(bloom.data.curves(composition)), curves_before)
+        keyed = bloom.ops.animation.set_keyframe_at_time_for_parameter(opacity, 1.0, time=0)
+        self.assertTrue(keyed['succeeded'])
+        self.assertEqual(len(bloom.data.curves(composition)), curves_before + 1)
+        self.assertEqual(len(bloom.data.curves(composition)[-1].components[0]), 1)
+        bloom.ops.animation.set_keyframe_at_time_for_parameter(opacity, 0.0, time=12)
+        values = [row['value'] for row in bloom.data.curves(composition)[-1].components[0]]
+        self.assertEqual(values, [1.0, 0.0])
+
     def test_keyframe_handle_modes(self):
         """Document 1.32: per-key handle modes through the registry, read back in curve rows."""
         bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))

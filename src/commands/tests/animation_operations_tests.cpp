@@ -283,6 +283,63 @@ void testColorKeyOperations(TestContext& test) {
                 "converting a color animation back to a constant erases the curve atomically");
 }
 
+// #643: keying a constant parameter with a value equal to that constant must still create the
+// key. The operation makes the parameter animated (its constant seeds a key at the same time) and
+// then finds that key already holding the value; that is a change to the project, not a no-op.
+void testKeyEqualToConstantCreatesTheKey(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const double constant = constantScalar(document.snapshot(), kOpacityId);
+
+    Transaction first("Key opacity at its constant", document.snapshot().revision());
+    first.emplace<SetKeyframeAtTimeForParameter>(kCompositionId, kOpacityId, time(0, 1), constant);
+    const auto keyed = stack.execute(std::move(first));
+    test.expect(keyed.changed() &&
+                    keyed.outputId<document::AnimationCurveId>(kAnimationCurveOutput).has_value() &&
+                    keyed.outputId<document::KeyframeId>(kKeyframeOutput).has_value(),
+                "keying a value equal to the constant applies and reports the curve and the key");
+    const auto* source =
+        std::get_if<document::AnimationCurveSource>(&parameter(document.snapshot(), kOpacityId).source);
+    test.expect(source != nullptr, "the parameter is animated after a key equal to its constant");
+    if (source == nullptr)
+        return;
+    const auto curveId = source->curveId;
+    test.expect(scalarCurve(document.snapshot(), curveId).keyframes.size() == 1 &&
+                    scalarCurve(document.snapshot(), curveId).keyframes.front().time == time(0, 1) &&
+                    scalarCurve(document.snapshot(), curveId).keyframes.front().value == constant,
+                "the key equal to the constant exists at its time");
+
+    Transaction second("Key opacity later", document.snapshot().revision());
+    second.emplace<SetKeyframeAtTimeForParameter>(kCompositionId, kOpacityId, time(1, 1),
+                                                  constant * 0.5);
+    test.expect(stack.execute(std::move(second)).changed() &&
+                    scalarCurve(document.snapshot(), curveId).keyframes.size() == 2,
+                "the later key joins the first, so the value animates from the constant");
+
+    Transaction again("Key the same value again", document.snapshot().revision());
+    again.emplace<SetKeyframeAtTimeForParameter>(kCompositionId, kOpacityId, time(0, 1), constant);
+    test.expect(stack.execute(std::move(again)).status == CommandStatus::NoChange,
+                "re-keying an existing key with its own value is a no-change, not a refusal");
+
+    test.expect(stack.undo().changed() && stack.undo().changed() &&
+                    constantScalar(document.snapshot(), kOpacityId) == constant,
+                "undoing both keys restores the constant in two steps");
+
+    // Vector and colour values go through the same body.
+    Document colorDocument(makeSourceProject());
+    CommandStack colorStack(colorDocument);
+    Transaction color("Key the solid color at its constant", colorDocument.snapshot().revision());
+    color.emplace<SetKeyframeAtTimeForParameter>(kCompositionId, kSolidColorId, time(2, 1),
+                                                 kFixtureSolidColor);
+    const auto colorKeyed = colorStack.execute(std::move(color));
+    const auto colorCurve = colorKeyed.outputId<document::AnimationCurveId>(kAnimationCurveOutput);
+    test.expect(colorKeyed.changed() && colorCurve.has_value() &&
+                    color4Curve(colorDocument.snapshot(), *colorCurve)
+                            .components[0]
+                            .keyframes.size() == 1,
+                "keying a colour equal to the constant creates its component keys");
+}
+
 void testComponentKeyOperations(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
@@ -1480,6 +1537,7 @@ int main() {
         bloom::commands::test::testKeyframeEasingOperations(test);
         bloom::commands::test::testKeyframeHandleModes(test);
         bloom::commands::test::testEasyEase(test);
+        bloom::commands::test::testKeyEqualToConstantCreatesTheKey(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }
