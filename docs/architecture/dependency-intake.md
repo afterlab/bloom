@@ -420,8 +420,10 @@ instead, and it still carries license text plus acquisition, license, and securi
 either beside the vendored files (`src/ui/kit/third_party/<component>/`) or, when the application's
 license catalog must ship its license text, in the same component-record shape under
 `dependencies/licenses/<component>/` with no lock entry. `dependencies/licenses/stb_truetype/` is
-that case and its own records state the determination. For each profile, components with a matching `profileBuild` form a
-closed acyclic dependency graph. Every provided capability has one component owner in that profile.
+that case and its own records state the determination. For each profile, components with a matching `profileBuild` form an
+acyclic dependency graph that is closed over `link`, `runtime-plugin` and `vendored` edges. A `build`
+edge may name a component the profile does not build: a build-host tool or header set that the
+profile's recipe does not use (NASM and nv-codec-headers on an arm64 macOS target). Every provided capability has one component owner in that profile.
 Every production profile has at least one participating component and one qualification gate; every
 component has at least one profile build. A recipe owns a closed feature vocabulary, and each
 feature in that vocabulary has exactly one enabled/disabled decision in every participating build;

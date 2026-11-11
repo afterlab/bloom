@@ -342,6 +342,30 @@ void testLockShapeAndGraph(const Fixture& fixture, Expectations& expectations) {
         "dependency-cycle", [&] { fixture.validateLock(cycle); },
         "participating dependency graphs must remain acyclic");
 
+    // A second profile that builds only component.beta: component.alpha, in the first profile,
+    // then reaches a component outside its profile. That is refused for a link edge and accepted
+    // for a build edge (a build-host tool or header set the profile's recipe does not use).
+    auto outsideProfile = fixture.lock;
+    {
+        auto toolsProfile = outsideProfile.at("profiles").asArray().front();
+        replace(toolsProfile, "id", text("bloom.linux-release-tools"));
+        outsideProfile.at("profiles").asArray().push_back(std::move(toolsProfile));
+        replace(outsideProfile.at("components").asArray()[1].at("profileBuilds").asArray().front(),
+                "profileId", text("bloom.linux-release-tools"));
+    }
+    expectations.rejects(
+        "dependency-closure", [&] { fixture.validateLock(outsideProfile); },
+        "a link dependency must be built in the same profile");
+    auto buildOnlyEdge = outsideProfile;
+    replace(buildOnlyEdge.at("components").asArray().front().at("dependencies").asArray().front(),
+            "relationship", text("build"));
+    try {
+        fixture.validateLock(buildOnlyEdge);
+    } catch (const std::exception& error) {
+        std::cerr << "Unexpected rejection: " << error.what() << '\n';
+        expectations.expect(false, "a profile may leave out a build-only dependency");
+    }
+
     auto duplicateCapability = fixture.lock;
     replace(duplicateCapability.at("components").asArray()[1].at("profileBuilds").asArray().front(),
             "capabilities", array({text("bloom.capability.alpha")}));

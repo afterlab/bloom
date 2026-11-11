@@ -110,6 +110,52 @@ def add_configure_arguments(component: OrderedDict[str, object], arguments_path:
     component.update(reordered)
 
 
+def apply_profile(lock: OrderedDict[str, object], profile_path: Path) -> None:
+    """Add or replace one profile and each component's build for it.
+
+    The input holds the profile record and, under componentBuilds, one entry per component: its
+    build record without the profileId, or null when the profile does not build that component.
+    Every component of the lock must be named: a profile is reviewed as a whole, so a component
+    left out is an error rather than a silent absence.
+    """
+    data = read_json(profile_path)
+    profile = data.get("profile")
+    builds = data.get("componentBuilds")
+    if not isinstance(profile, dict) or not isinstance(builds, dict):
+        raise ValueError(f"{profile_path} must contain 'profile' and 'componentBuilds' objects")
+    profile_id = profile.get("id")
+    if not isinstance(profile_id, str):
+        raise ValueError(f"{profile_path}: the profile has no id")
+    profiles = lock.get("profiles")
+    components = lock.get("components")
+    if not isinstance(profiles, list) or not isinstance(components, list):
+        raise ValueError("the input lock must contain profiles and components arrays")
+    profiles[:] = [entry for entry in profiles if entry.get("id") != profile_id]
+    profiles.append(profile)
+    profiles.sort(key=lambda entry: entry["id"])
+    names = {entry["name"] for entry in components}
+    unknown = sorted(set(builds) - names)
+    missing = sorted(names - set(builds))
+    if unknown or missing:
+        raise ValueError(
+            f"{profile_path}: componentBuilds must name every component exactly once "
+            f"(unknown: {unknown}, missing: {missing})"
+        )
+    for component in components:
+        kept = [
+            entry for entry in component["profileBuilds"] if entry.get("profileId") != profile_id
+        ]
+        record = builds[component["name"]]
+        if record is not None:
+            build = OrderedDict([("profileId", profile_id)])
+            build.update(record)
+            kept.append(build)
+        if not kept:
+            raise ValueError(f"{component['name']} would be left with no profile build")
+        kept.sort(key=lambda entry: entry["profileId"])
+        component["profileBuilds"] = kept
+
+
 def write_lock(lock: OrderedDict[str, object], output_path: Path) -> None:
     encoded = json.dumps(lock, ensure_ascii=False, separators=(",", ":"))
     output_path.write_text(encoded, encoding="utf-8", newline="")
@@ -126,6 +172,14 @@ def main() -> int:
         action="append",
         default=[],
         help="NAME=PATH copies a recipe argument file into component NAME; a bare PATH is FFmpeg's",
+    )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        action="append",
+        default=[],
+        help="adds or replaces one profile and every component's build for it "
+        "(dependencies/lock-profiles/<profile id>.json)",
     )
     args = parser.parse_args()
 
@@ -146,6 +200,8 @@ def main() -> int:
         if component is None:
             raise ValueError(f"no component {name!r} for configure arguments {path}")
         add_configure_arguments(component, Path(path))
+    for profile_path in args.profile:
+        apply_profile(lock, profile_path)
     upgrade_schema(lock)
     write_lock(lock, args.output)
     return 0

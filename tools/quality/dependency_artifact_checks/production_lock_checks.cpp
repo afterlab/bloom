@@ -659,7 +659,11 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
         std::map<std::string, std::string> capabilityOwners;
         for (const auto& [name, component] : participating) {
             for (const auto& dependency : component->at("dependencies").asArray()) {
-                if (!participating.contains(dependency.at("name").asString())) {
+                // A build edge names a tool or header set used while building. A profile whose
+                // recipe does not use it (an x86 assembler on an arm64 target) leaves that
+                // component out; every other edge must stay inside the profile.
+                if (!participating.contains(dependency.at("name").asString()) &&
+                    dependency.at("relationship").asString() != "build") {
                     fail("dependency-closure", "profile " + profileId, name);
                 }
             }
@@ -688,7 +692,9 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
             }
             visiting.insert(name);
             for (const auto& edge : participating.at(name)->at("dependencies").asArray()) {
-                visit(edge.at("name").asString());
+                if (participating.contains(edge.at("name").asString())) {
+                    visit(edge.at("name").asString());
+                }
             }
             visiting.erase(name);
             visited.insert(name);
