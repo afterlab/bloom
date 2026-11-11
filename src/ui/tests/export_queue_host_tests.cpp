@@ -255,8 +255,10 @@ int main(int argc, char** argv) {
     poll->stop();
     expect(prompted, "New during a render asks before stopping it");
     expect(sawNull, "exportQueue() is null while the old service shuts down");
-    expect(host.exportQueue() != nullptr && host.exportQueue() != first,
-           "a new service exists after the replacement");
+    // The old service was destroyed first (the null seen above), so the allocator is free to give
+    // the new one the same address; its address says nothing about which service it is. The empty
+    // queue below is what shows it is a new one.
+    expect(host.exportQueue() != nullptr, "a new service exists after the replacement");
     QTest::qWait(50);
     expect(replaced == 1, "the replacement notification fires exactly once");
     snapshot = adapter.snapshot();

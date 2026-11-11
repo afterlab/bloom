@@ -520,8 +520,16 @@ void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
                         "native chrome: stock OS decorations, never frameless");
     expectations.expect(window.findChild<QWidget*>(QStringLiteral("kinetikTitleBar")) == nullptr,
                         "native chrome: no Kinetik TitleBar is constructed at all");
+#ifdef Q_OS_MACOS
+    // #536: macOS has one global menu bar for every window, so the window carries none itself.
+    expectations.expect(window.menuBar() != nullptr &&
+                            window.menuBar()->parentWidget() == nullptr &&
+                            window.menuWidget() == nullptr,
+                        "native chrome: the one global menu bar is in charge");
+#else
     expectations.expect(window.menuBar() != nullptr && window.menuWidget() == window.menuBar(),
                         "native chrome: QMainWindow's own classic menu bar is in charge");
+#endif
 
     // No "Bloom" app-title label anywhere in the client area (task C1, item C1): the only window
     // title left is the OS one, and it carries the document title alone.

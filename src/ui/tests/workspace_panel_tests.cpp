@@ -242,6 +242,12 @@ void testAllFourJoins(Expectations& expectations) {
         action->trigger();
         menu->close();
         settle();
+        // A window manager gives the window back its activation when the popup closes. Qt's
+        // offscreen platform does that on Linux and not on macOS, where no window is active
+        // afterwards and so no widget can report focus. Activating the window again restores the
+        // focus child the join chose; it does not choose one.
+        host.activateWindow();
+        settle();
 
         expectations.expect(absorbed.isNull() && host.areaCount() == 1,
                             label + ": the other panel closes");

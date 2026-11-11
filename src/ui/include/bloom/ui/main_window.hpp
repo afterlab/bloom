@@ -154,6 +154,10 @@ class MainWindow final : public QMainWindow {
     // The one persistent reporting surface (task VIEW-1). Exposed so a test can read what the
     // window is currently saying without grabbing pixels.
     [[nodiscard]] WindowStatusBar* statusStrip() const noexcept { return statusStrip_; }
+    // The application's menu bar: this window's own on Linux and Windows, the one global menu
+    // bar on macOS (#536). It hides QMainWindow::menuBar(), which on macOS would create a second,
+    // empty menu bar for this window and show that instead of the global one.
+    [[nodiscard]] QMenuBar* menuBar() const;
     // ADR 0031: the fixed contextual bar under the menu bar, and Window > Context Bar.
     [[nodiscard]] ContextBar* contextBar() const noexcept { return contextBar_; }
     [[nodiscard]] QAction* contextBarAction() const noexcept { return contextBarAction_; }
@@ -190,6 +194,8 @@ class MainWindow final : public QMainWindow {
   private:
     void createChrome();
     void createMenus(QMenuBar& menuBar);
+    // macOS: makes the global menu bar's menus children of this window (see the definition).
+    void adoptMenus();
     void createFileMenu(QMenu& fileMenu);
     void createCompositionMenu(QMenu& compositionMenu);
     void createViewMenu(QMenu& viewMenu);

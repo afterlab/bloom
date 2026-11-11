@@ -135,7 +135,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     // #489: font downloads, their notices and the refresh when a font arrives.
     new FontServiceBridge(statusStrip_, previewController_, this);
     createMenus(*menuBar_);
+    adoptMenus();
     createWorkspaceActions();
+    adoptMenus();
     updateEditActions();
     if (cachePurgeController_ != nullptr) {
         connect(cachePurgeController_, &CachePurgeController::purgeStarted, this, [this] {
@@ -645,9 +647,23 @@ void MainWindow::createChrome() {
     globalMenuBar_ = std::make_unique<QMenuBar>(nullptr);
     menuBar_ = globalMenuBar_.get();
 #else
-    menuBar_ = menuBar();
+    menuBar_ = QMainWindow::menuBar();
 #endif
 }
+
+void MainWindow::adoptMenus() {
+#ifdef Q_OS_MACOS
+    // The global menu bar has no parent window, so its menus, their submenus and the commands
+    // they own were not descendants of this window, and every lookup of an application command
+    // or menu by name through the window (findChild here, in the editors and in the tests) found
+    // nothing on macOS. The menus belong to the window as they do on the other platforms; the
+    // menu bar keeps showing them. The flags are passed back so each menu stays a popup.
+    for (auto* menu : globalMenuBar_->findChildren<QMenu*>(Qt::FindDirectChildrenOnly))
+        menu->setParent(this, menu->windowFlags());
+#endif
+}
+
+QMenuBar* MainWindow::menuBar() const { return menuBar_; }
 
 void MainWindow::toggleFullScreen() {
     // F11 acts on the window it was pressed in: each window goes full screen on its own monitor.
