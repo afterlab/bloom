@@ -633,11 +633,12 @@ session holds a file, `project.open`, `project.save-as` and `project.save-copy` 
 refused with `bloom.mcp.busy`; close the session first. At most four files are open this way at
 once. In the desktop application their renders use the application's own final-render provider,
 only for these calls; the open project keeps rendering through the export queue. A render, export
-or capture of a project file reports `gpuFrames`, `cpuReferenceFrames` and `provenance` (`gpu` or
-`cpu-reference`); when frames ran on the CPU reference path, because no GPU device was available
-or the scene could not run on it, `routeNote` says so. In the desktop application the render,
-export, capture and `pixels` of the open project report the same fields from what the export
-queue recorded for the job, and read `null` when it recorded none.
+or capture reports `gpuFrames`, `cpuReferenceFrames` and `provenance` (`gpu` or `cpu-reference`),
+for a project file and for the project a `bloom-mcp` process has open alike; when frames ran on
+the CPU reference path, because no GPU device was available or the scene could not run on it,
+`routeNote` says so. In the desktop application the render, export, capture and `pixels` of the
+open project report the same fields from what the export queue recorded for the job, and read
+`null` when it recorded none.
 
 **Dialogs.** While a modal dialog is open in the application, the calls that need the window
 answer `bloom.mcp.busy` and name the dialog: its title, its text and its buttons, with the

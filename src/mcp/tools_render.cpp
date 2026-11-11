@@ -155,14 +155,16 @@ RenderDestination renderDestination(const std::string& text, const std::string_v
     return {path, pattern};
 }
 
-// A projectFile render says which route rendered it, in the vocabulary the other provenance
-// fields use (gpuFrames, cpuReferenceFrames, "gpu", "cpu-reference"): a file render never turns
-// into a silent CPU render. Frames the provider did not evaluate on the GPU ran the CPU reference
-// path, whether no device was available or no provider was given.
-void reportFileRoute(Json& out, yyjson_mut_val* value, const McpCall& call,
-                     const std::uint64_t frames, const std::uint64_t gpuFrames,
-                     const bool withProvenance = true) {
-    if (!call.fileSession)
+// A render outside the desktop application's export queue (the stdio host's own project, and a
+// projectFile session on either host) says which route rendered it, in the vocabulary the other
+// provenance fields use (gpuFrames, cpuReferenceFrames, "gpu", "cpu-reference"): such a render
+// never turns into a silent CPU render (issue #663). Frames the provider did not evaluate on the
+// GPU ran the CPU reference path, whether no device was available or no provider was given. The
+// desktop application's open project reports through reportJobRoute instead.
+void reportHeadlessRoute(Json& out, yyjson_mut_val* value, const McpCall& call,
+                         const std::uint64_t frames, const std::uint64_t gpuFrames,
+                         const bool withProvenance = true) {
+    if (call.live != nullptr)
         return;
     const auto gpu = std::min(gpuFrames, frames);
     const auto cpu = frames - gpu;
@@ -174,8 +176,7 @@ void reportFileRoute(Json& out, yyjson_mut_val* value, const McpCall& call,
         out.set(value, "routeNote",
                 out.text(std::to_string(cpu) + " of " + std::to_string(frames) +
                          " frames rendered on the CPU reference path: no GPU device was "
-                         "available to the project file's render, or the scene could not run "
-                         "on it."));
+                         "available to the render, or the scene could not run on it."));
 }
 
 // A live render, export or capture says which route the export queue recorded for its frames, in
@@ -465,7 +466,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     }
     auto* result = out.object();
     out.set(result, "publishedFrames", out.number(frames));
-    reportFileRoute(out, result, call, frames, gpuFrames);
+    reportHeadlessRoute(out, result, call, frames, gpuFrames);
     out.set(result, "preservationReport", out.text(report));
     if (workerMemory)
         out.set(result, "workerMemory", workerMemoryValue(out, *workerMemory));
@@ -740,8 +741,7 @@ ScratchFrames renderScratchFrames(McpServerCore::State& core, McpCall& call,
             throw std::runtime_error(result.diagnostic);
         frames.routeFrames = result.publishedFrames;
         frames.routeGpuFrames = result.gpuEvaluatedFrames;
-        if (call.fileSession && frames.routeGpuFrames >= frames.routeFrames &&
-            frames.routeGpuFrames > 0)
+        if (frames.routeGpuFrames >= frames.routeFrames && frames.routeGpuFrames > 0)
             frames.provenance = "gpu";
     }
     return frames;
@@ -833,7 +833,7 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
                                     "red, green and blue"));
     out.set(value, "route", out.text("production still export to a scratch OpenEXR, working space"));
     out.set(value, "provenance", out.text(provenance));
-    reportFileRoute(out, value, call, routeFrames, routeGpuFrames, false);
+    reportHeadlessRoute(out, value, call, routeFrames, routeGpuFrames, false);
     if (transient)
         reportJobRoute(out, value, *transient, false);
     out.set(value, "statistics", statisticsJson(out, all.result()));
@@ -927,7 +927,7 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
     out.set(value, "path", out.text(path.string()));
     out.set(value, "bytes", out.number(bytes));
     out.set(value, "digest", out.text(digestFile(path)));
-    reportFileRoute(out, value, call, routeFrames, routeGpuFrames);
+    reportHeadlessRoute(out, value, call, routeFrames, routeGpuFrames);
     if (transient)
         reportJobRoute(out, value, *transient);
     out.set(value, "width", out.number(composition->format().width()));

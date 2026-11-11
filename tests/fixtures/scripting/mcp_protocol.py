@@ -475,6 +475,10 @@ class Protocol(unittest.TestCase):
                 'destination': str(root / 'mcp.png')})], project)
             result = responses[-1]['result']
             self.assertFalse(result['isError'], result)
+            # The process's own project reports its route, as a project file does (issue #663).
+            content = result['structuredContent']
+            self.assertEqual(content['gpuFrames'] + content['cpuReferenceFrames'], 1, content)
+            self.assertIn(content['provenance'], ('gpu', 'cpu-reference'))
             subprocess.run([CLI, 'render', '--project', str(project), '--frame', '12',
                             '--preset', 'PngRgba8SrgbV1', '--out', str(root / 'cli')],
                            check=True, capture_output=True, timeout=60)
