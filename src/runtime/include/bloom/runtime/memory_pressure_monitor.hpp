@@ -23,11 +23,13 @@ namespace bloom::runtime {
 // Makes freed large blocks go back to the OS. glibc's dynamic mmap threshold grows to the size of
 // the largest freed block (up to 32 MiB), after which frame-sized buffers come from heap arenas
 // and stay resident after free. A fixed threshold keeps every pixel/frame buffer an mmap that
-// free() unmaps. Process-wide and idempotent; elsewhere a no-op (the macOS and Windows allocators
-// already return large blocks to the OS on free).
+// free() unmaps. Process-wide and idempotent; elsewhere a no-op. The macOS allocator has no such
+// setting and keeps freed large blocks charged to the process, so there Bloom's pixel and frame
+// buffers are mapped from the system directly (core::allocateHostBlock).
 void configureHostMemoryReturn() noexcept;
-// Returns free heap pages to the OS after a bulk eviction (glibc malloc_trim). Not on the UI
-// thread: it can walk large arenas. A no-op where the allocator has no such call.
+// Returns free heap pages to the OS after a bulk eviction (glibc malloc_trim; the macOS
+// allocator's pressure relief, which covers its small blocks only). Not on the UI thread: it can
+// walk large arenas. A no-op where the allocator has no such call.
 void releaseFreedHostMemory() noexcept;
 // Cumulative system memory-pressure counters. Linux: PSI stall time from /proc/pressure/memory
 // ("some": at least one task stalled; "full": all non-idle tasks stalled) and swap traffic from
@@ -40,7 +42,8 @@ struct MemoryPressureCounters final {
     std::optional<std::uint64_t> swapOutPages;
 };
 [[nodiscard]] MemoryPressureCounters memoryPressureCounters() noexcept;
-// The process's resident set in bytes, if the platform reports it (diagnostics and tests).
+// The process's resident memory in bytes, if the platform reports it (diagnostics and tests): the
+// resident set on Linux, the working set on Windows, the physical footprint on macOS.
 [[nodiscard]] std::optional<std::size_t> processResidentBytes() noexcept;
 
 class MemoryPressureMonitor final {

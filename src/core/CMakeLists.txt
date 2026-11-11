@@ -18,6 +18,7 @@ target_sources(
         utf8.cpp
         file_uri.cpp
         float_chars.cpp
+        host_block.cpp
         safe_parse.cpp
         specified_log2.cpp
         telemetry_counters.cpp
@@ -28,6 +29,7 @@ target_sources(
         FILES
             include/bloom/core/artifact_target_key.hpp
             include/bloom/core/blend_mode.hpp
+            include/bloom/core/host_block.hpp
             include/bloom/core/field_program.hpp
             include/bloom/core/film_grain_noise.hpp
             include/bloom/core/dither_pattern.hpp

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/host_block.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 
 #include <cstddef>
@@ -174,15 +175,15 @@ template <class T> class ProcessingHostAllocator {
             }
             token = std::move(*grant.token);
         }
-        auto* block = static_cast<Header*>(::operator new(sizeof(Header) + payload));
+        auto* block = static_cast<Header*>(core::allocateHostBlock(sizeof(Header) + payload));
         ::new (static_cast<void*>(block)) Header{std::move(token)};
         return reinterpret_cast<T*>(block + 1);
     }
-    void deallocate(T* pointer, std::size_t) noexcept {
+    void deallocate(T* pointer, const std::size_t count) noexcept {
         auto* header = reinterpret_cast<Header*>(pointer) - 1;
         auto token = std::move(header->token);
         header->~Header();
-        ::operator delete(header);
+        core::freeHostBlock(header, sizeof(Header) + count * sizeof(T));
         // Token credit follows actual backing free, outside any native/ledger handoff lock.
     }
     template <class U> bool operator==(const ProcessingHostAllocator<U>& other) const noexcept {

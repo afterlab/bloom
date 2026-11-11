@@ -1,3 +1,4 @@
+#include <bloom/core/host_block.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 
@@ -52,7 +53,7 @@ class FrameCache final {
     void fill(const std::size_t count) {
         const std::lock_guard lock(mutex_);
         for (std::size_t index = 0; index < count; ++index) {
-            Frame frame{next_++, std::make_unique<std::byte[]>(kFrameBytes)};
+            Frame frame{next_++, Pixels(bloom::core::allocateHostBlock(kFrameBytes))};
             std::memset(frame.pixels.get(), static_cast<int>(frame.id % 251) + 1, kFrameBytes);
             frames_.push_front(std::move(frame));
         }
@@ -75,9 +76,16 @@ class FrameCache final {
     }
 
   private:
+    // Frames are held the way Bloom's pixel storage holds them.
+    struct FreeBlock final {
+        void operator()(void* const block) const noexcept {
+            bloom::core::freeHostBlock(block, kFrameBytes);
+        }
+    };
+    using Pixels = std::unique_ptr<void, FreeBlock>;
     struct Frame final {
         std::size_t id = 0;
-        std::unique_ptr<std::byte[]> pixels;
+        Pixels pixels;
     };
     MemoryBudgetLedger& ledger_;
     mutable std::mutex mutex_;

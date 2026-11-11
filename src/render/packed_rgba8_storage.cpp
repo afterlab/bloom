@@ -1,3 +1,4 @@
+#include <bloom/core/host_block.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/render/packed_rgba8_storage.hpp>
 
@@ -20,9 +21,10 @@ void destroyAllocation(detail::PackedHostRetirementNode* const node) noexcept {
     // Revoke sampled credit while this backing is still charged. The OS may not immediately
     // regain malloc pages, and sampling can race the interval before token release.
     detail::retireHostPixelsBeforeFree(header + 1);
+    const auto bytes = sizeof(AllocationHeader) + static_cast<std::size_t>(header->token.bytes());
     auto token = std::move(header->token);
     header->~AllocationHeader();
-    ::operator delete(header);
+    core::freeHostBlock(header, bytes);
     // Token releases payload and metadata together only after backing is actually gone.
 }
 } // namespace
@@ -59,7 +61,7 @@ void* detail::allocateHostPixels(const std::shared_ptr<PackedHostStorageAuthorit
     try {
         // Payload AND the exact requested header/node are charged before backing allocation.
         // Opaque malloc/stdlib/thread overhead remains outside this explicit claim.
-        void* block = ::operator new(sizeof(AllocationHeader) + bytes);
+        void* block = core::allocateHostBlock(sizeof(AllocationHeader) + bytes);
         auto* header = ::new (block) AllocationHeader;
         header->destroy = &destroyAllocation;
         header->token = std::move(*token);

@@ -27,6 +27,7 @@
 #include <psapi.h>
 #elif defined(__APPLE__)
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #endif
 
 namespace bloom::runtime {
@@ -72,6 +73,11 @@ void configureHostMemoryReturn() noexcept {
 void releaseFreedHostMemory() noexcept {
 #if defined(__GLIBC__)
     static_cast<void>(malloc_trim(0));
+#elif defined(__APPLE__)
+    // Asks every zone to give back the free pages of its small-block regions. It does not release
+    // the large blocks the allocator keeps after free; core::allocateHostBlock is what keeps
+    // Bloom's own large buffers out of that cache.
+    static_cast<void>(malloc_zone_pressure_relief(nullptr, 0));
 #endif
 }
 
@@ -131,13 +137,15 @@ std::optional<std::size_t> processResidentBytes() noexcept {
         return std::nullopt;
     return static_cast<std::size_t>(counters.WorkingSetSize);
 #elif defined(__APPLE__)
-    mach_task_basic_info_data_t info{};
-    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+    // The physical footprint: the memory the system charges to this process, which is what its
+    // memory pressure accounting and Activity Monitor use.
+    task_vm_info_data_t info{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO,
                   reinterpret_cast<task_info_t>(&info), // NOLINT(*-reinterpret-cast)
                   &count) != KERN_SUCCESS)
         return std::nullopt;
-    return static_cast<std::size_t>(info.resident_size);
+    return static_cast<std::size_t>(info.phys_footprint);
 #else
     return std::nullopt;
 #endif
