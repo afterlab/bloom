@@ -1122,6 +1122,17 @@ LUT fallback. The sealed-file intake also returns `HelperUnavailable` on macOS a
 LUT import is refused there while saved LUT records remain editable. Built-in CST processing
 remains available on all three desktop targets.
 
+A File Transform runs on the GPU on every required route when a device is available: the
+interactive Viewer, RAM preview, still export, sequence export, video export, and the scripted
+render (`bloom.render.frame` under `bloom-cli run`, whose provider takes the packaged shader
+tools of the executable that embeds the interpreter). `bloom.ui.viewer_export_lut` renders a
+channel-rotating 3D `.cube` through the Viewer, a cold and warm RAM preview and the three export
+routes, and `bloom.scripting.python-lut-render` through the scripted route. On the device each
+frame must come from the GPU with no CPU fallback or CPU reference frame and match the CPU
+reference within one 8-bit code; the bypassed and no-LUT states are covered too. An external
+Python interpreter that imports the build-tree package has no packaged shader tools, so its File
+Transform renders take the CPU reference path and report it in the result.
+
 File Transform's `look` marker opts it into request-level `bypassLookNodes`. The default is false;
 true skips only marked effects and has a separate frame/memo identity. COLOR-4 owns the Viewer
 footer switch. Export captures its own policy: the COLOR-5 handoff preset sets

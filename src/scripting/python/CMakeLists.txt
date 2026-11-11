@@ -112,6 +112,10 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_shared_device.py"
             "${CMAKE_BINARY_DIR}/python"
         LABELS scripting python integration device)
+    # #608: a scripted render through OCIO File Transform runs on the device, with CPU parity.
+    bloom_add_test(NAME bloom.scripting.python-lut-render
+        COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_lut_render.py"
+        LABELS scripting python integration device TIMEOUT 300)
     bloom_add_test(NAME bloom.scripting.python-embedding
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/embedding.py"
         LABELS scripting python integration device)
