@@ -767,6 +767,7 @@ void prores4444Threaded(const std::filesystem::path& directory) {
             limit = addressSpaceLimit(pid);
 #else
             (void)pid;
+            (void)limit;
 #endif
         };
         (void)run(settings,

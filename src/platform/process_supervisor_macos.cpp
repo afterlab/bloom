@@ -5,6 +5,8 @@
 #include <array>
 #include <cerrno>
 #include <csignal>
+#include <cstdint>
+#include <cstring>
 #include <fcntl.h>
 #include <libproc.h>
 #include <poll.h>
@@ -21,14 +23,25 @@
 
 // macOS port of the Linux supervisor. Differences from the Linux provider, all forced by Darwin:
 //   * no pipe2(O_CLOEXEC): pipe() plus F_DUPFD_CLOEXEC over fd 4 (the same high-fd trick).
-//   * no posix_spawnattr_setrlimit_np and no addclosefrom_np: the child inherits no kernel rlimits
-//     and relies on close-on-exec for every descriptor the host already marked, plus the explicit
-//     file actions below. ProcessOptions limits remain validated but are not enforced by the
-//     kernel.
-//   * no sigtimedwait: pipeWrite consumes a SIGPIPE that only this thread raised with sigwait.
+//   * no posix_spawnattr_setrlimit_np, no prlimit and no addclosefrom_np: the parent cannot set a
+//     child's kernel limits, and the child relies on close-on-exec for every descriptor the host
+//     already marked, plus the explicit file actions below. The limits are enforced like this:
+//       - open files and core dumps: the parent sends the open-file limit with the ready byte, and
+//         a trusted worker's processWorkerBootstrap installs it and a zero core limit on itself
+//         before any provider code is loaded. A tool that never calls the bootstrap gets neither.
+//       - memory: an address-space limit cannot be set here (a new process already maps hundreds
+//         of gigabytes of shared system libraries, and the kernel refuses a limit below that). The
+//         parent instead reads the child's physical footprint while it waits on the child's pipes
+//         and kills a child that exceeds ProcessOptions::addressSpaceBytes, reporting
+//         ResourceLimit. A footprint is never larger than an address space, so this is no
+//         stricter than the Linux limit of the same number.
+//   * a pipe's SIGPIPE goes to the process, not the writing thread: the parent's write ends are
+//     marked F_SETNOSIGPIPE, so a write to a closed pipe fails with EPIPE and raises nothing.
 namespace bloom::platform {
 namespace {
 using Clock = std::chrono::steady_clock;
+// What the parent writes to the gate: 'R' and the open-file limit, a 32-bit count.
+constexpr std::size_t kGateBytes = 1 + sizeof(std::uint32_t);
 class Fd final {
   public:
     explicit Fd(int fd = -1) : fd_(fd) {}
@@ -87,36 +100,33 @@ class SpawnAttributes final {
             posix_spawnattr_destroy(&value);
     }
 };
-// Block SIGPIPE in this calling thread only; consume only a newly generated signal before restore.
-ssize_t pipeWrite(int fd, const void* data, std::size_t size) {
-    sigset_t set{}, old{}, pending{};
-    sigemptyset(&set);
-    sigaddset(&set, SIGPIPE);
-    if (pthread_sigmask(SIG_BLOCK, &set, &old) != 0) {
-        errno = EIO;
-        return -1;
-    }
-    sigpending(&pending);
-    const bool alreadyPending = sigismember(&pending, SIGPIPE) == 1;
-    const auto written = ::write(fd, data, size);
-    const int saved = errno;
-    if (written < 0 && saved == EPIPE && !alreadyPending) {
-        int signal = 0;
-        ::sigwait(&set, &signal);
-    }
-    pthread_sigmask(SIG_SETMASK, &old, nullptr);
-    errno = saved;
-    return written;
+// A write to a pipe the parent owns. launch() marks those pipes so that a write after the child
+// closed its end fails with EPIPE and raises no SIGPIPE. Blocking the signal in the writing thread,
+// as the Linux supervisor does, is not enough here: this kernel sends a pipe's SIGPIPE to the
+// process, so another thread with the signal unblocked would take it.
+ssize_t pipeWrite(int fd, const void* data, std::size_t size) { return ::write(fd, data, size); }
+// Whether the child's physical footprint is over `limit`. An unreadable footprint (the child is
+// gone) is not over: the pipe then reports how the child ended.
+bool overMemoryLimit(const pid_t pid, const std::uint64_t limit) {
+    rusage_info_v4 usage{};
+    return ::proc_pid_rusage(pid, RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&usage)) == 0 &&
+           usage.ri_phys_footprint > limit;
 }
 ProcessResult<std::size_t> transfer(int fd, std::span<std::byte> bytes,
                                     std::span<const std::byte> output, ProcessDeadline deadline,
-                                    const ProcessCancellation& cancel) {
+                                    const ProcessCancellation& cancel, const pid_t pid,
+                                    const std::uint64_t memoryLimit) {
     const bool writing = !output.empty();
     const auto size = writing ? output.size() : bytes.size();
     std::size_t offset = 0;
     while (offset < size) {
         if (cancel && cancel())
             return ProcessFailure{ProcessError::Cancelled, 0};
+        // Checked on every turn of the wait, at most ten milliseconds apart.
+        if (overMemoryLimit(pid, memoryLimit)) {
+            ::kill(-pid, SIGKILL);
+            return ProcessFailure{ProcessError::ResourceLimit, ENOMEM};
+        }
         const auto remaining =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
         if (remaining.count() <= 0)
@@ -186,6 +196,9 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
         return ProcessFailure{ProcessError::ResourceLimit, 0};
     std::array<Fd, 2> input, output, gate;
     if (!makePipe(input) || !makePipe(output) || !makePipe(gate))
+        return ProcessFailure{ProcessError::Spawn, errno};
+    if (::fcntl(input[1].get(), F_SETNOSIGPIPE, 1) != 0 ||
+        ::fcntl(gate[1].get(), F_SETNOSIGPIPE, 1) != 0)
         return ProcessFailure{ProcessError::Spawn, errno};
     SpawnActions actions;
     SpawnAttributes attributes;
@@ -291,16 +304,21 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
             return ProcessFailure{ProcessError::Io, errno};
     }
     // The gate keeps the worker protocol identical to Linux: the child's bootstrap waits for 'R'
-    // before loading provider code. macOS has no kernel rlimit to install between spawn and the
-    // ready byte, so the byte simply releases the child.
+    // before loading provider code. The parent cannot install the child's limits here, so the
+    // open-file limit follows the ready byte and the bootstrap installs it on itself.
     if (!released) {
-        constexpr char ready = 'R';
+        std::array<char, kGateBytes> ready{};
+        ready[0] = 'R';
+        const std::uint32_t openFiles = options.openFiles;
+        std::memcpy(ready.data() + 1, &openFiles, sizeof(openFiles));
         // EPIPE means every holder of the gate's read end has closed it: the child has exited or
         // is exiting (its files close before it can be reaped, so a WNOHANG probe may still say it
         // runs, and under load that window is long), or it is a tool that never reads the gate.
         // Either way there is nothing to release; its output and exit status still gate the
         // caller. Any other failure is a failed launch.
-        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && errno != EPIPE && !childExited())
+        if (pipeWrite(gate[1].get(), ready.data(), ready.size()) !=
+                static_cast<ssize_t>(ready.size()) &&
+            errno != EPIPE && !childExited())
             return ProcessFailure{ProcessError::Spawn, errno};
     }
     return child;
@@ -308,12 +326,14 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
 ProcessResult<std::size_t> ProcessSupervisor::write(std::span<const std::byte> bytes,
                                                     ProcessDeadline deadline,
                                                     const ProcessCancellation& cancel) {
-    return transfer(state_->input.get(), {}, bytes, deadline, cancel);
+    return transfer(state_->input.get(), {}, bytes, deadline, cancel, state_->pid,
+                    state_->options.addressSpaceBytes);
 }
 ProcessResult<std::size_t> ProcessSupervisor::read(std::span<std::byte> bytes,
                                                    ProcessDeadline deadline,
                                                    const ProcessCancellation& cancel) {
-    return transfer(state_->output.get(), bytes, {}, deadline, cancel);
+    return transfer(state_->output.get(), bytes, {}, deadline, cancel, state_->pid,
+                    state_->options.addressSpaceBytes);
 }
 ProcessResult<int> ProcessSupervisor::finish(ProcessDeadline deadline) {
     state_->input = Fd{};
@@ -363,13 +383,25 @@ std::optional<ProcessExit> ProcessSupervisor::waitExit(const std::chrono::millis
     return ProcessExit{false, WIFEXITED(state_->status) ? WEXITSTATUS(state_->status) : 0};
 }
 bool processWorkerBootstrap() {
-    char ready = 0;
-    ssize_t n = 0;
-    do {
-        n = ::read(3, &ready, 1);
-    } while (n < 0 && errno == EINTR);
+    // The ready byte and the open-file limit the parent chose (see the notes at the top).
+    std::array<char, kGateBytes> ready{};
+    std::size_t received = 0;
+    while (received < ready.size()) {
+        const auto n = ::read(3, ready.data() + received, ready.size() - received);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        received += static_cast<std::size_t>(n);
+    }
     ::close(3);
-    if (n != 1 || ready != 'R')
+    if (received != ready.size() || ready[0] != 'R')
+        return false;
+    std::uint32_t openFiles = 0;
+    std::memcpy(&openFiles, ready.data() + 1, sizeof(openFiles));
+    const rlimit files{openFiles, openFiles}, core{0, 0};
+    if (openFiles < 8 || ::setrlimit(RLIMIT_NOFILE, &files) != 0 ||
+        ::setrlimit(RLIMIT_CORE, &core) != 0)
         return false;
     const int flags = ::fcntl(4, F_GETFD);
     return (flags < 0 && errno == EBADF) ||

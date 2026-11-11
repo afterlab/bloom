@@ -12,9 +12,15 @@
 #include <filesystem>
 #include <fstream>
 #include <numeric>
+#include <string>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
+#if defined(__APPLE__)
+#include <libproc.h>
+#include <sys/proc_info.h>
+#endif
 using namespace bloom::media::provider;
 namespace {
 struct Fixture {
@@ -82,6 +88,46 @@ struct Fixture {
         return *reply;
     }
 };
+// Whether process `pid` holds `path` open: the test kills the worker once it has opened its input.
+[[nodiscard]] bool processHasOpen(const std::int64_t pid, const std::filesystem::path& path) {
+#if defined(__APPLE__)
+    // The kernel reports each open file by its resolved path.
+    std::error_code error;
+    const auto resolved = std::filesystem::canonical(path, error);
+    if (error)
+        return false;
+    const int bytes = ::proc_pidinfo(static_cast<int>(pid), PROC_PIDLISTFDS, 0, nullptr, 0);
+    if (bytes <= 0)
+        return false;
+    std::vector<proc_fdinfo> descriptors(static_cast<std::size_t>(bytes) / sizeof(proc_fdinfo) + 16);
+    const int filled =
+        ::proc_pidinfo(static_cast<int>(pid), PROC_PIDLISTFDS, 0, descriptors.data(),
+                       static_cast<int>(descriptors.size() * sizeof(proc_fdinfo)));
+    if (filled <= 0)
+        return false;
+    descriptors.resize(static_cast<std::size_t>(filled) / sizeof(proc_fdinfo));
+    for (const auto& descriptor : descriptors) {
+        if (descriptor.proc_fdtype != PROX_FDTYPE_VNODE)
+            continue;
+        vnode_fdinfowithpath info{};
+        if (::proc_pidfdinfo(static_cast<int>(pid), descriptor.proc_fd, PROC_PIDFDVNODEPATHINFO,
+                             &info, sizeof(info)) == static_cast<int>(sizeof(info)) &&
+            resolved == std::filesystem::path(info.pvip.vip_path))
+            return true;
+    }
+    return false;
+#else
+    std::error_code error;
+    const auto descriptors = std::filesystem::path("/proc") / std::to_string(pid) / "fd";
+    for (std::filesystem::directory_iterator it(descriptors, error), end; !error && it != end;
+         it.increment(error)) {
+        std::error_code linkError;
+        if (std::filesystem::read_symlink(it->path(), linkError) == path && !linkError)
+            return true;
+    }
+    return false;
+#endif
+}
 void run(const std::filesystem::path& directory) {
     // The bundled OpenH264 is always the software H.264 encoder: no verified download, no
     // entitlement suffix, nothing to install.
@@ -281,19 +327,9 @@ void run(const std::filesystem::path& directory) {
     std::jthread killer([&](const std::stop_token& stop) {
         while (!stop.stop_requested()) {
             const auto pid = fixture.pid.load();
-            if (pid > 0) {
-                std::error_code error;
-                const auto descriptors =
-                    std::filesystem::path("/proc") / std::to_string(pid) / "fd";
-                for (std::filesystem::directory_iterator it(descriptors, error), end;
-                     !error && it != end; it.increment(error)) {
-                    std::error_code linkError;
-                    if (std::filesystem::read_symlink(it->path(), linkError) == crashPath &&
-                        !linkError) {
-                        killed.store(::kill(static_cast<pid_t>(pid), SIGKILL) == 0);
-                        return;
-                    }
-                }
+            if (pid > 0 && processHasOpen(pid, crashPath)) {
+                killed.store(::kill(static_cast<pid_t>(pid), SIGKILL) == 0);
+                return;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

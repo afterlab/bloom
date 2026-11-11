@@ -3,10 +3,13 @@
 #include <bloom/platform/process_supervisor.hpp>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
+#include <memory>
 #include <poll.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 void raw(const bloom::media::provider::Bytes& bytes) {
@@ -72,10 +75,28 @@ int main(int argc, char** argv) {
                 return 11;
             rlimit address{}, files{}, core{};
             if (::getrlimit(RLIMIT_AS, &address) != 0 || ::getrlimit(RLIMIT_NOFILE, &files) != 0 ||
-                ::getrlimit(RLIMIT_CORE, &core) != 0 ||
-                address.rlim_cur != 2ULL * 1024 * 1024 * 1024 || files.rlim_cur != 64 ||
-                core.rlim_cur != 0)
+                ::getrlimit(RLIMIT_CORE, &core) != 0 || files.rlim_cur != 64 || core.rlim_cur != 0)
                 return 7;
+#if !defined(__APPLE__)
+            // macOS cannot set an address-space limit; the supervisor bounds the footprint
+            // instead, which the "memory" mode proves.
+            if (address.rlim_cur != 2ULL * 1024 * 1024 * 1024)
+                return 7;
+#endif
+        }
+        if (mode == "memory") {
+            // Keeps touching new memory until the supervisor stops it. It gives up on its own at
+            // twice the profile's limit, so a supervisor that never stops it fails the test
+            // instead of exhausting the machine.
+            constexpr std::size_t chunk = std::size_t{32} * 1024 * 1024;
+            constexpr std::size_t ceiling = std::size_t{4} * 1024 * 1024 * 1024;
+            std::vector<std::unique_ptr<char[]>> held;
+            for (std::size_t touched = 0; touched < ceiling; touched += chunk) {
+                held.push_back(std::make_unique<char[]>(chunk));
+                std::memset(held.back().get(), 1, chunk);
+                ::poll(nullptr, 0, 1);
+            }
+            return 12;
         }
         if (mode == "replay") {
             raw(helloBytes);

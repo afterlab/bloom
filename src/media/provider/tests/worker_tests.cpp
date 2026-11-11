@@ -198,6 +198,19 @@ void run() {
                                               {"VersionMismatch", Error::VersionMismatch},
                                               {"IdentityMismatch", Error::IdentityMismatch},
                                               {"Timeout", Error::Timeout}};
+    {
+        // An operating system may check a newly built program the first time it runs, which can
+        // take longer than a case's watchdog below. One launch with a long watchdog pays for that
+        // here, so no case is charged for it.
+        auto first = fixture.options(BLOOM_MEDIA_HOSTILE_WORKER);
+        first.process.arguments = {"version"};
+        first.timeout = std::chrono::seconds(20);
+        first.launched = options.launched;
+        MediaWorkerPool firstPool(first);
+        auto ticket = firstPool.submit(scheduler, owner(), fixture.attempt(), 0, fixture.request());
+        expectError(ticket, Error::VersionMismatch);
+        reaped(pid.load());
+    }
     std::ifstream cases(BLOOM_MEDIA_FIXTURES);
     test::check(static_cast<bool>(cases), "synthetic fixture manifest");
     std::string line;
@@ -226,6 +239,19 @@ void run() {
     waitDone(limitedCall);
     test::check(limitedCall.result() && std::holds_alternative<ProbeResult>(*limitedCall.result()),
                 "rlimits installed before provider call");
+#if defined(__APPLE__)
+    // macOS cannot give a worker an address-space limit, so the supervisor stops a worker whose
+    // memory passes the profile's limit while it waits for the reply.
+    auto greedy = fixture.options(BLOOM_MEDIA_HOSTILE_WORKER);
+    greedy.process.arguments = {"memory"};
+    greedy.timeout = std::chrono::seconds(20);
+    greedy.launched = options.launched;
+    MediaWorkerPool greedyPool(greedy);
+    auto greedyCall =
+        greedyPool.submit(scheduler, owner(), fixture.attempt(), 0, fixture.request());
+    expectError(greedyCall, Error::Oversized);
+    reaped(pid.load());
+#endif
     const auto marker = std::filesystem::temp_directory_path() /
                         ("bloom-media-worker-test-" + std::to_string(::getpid()));
     struct Cleanup {
