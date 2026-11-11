@@ -63,18 +63,23 @@ bool drop(QWidget& target, const QMimeData& mime) {
 // Waits for `predicate` with no wall-clock limit: the work it waits on takes as long as the machine
 // lets it, and a test of what that work does must not depend on how fast it ran (a compiling
 // machine made a fixed five seconds fail with the catalogue still being prepared). It gives up only
-// when the scheduler has been idle for three bridge poll intervals with the predicate still false,
-// which means nothing is left that could make it true. A real hang is the test runner's timeout.
+// when nothing is left that could make the predicate true: the scheduler idle and no completion
+// delivered across 200 consecutive turns of the event loop. Turns are counted, not timed (#623):
+// a starved test thread used to let three poll intervals of wall-clock time pass between two
+// turns and give up before the loop had run once more. Each turn sleeps, so a worker that has
+// yet to post its completion runs first. A real hang is the test runner's timeout.
 template <typename Predicate>
 bool waitUntil(runtime::TaskScheduler& scheduler, const ui::TaskUiBridge& bridge,
                Predicate predicate) {
-    std::optional<std::chrono::steady_clock::time_point> idleSince;
+    constexpr int kIdleTurns = 200;
+    int idleTurns = 0;
+    auto delivered = bridge.completionWakeCount();
     while (!predicate()) {
-        if (!scheduler.isQuiescent()) {
-            idleSince.reset();
-        } else if (!idleSince) {
-            idleSince = std::chrono::steady_clock::now();
-        } else if (std::chrono::steady_clock::now() - *idleSince > 3 * bridge.pollingInterval()) {
+        const auto now = bridge.completionWakeCount();
+        if (!scheduler.isQuiescent() || now != delivered) {
+            idleTurns = 0;
+            delivered = now;
+        } else if (++idleTurns > kIdleTurns) {
             return predicate();
         }
         QTest::qWait(1);

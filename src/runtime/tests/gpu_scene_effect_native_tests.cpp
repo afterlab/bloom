@@ -1338,8 +1338,12 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
                         std::move(changedDefinition));
                     const auto changed = builder.build(changedPlan, request);
                     const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+                    // The reason is part of the message: a preparation that fails only on a
+                    // busy machine (#623) has to say why.
                     expectations.expect(changed && changedOracle.frame(),
-                                        "blur native: changed radius prepares");
+                                        "blur native: changed radius prepares: " +
+                                            changed.diagnostic.message +
+                                            (changedOracle.frame() ? "" : " (no CPU frame)"));
                     if (!changed || !changedOracle.frame())
                         continue;
                     const auto rerun = runScene(*executor.executor, changed.scene);
