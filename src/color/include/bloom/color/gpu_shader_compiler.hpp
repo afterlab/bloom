@@ -13,6 +13,10 @@
 
 namespace bloom::color {
 
+namespace gpu_shader_detail {
+class ScheduledDeadline;
+}
+
 // Caller-provided, already-validated qualified paths to the pinned tools. The adapter never
 // consults PATH, a package registry, or an ambient environment variable.
 struct GpuShaderToolPaths {
@@ -26,6 +30,10 @@ struct GpuShaderCompileLimits {
     std::size_t maxSourceBytes = 4ull * 1024u * 1024u;
     std::size_t maxSpirvBytes = 64ull * 1024u * 1024u;
     std::size_t maxDiagnosticBytes = 16ull * 1024u;
+    // The limit on one compile, spent while the work can run (#623): time the calling thread
+    // or a tool process waits for a processor is not counted, where the system reports it
+    // (Linux), so a busy machine does not time a small compile out. No compile outlives 120
+    // seconds of wall-clock time whatever was not counted.
     std::chrono::milliseconds deadline{10000};
     std::uint64_t addressSpaceBytes = 512ull * 1024ull * 1024ull;
     std::uint32_t openFiles = 64;
@@ -110,8 +118,11 @@ class GpuShaderCompiler final {
     };
     [[nodiscard]] ToolResolution resolveTool(const std::string& role, const std::string& path,
                                              const GpuShaderCompileLimits& limits,
-                                             GpuShaderDeadline deadline,
+                                             gpu_shader_detail::ScheduledDeadline& deadline,
                                              const GpuShaderCancellation& cancel);
+    [[nodiscard]] GpuShaderCompileResult
+    compileWithin(const GpuShaderCompileRequest& request, const GpuShaderCancellation& cancel,
+                  gpu_shader_detail::ScheduledDeadline& deadline);
     [[nodiscard]] std::optional<render::CompiledGpuShader> lookupCache(const std::string& key);
     void insertCache(const std::string& key, const render::CompiledGpuShader& artifact);
     std::unique_ptr<State> state_;

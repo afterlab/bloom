@@ -267,14 +267,15 @@ GpuShaderCompiler::~GpuShaderCompiler() = default;
 
 GpuShaderCompiler::ToolResolution
 GpuShaderCompiler::resolveTool(const std::string& role, const std::string& path,
-                               const GpuShaderCompileLimits& limits, GpuShaderDeadline deadline,
+                               const GpuShaderCompileLimits& limits,
+                               gpu_shader_detail::ScheduledDeadline& deadline,
                                const GpuShaderCancellation& cancel) {
     ToolResolution result;
     if (cancel && cancel()) {
         result.error = GpuShaderCompileError::Cancelled;
         return result;
     }
-    if (Clock::now() >= deadline) {
+    if (deadline.expired()) {
         result.error = GpuShaderCompileError::Timeout;
         return result;
     }
@@ -393,9 +394,30 @@ GpuShaderCompilerStats GpuShaderCompiler::stats() const {
 
 GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest& request,
                                                   const GpuShaderCancellation& cancel) {
-    const auto& limits = request.limits;
-    if (const auto limitsError = validateLimits(limits))
+    if (const auto limitsError = validateLimits(request.limits))
         return failed(*limitsError, "request limits exceed the hard ceilings");
+    gpu_shader_detail::ScheduledDeadline deadline(request.limits.deadline, kHardMaxDeadline);
+    auto result = compileWithin(request, cancel, deadline);
+    if (result.failure && result.failure->code == GpuShaderCompileError::Timeout) {
+        // Say what the limit was and what it did not count, so a timeout on a busy machine is
+        // told apart from a tool that hung.
+        const auto milliseconds = [](const auto duration) {
+            return std::to_string(
+                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
+        };
+        result.failure->diagnostic +=
+            " (the " + milliseconds(request.limits.deadline) + " ms compile limit ended after " +
+            milliseconds(std::chrono::steady_clock::now() - deadline.start()) + " ms; " +
+            milliseconds(deadline.waited()) + " ms waiting for a processor was not counted)";
+    }
+    return result;
+}
+
+GpuShaderCompileResult
+GpuShaderCompiler::compileWithin(const GpuShaderCompileRequest& request,
+                                 const GpuShaderCancellation& cancel,
+                                 gpu_shader_detail::ScheduledDeadline& deadline) {
+    const auto& limits = request.limits;
     if (request.computeShaderText.empty())
         return failed(GpuShaderCompileError::MalformedSource, "compute shader text is empty");
     if (request.computeShaderText.size() > limits.maxSourceBytes)
@@ -410,10 +432,9 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
     const auto allowedMinor = maxSpirvMinor(request.targetEnvironment);
     if (!allowedMinor)
         return failed(GpuShaderCompileError::UnsupportedTarget, "unsupported target environment");
-    const GpuShaderDeadline deadline = Clock::now() + limits.deadline;
     if (cancel && cancel())
         return cancelled();
-    if (Clock::now() >= deadline)
+    if (deadline.expired())
         return failed(GpuShaderCompileError::Timeout, "compile deadline already elapsed");
 
     const auto compiler =
@@ -447,7 +468,7 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
                           "cached SPIR-V exceeds the request byte ceiling");
         if (cancel && cancel())
             return cancelled();
-        if (Clock::now() >= deadline)
+        if (deadline.expired())
             return failed(GpuShaderCompileError::Timeout,
                           "compile deadline elapsed before cache publication");
         render::CompiledGpuShader cachedArtifact = *cached;
@@ -512,7 +533,7 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
 
     if (cancel && cancel())
         return cancelled();
-    if (Clock::now() >= deadline)
+    if (deadline.expired())
         return failed(GpuShaderCompileError::Timeout, "compile deadline elapsed before validation");
     ToolRun validated = runProcess(
         validator.identity->path, {"--target-env", request.targetEnvironment, spirvPath.string()},
@@ -522,7 +543,7 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
                                "spirv-val rejected the SPIR-V module");
     if (cancel && cancel())
         return cancelled();
-    if (Clock::now() >= deadline)
+    if (deadline.expired())
         return failed(GpuShaderCompileError::Timeout,
                       "compile deadline elapsed before publication");
 
@@ -543,7 +564,7 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
     // Final publication guards: nothing reaches the cache or the caller after a cancel or expiry.
     if (cancel && cancel())
         return cancelled();
-    if (Clock::now() >= deadline)
+    if (deadline.expired())
         return failed(GpuShaderCompileError::Timeout,
                       "compile deadline elapsed immediately before publication");
     {

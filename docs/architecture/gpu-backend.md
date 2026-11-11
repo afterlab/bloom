@@ -1596,7 +1596,14 @@ way when a source does not fit a source ceiling that other admitted work had cut
 effect's GPU program could not be compiled because the shader compiler timed out, could not start or
 crashed (`compile-unavailable`; many frames compiling at once on a loaded machine): neither says
 anything about the scene, and both used to send a GPU-capable frame to the CPU, where a large Glow
-took over a minute and stalled the RAM fill behind it. Device memory another program holds is
+took over a minute and stalled the RAM fill behind it. The compile limit itself (10 seconds for one
+compile: both tool checks, glslangValidator and spirv-val) is spent only while the work can run
+(#623): time the compiling thread or a tool process is runnable but waiting for a processor is
+added back, from the scheduler's own statistics on Linux, so a machine busy with other work does
+not time out a compile that needs a fraction of a second of processor time. A tool that is
+blocked or asleep earns nothing and still ends at the limit, and no compile outlives 120 seconds
+of wall-clock time whatever was added back. Elsewhere the limit is wall-clock time. A timeout
+reports the limit, the elapsed time and what was not counted. Device memory another program holds is
 waited for too. Admission refuses only a device need above the device's ceiling (its device-local
 heap minus the VRAM headroom, `deviceCeilingBytes`); a need above the measured free room but within
 the ceiling, including a measured zero, waits for that room to come back. A frame whose executor
