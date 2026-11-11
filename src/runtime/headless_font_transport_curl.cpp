@@ -68,7 +68,13 @@ struct Library final {
 [[nodiscard]] const Library* library() {
     static const Library loaded = [] {
         Library lib;
-        for (const char* name : {"libcurl.so.4", "libcurl.so"}) {
+#if defined(__APPLE__)
+        // Part of the operating system (in its shared library cache, so there is no file to find).
+        static constexpr const char* names[] = {"/usr/lib/libcurl.4.dylib"};
+#else
+        static constexpr const char* names[] = {"libcurl.so.4", "libcurl.so"};
+#endif
+        for (const char* name : names) {
             lib.handle = ::dlopen(name, RTLD_NOW | RTLD_LOCAL);
             if (lib.handle != nullptr)
                 break;

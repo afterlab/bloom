@@ -410,7 +410,7 @@ void previewSubsetIsFetchedOnlyOnRequest() {
 // here reaches the network: the address refuses connections.
 void headlessTransportFailsOfflineAndCancels() {
     const auto transport = makeHeadlessFontTransport();
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
     if (!transport) {
         std::cerr << "SKIP: the system HTTP client is not installed here\n";
         return;
