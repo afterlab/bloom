@@ -223,9 +223,10 @@ The manual [`gpu-qualification.yml`](../../.github/workflows/gpu-qualification.y
 an explicit Vulkan-OFF CPU fallback on Linux, then runs the bounded image,
 source-revision, CPU evaluation, processing-budget and host-lifetime tests. It builds selected targets
 and does not repeat the repository-wide quality sweep. Locked superbuild archive hashes and library
-versions are reused and Linux uses the locked Clang 22 family. The current issue qualification scope
-is explicitly Linux. The helper retains portable Apple/MSVC configuration support, but those jobs are
-not in the default matrix and no macOS/Windows execution is claimed.
+versions are reused and Linux uses the locked Clang 22 family. The default matrix is Linux. The
+native job also accepts a macOS runner (the lock's Apple silicon profile, Apple clang, the locked
+MoltenVK as the device); the helper retains portable MSVC configuration support, and no Windows
+execution is claimed.
 
 Before the new workflow is on the default branch, the existing `ci.yml` dispatch entry calls it
 from the selected branch with `focused_gpu_gate=true`. That explicit manual mode skips the four
@@ -238,11 +239,12 @@ gh workflow run ci.yml --ref <branch> -f focused_gpu_gate=true -f run_native=fal
 Native execution additionally requires `run_native=true` and explicit `native_runner_labels`, for
 example `["self-hosted","linux","gpu"]`. No workflow is dispatched by saving these files.
 
-Dependency provenance remains separate from functional test results. The current production lock
-contains only a Linux Clang profile. A future explicit macOS/Windows run consumes its exact
-source-built prefix in `developer-system` mode and reports **Unqualified**, even if its CPU tests pass. No accepted
-Apple/MSVC ABI profile, release qualification or native GPU capability is fabricated. Linux's existing
-`Qualified-pending-manifest` state is preserved rather than upgraded by this focused gate.
+Dependency provenance remains separate from functional test results. The production lock holds a
+Linux Clang profile and an Apple silicon macOS profile (Apple clang, deployment target 13.3); a run
+on either consumes its source-built prefix in `qualified` mode. A Windows run consumes its exact
+source-built prefix in `developer-system` mode and reports **Unqualified**, even if its CPU tests
+pass. No accepted MSVC ABI profile, release qualification or native GPU capability is fabricated.
+The `Qualified-pending-manifest` state is preserved rather than upgraded by this focused gate.
 
 The reusable [`gpu_qualification.py`](../../tools/ci/gpu_qualification.py) runner writes JSON with
 separate CPU fallback, native, dependency-provenance and qualified-native fields. The fallback gate
@@ -279,12 +281,47 @@ python3 tools/ci/gpu_qualification.py --build-dir build/gpu-native-evidence \
 ```
 
 An available Windows Vulkan driver may support a native probe, but a prepared workflow is not proof
-that a particular Windows machine has that device or that Bloom's Windows GPU routes are qualified.
-macOS additionally needs an explicitly supplied, compatible MoltenVK/ICD setup; a system Metal GPU
-alone does not establish a Vulkan capability. The optional job probes the actual selected runner and
-retains unavailable/failure evidence. As of 2026-10-13, this continuation has local Linux CPU fallback
-evidence; macOS/Windows execution remains **NotRun** and outside the current Linux-focused
-qualification. Actual target evidence is required before platform parity is claimed.
+that a particular Windows machine has that device or that Bloom's Windows GPU routes are qualified;
+Windows execution remains **NotRun**. The optional job probes the actual selected runner and retains
+unavailable/failure evidence. Actual target evidence is required before platform parity is claimed.
+
+## macOS
+
+macOS has no system Vulkan. Bloom's device there is MoltenVK over Metal, a locked, source-built
+component of the dependency prefix, with the locked Vulkan loader. Both are packaged with every
+program that renders: inside `Bloom.app` (`Contents/Frameworks`, with the driver manifest under
+`Contents/Resources/vulkan/icd.d`) and beside `bloom-cli`, `bloom-mcp` and the test programs. A
+device is reached with nothing set in the environment. Metal's fast-math is turned off for Bloom,
+because it breaks parity with the CPU reference. A Metal device has one memory pool shared with
+the system; Bloom plans against it with its own budget
+([GPU backend](gpu-backend.md)).
+
+What was measured, on an Apple M4 running macOS 26 (2026-11-11), in a qualified build at the
+13.3 deployment target:
+
+- The GPU coverage contract and the native acceptance pass with the contract's exception lists
+  unchanged.
+- `bloom.sweep.nodes` renders all 98 node types that have an image output and a buildable graph
+  on the GPU: 97 are bit-identical to the CPU reference and Auto Exposure is within the
+  documented 2e-6 gate.
+- The Viewer uses the adopted preview route (prepared on the GPU, painted through the widget).
+  The resident presentation route needs a Wayland surface and is not built for macOS; no Metal
+  surface route exists.
+
+Not measured: any macOS release from 13.3 to 25, and an Intel Mac. The deployment target says
+where the binaries are allowed to start, not where they were tested.
+
+The application bundle is `org.kinetik.bloom`, with its icon, the minimum system version of the
+deployment target, the media workers under `Contents/libexec/bloom/media`, the color worker and
+the shader tools beside the executable, and the loader and driver as above. The
+`bloom-deploy-macos` target adds Qt with `macdeployqt` and signs the result ad hoc; there is no
+Developer ID signature or notarization, so a copy downloaded from the internet is stopped by
+Gatekeeper until the person opening it allows it.
+
+Media on macOS is read and encoded by the Apple frameworks first, with the bundled FFmpeg worker
+behind them ([Media I/O](media-io.md)). Continuous integration builds macOS in qualified mode on
+hosted Apple silicon runners; a hosted runner may have no usable GPU device, and its GPU tests
+then report not run.
 
 The immutable still-source seam uses native `std::filesystem::path` file opening, UTF-8 locator/base
 identity, fixed-width digest/counters and `steady_clock` timings. Decoder input is one owned byte
