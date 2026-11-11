@@ -26,8 +26,9 @@ LossyAudioCompare::LossyAudioCompare(const unsigned channels, const unsigned sam
     const double corner = std::min(kLossyAudioBandHz, rate * 0.25);
     const double k = std::tan(std::numbers::pi * corner / rate);
     for (std::size_t section = 0; section < sections_.size(); ++section) {
-        const double q = 1.0 / (2.0 * std::cos(std::numbers::pi *
-                                               (2.0 * static_cast<double>(section) + 1.0) / 16.0));
+        const double q =
+            1.0 /
+            (2.0 * std::cos(std::numbers::pi * (2.0 * static_cast<double>(section) + 1.0) / 16.0));
         const double norm = 1.0 / (1.0 + k / q + k * k);
         sections_[section] = {.b0 = k * k * norm,
                               .b1 = 2.0 * k * k * norm,

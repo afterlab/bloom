@@ -532,11 +532,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto fallbackEvaluator = state_->request.fallbackEvaluator;
 
         const auto requestOwner = attemptOwner(state_->request.owner);
-        const std::string requestLabel =
-            std::string("request=") + ownerKindName(requestOwner.kind) + ":" +
-            std::to_string(requestOwner.id.value()) + " time=" +
-            std::to_string(evaluation.time.numerator()) + "/" +
-            std::to_string(evaluation.time.denominator());
+        const std::string requestLabel = std::string("request=") +
+                                         ownerKindName(requestOwner.kind) + ":" +
+                                         std::to_string(requestOwner.id.value()) +
+                                         " time=" + std::to_string(evaluation.time.numerator()) +
+                                         "/" + std::to_string(evaluation.time.denominator());
         runtime::TaskRequest cpuRequest(
             "Analyze a frame export attempt", attemptOwner(state_->request.owner),
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);

@@ -1765,8 +1765,7 @@ void exportAcceptsEveryListedPreset() {
         .revision = [&] { return server.session->snapshot().revision(); },
         .viewerLevel = {}};
     const auto call = [&](const std::string& tool, const std::string& arguments) {
-        auto result =
-            std::async(std::launch::async, [&] { return server.call(tool, arguments); });
+        auto result = std::async(std::launch::async, [&] { return server.call(tool, arguments); });
         while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
             if (queue)
                 queue->pump();
@@ -1828,23 +1827,22 @@ void exportAcceptsEveryListedPreset() {
                              R"re("extension":"([^"]+)","available":(true|false),)re"
                              R"re("reason":"([^"]*)")re");
         for (std::sregex_iterator at(presets.begin(), presets.end(), row), end; at != end; ++at)
-            rows.push_back({(*at)[1].str(), (*at)[2].str(), (*at)[4].str(),
-                            (*at)[3].str() == "true"});
+            rows.push_back(
+                {(*at)[1].str(), (*at)[2].str(), (*at)[4].str(), (*at)[3].str() == "true"});
         expect(!rows.empty(), "export.presets lists presets with their extension: " + presets);
         return rows;
     };
     const auto exportWith = [&](const Listed& preset, const std::string& stem) {
-        return call("export",
-                           R"({"composition":1,"frame":0,"preset":")" + preset.id +
-                               R"(","destination":")" +
-                               (folder / (stem + "." + preset.extension)).string() +
-                               R"(","overwrite":"replace"})");
+        return call("export", R"({"composition":1,"frame":0,"preset":")" + preset.id +
+                                  R"(","destination":")" +
+                                  (folder / (stem + "." + preset.extension)).string() +
+                                  R"(","overwrite":"replace"})");
     };
     const auto transact = [&](const std::string& operations) {
-        const auto revision = firstMatch(call("query", R"({"kind":"project"})"),
-                                         R"re("revision":(\d+))re");
-        return call("transact", R"({"expectedRevision":)" + revision +
-                                           R"(,"operations":[)" + operations + "]}");
+        const auto revision =
+            firstMatch(call("query", R"({"kind":"project"})"), R"re("revision":(\d+))re");
+        return call("transact", R"({"expectedRevision":)" + revision + R"(,"operations":[)" +
+                                    operations + "]}");
     };
 
     bool h264Mp4 = false;
@@ -1873,10 +1871,9 @@ void exportAcceptsEveryListedPreset() {
         if (job == 0)
             return;
         fake->push({});
-        const auto started =
-            call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
-        const auto waited = call("export.wait", R"({"job":)" + std::to_string(job) +
-                                                           R"(,"timeoutMs":20000})");
+        const auto started = call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
+        const auto waited =
+            call("export.wait", R"({"job":)" + std::to_string(job) + R"(,"timeoutMs":20000})");
         expect(contains(started, R"("isError":false)") && contains(waited, R"("finished":true)") &&
                    !contains(waited, R"("state":"failed")"),
                "the queue runs " + preset.id + ": " + started + waited);
@@ -1919,16 +1916,16 @@ void exportAcceptsEveryListedPreset() {
     expect(h264Mp4 && needAces > 0 && done.size() == onAces.size() && walked >= 6,
            "the walk covered builtin:h264-mp4 and every other preset");
 
-    const auto unknown = call(
-        "export", R"({"composition":1,"frame":0,"preset":"builtin:no-such-preset",)"
-                  R"("destination":")" +
-                      (folder / "unknown.mp4").string() + R"("})");
+    const auto unknown =
+        call("export", R"({"composition":1,"frame":0,"preset":"builtin:no-such-preset",)"
+                       R"("destination":")" +
+                           (folder / "unknown.mp4").string() + R"("})");
     expect(contains(unknown, "Unknown preset") && contains(unknown, "export.presets"),
            "an id the list does not carry is refused as unknown and points at the list: " +
                unknown);
-    const auto stillOnly = call(
-        "render", R"({"composition":1,"frame":0,"preset":"builtin:h264-mp4","destination":")" +
-                      (folder / "render.mp4").string() + R"("})");
+    const auto stillOnly =
+        call("render", R"({"composition":1,"frame":0,"preset":"builtin:h264-mp4","destination":")" +
+                           (folder / "render.mp4").string() + R"("})");
     expect(contains(stillOnly, R"("isError":true)") || contains(stillOnly, "-32602"),
            "render still refuses a movie preset: " + stillOnly);
 

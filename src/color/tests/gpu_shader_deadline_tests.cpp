@@ -31,7 +31,8 @@ struct Waits final {
 };
 
 ScheduledDeadline::Sources sourcesOf(Waits& waits) {
-    return {[&waits] { return waits.thread; }, [&waits](const std::int64_t processId) {
+    return {[&waits] { return waits.thread; },
+            [&waits](const std::int64_t processId) {
                 waits.asked = processId;
                 return waits.process;
             }};
@@ -75,8 +76,7 @@ int main() {
         deadline.processFinished();
         waits.process = 0ns;
         deadline.refresh();
-        check(deadline.current() == deadline.start() + 13s,
-              "a finished tool's waiting is kept");
+        check(deadline.current() == deadline.start() + 13s, "a finished tool's waiting is kept");
         deadline.processStarted(4243);
         waits.process = 1500ms;
         deadline.refresh();

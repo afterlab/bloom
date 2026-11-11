@@ -64,17 +64,16 @@ namespace bloom::ui::routeproof {
         const int descriptor = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (descriptor < 0)
             return false;
-        const bool connected =
-            ::connect(descriptor, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) ==
-            0;
+        const bool connected = ::connect(descriptor, reinterpret_cast<const sockaddr*>(&address),
+                                         sizeof(address)) == 0;
         ::close(descriptor);
         return connected;
     };
     if (const auto wayland = set("WAYLAND_DISPLAY"); !wayland.empty()) {
         const auto runtime = set("XDG_RUNTIME_DIR");
         if (accepts(wayland.front() == '/' ? wayland
-                                           : runtime.empty() ? std::string()
-                                                             : runtime + '/' + wayland))
+                    : runtime.empty()      ? std::string()
+                                           : runtime + '/' + wayland))
             return true;
     }
     if (const auto display = set("DISPLAY"); !display.empty()) {
@@ -82,9 +81,8 @@ namespace bloom::ui::routeproof {
         // checked here.
         if (display.front() != ':')
             return true;
-        const auto number = display.substr(1, display.find('.') == std::string::npos
-                                                  ? std::string::npos
-                                                  : display.find('.') - 1);
+        const auto number = display.substr(
+            1, display.find('.') == std::string::npos ? std::string::npos : display.find('.') - 1);
         if (accepts("/tmp/.X11-unix/X" + number))
             return true;
     }

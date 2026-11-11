@@ -214,7 +214,8 @@ struct Authored final {
 
 template <typename Operation, typename... Arguments>
 commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
-    commands::Transaction transaction("Export revisions", authored.scripting->snapshot().revision());
+    commands::Transaction transaction("Export revisions",
+                                      authored.scripting->snapshot().revision());
     transaction.emplace<Operation>(std::forward<Arguments>(arguments)...);
     return authored.scripting->commandStack()->execute(std::move(transaction));
 }
@@ -298,7 +299,7 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
     checks.expect(edit<commands::CreateAnimationForParameter>(authored, authored.composition,
                                                               authored.positions.front(),
                                                               core::RationalTime{})
-                      .succeeded() &&
+                          .succeeded() &&
                       edit<commands::SetKeyframeAtTimeForParameter>(
                           authored, authored.composition, authored.positions.front(),
                           core::RationalTime::fromInteger(1), document::Vec2d{380.0, 210.0})
@@ -425,8 +426,7 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         }
     }
 
-    checks.expect(counters().cpuFallbacks == 0,
-                  prefix + "the Viewer frames took no CPU fallback");
+    checks.expect(counters().cpuFallbacks == 0, prefix + "the Viewer frames took no CPU fallback");
     checks.expect(!route.gpu || counters().nativeDispatches > 0,
                   prefix + "the Viewer frames ran on the device");
 
@@ -499,11 +499,10 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                                                 0.35 + 0.05 * static_cast<double>(step) +
                                                     0.02 * static_cast<double>(round),
                                                 QStringLiteral("Opacity"))
-                    : layer != 0 &&
-                          session.setParameterValue(
-                              authored->positions.at(layer),
-                              document::Vec2d{90.0 + 13.0 * nudge, 60.0 + 7.5 * nudge},
-                              QStringLiteral("Move"));
+                    : layer != 0 && session.setParameterValue(
+                                        authored->positions.at(layer),
+                                        document::Vec2d{90.0 + 13.0 * nudge, 60.0 + 7.5 * nudge},
+                                        QStringLiteral("Move"));
             checks.expect(edited || (step % 2 == 1 && layer == 0), label + "a small edit applies");
             const auto before = viewer.displayedFrameForTest();
             controller.requestRefresh();
@@ -565,9 +564,9 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     ram.beginShutdown();
     // Nothing of the exports stays admitted on the export provider's processing root.
     if (const auto policy = provider->processingPhasePolicy()) {
-        checks.expect(waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; },
-                                10s),
-                      prefix + "no export phase stays admitted after the last export");
+        checks.expect(
+            waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; }, 10s),
+            prefix + "no export phase stays admitted after the last export");
     }
     checks.expect(provider->shutdownAndWait(10s), prefix + "the export provider retires");
     if (reference != provider) {

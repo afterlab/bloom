@@ -30,17 +30,18 @@
 namespace bloom::runtime::detail {
 
 template <typename Emit, typename Charge, typename ChargeCoverage>
-[[nodiscard]] std::optional<GpuSceneLeafFailure> emitSolidCommand(
-    const CompiledSolid& solid, const CompiledCompositionPlan& plan,
-    const ResolvedEvaluation& resolved, const core::RationalTime time, const std::size_t index,
-    const OperationIndex operationIndex, const render::ImageWindow fullWindow,
-    const render::ImageWindow fullDisplayWindow, const core::PixelAspectRatio fullPixelAspect,
-    const double hScale, const double vScale, Emit&& emit, Charge&& charge,
-    ChargeCoverage&& chargeCoverage, std::vector<GpuSceneCommandIndex>& commandForOperation,
-    std::vector<std::string>& keyOf,
-    std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
-    std::vector<EvaluatedOperationBounds>& bounds,
-    std::vector<std::optional<GpuSceneVectorChain>>& vectors) {
+[[nodiscard]] std::optional<GpuSceneLeafFailure>
+emitSolidCommand(const CompiledSolid& solid, const CompiledCompositionPlan& plan,
+                 const ResolvedEvaluation& resolved, const core::RationalTime time,
+                 const std::size_t index, const OperationIndex operationIndex,
+                 const render::ImageWindow fullWindow, const render::ImageWindow fullDisplayWindow,
+                 const core::PixelAspectRatio fullPixelAspect, const double hScale,
+                 const double vScale, Emit&& emit, Charge&& charge, ChargeCoverage&& chargeCoverage,
+                 std::vector<GpuSceneCommandIndex>& commandForOperation,
+                 std::vector<std::string>& keyOf,
+                 std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
+                 std::vector<EvaluatedOperationBounds>& bounds,
+                 std::vector<std::optional<GpuSceneVectorChain>>& vectors) {
     const auto color = resolveParameter(solid.color, plan, resolved);
     const auto width = resolveParameter(solid.width, plan, resolved);
     const auto height = resolveParameter(solid.height, plan, resolved);
@@ -183,8 +184,8 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
     const double lastColumn = std::clamp(exactWidth - (w - 1.0), 0.0, 1.0);
     const double lastRow = std::clamp(exactHeight - (h - 1.0), 0.0, 1.0);
     if (!gpuGradient && (lastColumn != 1.0 || lastRow != 1.0)) {
-        const auto covered = [&pixel](const double coverage)
-            -> render::ImageResult<render::Rgba32f> {
+        const auto covered =
+            [&pixel](const double coverage) -> render::ImageResult<render::Rgba32f> {
             if (coverage == 1.0)
                 return render::ImageResult<render::Rgba32f>::success(*pixel.value());
             const auto base = *pixel.value();
@@ -202,9 +203,9 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         if (!right || !bottom || !corner)
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Solid edge coverage is invalid");
-        auto palette = std::make_shared<const std::vector<render::Rgba32f>>(
-            std::vector<render::Rgba32f>{*pixel.value(), *right.value(), *bottom.value(),
-                                         *corner.value()});
+        auto palette =
+            std::make_shared<const std::vector<render::Rgba32f>>(std::vector<render::Rgba32f>{
+                *pixel.value(), *right.value(), *bottom.value(), *corner.value()});
         OperationKey edgeKey;
         edgeKey.add(std::string{"gpu-solid-edge-v1"});
         for (const auto& value : *palette) {

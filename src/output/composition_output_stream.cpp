@@ -208,8 +208,7 @@ struct CompositionOutputStreamV1::State {
             std::shared_ptr<const media::audio::AudioBuffer> published;
             if (retainedClaim) {
                 const auto measured = measuredAudioBacking(*backing);
-                require(measured.has_value(), "Audio backing byte count overflows",
-                        Error::Busy);
+                require(measured.has_value(), "Audio backing byte count overflows", Error::Busy);
                 published = render::adoptProcessingHostBacking(
                     std::move(backing), retainedClaim->ownedHostPhase(), measured->allocated,
                     measured->initialized);

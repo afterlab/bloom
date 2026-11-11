@@ -44,8 +44,9 @@ std::vector<float> coded(const std::vector<float>& source) {
         const double sinc = x == 0 ? 1.0
                                    : std::sin(2 * std::numbers::pi * 16000.0 / kRate * x) /
                                          (2 * std::numbers::pi * 16000.0 / kRate * x);
-        taps[tap] = sinc * (0.5 - 0.5 * std::cos(2 * std::numbers::pi * n /
-                                                 (static_cast<double>(kTaps) - 1)));
+        taps[tap] =
+            sinc *
+            (0.5 - 0.5 * std::cos(2 * std::numbers::pi * n / (static_cast<double>(kTaps) - 1)));
         sum += taps[tap];
     }
     std::vector<float> out(source.size());
@@ -96,7 +97,8 @@ LossyAudioMeasure v2(const std::vector<float>& reference, const std::vector<floa
     // In blocks of an AAC frame, as the verifier feeds it.
     for (std::size_t at = 0; at < reference.size(); at += 1024U * kChannels) {
         const auto count = std::min<std::size_t>(1024U * kChannels, reference.size() - at);
-        compare.push(std::span(reference).subspan(at, count), std::span(decoded).subspan(at, count));
+        compare.push(std::span(reference).subspan(at, count),
+                     std::span(decoded).subspan(at, count));
     }
     return compare.finish();
 }
@@ -137,8 +139,7 @@ int main() {
     // Real defects at full level: both profiles refuse them.
     const auto late = v2(source, shifted(encoded, 1025));
     check(!late.failure.empty(), "a stream more than one AAC frame late is refused");
-    check(!v2(source, shifted(encoded, 64)).failure.empty(),
-          "a stream 64 frames late is refused");
+    check(!v2(source, shifted(encoded, 64)).failure.empty(), "a stream 64 frames late is refused");
     const auto other = coded(programAudio(1234, 1.19));
     check(!v2(source, other).failure.empty(), "another source is refused");
     check(!v2(source, std::vector<float>(source.size(), 0.0F)).failure.empty(),
@@ -156,8 +157,7 @@ int main() {
         std::fill(dropout.begin() + 10 * kRate * kChannels,
                   dropout.begin() + (10 * kRate + 4800) * kChannels, 0.0F);
         const auto measure = v2(source, dropout);
-        check(!measure.failure.empty() &&
-                  measure.failure.find("quieter") != std::string::npos,
+        check(!measure.failure.empty() && measure.failure.find("quieter") != std::string::npos,
               "a 100 ms dropout is refused as missing sound: " + measure.failure);
         auto hiss = encoded;
         Random random{5};

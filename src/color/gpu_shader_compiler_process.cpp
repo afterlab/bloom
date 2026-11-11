@@ -4,13 +4,13 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <functional>
-#include <optional>
-#include <string>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -28,8 +28,8 @@ std::optional<std::chrono::nanoseconds> runQueueWait(const std::string& path) {
     std::uint64_t waiting = 0;
     if (!(file >> running >> waiting))
         return std::nullopt;
-    return std::chrono::nanoseconds(static_cast<std::chrono::nanoseconds::rep>(
-        std::min<std::uint64_t>(
+    return std::chrono::nanoseconds(
+        static_cast<std::chrono::nanoseconds::rep>(std::min<std::uint64_t>(
             waiting, static_cast<std::uint64_t>(std::chrono::nanoseconds::max().count()))));
 }
 #endif
@@ -156,8 +156,7 @@ BoundedHash hashFileBounded(const std::string& path, const std::size_t ceiling,
                             const GpuShaderDeadline deadline,
                             const platform::ProcessCancellation& cancel) {
     return hashFileUntil(
-        path, ceiling, [deadline] { return std::chrono::steady_clock::now() >= deadline; },
-        cancel);
+        path, ceiling, [deadline] { return std::chrono::steady_clock::now() >= deadline; }, cancel);
 }
 
 ToolRun runProcess(const std::string& executable, const std::vector<std::string>& arguments,

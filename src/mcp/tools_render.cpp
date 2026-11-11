@@ -341,10 +341,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     // is never written with a token in its name.
     const auto requested = expandedDestination(requestedText, *composition, mapping->builtIn,
                                                compositionExport ? "MCP export" : "MCP render");
-    const auto destination =
-        renderDestination(requested, presetName, presetExtension(presetName), range, first,
-                          stillPreset, false)
-            .path;
+    const auto destination = renderDestination(requested, presetName, presetExtension(presetName),
+                                               range, first, stillPreset, false)
+                                 .path;
     std::optional<output::OutputPresetV1> preset;
     constexpr std::array presets{output::OutputPresetV1::PngRgba8SrgbV1,
                                  output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
@@ -618,8 +617,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Audio sample rate is outside 8000..192000");
         request.settings.audioSampleRate = static_cast<std::uint32_t>(value);
     }
-    const auto destination = renderDestination(requested, presetName, found.extension, range,
-                                               first, found.still, true);
+    const auto destination =
+        renderDestination(requested, presetName, found.extension, range, first, found.still, true);
     if (destination.pattern)
         request.settings.naming.pattern = *destination.pattern;
     request.destination =

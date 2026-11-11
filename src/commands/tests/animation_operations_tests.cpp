@@ -298,14 +298,15 @@ void testKeyEqualToConstantCreatesTheKey(TestContext& test) {
                     keyed.outputId<document::AnimationCurveId>(kAnimationCurveOutput).has_value() &&
                     keyed.outputId<document::KeyframeId>(kKeyframeOutput).has_value(),
                 "keying a value equal to the constant applies and reports the curve and the key");
-    const auto* source =
-        std::get_if<document::AnimationCurveSource>(&parameter(document.snapshot(), kOpacityId).source);
+    const auto* source = std::get_if<document::AnimationCurveSource>(
+        &parameter(document.snapshot(), kOpacityId).source);
     test.expect(source != nullptr, "the parameter is animated after a key equal to its constant");
     if (source == nullptr)
         return;
     const auto curveId = source->curveId;
     test.expect(scalarCurve(document.snapshot(), curveId).keyframes.size() == 1 &&
-                    scalarCurve(document.snapshot(), curveId).keyframes.front().time == time(0, 1) &&
+                    scalarCurve(document.snapshot(), curveId).keyframes.front().time ==
+                        time(0, 1) &&
                     scalarCurve(document.snapshot(), curveId).keyframes.front().value == constant,
                 "the key equal to the constant exists at its time");
 
@@ -333,11 +334,10 @@ void testKeyEqualToConstantCreatesTheKey(TestContext& test) {
                                                  kFixtureSolidColor);
     const auto colorKeyed = colorStack.execute(std::move(color));
     const auto colorCurve = colorKeyed.outputId<document::AnimationCurveId>(kAnimationCurveOutput);
-    test.expect(colorKeyed.changed() && colorCurve.has_value() &&
-                    color4Curve(colorDocument.snapshot(), *colorCurve)
-                            .components[0]
-                            .keyframes.size() == 1,
-                "keying a colour equal to the constant creates its component keys");
+    test.expect(
+        colorKeyed.changed() && colorCurve.has_value() &&
+            color4Curve(colorDocument.snapshot(), *colorCurve).components[0].keyframes.size() == 1,
+        "keying a colour equal to the constant creates its component keys");
 }
 
 void testComponentKeyOperations(TestContext& test) {

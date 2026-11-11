@@ -273,7 +273,8 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
     }
     authored.lut = assets.front().id;
 
-    checks.expect(edit<commands::AddSolidLayer>(authored, authored.composition, std::string("Solid"),
+    checks.expect(edit<commands::AddSolidLayer>(authored, authored.composition,
+                                                std::string("Solid"),
                                                 core::Color4d{0.8, 0.3, 0.1, 1.0})
                       .succeeded(),
                   "the solid layer is added");
@@ -307,12 +308,12 @@ parameterOf(const Authored& authored, const document::NodeId node, const std::st
                       document::NodeInputRef{*transform, "input"})
                       .succeeded(),
                   "the solid feeds the File Transform");
-    checks.expect(edit<commands::ConnectPorts>(
-                      authored, authored.composition, document::OutputPortRef{*transform, "image"},
-                      document::NodeInputRef{layer,
-                                             std::string(document::kLayerOutputContentInputPort)})
-                      .succeeded(),
-                  "the File Transform feeds the layer");
+    checks.expect(
+        edit<commands::ConnectPorts>(
+            authored, authored.composition, document::OutputPortRef{*transform, "image"},
+            document::NodeInputRef{layer, std::string(document::kLayerOutputContentInputPort)})
+            .succeeded(),
+        "the File Transform feeds the layer");
     checks.expect(authored.session->setNodeParameterValue(
                       *transform, "lut", static_cast<std::int64_t>(authored.lut.value()),
                       QStringLiteral("Select LUT")),
@@ -453,16 +454,14 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         }
     }
 
-    checks.expect(counters().cpuFallbacks == 0,
-                  prefix + "the Viewer frames took no CPU fallback");
+    checks.expect(counters().cpuFallbacks == 0, prefix + "the Viewer frames took no CPU fallback");
     checks.expect(!route.gpu || counters().nativeDispatches > 0,
                   prefix + "the Viewer frames ran on the device");
     // The picture moves with the keys, and the frame past the last key holds it.
     checks.expect(shown[1].rgba != shown[0].rgba && shown[1].rgba != shown[2].rgba &&
                       shown[2].rgba != shown[0].rgba,
                   prefix + "the keyed color changes the picture in the Viewer");
-    checks.expect(shown[3].rgba == shown[2].rgba,
-                  prefix + "the last key holds the picture");
+    checks.expect(shown[3].rgba == shown[2].rgba, prefix + "the last key holds the picture");
     // CPU against GPU: the CPU route runs first and keeps its frames.
     for (std::size_t index = 0; index < kFrames.size(); ++index) {
         if (!route.gpu) {
@@ -630,7 +629,8 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                    displayed->provenance().provider == expectedProvider &&
                    viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current;
         });
-        checks.expect(ready, label + ": the Viewer displays a current frame from the expected route");
+        checks.expect(ready,
+                      label + ": the Viewer displays a current frame from the expected route");
         const Pixels viewed = pixelsOf(viewer.displayedFrameForTest());
         const auto still = workDir / (std::string(route.name) + "-" + file + ".png");
         const auto result =

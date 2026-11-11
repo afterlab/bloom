@@ -78,8 +78,8 @@ compositeStatusRejected(const render::GpuCompositeDiagnostic& diagnostic) noexce
 [[nodiscard]] std::string describeWindow(const std::optional<render::ImageWindow>& window) {
     if (!window)
         return "none";
-    return "[" + std::to_string(window->originX()) + "," + std::to_string(window->originY()) +
-           " " + std::to_string(window->extent().width()) + "x" +
+    return "[" + std::to_string(window->originX()) + "," + std::to_string(window->originY()) + " " +
+           std::to_string(window->extent().width()) + "x" +
            std::to_string(window->extent().height()) + "]";
 }
 
@@ -132,7 +132,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
                              std::to_string(scene->commands()[step.command].index());
         detail += "; expected data " +
                   (expected ? describeWindow(expected->data) : std::string("unknown")) +
-                  " display " + (expected ? describeWindow(expected->display) : std::string("unknown"));
+                  " display " +
+                  (expected ? describeWindow(expected->display) : std::string("unknown"));
         detail += "; produced data " + describeWindow(produced.dataWindow()) + " display " +
                   describeWindow(produced.displayWindow());
         if (inputImage != nullptr)

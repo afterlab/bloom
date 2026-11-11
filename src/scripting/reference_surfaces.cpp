@@ -621,7 +621,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
                      "encoder and fails if it cannot; software uses Bloom's FFmpeg encoder; "
                      "hardware fails without a system or GPU encoder.",
           .defaultValue = "automatic",
-          .choices = {{"automatic", "The system's encoder for ProRes, the best available otherwise"},
+          .choices = {{"automatic",
+                       "The system's encoder for ProRes, the best available otherwise"},
                       {"software", "Bloom's FFmpeg encoder"},
                       {"hardware", "A system or GPU encoder, or the export fails"}}},
          {.name = "overwrite",
@@ -634,9 +635,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
                       {"refuse", "Fail when a file exists"}}},
          {.name = "workerMemoryCapBytes",
           .type = "integer",
-          .summary = "Opt-in cap on the encode worker's memory: at the cap the export waits for the "
-                     "worker, and fails with a message if it cannot go on. 0 is no cap. Not given "
-                     "uses the saved Preferences value.",
+          .summary =
+              "Opt-in cap on the encode worker's memory: at the cap the export waits for the "
+              "worker, and fails with a message if it cannot go on. 0 is no cap. Not given "
+              "uses the saved Preferences value.",
           .unit = "bytes",
           .range = "0..1099511627776",
           .defaultValue = "the Preferences value (no cap)"},

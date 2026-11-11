@@ -139,9 +139,8 @@ int main(int argc, char** argv) {
     double widest = 0;
     for (std::size_t second = 0; second < kFrames / kRate; ++second)
         for (std::size_t channel = 0; channel < kChannels; ++channel) {
-            const double difference =
-                std::abs(decibels(decoded, second * kRate, kRate, channel) -
-                         decibels(source, second * kRate, kRate, channel));
+            const double difference = std::abs(decibels(decoded, second * kRate, kRate, channel) -
+                                               decibels(source, second * kRate, kRate, channel));
             widest = std::max(widest, difference);
         }
     check(widest <= 1.0, "every second's level is within 1 dB of the source: widest " +

@@ -265,11 +265,9 @@ GpuShaderCompiler::GpuShaderCompiler(std::size_t maxCacheEntries, std::size_t ma
 
 GpuShaderCompiler::~GpuShaderCompiler() = default;
 
-GpuShaderCompiler::ToolResolution
-GpuShaderCompiler::resolveTool(const std::string& role, const std::string& path,
-                               const GpuShaderCompileLimits& limits,
-                               gpu_shader_detail::ScheduledDeadline& deadline,
-                               const GpuShaderCancellation& cancel) {
+GpuShaderCompiler::ToolResolution GpuShaderCompiler::resolveTool(
+    const std::string& role, const std::string& path, const GpuShaderCompileLimits& limits,
+    gpu_shader_detail::ScheduledDeadline& deadline, const GpuShaderCancellation& cancel) {
     ToolResolution result;
     if (cancel && cancel()) {
         result.error = GpuShaderCompileError::Cancelled;

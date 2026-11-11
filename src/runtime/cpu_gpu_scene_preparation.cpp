@@ -754,8 +754,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (const auto error = detail::emitSolidCommand(
                     *solid, *plan, resolved, *operandTime, index, operationIndex, fullWindow,
                     fullDisplayWindow, fullPixelAspect, hScale, vScale, emit, chargeTransient,
-                    chargeCoverage, commandForOperation, keyOf, outputWindowOf, bounds,
-                    vectors)) {
+                    chargeCoverage, commandForOperation, keyOf, outputWindowOf, bounds, vectors)) {
                 return fail(error->code, error->message);
             }
             continue;
