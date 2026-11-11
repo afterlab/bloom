@@ -841,11 +841,7 @@ struct Opened final {
 // ---------------------------------------------------------------------------------------------
 // Decoded frames.
 
-// Holds one decoded picture's planes in the layout the conversion takes.
-struct Planes final {
-    PlanarFrame frame;
-    std::array<std::vector<std::uint8_t>, 4> storage;
-};
+using Planes = DecodedPlanes;
 
 // 16-bit words from `source` (`shift` drops the padding below the significant bits).
 void copyWords(const std::uint8_t* source, const std::size_t sourceStride, const std::size_t first,
@@ -877,7 +873,7 @@ void copyBytes(const std::uint8_t* source, const std::size_t sourceStride, const
 
 // The planes of a locked pixel buffer. Every layout the decoders return for the streams this
 // reader accepts is listed; any other is refused rather than converted by the framework.
-[[nodiscard]] Planes planes(const CVPixelBufferRef buffer, const VideoTrack& video) {
+[[nodiscard]] Planes planesOf(const CVPixelBufferRef buffer, const VideoTrack& video) {
     Planes result;
     auto& frame = result.frame;
     frame.width = static_cast<std::uint32_t>(CVPixelBufferGetWidth(buffer));
@@ -1251,7 +1247,7 @@ struct Reader::State final {
         opened.reset();
     }
 
-    provider::Payload video(const provider::CallRequest& request) {
+    DecodedPlanes decode(const provider::CallRequest& request) {
         auto& source = this->source(request);
         const auto found = source.described.video.find(request.stream);
         require(found != source.described.video.end(), "Stream does not exist",
@@ -1276,14 +1272,21 @@ struct Reader::State final {
                     kCVReturnSuccess,
                 "Decoded picture is not readable");
         const Release release{buffer};
-        provider::FrameProduct product;
-        product.pts = reduced(track.samples[target].pts - track.start, track.timescale);
-        product.colour = track.colour;
-        auto decoded = planes(buffer, track);
+        auto decoded = planesOf(buffer, track);
+        decoded.pts = reduced(track.samples[target].pts - track.start, track.timescale);
+        decoded.colour = track.colour;
         // The decoder's range is the stream's; an undeclared range decodes as limited.
         require(decoded.frame.fullRange == (track.colour.range == 2),
                 "Decoded range does not match the stream's declared range",
                 Error::IdentityMismatch);
+        return decoded;
+    }
+
+    provider::Payload video(const provider::CallRequest& request) {
+        const auto decoded = decode(request);
+        provider::FrameProduct product;
+        product.pts = decoded.pts;
+        product.colour = decoded.colour;
         auto converted = converter.convert(decoded.frame, product);
         if (const auto* error = std::get_if<Unavailable>(&converted))
             throw *error;
@@ -1434,6 +1437,20 @@ struct Reader::State final {
 };
 
 Reader::Reader() : state_(std::make_unique<State>()) {}
+
+provider::Result<DecodedPlanes> Reader::planes(const provider::CallRequest& request) {
+    @autoreleasepool {
+        try {
+            return state_->decode(request);
+        } catch (const Unavailable& error) {
+            state_->reset();
+            return error;
+        } catch (const std::bad_alloc&) {
+            state_->reset();
+            return Unavailable{Error::Oversized, "Media allocation limit"};
+        }
+    }
+}
 Reader::~Reader() = default;
 
 provider::Payload Reader::call(const provider::CallRequest& request) {

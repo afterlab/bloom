@@ -1,5 +1,7 @@
 #include <bloom/media/provider/videotoolbox_manifest.hpp>
 
+#include <string_view>
+
 namespace bloom::media::provider {
 
 Handshake videoToolboxHandshake(const bool hardwareEncoder) {
@@ -78,17 +80,18 @@ Handshake videoToolboxHandshake(const bool hardwareEncoder) {
     };
     for (const auto* profile : {"proxy", "lt", "422", "hq", "4444", "4444xq"}) {
         auto* declaration = encode(Role::VideoEncode, "prores", "mov", profile);
-        declaration->capability.bitDepth = 10;
-        declaration->capability.chroma = "422";
-        declaration->capability.range = "full";
-        declaration->capability.colorFeatures = "rec709-display-referred";
+        const bool four = std::string_view(profile).starts_with("4444");
+        declaration->capability.bitDepth = four ? 12 : 10;
+        declaration->capability.chroma = four ? "4444" : "422";
+        declaration->capability.range = "limited";
+        declaration->capability.colorFeatures = "h273-export-tags";
     }
     {
         auto* declaration = encode(Role::VideoEncode, "h264", "mov", "high");
         declaration->capability.bitDepth = 8;
         declaration->capability.chroma = "yuv420p";
-        declaration->capability.range = "limited";
-        declaration->capability.colorFeatures = "rec709-display-referred";
+        declaration->capability.range = "stream-declared";
+        declaration->capability.colorFeatures = "h273-export-tags";
     }
     for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"})
         encode(Role::AudioEncode, codec, "apple-muxers-v1", "source-rate");

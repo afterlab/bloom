@@ -28,11 +28,25 @@
 // more than two audio channels, and a snapshot on a system older than macOS 14 (which cannot name
 // a descriptor's media type).
 
+#include "videotoolbox_layout.hpp"
+
 #include <bloom/media/provider/protocol.hpp>
 
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace bloom::media::videotoolbox {
+
+// One decoded picture as the decoder returned it, before the layout conversion: `frame` points
+// into `storage`.
+struct DecodedPlanes final {
+    PlanarFrame frame;
+    std::array<std::vector<std::uint8_t>, 4> storage;
+    provider::Rational pts;
+    provider::ColourTags colour;
+};
 
 class Reader final {
   public:
@@ -44,6 +58,10 @@ class Reader final {
     // One read call. The opened source, its sample tables and the decoder are kept between calls
     // for the same source, so a retained worker continues where the previous frame ended.
     [[nodiscard]] provider::Payload call(const provider::CallRequest& request);
+
+    // A VideoDecode request answered with the decoder's own planes. The export check compares
+    // them in the sampling the stream declares.
+    [[nodiscard]] provider::Result<DecodedPlanes> planes(const provider::CallRequest& request);
 
   private:
     struct State;

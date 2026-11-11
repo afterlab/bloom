@@ -71,6 +71,10 @@ struct EncodeQcV1 {
     // reopen check instead of being reported as an adjustment.
     std::string profile;
     std::uint32_t bitDepth = 0;
+    // Issue #455: the encoder that produced the video stream, as the worker knows it: the system
+    // encoder's name and whether it is a hardware one on macOS, the codec implementation's name
+    // in the FFmpeg worker. Empty when there is no video stream.
+    std::string encoder;
 };
 inline constexpr std::uint32_t kEncodeChunkBytes = 1024U * 1024U;
 // v2 compared against the reference taken through the stream's declared sample format, matrix,

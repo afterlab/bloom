@@ -46,6 +46,10 @@ struct PlanarFrame final {
 
 [[nodiscard]] bool layoutConversionAvailable() noexcept;
 
+// The FFmpeg pixel format (an AVPixelFormat value) of planes laid out as `frame`, or -1 when
+// there is none or the build has no FFmpeg package.
+[[nodiscard]] int ffmpegPixelFormat(const PlanarFrame& frame) noexcept;
+
 // Keeps the conversion's state between frames of one stream.
 class LayoutConverter final {
   public:

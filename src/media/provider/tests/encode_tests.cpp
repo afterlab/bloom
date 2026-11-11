@@ -104,6 +104,22 @@ AudioBlock sound(const EncodeSettingsV1& settings, std::uint64_t offset, std::ui
                     : static_cast<float>(static_cast<int>((offset + i + c) % 997) - 498) / 1024.0F;
     return block;
 }
+// A provider ahead of FFmpeg in the platform's chain that does not declare the codec is passed
+// over (ADR 0035); that is not a refusal. These two read provenance past such entries.
+bool passedOver(const MediaProviderFallbackV1& fallback) {
+    return fallback.cause == MediaFallbackCauseV1::NotDeclared;
+}
+// The FFmpeg worker served it and nothing was tried before it.
+bool servedByFfmpegAlone(const MediaProviderProvenanceV1& served) {
+    return served.provider == kFfmpegProviderId &&
+           std::ranges::all_of(served.fallbacks, passedOver);
+}
+// The FFmpeg worker served it after `refused`, the first provider that was tried, gave it up.
+bool servedByFfmpegAfter(const MediaProviderProvenanceV1& served, const std::string_view refused) {
+    const auto tried = std::ranges::find_if_not(served.fallbacks, passedOver);
+    return served.provider == kFfmpegProviderId && tried != served.fallbacks.end() &&
+           tried->provider == refused;
+}
 Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destination,
           EncodeSessionOptionsV1 options = {}, MediaProviderProvenanceV1* provenance = nullptr,
           EncodeQcV1* reopened = nullptr) {
@@ -316,8 +332,14 @@ void tests(const std::filesystem::path& directory) {
     {
         MediaProviderProvenanceV1 served;
         (void)run(settings, directory / "export-h264.mov", {}, &served);
-        test::check(served.provider == kFfmpegProviderId && !served.fellBack(),
+#if defined(__APPLE__)
+        // ADR 0035: the system encoder is ahead of FFmpeg in the macOS chain.
+        test::check(served.provider == nativeMediaProviderId() && !served.fellBack(),
+                    "H.264 is served by the system encoder on macOS");
+#else
+        test::check(servedByFfmpegAlone(served),
                     "software H.264 is served by the FFmpeg worker's bundled OpenH264");
+#endif
         auto mp4 = settings;
         mp4.container = "mp4";
         mp4.audioCodec = "aac";
@@ -340,9 +362,14 @@ void tests(const std::filesystem::path& directory) {
         vaapi.vaapi = true;
         MediaProviderProvenanceV1 served;
         (void)run(absent, directory / "export-h264-fallback.mov", std::move(vaapi), &served);
-        test::check(served.provider == kFfmpegProviderId && served.fellBack() &&
-                        served.fallbacks.front().provider == kFfmpegVaapiProviderId,
+#if defined(__APPLE__)
+        // There is no VA-API on macOS; the request is served like any other H.264 export.
+        test::check(served.provider == nativeMediaProviderId(),
+                    "an H.264 export that asks for VA-API is served by the system encoder");
+#else
+        test::check(servedByFfmpegAfter(served, kFfmpegVaapiProviderId),
                     "H.264 falls back from VA-API to the bundled OpenH264 silently");
+#endif
     }
     // HEVC ships with Bloom too: the bundled Kvazaar encodes Main in MOV and MP4 with its 8-bit
     // build and Main 10 with its 10-bit build (#408), the requested profile choosing the build. It
@@ -354,7 +381,7 @@ void tests(const std::filesystem::path& directory) {
         hevc.profile = "main";
         MediaProviderProvenanceV1 served;
         (void)run(hevc, directory / "export-hevc.mov", {}, &served);
-        test::check(served.provider == kFfmpegProviderId && !served.fellBack(),
+        test::check(servedByFfmpegAlone(served),
                     "software HEVC is served by the FFmpeg worker's bundled Kvazaar");
         auto mp4 = hevc;
         mp4.container = "mp4";
@@ -378,8 +405,8 @@ void tests(const std::filesystem::path& directory) {
             MediaProviderProvenanceV1 tenServed;
             (void)run(request, directory / (std::string("export-hevc-main10.") + container), {},
                       &tenServed, &delivered);
-            test::check(tenServed.provider == kFfmpegProviderId && !tenServed.fellBack() &&
-                            delivered.profile == "Main 10" && delivered.bitDepth == 10 &&
+            test::check(servedByFfmpegAlone(tenServed) && delivered.profile == "Main 10" &&
+                            delivered.bitDepth == 10 &&
                             delivered.container == std::string(container) + "/hevc" &&
                             delivered.colour == ColourTags{1, 1, 1, 1},
                         "software HEVC Main 10 is delivered as 10-bit Main 10 by the bundled "
@@ -425,8 +452,7 @@ void tests(const std::filesystem::path& directory) {
         vaapi.vaapi = true;
         MediaProviderProvenanceV1 fell;
         (void)run(absent, directory / "export-hevc-fallback.mov", std::move(vaapi), &fell);
-        test::check(fell.provider == kFfmpegProviderId && fell.fellBack() &&
-                        fell.fallbacks.front().provider == kFfmpegVaapiProviderId,
+        test::check(servedByFfmpegAfter(fell, kFfmpegVaapiProviderId),
                     "HEVC falls back from VA-API to the bundled Kvazaar silently");
         // A Main 10 request falls back to the 10-bit Kvazaar and is still Main 10.
         absent.profile = "main10";
@@ -435,7 +461,7 @@ void tests(const std::filesystem::path& directory) {
         if (main10Served) {
             (void)run(absent, directory / "export-hevc-main10-fallback.mov", std::move(vaapi10),
                       &fell, &delivered);
-            test::check(fell.provider == kFfmpegProviderId && fell.fellBack() &&
+            test::check(servedByFfmpegAfter(fell, kFfmpegVaapiProviderId) &&
                             delivered.profile == "Main 10" && delivered.bitDepth == 10,
                         "HEVC Main 10 falls back from VA-API to the 10-bit Kvazaar as Main 10");
         }
@@ -459,7 +485,7 @@ void tests(const std::filesystem::path& directory) {
             (void)run(web, directory / (name + ".webm"), {}, &served, &delivered);
             const bool ten = std::string_view(depth) == "10bit";
             test::check(
-                served.provider == kFfmpegProviderId && !served.fellBack() &&
+                servedByFfmpegAlone(served) &&
                     delivered.container == std::string("webm/") + codec &&
                     delivered.bitDepth == (ten ? 10U : 8U) &&
                     delivered.profile == (std::string_view(codec) == "av1" ? "Main"
@@ -902,8 +928,8 @@ void workerMemoryCap() {
         options.memorySettle = std::chrono::seconds(30);
         options.memorySampler = [&samples](std::int64_t) {
             ++samples;
-            return std::optional(bloom::platform::ProcessMemory{(samples >= 2 && samples <= 4 ? 150 : 50) * mib,
-                                                         150 * mib});
+            return std::optional(bloom::platform::ProcessMemory{
+                (samples >= 2 && samples <= 4 ? 150 : 50) * mib, 150 * mib});
         };
         EncodeSessionV1 session(options);
         ok(session.begin(settings));

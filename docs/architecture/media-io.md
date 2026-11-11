@@ -268,6 +268,39 @@ The worker links the bundled FFmpeg's libswscale and libavutil for that one layo
 developer build without the FFmpeg package has no such conversion, and its reader serves only
 limited-range 8-bit 4:2:0 video.
 
+### The macOS encoder (issues #455 and #438)
+
+On macOS, H.264 (High) and ProRes in MOV and MP4 are encoded by the system encoder through
+AVAssetWriter (`apps/bloom-media-worker/videotoolbox_provider.mm`); every other codec and container
+is not declared by this provider and goes to FFmpeg.
+
+- **Samples.** The frame's RGBA16 is converted to the stream's own Y'CbCr sampling by the FFmpeg
+  worker's output conversion (the same libswscale call, under the export's matrix, range and
+  left chroma siting), and the system encoder is handed those samples: 16-bit 4:2:2 for ProRes
+  422, 16-bit 4:4:4 with the frame's own alpha for ProRes 4444, 8-bit 4:2:0 for H.264. The system
+  framework converts no color.
+- **Tags and rate.** The color tags are the export's (`EncodeSettingsV1::colour`), so Display P3,
+  BT.2020, PQ and HLG outputs are tagged as such; a code point the system cannot write is refused
+  and FFmpeg serves the export. H.264 uses the requested bit rate. Every frame carries its own
+  duration and the track's time scale is the frame rate, so no timestamp is rounded.
+- **Encoder.** The encoder is chosen from the system's encoder list (a hardware one when the
+  computer has it) and asked for by its identifier. Its name and whether it is hardware are
+  returned in `EncodeQcV1::encoder` and recorded in the export evidence's version field.
+- **Audio.** The system writer accepts video only while audio keeps up, and the reverse, so frames
+  and audio blocks wait in the worker (frames up to 256 MiB) until the writer takes them.
+- **Reopen check.** The finished file is reopened with the macOS reader and checked under the same
+  tolerance profile v3 as the FFmpeg worker: frame count, rate, duration, stream layout, the
+  first and last frames compared in the sampling the reopened stream declares, the maximum gated
+  after each frame's largest 0.01% of color samples are set aside, the mean, and alpha for the
+  4444 profiles. The system encoder writes a 4444 stream without an alpha channel when every
+  frame is opaque; such a stream is compared with an opaque picture.
+
+A build without the FFmpeg package has no macOS encoder, because the conversion and the check are
+libswscale's.
+
+Published saves on macOS are flushed with `F_FULLFSYNC` (the staged file and its directory), which
+asks the drive to write its own cache out; a file system without it gets `fsync`.
+
 Worker generations sit beside the application: `libexec/bloom/media/<generation>/` on Linux,
 `Bloom.app/Contents/libexec/bloom/media/<generation>/` on macOS, and
 `<Bloom.exe dir>\media\<generation>\` on Windows, located from the executable the operating

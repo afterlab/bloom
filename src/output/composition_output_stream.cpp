@@ -559,7 +559,10 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
         }
         evidence.pipeline = checked(digest(pipeline));
         evidence.tool = hello.execution.provider;
-        evidence.version = videotoolbox ? std::string("VideoToolbox") : hello.execution.sdk;
+        // On macOS the version names the system encoder that ran (issue #455).
+        evidence.version =
+            videotoolbox ? std::string("VideoToolbox") + (qc.encoder.empty() ? "" : " " + qc.encoder)
+                         : hello.execution.sdk;
         evidence.profile = "media4-export-v1";
         evidence.coverage = "all frame timestamps/count; stream layout; duration; first/last "
                             "pixels; every PCM sample; staged digest";

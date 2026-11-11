@@ -1,16 +1,15 @@
 #include "gpu_route_proof_export_support.hpp"
 
-#include <tuple>
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <bloom/core/file_uri.hpp>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/frame_range_runner.hpp>
@@ -45,6 +44,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
 #include <vector>
 using namespace bloom;
@@ -562,13 +562,11 @@ void testCapacityWait(Fixture& f, const std::filesystem::path& directory, const 
 void testRetentionOnlyCapacityWaitStalls() {
     using Wait = host::OutputAnalysisCapacityWaitV1;
     auto policy = capacityPolicy(768ULL * 1024 * 1024);
-    auto granted = policy->reserve({.pixels = 1,
-                                    .metadataBytes = 72,
-                                    .sourceFree = true,
-                                    .native = false});
+    auto granted =
+        policy->reserve({.pixels = 1, .metadataBytes = 72, .sourceFree = true, .native = false});
     check(granted.lease != nullptr, "retention wait: a phase is admitted");
-    auto cached = render::adoptProcessingHostBacking(
-        std::make_unique<std::array<std::byte, 80>>(), granted.lease, 80, 80);
+    auto cached = render::adoptProcessingHostBacking(std::make_unique<std::array<std::byte, 80>>(),
+                                                     granted.lease, 80, 80);
     const auto t0 = Wait::Clock::now();
     Wait active;
     active.refused(t0, policy.get(), 0);
@@ -1101,7 +1099,13 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
                   result.gpuNativeDispatches == 0 && result.gpuReadbacks == 0,
               "null-provider default preserves complete actual CPU output with no GPU provenance");
         // The encoder implementation token is its own field (#439), never the review note.
-        check(result.encoder == (preset == output::OutputPresetV1::ProResMovV1 ? "ffmpeg-prores"
+        // ProRes is encoded by the system encoder on macOS (ADR 0035) and by FFmpeg elsewhere.
+#if defined(__APPLE__)
+        const std::string_view proresEncoder = "videotoolbox";
+#else
+        const std::string_view proresEncoder = "ffmpeg-prores";
+#endif
+        check(result.encoder == (preset == output::OutputPresetV1::ProResMovV1  ? proresEncoder
                                  : preset == output::OutputPresetV1::DnxhrMxfV1 ? "ffmpeg-dnxhr"
                                                                                 : ""),
               "encoder token for the ProRes, DNxHR and PCM routes");
@@ -1112,9 +1116,15 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
                   "required ProRes evidence wording");
         }
     }
-    // Software delivery routes report their bundled encoder, not the implementation note.
+    // Delivery routes report the encoder that ran, not the implementation note: the bundled
+    // software encoders, and for H.264 on macOS the system encoder (ADR 0035).
+#if defined(__APPLE__)
+    const char* const h264Encoder = "videotoolbox";
+#else
+    const char* const h264Encoder = "openh264";
+#endif
     for (const auto& [preset, name, token] :
-         {std::tuple{output::OutputPresetV1::H264Mp4V1, "token-h264.mp4", "openh264"},
+         {std::tuple{output::OutputPresetV1::H264Mp4V1, "token-h264.mp4", h264Encoder},
           std::tuple{output::OutputPresetV1::HevcMp4V1, "token-hevc.mp4", "kvazaar"},
           std::tuple{output::OutputPresetV1::Vp9WebmV1, "token-vp9.webm", "libvpx"},
           std::tuple{output::OutputPresetV1::Av1WebmV1, "token-av1.webm", "svt-av1"}}) {
@@ -1204,8 +1214,8 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
               crashed.failure->reason == media::provider::Error::Crashed &&
               !std::filesystem::exists(directory / "crash.mov"),
           "crash publishes nothing");
-    check(crashed.failure && crashed.failure->detail.find("Media worker exited") !=
-                                 std::string::npos,
+    check(crashed.failure &&
+              crashed.failure->detail.find("Media worker exited") != std::string::npos,
           "a crashed export worker is named in the failure");
     verify(f.run(f.request(directory / "retry.mov", output::OutputPresetV1::ProResMovV1)),
            directory / "retry.mov", true);

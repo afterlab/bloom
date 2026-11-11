@@ -90,6 +90,9 @@ struct LayoutConverter::State final {
 };
 
 bool layoutConversionAvailable() noexcept { return true; }
+int ffmpegPixelFormat(const PlanarFrame& frame) noexcept {
+    return static_cast<int>(pixelFormat(frame));
+}
 
 provider::Result<std::monostate> LayoutConverter::convert(const PlanarFrame& frame,
                                                           provider::FrameProduct& product) {
@@ -176,6 +179,7 @@ provider::Result<std::monostate> LayoutConverter::convert(const PlanarFrame& fra
 struct LayoutConverter::State final {};
 
 bool layoutConversionAvailable() noexcept { return false; }
+int ffmpegPixelFormat(const PlanarFrame&) noexcept { return -1; }
 
 provider::Result<std::monostate> LayoutConverter::convert(const PlanarFrame& frame,
                                                           provider::FrameProduct& product) {

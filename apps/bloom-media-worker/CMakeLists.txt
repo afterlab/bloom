@@ -177,7 +177,8 @@ if(APPLE)
         BLOOM_MEDIA_OS="${CMAKE_SYSTEM_NAME}" BLOOM_MEDIA_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
     add_library(bloom_media_videotoolbox_worker_provider STATIC
                 videotoolbox_provider.mm videotoolbox_reader.mm videotoolbox_layout.cpp)
-    set_source_files_properties(videotoolbox_reader.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(videotoolbox_reader.mm videotoolbox_provider.mm
+                                PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_include_directories(bloom_media_videotoolbox_worker_provider
                                PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(bloom_media_videotoolbox_worker_provider
@@ -188,8 +189,10 @@ if(APPLE)
     if(bloom_ffmpeg_worker)
         target_compile_definitions(bloom_media_videotoolbox_worker_provider
                                    PRIVATE BLOOM_VIDEOTOOLBOX_LAYOUT_CONVERSION)
+        # The encoder's output conversion and reopen check are the FFmpeg worker's.
         target_link_libraries(bloom_media_videotoolbox_worker_provider
-                              PRIVATE FFmpeg::swscale FFmpeg::avutil)
+                              PRIVATE bloom_media_ffmpeg_reopen_compare FFmpeg::swscale
+                                      FFmpeg::avutil)
     endif()
     bloom_enable_warnings(bloom_media_videotoolbox_worker_provider)
     target_compile_options(bloom_media_videotoolbox_worker_provider

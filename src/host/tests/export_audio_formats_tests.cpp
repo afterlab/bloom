@@ -347,6 +347,22 @@ std::string audioCodecOf(const std::filesystem::path& path) {
                                         {"A_OPUS", "opus"}})
         if (bytes.find(marker) != std::string::npos)
             return codec;
+    // QuickTime's general PCM sample entry ('lpcm', sound description version 2), which the macOS
+    // writer uses: the sample size and the format flags are fields of the description.
+    if (const auto entry = bytes.find("lpcm");
+        entry != std::string::npos && entry + 60 <= bytes.size()) {
+        const auto field = [&](const std::size_t offset) {
+            std::uint32_t value = 0;
+            for (std::size_t index = 0; index < 4; ++index)
+                value =
+                    (value << 8U) | static_cast<unsigned char>(bytes[entry + 4 + offset + index]);
+            return value;
+        };
+        const auto bits = field(48), flags = field(52);
+        const bool floating = (flags & 1U) != 0, bigEndian = (flags & 2U) != 0;
+        return std::string(floating ? "pcm_f" : "pcm_s") + std::to_string(bits) +
+               (bigEndian ? "be" : "le");
+    }
     return {};
 }
 
@@ -585,16 +601,14 @@ void testUndecodableSourceIsRefusedBeforeRendering() {
         expect(output.availability.code == host::ExportAvailabilityCode::AudioSourceUnsupported &&
                    output.availability.reason == expectedReason,
                file + ": the output is unavailable for the source");
-        expect(std::ranges::any_of(output.preflight,
-                                   [&](const auto& issue) {
-                                       return issue.code ==
-                                                  host::ExportPreflightCode::
-                                                      AudioSourceUnsupported &&
-                                              issue.target == host::ExportPreflightTarget::Audio &&
-                                              issue.severity ==
-                                                  host::ExportPreflightSeverity::Blocking &&
-                                              issue.reason == expectedReason;
-                                   }),
+        expect(std::ranges::any_of(
+                   output.preflight,
+                   [&](const auto& issue) {
+                       return issue.code == host::ExportPreflightCode::AudioSourceUnsupported &&
+                              issue.target == host::ExportPreflightTarget::Audio &&
+                              issue.severity == host::ExportPreflightSeverity::Blocking &&
+                              issue.reason == expectedReason;
+                   }),
                file + ": the panel's preflight shows the reason");
         const auto start = f.service->canStart(job);
         expect(!start.available && start.code == host::ExportUnavailableCode::PreflightBlocked &&
@@ -627,10 +641,10 @@ void testUndecodableSourceIsRefusedBeforeRendering() {
         .composition = {snapshot, composition->id()},
         .range = {.destination = f.folder / "Exports/direct.mov",
                   .firstFrame = 0,
-                  .lastFrame = static_cast<std::uint64_t>(duration.numerator() * rate.numerator() /
-                                                          (duration.denominator() *
-                                                           rate.denominator())) -
-                               1,
+                  .lastFrame =
+                      static_cast<std::uint64_t>(duration.numerator() * rate.numerator() /
+                                                 (duration.denominator() * rate.denominator())) -
+                      1,
                   .frameRate = rate,
                   .duration = duration},
         .preset = output::OutputPresetV1::ProResMovV1,
@@ -756,7 +770,6 @@ void testCompileFailureNamesItsSubject() {
     }
 }
 
-
 // #570: a WAV export normalized to a loudness target. The tone source measures about -12.4 LUFS
 // (a 0.25-amplitude sine in both channels); the export brings it to the target, the report states
 // the measured and the delivered level, and an independent meter reading of the published file
@@ -827,11 +840,11 @@ void testLoudnessNormalization() {
         if (report) {
             expect(report->measured && report->finalMeasured, "the programme is measurable");
             expect(std::abs(report->measuredLufs - -12.4) < 0.6,
-                   "the tone measures near -12.4 LUFS (got " + std::to_string(report->measuredLufs) +
-                       ")");
+                   "the tone measures near -12.4 LUFS (got " +
+                       std::to_string(report->measuredLufs) + ")");
             expect(std::abs(report->finalLufs - -23.0) < 0.2,
-                   "the delivered loudness is the target (got " + std::to_string(report->finalLufs) +
-                       ")");
+                   "the delivered loudness is the target (got " +
+                       std::to_string(report->finalLufs) + ")");
             expect(std::abs(report->gainDb - (-23.0 - report->measuredLufs)) < 1e-6,
                    "the gain is target minus measured");
             expect(report->limiterReductionDb < 0.05, "no limiting was needed");

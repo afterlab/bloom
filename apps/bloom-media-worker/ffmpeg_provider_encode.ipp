@@ -874,6 +874,8 @@ struct Encoder::State {
         qc.colour = {parameters.color_primaries, parameters.color_trc, parameters.color_space,
                      parameters.color_range};
         qc.container = containerToken(*input.format, parameters, settings);
+        if (videoTrack.codec->codec != nullptr && videoTrack.codec->codec->name != nullptr)
+            qc.encoder = videoTrack.codec->codec->name;
         if (const auto* name = avcodec_profile_name(parameters.codec_id, parameters.profile))
             qc.profile = name;
         if (const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(parameters.format)))

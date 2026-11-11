@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace bloom::media::provider {
-inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 9;
+inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 10;
 inline constexpr std::uint32_t kEnvelopeBytes = 25;
 enum class MessageKind : std::uint8_t {
     Handshake = 1,
