@@ -109,20 +109,60 @@ function(bloom_validate_shared_dependency_inventory package)
         return()
     endif()
 
-    # FFmpeg is a Linux-only worker dependency in this intake. The desktop target must never call
-    # this function or link these targets. The worker's eventual Linux rpath policy is
-    # $ORIGIN/../lib, relative to its private executable directory; no desktop rpath is permitted
-    # to mention this prefix. macOS and Windows providers will use their native loader/package
-    # rules in a later intake and do not silently pass this ELF inventory check.
+    # FFmpeg is a worker-only dependency. The desktop target must never call this function or
+    # link these targets. The worker finds the libraries beside itself: $ORIGIN/../lib on Linux,
+    # @loader_path/lib through @rpath install names on macOS; no desktop rpath is permitted to
+    # mention this prefix. Linux verifies ELF sonames and macOS verifies Mach-O install names
+    # below. Windows uses its own loader and package rules and does not pass through this check.
+    set(bloom_ffmpeg_libraries avcodec avdevice avfilter avformat avutil swresample swscale)
+    if(APPLE)
+        find_program(bloom_otool NAMES otool HINTS /usr/bin REQUIRED)
+        set(bloom_ffmpeg_inventory)
+        foreach(bloom_ffmpeg_library IN LISTS bloom_ffmpeg_libraries)
+            set(bloom_ffmpeg_library_file
+                "${BLOOM_DEPENDENCY_PREFIX}/lib/lib${bloom_ffmpeg_library}.dylib")
+            if(NOT EXISTS "${bloom_ffmpeg_library_file}")
+                message(FATAL_ERROR
+                    "qualified mode: FFmpeg shared-library inventory is missing "
+                    "lib${bloom_ffmpeg_library}.dylib under ${BLOOM_DEPENDENCY_PREFIX}/lib.")
+            endif()
+            execute_process(
+                COMMAND "${bloom_otool}" -D "${bloom_ffmpeg_library_file}"
+                RESULT_VARIABLE bloom_otool_result
+                OUTPUT_VARIABLE bloom_otool_output
+                ERROR_VARIABLE bloom_otool_error
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+            # The install name is how the worker's loader finds the copy bundled beside it; an
+            # absolute name would point every build at this prefix instead.
+            if(NOT bloom_otool_result EQUAL 0 OR NOT bloom_otool_output MATCHES
+                   "\n@rpath/lib${bloom_ffmpeg_library}\.[0-9]+\.dylib$")
+                message(FATAL_ERROR
+                    "qualified mode: FFmpeg library ${bloom_ffmpeg_library_file} has no verified "
+                    "@rpath install name (otool: ${bloom_otool_output} ${bloom_otool_error}).")
+            endif()
+            list(APPEND bloom_ffmpeg_inventory "lib${bloom_ffmpeg_library}.dylib")
+        endforeach()
+        file(GLOB bloom_ffmpeg_static_archives LIST_DIRECTORIES false
+            "${BLOOM_DEPENDENCY_PREFIX}/lib/libav*.a"
+            "${BLOOM_DEPENDENCY_PREFIX}/lib/libsw*.a")
+        if(bloom_ffmpeg_static_archives)
+            message(FATAL_ERROR
+                "qualified mode: FFmpeg shared-only inventory contains static archives: "
+                "${bloom_ffmpeg_static_archives}")
+        endif()
+        list(JOIN bloom_ffmpeg_inventory ", " bloom_ffmpeg_inventory_text)
+        message(STATUS "Bloom shared dependency inventory: FFmpeg ${bloom_ffmpeg_inventory_text} "
+            "with verified @rpath install names.")
+        return()
+    endif()
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(STATUS "Bloom shared dependency inventory: FFmpeg ELF soname check skipped on "
-            "${CMAKE_SYSTEM_NAME}; this intake is Linux worker-only.")
+            "${CMAKE_SYSTEM_NAME}.")
         return()
     endif()
 
     find_program(bloom_readelf NAMES readelf llvm-readelf
         HINTS /usr/bin /usr/local/bin REQUIRED)
-    set(bloom_ffmpeg_libraries avcodec avdevice avfilter avformat avutil swresample swscale)
     set(bloom_ffmpeg_inventory)
     foreach(bloom_ffmpeg_library IN LISTS bloom_ffmpeg_libraries)
         file(GLOB bloom_ffmpeg_candidates LIST_DIRECTORIES false

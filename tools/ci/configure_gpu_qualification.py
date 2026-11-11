@@ -6,6 +6,9 @@ from pathlib import Path
 import subprocess
 import sys
 
+# The platforms whose toolchain has a profile in the dependency lock build in qualified mode.
+LOCKED_PLATFORM = sys.platform.startswith("linux") or sys.platform == "darwin"
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -29,11 +32,12 @@ def main():
                    "-DBLOOM_DEPENDENCY_PREFIX=" + str(prefix),
                    "-DBLOOM_DEPENDENCY_DOWNLOAD_DIR=" + str(Path(args.download_dir).resolve())]
         subprocess.run(command, check=True)
-        # Build exactly the image/core closure. Linux's main configure also needs its worker's
-        # FFmpeg package; other platforms must never execute the Linux-only make-based recipes.
+        # Build exactly the image/core closure. A qualified configure also needs the worker's
+        # FFmpeg package, so the platforms with a locked profile (Linux and macOS) build it; the
+        # others must never execute the make-based recipes.
         targets = ["bloom_dependency_yyjson", "bloom_dependency_libzip",
                    "bloom_dependency_openexr", "bloom_dependency_opencolorio"]
-        if sys.platform.startswith("linux"):
+        if LOCKED_PLATFORM:
             targets.append("bloom_dependency_ffmpeg")
         if args.mode == "native":
             targets += ["bloom_dependency_vulkan-headers", "bloom_dependency_vulkan-memory-allocator",
@@ -42,7 +46,7 @@ def main():
         subprocess.run(["cmake", "--build", str(directory), "--config", "Release", "--parallel",
                         str(args.jobs), "--target", *targets], check=True)
     else:
-        dependency_mode = "qualified" if sys.platform.startswith("linux") else "developer-system"
+        dependency_mode = "qualified" if LOCKED_PLATFORM else "developer-system"
         subprocess.run([
             "cmake", "-S", str(root), "-B", str(directory), *common,
             "-DBLOOM_DEPENDENCY_MODE=" + dependency_mode,

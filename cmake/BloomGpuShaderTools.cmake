@@ -164,6 +164,38 @@ function(_bloom_gpu_tools_private_runtime prefix tool_path out_paths out_names)
             list(REMOVE_DUPLICATES _paths)
             list(REMOVE_DUPLICATES _names)
         endif()
+    elseif(APPLE)
+        # Mach-O: every library the tool loads must be part of the operating system (the dyld
+        # shared cache locations). The pinned tools are static apart from those, so there is no
+        # private runtime to copy; any other load command is an accidental ambient dependency.
+        find_program(_bloom_otool NAMES otool HINTS /usr/bin)
+        if(NOT _bloom_otool)
+            message(FATAL_ERROR
+                "Bloom GPU shader tools: otool is required to inspect ${tool_path} linked "
+                "dependencies; refusing to guess whether a private runtime library is needed.")
+        endif()
+        execute_process(
+            COMMAND "${_bloom_otool}" -L "${tool_path}"
+            RESULT_VARIABLE _otool_result
+            OUTPUT_VARIABLE _otool_output
+            ERROR_VARIABLE _otool_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT _otool_result EQUAL 0)
+            message(FATAL_ERROR
+                "Bloom GPU shader tools: otool failed on ${tool_path}: ${_otool_error}")
+        endif()
+        string(REGEX MATCHALL "\n[ \t]+[^\n]+ \\(compatibility version" _load_matches
+            "${_otool_output}")
+        foreach(_load IN LISTS _load_matches)
+            string(REGEX REPLACE "^\n[ \t]+(.+) \\(compatibility version$" "\\1" _load_path
+                "${_load}")
+            if(NOT _load_path MATCHES "^(/usr/lib/|/System/Library/)")
+                message(FATAL_ERROR
+                    "Bloom GPU shader tools: ${tool_path} loads '${_load_path}', which is not an "
+                    "operating-system library; refusing to depend on an accidental ambient "
+                    "library. The pinned tools are built without private shared libraries.")
+            endif()
+        endforeach()
     endif()
     set(${out_paths} "${_paths}" PARENT_SCOPE)
     set(${out_names} "${_names}" PARENT_SCOPE)
