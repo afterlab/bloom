@@ -5,8 +5,6 @@
 // TIFF, flat EXR and ProRes must come out with the reference's bytes; a changed or missing config
 // stops the render with its reason instead of falling back to another config.
 
-#include <bloom/color/bloom_neutral_builtin.hpp>
-#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/export_job_runner.hpp>
@@ -69,7 +67,7 @@ document::ColorSettings settingsFor(document::OcioConfigLocator locator,
                                     const core::Sha256Digest& revision) {
     return {
         .schemaVersion = document::kColorSettingsSchemaVersionV1,
-        .processColorSpaceId = std::string(color::kAcesCgV1SceneLinearColorSpaceId),
+        .processColorSpaceId = std::string(document::kAcesCgSceneLinearColorSpaceIdV1),
         .ocioConfig = {.schemaVersion = document::kOcioConfigReferenceSchemaVersionV1,
                        .locator = std::move(locator),
                        .expectedRevision = {.algorithm = document::OcioRevisionAlgorithm::Sha256,
@@ -180,8 +178,10 @@ bool run(const bool device, const bool requireDevice) {
 
     // The fixtures: the built-in ACES CG config as a loose folder and as an archive.
     try {
-        const auto builtIn = OCIO::Config::CreateFromBuiltinConfig(
-            std::string(color::kAcesCgV1BuiltinConfigName).c_str());
+        // OpenColorIO names the built-in by its URI without the scheme.
+        const std::string builtInName(
+            document::kAcesCgConfigUriV1.substr(std::string_view("ocio://").size()));
+        const auto builtIn = OCIO::Config::CreateFromBuiltinConfig(builtInName.c_str());
         std::ostringstream text;
         builtIn->serialize(text);
         std::ofstream(root / "loose" / "config.ocio", std::ios::binary) << text.str();
@@ -197,21 +197,24 @@ bool run(const bool device, const bool requireDevice) {
 
     const auto looseUri = "file://" + (root / "loose" / "config.ocio").string();
     const auto archiveUri = "file://" + (root / "shot.ocioz").string();
-    const auto revisionOf = [](const color::OcioConfigLocation& location) {
-        return color::ocioConfigContentRevision(location).value_or(core::Sha256Digest{});
+    const auto revisionOf = [](document::OcioConfigLocator locator,
+                               const std::filesystem::path& projectDirectory) {
+        document::OcioConfigReference reference;
+        reference.locator = std::move(locator);
+        return host::ocioConfigContentRevision(reference, projectDirectory);
     };
-    const auto builtInRevision = color::ocioBuiltInContentRevision(
-        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    const auto builtInRevision = revisionOf(
+        document::BuiltInOcioConfigLocator{std::string(document::kAcesCgConfigUriV1)}, {});
     expect(builtInRevision.has_value(), "the built-in ACES config is available");
     if (!builtInRevision)
         return true;
-    const auto looseRevision =
-        revisionOf({color::OcioConfigLocatorKind::ExternalLooseConfig, looseUri, {}});
+    const auto looseRevision = revisionOf(document::ExternalOcioConfigLocator{looseUri}, {})
+                                   .value_or(core::Sha256Digest{});
     const auto archiveRevision =
-        revisionOf({color::OcioConfigLocatorKind::ExternalArchive, archiveUri, {}});
-    const auto relativeRevision = revisionOf({color::OcioConfigLocatorKind::ProjectRelativeArchive,
-                                              (root / "relative" / "color" / "shot.ocioz").string(),
-                                              {}});
+        revisionOf(document::ExternalOciozLocator{archiveUri}, {}).value_or(core::Sha256Digest{});
+    const auto relativeRevision =
+        revisionOf(document::ProjectRelativeOciozLocator{"color/shot.ocioz"}, root / "relative")
+            .value_or(core::Sha256Digest{});
     expect(looseRevision != core::Sha256Digest{} && archiveRevision != core::Sha256Digest{} &&
                relativeRevision != core::Sha256Digest{} && archiveRevision != relativeRevision,
            "each external config reports its content revision");
@@ -234,7 +237,7 @@ bool run(const bool device, const bool requireDevice) {
     }
     const auto provider = host::GpuExportProvider::create(options);
     const auto retire = [&] {
-        color::releaseExternalOcioConfigs();
+        host::releaseExternalOcioConfigs();
         expect(provider->shutdownAndWait(std::chrono::seconds(10)), "the provider retires");
         scheduler.beginShutdown();
         while (!scheduler.isQuiescent())
@@ -257,7 +260,7 @@ bool run(const bool device, const bool requireDevice) {
 
     const Project reference(
         root / "reference",
-        settingsFor(document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)},
+        settingsFor(document::BuiltInOcioConfigLocator{std::string(document::kAcesCgConfigUriV1)},
                     document::OcioConfigPortability::BuiltIn, *builtInRevision),
         "built-in");
     struct External final {
@@ -332,10 +335,10 @@ bool run(const bool device, const bool requireDevice) {
     {
         const auto convert = [](const std::string& location, const core::Sha256Digest& revision)
             -> std::optional<std::vector<std::array<float, 4>>> {
-            const runtime::EvaluationColorIntent intent{.workingColorSpaceId =
-                                                            color::kAcesCgV1SceneLinearColorSpaceId,
-                                                        .ocioConfigRevision = revision,
-                                                        .ocioConfigUri = location};
+            const runtime::EvaluationColorIntent intent{
+                .workingColorSpaceId = document::kAcesCgSceneLinearColorSpaceIdV1,
+                .ocioConfigRevision = revision,
+                .ocioConfigUri = location};
             const auto prepared = output::PreparedFlatExrOutputV1::prepare(
                 intent, {.outputColorSpaceId = "ACES2065-1"});
             if (!prepared)
@@ -355,7 +358,7 @@ bool run(const bool device, const bool requireDevice) {
                 return std::nullopt;
             return target;
         };
-        const auto handoff = convert(std::string(color::kAcesCgV1ConfigUri), *builtInRevision);
+        const auto handoff = convert(std::string(document::kAcesCgConfigUriV1), *builtInRevision);
         expect(handoff.has_value() && (*handoff)[2][1] != 1.0F,
                "flat EXR hand-off: the built-in reference converts to ACES2065-1");
         for (const auto& external : externals) {

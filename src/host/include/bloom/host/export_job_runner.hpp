@@ -255,6 +255,16 @@ class ExportJobRunner final : public ExportRun {
 [[nodiscard]] std::string ocioConfigIntentLocation(const document::OcioConfigReference& reference,
                                                    const std::filesystem::path& projectDirectory);
 
+// The current content revision of the config `reference` names, for stamping its expected
+// revision; nullopt when the config cannot be read. Blocking for a file config.
+[[nodiscard]] std::optional<core::Sha256Digest>
+ocioConfigContentRevision(const document::OcioConfigReference& reference,
+                          const std::filesystem::path& projectDirectory);
+
+// Ends the helpers kept for external configs. Call before the process retires its export
+// provider; a later resolution starts a new helper.
+void releaseExternalOcioConfigs();
+
 // The evaluation colour intent of `composition` under `settings` (the working space, the selected
 // OCIO config location and pinned revision), captured so it owns its strings. `projectDirectory`
 // is where a project-relative config archive is looked for.

@@ -7,6 +7,7 @@
 #include "export_output_drivers.hpp"
 #include "export_queue_values.hpp"
 
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/project.hpp>
@@ -39,6 +40,18 @@ std::string ocioConfigIntentLocation(const document::OcioConfigReference& refere
         location.context.push_back({variable.name, variable.value});
     return color::ocioConfigLocationText(location);
 }
+
+std::optional<core::Sha256Digest>
+ocioConfigContentRevision(const document::OcioConfigReference& reference,
+                          const std::filesystem::path& projectDirectory) {
+    if (const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&reference.locator))
+        return color::ocioBuiltInContentRevision(color::OcioConfigLocatorKind::BloomBuiltIn,
+                                                 builtIn->uri);
+    return color::ocioConfigContentRevision(
+        color::parseOcioConfigLocation(ocioConfigIntentLocation(reference, projectDirectory)));
+}
+
+void releaseExternalOcioConfigs() { color::releaseExternalOcioConfigs(); }
 
 std::optional<runtime::EvaluationColorIntent>
 exportColorIntent(const document::ColorSettings& settings, const document::Composition& composition,

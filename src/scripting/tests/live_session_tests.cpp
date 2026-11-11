@@ -1,8 +1,8 @@
 #include <atomic>
-#include <bloom/color/ocio_config_resolution.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/host/bloom_neutral_profile.hpp>
+#include <bloom/host/export_job_runner.hpp>
 #include <bloom/scripting/facade.hpp>
 #include <bloom/scripting/render.hpp>
 #include <chrono>
@@ -216,15 +216,14 @@ void savedColorIntent() {
     require(relativeComposition != nullptr, "Relative OCIO composition exists");
     const auto relativeIntent =
         scripting::captureRenderColorIntent(relativeSource, *relativeComposition);
-    // The intent carries the archive as a resolvable location: its kind and the path under the
-    // project folder, the same text the export queue carries.
-    require(relativeIntent.has_value(), "Headless capture keeps a relative OCIO archive intent");
-    const auto relativeLocation = color::parseOcioConfigLocation(relativeIntent->ocioConfigUri);
-    require(relativeLocation.kind == color::OcioConfigLocatorKind::ProjectRelativeArchive &&
-                relativeLocation.value == (relativeSource.assetBaseDirectory / "color/config.ocioz")
-                                              .lexically_normal()
-                                              .string() &&
-                relativeLocation.context.empty() &&
+    // The intent carries the archive as a resolvable location under the project folder, the
+    // same text the export queue carries, not the bare relative path of a missing built-in.
+    require(relativeIntent.has_value() &&
+                relativeIntent->ocioConfigUri ==
+                    host::ocioConfigIntentLocation(relative.ocioConfig,
+                                                   relativeSource.assetBaseDirectory) &&
+                relativeIntent->ocioConfigUri != "color/config.ocioz" &&
+                relativeIntent->ocioConfigUri.ends_with("color/config.ocioz") &&
                 relativeIntent->ocioConfigRevision == core::Sha256Digest{},
             "Headless capture preserves relative OCIO locator instead of empty Neutral intent");
 }
