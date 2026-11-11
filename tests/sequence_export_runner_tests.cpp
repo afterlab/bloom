@@ -12,6 +12,7 @@
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/export_capacity_wait.hpp>
+#include <bloom/host/export_media_failure.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
@@ -583,6 +584,62 @@ void testRetentionOnlyCapacityWaitStalls() {
           "the wait is not stalled before its limit");
     check(wait.stalled(t0 + Wait::kStallAfter, policy.get(), 0),
           "with only retention held the wait stalls after its limit");
+}
+
+// #586: a refused audio backing admission is reported as that refusal. Other work holds every
+// processing request slot but the export's own (what cached audio did before it retired to
+// retention), so the decoded audio's own claim is refused: the export fails with the provider's
+// Busy and the audio sentence, which the job reports as a resource refusal and never as a full
+// destination (the disk has room; nothing was written).
+void testRefusedAudioBackingIsNotDiskFull(Fixture& f, const std::filesystem::path& directory) {
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    auto policy = capacityPolicy(768 * mib);
+    auto provider = capacityProvider(f.scheduler, policy, nullptr);
+    // Other work holds every processing request slot but two. The export's frame queue takes one
+    // and the frame being analysed takes the other, which it keeps until it has been encoded; the
+    // decoded audio's backing is opened while that first frame is encoded, needs a slot of its
+    // own, and is refused.
+    std::vector<std::shared_ptr<render::GpuProcessingPhaseLease>> others;
+    for (int slot = 0; slot < 30; ++slot) {
+        auto granted = policy->reserve(
+            {.pixels = 1, .metadataBytes = 72, .sourceFree = true, .native = false});
+        check(granted.lease != nullptr, "audio refusal: another request slot is admitted");
+        others.push_back(std::move(granted.lease));
+    }
+    const auto path = directory / "audio-backing-refused.mov";
+    auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+    request.gpuProvider = provider;
+    std::optional<std::chrono::steady_clock::time_point> waitingSince;
+    const auto result = f.run(std::move(request), false, false, [&](auto& runner) {
+        // The refusal must fail the export; if it waits instead, stop so the check below fails
+        // with the state rather than at the run deadline.
+        if (!runner.waitingForCapacity())
+            return;
+        if (!waitingSince)
+            waitingSince = std::chrono::steady_clock::now();
+        else if (std::chrono::steady_clock::now() - *waitingSince > std::chrono::seconds(20))
+            runner.cancel();
+    });
+    const std::string detail = result.failure ? result.failure->detail : std::string();
+    check(!result.published() && result.failure &&
+              result.failure->reason == media::provider::Error::Busy &&
+              detail.find("Audio backing admission refused") != std::string::npos &&
+              !std::filesystem::exists(path),
+          "audio refusal: the export fails with the refused audio backing: " + detail + " / " +
+              result.diagnostic);
+    if (result.failure) {
+        const auto reported = host::classifyExportMediaFailure(result.failure->reason);
+        const auto reason =
+            host::exportMediaFailureReason(reported.code, detail, !result.diagnostic.empty());
+        check(reported.code == host::ExportFailureCode::ResourceRefused &&
+                  reason.find("ran out of space") == std::string::npos &&
+                  reason.find("Audio backing admission refused") != std::string::npos,
+              "audio refusal: the job reports a resource refusal naming the audio backing, not a "
+              "full destination: " +
+                  reason);
+    }
+    others.clear();
+    check(provider->shutdownAndWait(std::chrono::seconds(3)), "audio refusal provider retires");
 }
 
 void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& path, bool video) {
@@ -1253,6 +1310,7 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     check(refused.failure && refused.failure->reason == media::provider::Error::Oversized,
           "frame queue budget enforced");
     testCapacityWait(f, directory, nullptr);
+    testRefusedAudioBackingIsNotDiskFull(f, directory);
     if (const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER"); loader && *loader)
         testCapacityWait(f, directory, loader);
     {

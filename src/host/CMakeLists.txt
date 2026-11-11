@@ -183,6 +183,15 @@ if(BUILD_TESTING)
         LABELS unit host rendering
     )
 
+    add_executable(bloom_host_export_media_failure_test tests/export_media_failure_tests.cpp)
+    target_link_libraries(bloom_host_export_media_failure_test PRIVATE bloom_host)
+    bloom_enable_warnings(bloom_host_export_media_failure_test)
+    bloom_add_test(
+        NAME bloom.host.export-media-failure
+        COMMAND bloom_host_export_media_failure_test
+        LABELS unit host
+    )
+
     add_executable(bloom_host_frame_range_runner_test tests/frame_range_runner_tests.cpp)
     target_link_libraries(bloom_host_frame_range_runner_test PRIVATE bloom_host)
     bloom_enable_warnings(bloom_host_frame_range_runner_test)

@@ -5,6 +5,7 @@
 #include "export_output_drivers.hpp"
 
 #include <bloom/host/export_capacity_wait.hpp>
+#include <bloom/host/export_media_failure.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -1753,35 +1754,10 @@ class MediaDriver final : public DriverBase {
                 return fail(failure(ExportFailureCode::PublicationConflict,
                                     "export.publication.conflict",
                                     "The destination changed outside Bloom; it was not replaced"));
-            auto code = ExportFailureCode::EncoderFailed;
-            bool workerEnded = false;
-            if (result.failure) {
-                using media::provider::Error;
-                switch (result.failure->reason) {
-                case Error::Oversized:
-                    code = ExportFailureCode::DestinationFull;
-                    break;
-                case Error::Timeout:
-                    code = ExportFailureCode::DeadlineExceeded;
-                    break;
-                case Error::Busy:
-                    code = ExportFailureCode::ResourceRefused;
-                    break;
-                case Error::Io:
-                    code = ExportFailureCode::WriteFailed;
-                    break;
-                case Error::Unavailable:
-                    // An encoder or profile the worker cannot serve (#475) is a refusal with that
-                    // name, not an encoder that broke while running.
-                    code = ExportFailureCode::EncoderUnavailable;
-                    break;
-                case Error::Crashed:
-                    workerEnded = true; // #583: the cause is plain and goes to the user
-                    break;
-                default:
-                    break;
-                }
-            }
+            const auto failureClass = classifyExportMediaFailure(
+                result.failure ? std::optional(result.failure->reason) : std::nullopt);
+            const auto code = failureClass.code;
+            const bool workerEnded = failureClass.workerEnded;
             const std::string detail =
                 result.failure ? result.failure->detail : std::string("no publication result");
             // Issue #581: the worker stayed at the memory cap with nothing left to finish. The
@@ -1844,9 +1820,7 @@ class MediaDriver final : public DriverBase {
                                     "The export stopped because a media worker ended unexpectedly: " +
                                         detail + ". Nothing was published."));
             return fail(failure(code, "export.media.failed",
-                                readable ? detail
-                                         : std::string(exportFailureSummary(code)) +
-                                               " The details are in the log."));
+                                exportMediaFailureReason(code, detail, readable)));
         }
         const auto& settings = input_.output.record.settings;
         auto& artifacts = report_.verification.artifacts;

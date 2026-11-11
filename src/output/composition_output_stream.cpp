@@ -162,7 +162,7 @@ struct CompositionOutputStreamV1::State {
             // decodes forward through this session's retained worker as the mix reads it.
             const auto audioProbe = media::video::videoAudioProbe(*stream);
             require(audioProbe.has_value(), "Audio source sample count is not representable",
-                    Error::Oversized);
+                    Error::Unavailable);
             constexpr std::uint64_t decoderAllowance = 256U * 1024U;
             const std::uint64_t windowBytes = static_cast<std::uint64_t>(
                                                   media::video::kVideoAudioWindowFrames) *
@@ -172,6 +172,9 @@ struct CompositionOutputStreamV1::State {
                                            sizeof(media::audio::AudioStream) +
                                            audioProbe->channels * sizeof(std::vector<float>);
             const std::uint64_t scratchBytes = windowBytes;
+            // #586: every refusal below is memory or processing capacity, reported as Busy. Only
+            // an output that outgrows its byte limit is Oversized, which the job reports as a
+            // full destination.
             if (queueReservation->processingPolicy()) {
                 ExportResourceAdmissionStatusV1 status{};
                 retainedClaim = queueReservation->reserveOwnedHostBacking(retained, status,
@@ -192,10 +195,12 @@ struct CompositionOutputStreamV1::State {
                 const auto total = retained + scratchBytes;
                 require(total <= std::numeric_limits<std::uint64_t>::max() -
                                      queueReservation->chargedBytes(),
-                        "Audio export reservation overflows", Error::Oversized);
+                        "Audio export reservation overflows", Error::Busy);
                 require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
                             ExportResourceAdmissionStatusV1::Reserved,
-                        "Audio decode ledger reservation refused", Error::Oversized);
+                        "Audio decode ledger reservation refused: not enough free memory for "
+                        "the decoded audio",
+                        Error::Busy);
             }
             auto buffer = checked(
                 media::video::openWindowedVideoAudio(decoder, probe, description.audioStream));
@@ -204,12 +209,12 @@ struct CompositionOutputStreamV1::State {
             if (retainedClaim) {
                 const auto measured = measuredAudioBacking(*backing);
                 require(measured.has_value(), "Audio backing byte count overflows",
-                        Error::Oversized);
+                        Error::Busy);
                 published = render::adoptProcessingHostBacking(
                     std::move(backing), retainedClaim->ownedHostPhase(), measured->allocated,
                     measured->initialized);
                 require(published != nullptr, "Audio backing exceeds its admitted allocation",
-                        Error::Oversized);
+                        Error::Busy);
             } else {
                 published = std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
             }
