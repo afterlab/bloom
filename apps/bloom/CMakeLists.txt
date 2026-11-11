@@ -13,6 +13,31 @@ set_target_properties(
         MACOSX_BUNDLE TRUE
 )
 
+if(APPLE)
+    # The bundle's identity (issue #661). The minimum system version is the deployment target the
+    # binaries were built for: the dependency lock's in qualified mode. A developer build without
+    # one runs on the build machine's system and later, so it states that.
+    set(BLOOM_MACOS_MINIMUM_SYSTEM_VERSION "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    if(NOT BLOOM_MACOS_MINIMUM_SYSTEM_VERSION)
+        execute_process(COMMAND sw_vers -productVersion
+                        OUTPUT_VARIABLE BLOOM_MACOS_MINIMUM_SYSTEM_VERSION
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    endif()
+    target_sources(bloom PRIVATE macos/Bloom.icns)
+    set_source_files_properties(macos/Bloom.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(
+        bloom
+        PROPERTIES
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "org.kinetik.bloom"
+            MACOSX_BUNDLE_BUNDLE_NAME "Bloom"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_ICON_FILE "Bloom"
+            MACOSX_BUNDLE_COPYRIGHT "Licensed under the Apache License, Version 2.0"
+    )
+endif()
+
 install(
     TARGETS bloom
     BUNDLE DESTINATION .
@@ -88,9 +113,59 @@ endif()
 bloom_package_vulkan_runtime(bloom)
 
 if(APPLE)
+    # The worker processes inside the bundle, where the application looks for them first
+    # (media_workers.cpp, ocio_gpu_program_worker.cpp): the media workers with the FFmpeg
+    # worker's private libraries under Contents/libexec, the color worker beside the executable.
+    # Always-run, like the shader tools and the Vulkan runtime: a rebuilt worker is copied again
+    # even when the application does not relink. A bundle without these would run the workers
+    # from the build tree, so a moved or copied bundle would lose media and color processing.
+    set(bloom_bundle_media "$<TARGET_BUNDLE_CONTENT_DIR:bloom>/libexec/bloom/media")
+    set(bloom_bundle_worker_commands "")
+    set(bloom_bundle_worker_targets "")
+    get_target_property(bloom_ffmpeg_worker_type bloom-media-worker TYPE)
+    if(bloom_ffmpeg_worker_type STREQUAL "EXECUTABLE")
+        # The library folder is replaced whole with cp -R, which keeps the versioned names as the
+        # links they are; CMake's copy_directory would write every link as another full copy.
+        list(APPEND bloom_bundle_worker_commands
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${bloom_bundle_media}/ffmpeg-v1/lib"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${bloom_bundle_media}/ffmpeg-v1"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bloom-media-worker>"
+                "${bloom_bundle_media}/ffmpeg-v1/"
+            COMMAND cp -R "$<TARGET_FILE_DIR:bloom-media-worker>/lib"
+                "${bloom_bundle_media}/ffmpeg-v1/lib")
+        list(APPEND bloom_bundle_worker_targets bloom-media-worker)
+    endif()
+    if(TARGET bloom-media-videotoolbox-worker)
+        list(APPEND bloom_bundle_worker_commands
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${bloom_bundle_media}/videotoolbox-v1"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:bloom-media-videotoolbox-worker>"
+                "${bloom_bundle_media}/videotoolbox-v1/")
+        list(APPEND bloom_bundle_worker_targets bloom-media-videotoolbox-worker)
+    endif()
+    if(TARGET bloom-color-worker)
+        list(APPEND bloom_bundle_worker_commands
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bloom-color-worker>"
+                "$<TARGET_FILE_DIR:bloom>/")
+        list(APPEND bloom_bundle_worker_targets bloom-color-worker)
+    endif()
+    if(bloom_bundle_worker_commands)
+        add_custom_target(
+            bloom-bundle-workers ALL
+            ${bloom_bundle_worker_commands}
+            DEPENDS ${bloom_bundle_worker_targets}
+            COMMENT "Refreshing the worker processes inside Bloom.app"
+            VERBATIM
+        )
+        # The bundle directory exists once the application has linked.
+        add_dependencies(bloom-bundle-workers bloom)
+    endif()
+
     # Self-contained .app: copy the Qt frameworks (and plugins) the desktop needs beside the
-    # executable. Optional -- it requires Qt's macdeployqt, which is present in a normal Qt install
-    # but not in a headless CI checkout that only links Qt -- so the target appears only when found.
+    # executable, then give the finished bundle one ad hoc signature over everything inside it
+    # (no Developer ID signing; an ad hoc signature is what a local build can carry). Optional --
+    # it requires Qt's macdeployqt, which is present in a normal Qt install but not in a headless
+    # CI checkout that only links Qt -- so the target appears only when found.
     get_target_property(bloom_qmake Qt6::qmake IMPORTED_LOCATION)
     if(bloom_qmake)
         get_filename_component(bloom_qt_bin "${bloom_qmake}" DIRECTORY)
@@ -99,10 +174,15 @@ if(APPLE)
             add_custom_target(
                 bloom-deploy-macos
                 COMMAND "${BLOOM_MACDEPLOYQT}" "$<TARGET_BUNDLE_DIR:bloom>" -always-overwrite
+                COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:bloom>"
+                COMMAND codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:bloom>"
                 DEPENDS bloom
-                COMMENT "Bundling Qt frameworks into Bloom.app with macdeployqt"
+                COMMENT "Bundling Qt into Bloom.app with macdeployqt and signing it ad hoc"
                 VERBATIM
             )
+            if(TARGET bloom-bundle-workers)
+                add_dependencies(bloom-deploy-macos bloom-bundle-workers)
+            endif()
         endif()
     endif()
 endif()
