@@ -1175,9 +1175,10 @@ video producer attachment, so retained sessions cannot prevent host-worker exit 
 remains alive. Bootstrap/library verification and session construction hold no UI-close mutex;
 refresh generations reject construction that finishes after invalidation. Unbound headless sessions
 release on their calling worker.
-The current qualification scope is Linux. macOS verifies video sources through the same
-identity memo before each path-based worker call; Windows runs the FFmpeg worker through the
-Windows supervisor and verifies through the same memo. Neither is described as qualified by this Linux implementation.
+Linux and macOS capture the source snapshot and hand it to the worker as an inherited descriptor;
+the Linux tests of that path run on both. Windows runs the FFmpeg worker through the Windows
+supervisor on the path and verifies through the same identity memo; it is not described as
+qualified by the Linux and macOS implementation.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry
@@ -1335,7 +1336,13 @@ not a filesystem/network sandbox or authorization to launch untrusted executable
 media-file access capabilities and additional sandbox policy belong to real-provider intake.
 Poll-based pipe I/O shares a monotonic deadline. Cancellation sends a message, waits its grace,
 sends SIGTERM, waits again, then SIGKILL and reaps. No global host signal handler or detached
-watchdog thread is installed. macOS uses the same POSIX design without kernel rlimits. Windows
+watchdog thread is installed. macOS uses the same POSIX design. Its kernel lets a parent set no
+limit on a child and refuses an address-space limit below the system libraries every process maps,
+so the limits are kept another way: the parent sends the open-file limit with the ready byte and
+the worker's bootstrap installs it and a zero core limit before provider code loads, and the parent
+reads the worker's physical memory footprint while it waits on the worker's pipes and kills a
+worker that passes the address-space number, reporting `ResourceLimit`. A footprint is never larger
+than an address space, so the same number is no stricter than on Linux. Windows
 (ADR 0035) uses byte-mode named pipes with overlapped I/O under the same deadline and cancellation,
 a gate pipe whose inherited handle the child reads from `BLOOM_PROCESS_GATE`, an explicit inherited
 handle list (its pipe ends, the gate and `NUL` for stderr), and a job object with the
