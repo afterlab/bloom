@@ -1,5 +1,7 @@
 #include <bloom/core/safe_parse.hpp>
 
+#include <bloom/core/float_chars.hpp>
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -137,7 +139,7 @@ std::optional<double> parseScalar(const std::string_view text) noexcept {
         return std::nullopt;
     }
     double value = 0.0;
-    // std::from_chars is the one conversion in the standard library that is locale-independent by
+    // fromChars is std::from_chars on every platform (see float_chars.hpp): locale-independent by
     // specification, correctly rounded, and reports its failures through a return value rather than
     // through errno or an exception. `general` is used rather than `fixed` because the grammar
     // above admits an exponent; the grammar, not this flag, is what decides which spellings exist.
@@ -147,7 +149,7 @@ std::optional<double> parseScalar(const std::string_view text) noexcept {
     // stepped over here and the sign reattached below.
     const bool positiveSign = trimmed.front() == '+';
     const auto result =
-        std::from_chars(positiveSign ? first + 1 : first, last, value, std::chars_format::general);
+        fromChars(positiveSign ? first + 1 : first, last, value, std::chars_format::general);
     if (result.ec != std::errc{} || result.ptr != last) {
         return std::nullopt;
     }

@@ -17,6 +17,7 @@ target_sources(
         sha256.cpp
         utf8.cpp
         file_uri.cpp
+        float_chars.cpp
         safe_parse.cpp
         telemetry_counters.cpp
         worker_thread.cpp
@@ -33,6 +34,7 @@ target_sources(
             include/bloom/core/light_flicker.hpp
             include/bloom/core/motion_values.hpp
             include/bloom/core/color.hpp
+            include/bloom/core/float_chars.hpp
             include/bloom/core/floating_point.hpp
             include/bloom/core/frame_time_mapping.hpp
             include/bloom/core/id.hpp
@@ -220,6 +222,16 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_core_file_uri_test PRIVATE bloom_core)
     bloom_enable_warnings(bloom_core_file_uri_test)
     bloom_add_test(NAME bloom.core.file-uri COMMAND bloom_core_file_uri_test LABELS unit path)
+
+    add_executable(bloom_core_float_chars_test tests/float_chars_tests.cpp)
+    target_link_libraries(bloom_core_float_chars_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_float_chars_test)
+    bloom_enable_strict_floating_point(bloom_core_float_chars_test)
+    bloom_add_test(
+        NAME bloom.core.float-chars
+        COMMAND bloom_core_float_chars_test
+        LABELS unit text primitives
+    )
 
     add_executable(bloom_core_safe_parse_test tests/safe_parse_tests.cpp)
     target_link_libraries(bloom_core_safe_parse_test PRIVATE bloom_core)

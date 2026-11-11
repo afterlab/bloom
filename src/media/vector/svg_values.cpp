@@ -1,5 +1,7 @@
 #include "svg_internal.hpp"
 
+#include <bloom/core/float_chars.hpp>
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -469,7 +471,7 @@ std::optional<double> parseNumber(std::string_view text, std::string_view* rest)
     auto token = text.substr(0, i);
     if (!token.empty() && token.front() == '+')
         token.remove_prefix(1);
-    const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
+    const auto result = core::fromChars(token.data(), token.data() + token.size(), value);
     if (result.ec != std::errc{} && result.ec != std::errc::result_out_of_range)
         return std::nullopt;
     if (!std::isfinite(value))

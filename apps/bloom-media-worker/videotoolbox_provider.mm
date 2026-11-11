@@ -439,8 +439,12 @@ void pumpRunLoop(const std::chrono::milliseconds budget) {
         return AVVideoCodecTypeAppleProRes422;
     if (profile == "4444")
         return AVVideoCodecTypeAppleProRes4444;
-    if (profile == "4444xq")
-        return AVVideoCodecTypeAppleProRes4444XQ;
+    // The 4444 XQ writer arrived in macOS 15; on an older system the profile is not offered.
+    if (profile == "4444xq") {
+        if (@available(macOS 15.0, *))
+            return AVVideoCodecTypeAppleProRes4444XQ;
+        return std::nullopt;
+    }
     return std::nullopt;
 }
 

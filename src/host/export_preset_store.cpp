@@ -1,5 +1,6 @@
 #include "export_preset_store.hpp"
 
+#include <bloom/core/float_chars.hpp>
 #include <bloom/output/media_output.hpp>
 
 #include <array>
@@ -277,9 +278,9 @@ std::optional<document::ExportOutputSettings> settingsFrom(const Json& json) {
         if (!target || !peak)
             return std::nullopt;
         document::ExportLoudness parsed;
-        if (std::from_chars(target->data(), target->data() + target->size(), parsed.targetLufs)
+        if (core::fromChars(target->data(), target->data() + target->size(), parsed.targetLufs)
                     .ec != std::errc{} ||
-            std::from_chars(peak->data(), peak->data() + peak->size(), parsed.truePeakDbtp).ec !=
+            core::fromChars(peak->data(), peak->data() + peak->size(), parsed.truePeakDbtp).ec !=
                 std::errc{})
             return std::nullopt;
         out.loudness = parsed;

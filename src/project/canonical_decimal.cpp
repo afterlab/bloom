@@ -1,5 +1,7 @@
 #include <bloom/project/canonical_decimal.hpp>
 
+#include <bloom/core/float_chars.hpp>
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -629,7 +631,7 @@ CanonicalFloat64Result parseKnownFloat64(const std::string_view text) noexcept {
 
     double value = 0.0;
     const auto conversion =
-        std::from_chars(text.data(), text.data() + text.size(), value, std::chars_format::general);
+        core::fromChars(text.data(), text.data() + text.size(), value, std::chars_format::general);
     if (conversion.ec == std::errc::result_out_of_range) {
         if (isAtOrBelowHalfMinimumBinary64Subnormal(text)) {
             return CanonicalFloat64Result::success(

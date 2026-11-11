@@ -2,6 +2,7 @@
 #include "lut_resource_budget.hpp"
 #include <algorithm>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
+#include <bloom/core/float_chars.hpp>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -90,7 +91,7 @@ LutError detail::preflightLut(const std::string_view text, const std::uint32_t f
                 continue;
             }
             float r = 0, g = 0, b = 0;
-            const auto parsed = std::from_chars(token.data(), token.data() + token.size(), r);
+            const auto parsed = core::fromChars(token.data(), token.data() + token.size(), r);
             if (!expected || parsed.ec != std::errc{} ||
                 parsed.ptr != token.data() + token.size() || !(row >> g >> b) ||
                 !std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b))
