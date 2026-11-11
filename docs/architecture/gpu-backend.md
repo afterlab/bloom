@@ -84,7 +84,12 @@ unsupported entry is never inherited from another operation.
 
 Native render primitives. Their public headers are Qt-free and Vulkan-free with portable
 CPU-unavailable stubs. `GpuSolid` runs `SolidV1` and the covered arm `CoveredSolidV1` (a host-built
-premultiplied palette from the existing CPU coverage primitive, bit-exact on readback). `GpuImage`
+premultiplied palette from the existing CPU coverage primitive, bit-exact on readback). The same
+kernel fills an indexed image (`beginIndexed`): the host supplies up to 256 exact pixels and one
+index byte per pixel. A Solid whose authored size ends inside a pixel at a proxy scale is emitted
+that way, with its interior, right-edge, bottom-edge and corner pixels computed as the CPU
+computes them, so its partly covered last column and row match the CPU reference bit for bit at
+any scale (#641); a Solid that ends on whole pixels keeps `SolidV1`. `GpuImage`
 owns a device-resident RGBA32F image; `GpuImageUpload` stages one already-decoded host `Rgba32fImage`
 with no media decode on the GPU thread (a staging copy of more than one 8 MiB chunk runs through the
 caller's optional `parallelFor`; the scene executor passes the scheduler's row-band executor via

@@ -328,6 +328,75 @@ void testPathRasterPattern(Expectations& expectations, GpuSolid& solid) {
     }
 }
 
+// #641 beginIndexed: the resident pixel is the palette entry its index byte names, bit for bit,
+// and an index past the palette is transparent. The pixels are HDR, partial-alpha and unrelated
+// to one another, so nothing but selection can produce them.
+void testIndexed(Expectations& expectations, GpuSolid& solid) {
+    const auto window = ImageWindow::create(3, 2, 5, 4);
+    const auto display = ImageWindow::create(0, 0, 16, 9);
+    expectations.expect(window && display, "the indexed windows build");
+    if (!window || !display) {
+        return;
+    }
+    const auto premultiplied = [](const float red, const float green, const float blue,
+                                  const float alpha) {
+        const auto pixel = Rgba32f::fromPremultiplied(red, green, blue, alpha);
+        return pixel ? *pixel.value() : Rgba32f::transparent();
+    };
+    const std::vector<Rgba32f> palette{premultiplied(1.2F, 0.3F, 0.15F, 0.75F),
+                                       premultiplied(0.39000002F, 0.0975F, 0.04875F, 0.24375F),
+                                       premultiplied(7.5F, 0.0F, 2.25F, 1.0F),
+                                       premultiplied(1e-7F, 2e-7F, 3e-7F, 4e-7F)};
+    expectations.expect(palette[0].alpha() == 0.75F && palette[3].alpha() == 4e-7F,
+                        "the indexed palette pixels are valid");
+    // The last column is entry 1, the last row entry 2, the corner entry 3, and one index (200)
+    // names no entry.
+    std::vector<std::uint8_t> indices(static_cast<std::size_t>(5) * 4, 0);
+    for (std::size_t y = 0; y < 4; ++y)
+        indices[y * 5 + 4] = 1;
+    for (std::size_t x = 0; x < 5; ++x)
+        indices[3 * 5 + x] |= 2;
+    indices[1 * 5 + 2] = 200;
+    const GpuSolidParameters base{Rgba32f::transparent(), *window.value(), *display.value(),
+                                  PixelAspectRatio::square()};
+    const auto begin = solid.beginIndexed(base, indices, palette, 1ULL << 32ULL);
+    expectations.expect(begin.code == GpuSolidDiagnosticCode::None &&
+                            pollToCompletion(solid) == GpuSolidPollResult::Ready,
+                        "an indexed fill completes: " + begin.message);
+    const auto readback = solid.readback();
+    expectations.expect(readback.hasValue() && readback.pixels.size() == indices.size(),
+                        "the indexed resident image reads back");
+    if (readback.hasValue() && readback.pixels.size() == indices.size()) {
+        bool selected = true;
+        for (std::size_t i = 0; i < indices.size(); ++i) {
+            const Rgba32f expected =
+                indices[i] < palette.size() ? palette[indices[i]] : Rgba32f::transparent();
+            selected = selected && readback.pixels[i] == expected;
+        }
+        expectations.expect(selected, "every indexed pixel is its palette entry, bit for bit");
+    }
+    const bloom::render::GpuImage* const image = solid.image();
+    expectations.expect(image != nullptr && image->dataWindow() == *window.value() &&
+                            image->displayWindow() == *display.value(),
+                        "the indexed image keeps its data and display windows");
+    static_cast<void>(solid.takeImage());
+
+    const auto none = solid.beginIndexed(base, indices, {}, 1ULL << 32ULL);
+    expectations.expect(none.code == GpuSolidDiagnosticCode::InvalidArgument,
+                        "an empty palette is rejected");
+    const std::vector<Rgba32f> tooMany(257, Rgba32f::transparent());
+    const auto many = solid.beginIndexed(base, indices, tooMany, 1ULL << 32ULL);
+    expectations.expect(many.code == GpuSolidDiagnosticCode::InvalidArgument,
+                        "a palette of more than 256 pixels is rejected");
+    const std::vector<std::uint8_t> shortIndices(7, 0);
+    const auto count = solid.beginIndexed(base, shortIndices, palette, 1ULL << 32ULL);
+    expectations.expect(count.code == GpuSolidDiagnosticCode::InvalidArgument,
+                        "an index count that is not width*height is rejected");
+    const auto tight = solid.beginIndexed(base, indices, palette, 4);
+    expectations.expect(tight.code == GpuSolidDiagnosticCode::OverBudget,
+                        "an under-budget indexed request is rejected");
+}
+
 void testRejectionsAndGuards(Expectations& expectations, GpuSolid& solid, GpuDevice& device,
                              const std::filesystem::path& loaderPath) {
     const auto window = ImageWindow::create(0, 0, 8, 4);
@@ -526,6 +595,7 @@ int main(int argc, char** argv) {
 
         testCoverageMatrix(expectations, solid);
         testPathRasterPattern(expectations, solid);
+        testIndexed(expectations, solid);
         testRejectionsAndGuards(expectations, solid, *device.device, options.loader_path);
         testLifetime(expectations, *device.device);
         testPerformance(expectations, solid);

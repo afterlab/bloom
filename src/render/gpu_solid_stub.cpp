@@ -76,6 +76,10 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters&, std::span<c
                                           float, std::uint64_t) {
     return diagnostic();
 }
+GpuSolidDiagnostic GpuSolid::beginIndexed(const GpuSolidParameters&, std::span<const std::uint8_t>,
+                                          std::span<const Rgba32f>, std::uint64_t) {
+    return diagnostic();
+}
 GpuSolidDiagnostic GpuSolid::beginCoveredResident(const GpuSolidParameters&, const GpuPathCoverage&,
                                                   float, std::uint64_t) {
     return diagnostic();

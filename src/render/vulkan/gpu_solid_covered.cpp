@@ -264,7 +264,8 @@ bool GpuSolid::Impl::createCoveredPipeline() {
 GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     const GpuSolidParameters& base, const std::span<const std::uint8_t> hostCoverage,
     const float opacity, const std::uint64_t byteBudget, const VkBuffer residentMaskBuffer,
-    const std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner) {
+    const std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner,
+    const std::span<const Rgba32f> explicitPalette) {
     Impl& impl = *this;
     const bool usingResident = residentMaskBuffer != VK_NULL_HANDLE;
     if (!impl.onOwnerThread()) {
@@ -361,7 +362,10 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     // existing CPU primitive. A failed palette means some coverage sample is not
     // representable, so the CPU vector arm must handle this layer instead.
     std::vector<Rgba32f> palette(kPaletteEntries, Rgba32f::transparent());
-    if (const auto status = buildCoveredPalette(base.pixel, opacity, palette)) {
+    if (!explicitPalette.empty()) {
+        // The caller's exact pixels by index; the entries past them stay transparent.
+        std::copy(explicitPalette.begin(), explicitPalette.end(), palette.begin());
+    } else if (const auto status = buildCoveredPalette(base.pixel, opacity, palette)) {
         (void)status;
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
                                   "the covered palette is not representable as RGBA32F");
@@ -628,6 +632,22 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
                                   "the SolidV1 pipeline is not initialized");
     }
     return impl_->beginCoveredJob(base, coverage, opacity, byteBudget, VK_NULL_HANDLE, 0, nullptr);
+}
+
+GpuSolidDiagnostic GpuSolid::beginIndexed(const GpuSolidParameters& base,
+                                          const std::span<const std::uint8_t> indices,
+                                          const std::span<const Rgba32f> palette,
+                                          const std::uint64_t byteBudget) {
+    if (impl_ == nullptr) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                  "the SolidV1 pipeline is not initialized");
+    }
+    if (palette.empty() || palette.size() > kPaletteEntries) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the indexed palette must hold 1 to 256 pixels");
+    }
+    return impl_->beginCoveredJob(base, indices, 1.0F, byteBudget, VK_NULL_HANDLE, 0, nullptr,
+                                  palette);
 }
 
 GpuSolidDiagnostic GpuSolid::beginCoveredResident(const GpuSolidParameters& base,

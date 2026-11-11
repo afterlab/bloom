@@ -99,6 +99,8 @@ struct GpuSceneExecutorStep final {
     // FreeType text leaf carries its host bitmap. At most one is non-null.
     std::shared_ptr<const render::PathRasterCoverageGeometry> coverageGeometry;
     std::shared_ptr<const std::vector<std::uint8_t>> hostCoverage;
+    // Set with `hostCoverage` when its bytes index these exact pixels (#641).
+    std::shared_ptr<const std::vector<render::Rgba32f>> hostPalette;
     float coveredOpacity = 1.0F;
     // Upload source: the strong immutable CPU source the converted pixels came from. It is retained
     // for the job lifetime so the staging copy and any unretired submission keep their source

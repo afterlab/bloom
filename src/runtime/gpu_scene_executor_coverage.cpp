@@ -137,7 +137,9 @@ GpuSceneExecutor::Impl::startCoveredStep(const GpuSceneExecutorStep& step) {
                               "a covered step has neither geometry nor a host bitmap");
     }
     const auto native =
-        solid->beginCovered(parameters, *step.hostCoverage, step.coveredOpacity, remaining);
+        step.hostPalette != nullptr
+            ? solid->beginIndexed(parameters, *step.hostCoverage, *step.hostPalette, remaining)
+            : solid->beginCovered(parameters, *step.hostCoverage, step.coveredOpacity, remaining);
     if (native.code != render::GpuSolidDiagnosticCode::None) {
         return diagnosticFromSolid(native);
     }

@@ -234,6 +234,11 @@ struct GpuSceneCoverageSolidCommand final {
     float opacity = 1.0F;
     std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
     std::shared_ptr<const std::vector<std::uint8_t>> coverage;
+    // #641: when set, `coverage` holds indices into these exact premultiplied pixels instead of
+    // coverage samples, and `pixel`/`opacity` take no part: the image is `palette[index]`. A
+    // Solid whose last column and row are partly covered at a proxy scale carries its interior,
+    // right-edge, bottom-edge and corner pixels this way, each computed as the CPU computes it.
+    std::shared_ptr<const std::vector<render::Rgba32f>> palette;
     render::ImageWindow outputWindow;
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();

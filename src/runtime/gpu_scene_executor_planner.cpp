@@ -133,7 +133,10 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     if (const auto* covered = std::get_if<GpuSceneCoverageSolidCommand>(&command)) {
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(covered->outputWindow, bytes) ||
-            (covered->geometry == nullptr && covered->coverage == nullptr)) {
+            (covered->geometry == nullptr && covered->coverage == nullptr) ||
+            (covered->palette != nullptr &&
+             (covered->coverage == nullptr || covered->geometry != nullptr ||
+              covered->palette->empty() || covered->palette->size() > 256))) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a covered solid command is incomplete");
@@ -174,6 +177,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.solidPixelAspect = covered->pixelAspect;
         step.coverageGeometry = covered->geometry;
         step.hostCoverage = covered->coverage;
+        step.hostPalette = covered->palette;
         step.coveredOpacity = covered->opacity;
         steps.push_back(std::move(step));
         color[index] = 2;

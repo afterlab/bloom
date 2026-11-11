@@ -165,11 +165,13 @@ struct GpuSolid::Impl final {
     // Shared implementation of the covered fill. `hostCoverage` is non-empty for
     // the ordinary path and the CPU float mask is uploaded; otherwise the
     // already-resident `residentMaskBuffer` (owned by `residentOwner`) is bound
-    // directly with no host roundtrip.
+    // directly with no host roundtrip. A non-empty `explicitPalette` replaces the
+    // coverage palette built from `base.pixel` and `opacity` (beginIndexed).
     [[nodiscard]] GpuSolidDiagnostic
     beginCoveredJob(const GpuSolidParameters& base, std::span<const std::uint8_t> hostCoverage,
                     float opacity, std::uint64_t byteBudget, VkBuffer residentMaskBuffer,
-                    std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner);
+                    std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner,
+                    std::span<const Rgba32f> explicitPalette = {});
     // Bounded owner-thread drain. Returns true when the submission is proved
     // retired.
     [[nodiscard]] bool drainAndRetire() noexcept;

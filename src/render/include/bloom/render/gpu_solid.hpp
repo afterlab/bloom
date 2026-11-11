@@ -140,6 +140,19 @@ class GpuSolid final {
                                                   std::span<const std::uint8_t> coverage,
                                                   float opacity, std::uint64_t byteBudget);
 
+    // Indexed fill through the CoveredSolidV1 kernel (#641). `indices` is exactly width*height
+    // contiguous bytes (row-major over the data window) and `palette` holds 1 to 256 exact
+    // premultiplied pixels: the resident pixel is `palette[index]`, bit for bit, and an index
+    // past the palette is transparent. The host computes every pixel value, so a result with a
+    // few distinct values (a Solid whose last column and row are partly covered at a proxy
+    // scale) matches its CPU definition by construction. `base.pixel` is not used. Both spans
+    // are copied before this call returns. Rejections, ownership and cancellation are those of
+    // beginCovered.
+    [[nodiscard]] GpuSolidDiagnostic beginIndexed(const GpuSolidParameters& base,
+                                                  std::span<const std::uint8_t> indices,
+                                                  std::span<const Rgba32f> palette,
+                                                  std::uint64_t byteBudget);
+
     // ResidentCoveredSolidV1. Consumes the mask produced by a Ready
     // GpuPathCoverage directly, binding its device-resident packed R8 buffer with
     // no download or re-upload and co-owning it until this submission retires.

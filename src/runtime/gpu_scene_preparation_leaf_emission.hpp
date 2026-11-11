@@ -21,20 +21,23 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <memory>
+#include <new>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace bloom::runtime::detail {
 
-template <typename Emit, typename Charge>
+template <typename Emit, typename Charge, typename ChargeCoverage>
 [[nodiscard]] std::optional<GpuSceneLeafFailure> emitSolidCommand(
     const CompiledSolid& solid, const CompiledCompositionPlan& plan,
     const ResolvedEvaluation& resolved, const core::RationalTime time, const std::size_t index,
     const OperationIndex operationIndex, const render::ImageWindow fullWindow,
     const render::ImageWindow fullDisplayWindow, const core::PixelAspectRatio fullPixelAspect,
     const double hScale, const double vScale, Emit&& emit, Charge&& charge,
-    std::vector<GpuSceneCommandIndex>& commandForOperation, std::vector<std::string>& keyOf,
+    ChargeCoverage&& chargeCoverage, std::vector<GpuSceneCommandIndex>& commandForOperation,
+    std::vector<std::string>& keyOf,
     std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
     std::vector<EvaluatedOperationBounds>& bounds,
     std::vector<std::optional<GpuSceneVectorChain>>& vectors) {
@@ -171,6 +174,93 @@ template <typename Emit, typename Charge>
     entry.local.bottom = height->value;
     entry.output = entry.local;
     outputWindowOf[index] = solidWindow;
+
+    // #641: at a proxy scale an authored size can end inside a pixel. The CPU scales that last
+    // column and row by the part the Solid covers; SolidV1 writes one pixel everywhere. Such a
+    // Solid is emitted as an indexed fill instead: its interior, right-edge, bottom-edge and
+    // corner pixels are computed here exactly as the CPU computes them, and the kernel only
+    // selects among them, so the device image is the CPU image bit for bit at any scale.
+    const double lastColumn = std::clamp(exactWidth - (w - 1.0), 0.0, 1.0);
+    const double lastRow = std::clamp(exactHeight - (h - 1.0), 0.0, 1.0);
+    if (!gpuGradient && (lastColumn != 1.0 || lastRow != 1.0)) {
+        const auto covered = [&pixel](const double coverage)
+            -> render::ImageResult<render::Rgba32f> {
+            if (coverage == 1.0)
+                return render::ImageResult<render::Rgba32f>::success(*pixel.value());
+            const auto base = *pixel.value();
+            return render::Rgba32f::fromPremultiplied(
+                static_cast<float>(static_cast<double>(base.red()) * coverage),
+                static_cast<float>(static_cast<double>(base.green()) * coverage),
+                static_cast<float>(static_cast<double>(base.blue()) * coverage),
+                static_cast<float>(static_cast<double>(base.alpha()) * coverage));
+        };
+        // Index bit 0: the last column; bit 1: the last row. The corner is the row's coverage
+        // times the column's, in that order, as the CPU multiplies them.
+        const auto right = covered(lastColumn);
+        const auto bottom = covered(lastRow);
+        const auto corner = covered(lastRow * lastColumn);
+        if (!right || !bottom || !corner)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Solid edge coverage is invalid");
+        auto palette = std::make_shared<const std::vector<render::Rgba32f>>(
+            std::vector<render::Rgba32f>{*pixel.value(), *right.value(), *bottom.value(),
+                                         *corner.value()});
+        OperationKey edgeKey;
+        edgeKey.add(std::string{"gpu-solid-edge-v1"});
+        for (const auto& value : *palette) {
+            edgeKey.add(std::bit_cast<std::uint32_t>(value.red()));
+            edgeKey.add(std::bit_cast<std::uint32_t>(value.green()));
+            edgeKey.add(std::bit_cast<std::uint32_t>(value.blue()));
+            edgeKey.add(std::bit_cast<std::uint32_t>(value.alpha()));
+        }
+        edgeKey.add(lastColumn != 1.0);
+        edgeKey.add(lastRow != 1.0);
+        addWindowToKey(edgeKey, solidWindow);
+        addWindowToKey(edgeKey, solidDisplay);
+        addPixelAspectToKey(edgeKey, solidAspect);
+        edgeKey.add(std::string{kGpuCoveredSolidSpirvSha256});
+        keyOf[index] = edgeKey.digest();
+        if (const auto error = charge(solidWindow.extent().width(), solidWindow.extent().height(),
+                                      sizeof(render::Rgba32f))) {
+            return error;
+        }
+        const auto columns = static_cast<std::size_t>(solidWindow.extent().width());
+        const auto rows = static_cast<std::size_t>(solidWindow.extent().height());
+        std::shared_ptr<std::vector<std::uint8_t>> indices;
+        try {
+            indices = std::make_shared<std::vector<std::uint8_t>>(columns * rows, std::uint8_t{0});
+        } catch (const std::bad_alloc&) {
+            return fail(PreparedGpuSceneDiagnosticCode::BudgetRefused,
+                        "Solid edge indices could not be allocated");
+        }
+        if (lastColumn != 1.0) {
+            for (std::size_t y = 0; y < rows; ++y)
+                (*indices)[y * columns + columns - 1] = 1;
+        }
+        if (lastRow != 1.0) {
+            for (std::size_t x = 0; x < columns; ++x)
+                (*indices)[(rows - 1) * columns + x] |= 2;
+        }
+        GpuSceneCoverageSolidCommand command{
+            .index = kInvalidGpuSceneCommand,
+            .sourceOperation = operationIndex,
+            .pixel = *pixel.value(),
+            .opacity = 1.0F,
+            .geometry = nullptr,
+            .coverage = std::move(indices),
+            .palette = std::move(palette),
+            .outputWindow = solidWindow,
+            .displayWindow = solidDisplay,
+            .pixelAspect = solidAspect,
+            .geometryKey = keyOf[index],
+            .semanticKey = keyOf[index],
+        };
+        if (const auto error = chargeCoverage(command))
+            return error;
+        commandForOperation[index] = emit(std::move(command));
+        vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
+        return std::nullopt;
+    }
 
     OperationKey key;
     key.add(std::string{gpuGradient ? "gpu-gradient-v1" : "gpu-solid-v1"});
