@@ -567,8 +567,11 @@ void addTools(std::vector<ReferenceEntry>& out) {
          {.name = "preset",
           .type = "string",
           .required = true,
-          .summary = "The output format: the id export.presets lists, or the older name of the "
-                     "same preset.",
+          .summary = "The output format: any id export.presets lists as available on this "
+                     "computer (built-in or user preset), for example builtin:h264-mp4. A "
+                     "preset that is not available is refused with its reason. The values "
+                     "below are the presets that have an older name; export.presets lists "
+                     "every other one (H.264, HEVC, VP9, AV1, DPX and user presets).",
           .choices = {{"builtin:png-sequence", "PNG, 8-bit RGBA, sRGB"},
                       {"builtin:exr-sequence", "OpenEXR, 32-bit float RGBA, linear Rec.709 scene"},
                       {"builtin:tiff-sequence", "TIFF, 16-bit RGBA, sRGB"},
@@ -748,7 +751,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
          "request carries a progress token.",
          true},
         {"export.presets",
-         "The export presets available on this computer, optionally for one job's composition.",
+         "The export presets available on this computer and for the open project, optionally "
+         "for one job's composition.",
          true},
         {"export.script",
          "A script that recreates an export job and starts it (bloom-cli JSON or Python).", true},

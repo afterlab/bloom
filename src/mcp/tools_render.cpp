@@ -96,10 +96,12 @@ std::string lowered(std::string text) {
     return text;
 }
 
+// `preset` names the preset in a refusal; `extension` is its file extension without the dot.
 RenderDestination renderDestination(const std::string& text, const std::string_view preset,
-                                    const bool range, const std::uint64_t frame, const bool still,
+                                    const std::string_view presetFileExtension, const bool range,
+                                    const std::uint64_t frame, const bool still,
                                     const bool patternsSupported) {
-    const auto extension = std::string(presetExtension(preset));
+    const auto extension = std::string(presetFileExtension);
     std::filesystem::path path(text);
     std::error_code error;
     const bool folder =
@@ -236,6 +238,63 @@ std::string expandedDestination(const std::string& text, const document::Composi
     return *expanded;
 }
 
+std::string unknownPresetMessage(const std::string_view preset) {
+    return "Unknown preset \"" + std::string(preset) +
+           "\"; export.presets lists the presets this computer can export";
+}
+
+// A preset as the export queue runs it. The six presets of kPresetMappings keep their own names
+// and still/media split. Every other id the catalogue lists (#650: "builtin:h264-mp4", the other
+// built-ins and user presets) is accepted by `export` with the settings the queue would use, so
+// the tool and the queue agree on what can be exported.
+struct ResolvedPreset final {
+    host::ExportPreset preset;
+    bool still = false;
+    std::string extension;
+};
+
+ResolvedPreset resolvePreset(McpServerCore::State& core, McpCall& call,
+                             const std::string& presetName, const bool compositionExport) {
+    if (const auto found = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
+        found != kPresetMappings.end()) {
+        auto preset = host::builtInExportPreset(found->builtIn);
+        if (!preset)
+            throw std::runtime_error("The export preset is not available");
+        return {.preset = std::move(*preset),
+                .still = found->still,
+                .extension = std::string(presetExtension(presetName))};
+    }
+    if (!compositionExport)
+        throw InvalidInput(unknownPresetMessage(presetName));
+    auto preset = host::builtInExportPreset(presetName);
+    if (!preset) {
+        // A user preset lives in the queue's catalogue.
+        const auto read = [&](host::ExportQueueService* queue, std::uint64_t) {
+            if (queue == nullptr)
+                return;
+            const auto catalogue = queue->presets().snapshot();
+            if (catalogue == nullptr)
+                return;
+            const auto listed =
+                std::ranges::find(catalogue->presets, presetName, &host::ExportPreset::id);
+            if (listed != catalogue->presets.end())
+                preset = *listed;
+        };
+        if (!core.dependencies.exports.run(read, call.control.stop))
+            throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+    }
+    if (!preset)
+        throw InvalidInput(unknownPresetMessage(presetName));
+    const auto extension = preset->capabilities.extension.empty()
+                               ? std::string(host::exportFormatExtension(preset->settings.format))
+                               : preset->capabilities.extension;
+    const bool still = preset->capabilities.imageSequence;
+    return {.preset = std::move(*preset), .still = still, .extension = extension};
+}
+
+yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
+                           yyjson_val* arguments, bool compositionExport);
+
 yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& call,
                                yyjson_val* arguments, const bool compositionExport) {
     auto& scheduler = core.dependencies.scheduler;
@@ -265,8 +324,12 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     // A one-frame range is a still: one file named as given, not a sequence.
     const bool range = !frameGiven && first != last;
     const auto mapping = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
+    // #650: every other preset the catalogue lists runs as a transient export queue job, the same
+    // way the in-app server runs every export.
+    if (mapping == kPresetMappings.end() && compositionExport)
+        return renderLive(core, out, call, arguments, compositionExport);
     if (mapping == kPresetMappings.end())
-        throw InvalidInput("Unknown preset");
+        throw InvalidInput(unknownPresetMessage(presetName));
     const bool stillPreset = mapping->still;
     const auto source = session.renderSourceSnapshot();
     const auto& snapshot = source.snapshot;
@@ -279,7 +342,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     const auto requested = expandedDestination(requestedText, *composition, mapping->builtIn,
                                                compositionExport ? "MCP export" : "MCP render");
     const auto destination =
-        renderDestination(requested, presetName, range, first, stillPreset, false).path;
+        renderDestination(requested, presetName, presetExtension(presetName), range, first,
+                          stillPreset, false)
+            .path;
     std::optional<output::OutputPresetV1> preset;
     constexpr std::array presets{output::OutputPresetV1::PngRgba8SrgbV1,
                                  output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
@@ -516,21 +581,17 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     const bool range = !frameGiven && first != last;
     if (first > last || last - first >= core.dependencies.limits.renderFrames)
         throw InvalidInput("Range must contain 1..10000 frames");
-    const auto found = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
-    if (found == kPresetMappings.end())
-        throw InvalidInput("Unknown preset");
-    if (!compositionExport && !found->still)
+    const auto found = resolvePreset(core, call, presetName, compositionExport);
+    if (!compositionExport && !found.still)
         throw InvalidInput("Use export for media presets and encoding settings");
-    if (found->still && (member(arguments, "profile") || member(arguments, "audio") ||
-                         member(arguments, "sampleRate") || member(arguments, "loudnessLufs") ||
-                  member(arguments, "truePeakDbtp") || encoder || workerLimits.any()))
+    if (found.still && (member(arguments, "profile") || member(arguments, "audio") ||
+                        member(arguments, "sampleRate") || member(arguments, "loudnessLufs") ||
+                        member(arguments, "truePeakDbtp") || encoder || workerLimits.any()))
         throw InvalidInput("Still presets do not accept media encoding or worker settings");
-    auto preset = host::builtInExportPreset(found->builtIn);
-    if (!preset)
-        throw std::runtime_error("The export preset is not available");
+    const auto* preset = &found.preset;
     host::ExportTransientJobRequest request;
     request.composition = document::CompositionId::fromRaw(id);
-    request.range = range || !found->still
+    request.range = range || !found.still
                         ? document::ExportRange{document::ExportRangeKind::Custom, first, last}
                         : document::ExportRange{document::ExportRangeKind::Frame, first, first};
     request.settings = preset->settings;
@@ -557,8 +618,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Audio sample rate is outside 8000..192000");
         request.settings.audioSampleRate = static_cast<std::uint32_t>(value);
     }
-    const auto destination =
-        renderDestination(requested, presetName, range, first, found->still, true);
+    const auto destination = renderDestination(requested, presetName, found.extension, range,
+                                               first, found.still, true);
     if (destination.pattern)
         request.settings.naming.pattern = *destination.pattern;
     request.destination =

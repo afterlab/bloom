@@ -613,6 +613,10 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
             auto availability = preset.platformAvailability;
             if (availability.available)
                 availability = host::exportSourceAvailability(preset.settings, audioRefusal);
+            // #650: and the open project, so a preset listed as available is one an export
+            // accepts.
+            if (availability.available)
+                availability = service_.projectAvailability(preset.settings);
             json.begin('{')
                 .key("id")
                 .string(preset.id)
@@ -620,6 +624,11 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
                 .string(preset.displayName)
                 .key("format")
                 .string(document::exportFormatToken(preset.settings.format))
+                // The destination's file extension, without the dot.
+                .key("extension")
+                .string(preset.capabilities.extension.empty()
+                            ? host::exportFormatExtension(preset.settings.format)
+                            : std::string_view(preset.capabilities.extension))
                 .key("available")
                 .boolean(availability.available)
                 .key("reason")

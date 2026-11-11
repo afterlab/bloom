@@ -916,10 +916,20 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                         if (availability.available)
                             availability =
                                 host::exportSourceAvailability(preset.settings, audioRefusal);
+                        // #650: and the open project, so a preset listed as available is
+                        // one `export` accepts.
+                        if (availability.available)
+                            availability = queue->projectAvailability(preset.settings);
                         auto* row = out.object();
                         out.set(row, "id", out.text(preset.id));
                         out.set(row, "name", out.text(preset.displayName));
                         out.set(row, "description", out.text(preset.description));
+                        // The destination's file extension, without the dot.
+                        out.set(row, "extension",
+                                out.text(preset.capabilities.extension.empty()
+                                             ? std::string(host::exportFormatExtension(
+                                                   preset.settings.format))
+                                             : std::string(preset.capabilities.extension)));
                         out.set(row, "available", out.boolean(availability.available));
                         out.set(row, "reason", out.text(availability.reason));
                         Parsed settings(host::exportSettingsToJson(preset.settings));

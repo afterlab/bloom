@@ -1126,6 +1126,17 @@ ExportPresetCatalogue& ExportQueueService::presets() const noexcept {
     return *state_->dependencies.presets;
 }
 
+ExportAvailability
+ExportQueueService::projectAvailability(const document::ExportOutputSettings& settings) const {
+    const auto& color = state_->colorSettings;
+    if (color)
+        return exportProjectAvailability(settings, *color);
+    ExportAvailability available;
+    available.available = true;
+    available.code = ExportAvailabilityCode::Available;
+    return available;
+}
+
 void ExportQueueService::pump() {
     auto& s = *state_;
     if (s.pumping)

@@ -764,6 +764,13 @@ class ExportQueueService final {
 
     // ---- Owner thread (desktop: UI thread). Non-blocking, no I/O.
 
+    // Whether the open project can export `settings` as of the last pump (for example, an output
+    // that uses ACES names needs the built-in ACES configuration). Available when no project
+    // color settings are known. The preset listings use it so that a preset listed as available
+    // is one an export of this project accepts (#650).
+    [[nodiscard]] ExportAvailability
+    projectAvailability(const document::ExportOutputSettings& settings) const;
+
     // Consumes finished tasks and worker samples, reads the session's newest document snapshot,
     // advances runs, applies ready asset imports, schedules destination re-sampling for changed
     // outputs, and publishes a new snapshot when anything changed. The only publisher.

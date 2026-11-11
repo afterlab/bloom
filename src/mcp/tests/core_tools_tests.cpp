@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1691,6 +1692,265 @@ void keyEqualToDefault() {
            "the later key joins the key at the default, so the value animates: " + keyframes);
 }
 
+// #650: `export` accepts every preset export.presets lists as available, as the queue does, and
+// an id that is listed but unavailable is refused with its reason, never as unknown.
+void exportAcceptsEveryListedPreset() {
+    const auto folder =
+        std::filesystem::temp_directory_path() /
+        ("bloom-mcp-preset-walk-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    auto fake = std::make_shared<host::testing::FakeExportRunBackend>();
+    std::unique_ptr<host::ExportQueueService> queue;
+    std::uint64_t generation = 1;
+    // The test thread is the application's owner thread. A tool call runs on another thread, as
+    // an MCP request does, and hands its queue work and its color change over to this one.
+    std::mutex ownerMutex;
+    std::deque<std::function<void()>> ownerWork;
+    const auto onOwner = [&](std::function<void()> work) {
+        std::promise<void> done;
+        auto finished = done.get_future();
+        {
+            const std::lock_guard lock(ownerMutex);
+            ownerWork.push_back([&] {
+                work();
+                done.set_value();
+            });
+        }
+        finished.wait();
+    };
+    mcp::McpExportAccess exports{
+        .run =
+            [&](const mcp::McpExportAccess::Work& work, const std::stop_token&) {
+                onOwner([&] { work(queue.get(), generation); });
+                return true;
+            },
+        .callerIsOwner = false};
+    runtime::NodeDefinitionRegistry registry;
+    const runtime::SnapshotCompiler compiler{registry};
+    Live* live = nullptr;
+    const auto mirror = [&] {
+        return scripting::LiveSessionState{.renderSource = live->session->renderSourceSnapshot(),
+                                           .context = live->session->operationContext(),
+                                           .viewerDisplay = {},
+                                           .viewerView = {},
+                                           .projectPath = std::nullopt,
+                                           .readOnly = false};
+    };
+    mcp::McpLiveUiPort port;
+    // The tool resolves the configuration; the application applies it, here after the call.
+    std::mutex colorMutex;
+    std::optional<document::ColorSettings> requested;
+    port.setColorSettings = [&](const document::ColorSettings& settings) {
+        const std::lock_guard lock(colorMutex);
+        requested = settings;
+        return mcp::McpUiResult{};
+    };
+    Live server(std::move(port), std::move(exports), folder);
+    live = &server;
+    const scripting::LiveSessionCommitter committer{
+        .execute =
+            [&](commands::Transaction transaction) {
+                auto result = server.session->execute(std::move(transaction));
+                server.host.publish(mirror());
+                return result;
+            },
+        .history =
+            [&](const bool redo, const commands::CommandOrigin origin) {
+                auto result = redo ? server.session->redo(origin) : server.session->undo(origin);
+                server.host.publish(mirror());
+                return result;
+            },
+        .gestureOpen = [] { return false; },
+        .revision = [&] { return server.session->snapshot().revision(); },
+        .viewerLevel = {}};
+    const auto call = [&](const std::string& tool, const std::string& arguments) {
+        auto result =
+            std::async(std::launch::async, [&] { return server.call(tool, arguments); });
+        while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+            if (queue)
+                queue->pump();
+            std::deque<std::function<void()>> work;
+            {
+                const std::lock_guard lock(ownerMutex);
+                work.swap(ownerWork);
+            }
+            for (const auto& item : work)
+                item();
+            static_cast<void>(server.host.drainOne(committer));
+        }
+        return result.get();
+    };
+    struct Release final {
+        std::unique_ptr<host::ExportQueueService>& queue;
+        std::filesystem::path folder;
+        ~Release() {
+            queue.reset();
+            std::error_code ignored;
+            std::filesystem::remove_all(folder, ignored);
+        }
+    } release{queue, folder};
+    const auto makeQueue = [&](const host::ExportEncoderStatus& encoders) {
+        queue.reset();
+        ++generation;
+        queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
+            .session = *server.session->hostSession(),
+            .scheduler = server.scheduler,
+            .compiler = compiler,
+            .publications = *server.session->publicationCoordinator(),
+            .artifacts = *server.session->artifactCoordinator(),
+            .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
+            .gpu = nullptr,
+            .retirement = nullptr,
+            .presets = host::ExportPresetCatalogue::create(
+                {.userDataDirectory = std::nullopt, .initialEncoders = encoders}),
+            .limits = {},
+            .displayProcessor = nullptr,
+            .scratchDirectory = {},
+            .backend = fake});
+    };
+    host::ExportEncoderStatus everything;
+    everything.probed = true;
+    everything.mediaWorker = true;
+    everything.openh264 = host::ExportEncoderStatus::OpenH264::Installed;
+    everything.vaapiH264 = everything.vaapiHevc = everything.vaapiHevcMain10 = true;
+    everything.nvencH264 = everything.nvencHevc = everything.nvencHevcMain10 = true;
+    makeQueue(everything);
+
+    struct Listed final {
+        std::string id, extension, reason;
+        bool available = false;
+    };
+    const auto list = [&] {
+        const auto presets = call("export.presets", "{}");
+        std::vector<Listed> rows;
+        const std::regex row(R"re(\{"id":"([^"]+)","name":"[^"]*","description":"[^"]*",)re"
+                             R"re("extension":"([^"]+)","available":(true|false),)re"
+                             R"re("reason":"([^"]*)")re");
+        for (std::sregex_iterator at(presets.begin(), presets.end(), row), end; at != end; ++at)
+            rows.push_back({(*at)[1].str(), (*at)[2].str(), (*at)[4].str(),
+                            (*at)[3].str() == "true"});
+        expect(!rows.empty(), "export.presets lists presets with their extension: " + presets);
+        return rows;
+    };
+    const auto exportWith = [&](const Listed& preset, const std::string& stem) {
+        return call("export",
+                           R"({"composition":1,"frame":0,"preset":")" + preset.id +
+                               R"(","destination":")" +
+                               (folder / (stem + "." + preset.extension)).string() +
+                               R"(","overwrite":"replace"})");
+    };
+    const auto transact = [&](const std::string& operations) {
+        const auto revision = firstMatch(call("query", R"({"kind":"project"})"),
+                                         R"re("revision":(\d+))re");
+        return call("transact", R"({"expectedRevision":)" + revision +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+
+    bool h264Mp4 = false;
+    std::size_t walked = 0;
+    std::vector<std::string> done;
+    const auto walk = [&](const Listed& preset) {
+        done.push_back(preset.id);
+        h264Mp4 = h264Mp4 || preset.id == "builtin:h264-mp4";
+        const auto stem = "walk-" + std::to_string(walked++);
+        // The tool.
+        fake->push({});
+        const auto exported = exportWith(preset, stem);
+        expect(contains(exported, R"("isError":false)") && !contains(exported, "Unknown preset") &&
+                   contains(exported, R"("publishedFrames":)"),
+               "export accepts " + preset.id + ": " + exported);
+        // The queue, with only the preset id.
+        const auto destination = (folder / (stem + "-queued." + preset.extension)).string();
+        const auto added = transact(
+            R"({"op":"bloom.export.add-job","args":{"composition":1,"range":"frame","first":0,)"
+            R"("outputs":["{\"preset\":\")" +
+            preset.id + R"(\",\"destination\":{\"path\":\")" + destination +
+            R"(\",\"overwrite\":\"replace\"}}"]}})");
+        const auto job = outputId(added, "exportJob");
+        expect(contains(added, R"("succeeded":true)") && job != 0,
+               "the queue accepts " + preset.id + ": " + added);
+        if (job == 0)
+            return;
+        fake->push({});
+        const auto started =
+            call("export.start", R"({"jobs":[)" + std::to_string(job) + "]}");
+        const auto waited = call("export.wait", R"({"job":)" + std::to_string(job) +
+                                                           R"(,"timeoutMs":20000})");
+        expect(contains(started, R"("isError":false)") && contains(waited, R"("finished":true)") &&
+                   !contains(waited, R"("state":"failed")"),
+               "the queue runs " + preset.id + ": " + started + waited);
+    };
+    // Bloom Neutral project: the presets that use ACES names are listed as unavailable with the
+    // reason, and export refuses them with it. Everything else is accepted.
+    std::size_t needAces = 0;
+    for (const auto& preset : list()) {
+        if (preset.available) {
+            walk(preset);
+            continue;
+        }
+        ++needAces;
+        expect(contains(preset.reason, "ACES"),
+               preset.id + " is unavailable in a Bloom Neutral project only for its ACES names: " +
+                   preset.reason);
+        const auto result = exportWith(preset, "neutral-" + std::to_string(needAces));
+        expect(!contains(result, "Unknown preset") && !contains(result, R"("isError":false)") &&
+                   contains(result, preset.reason),
+               "export refuses " + preset.id + " with the listed reason: " + result);
+    }
+    // The same project on the built-in ACES configuration: those presets are now available and
+    // accepted, so every preset has been through both surfaces.
+    const auto aces = call("project.set-color-settings", R"({"config":"aces"})");
+    expect(contains(aces, R"("isError":false)") && requested.has_value(),
+           "the project switches to ACES: " + aces);
+    if (!requested)
+        return;
+    static_cast<void>(server.session->hostSession()->setColorSettings(*requested));
+    server.host.publish(mirror());
+    const auto onAces = list();
+    for (const auto& preset : onAces) {
+        if (std::ranges::find(done, preset.id) != done.end())
+            continue;
+        expect(preset.available,
+               preset.id + " is available on the ACES configuration: " + preset.reason);
+        if (preset.available)
+            walk(preset);
+    }
+    expect(h264Mp4 && needAces > 0 && done.size() == onAces.size() && walked >= 6,
+           "the walk covered builtin:h264-mp4 and every other preset");
+
+    const auto unknown = call(
+        "export", R"({"composition":1,"frame":0,"preset":"builtin:no-such-preset",)"
+                  R"("destination":")" +
+                      (folder / "unknown.mp4").string() + R"("})");
+    expect(contains(unknown, "Unknown preset") && contains(unknown, "export.presets"),
+           "an id the list does not carry is refused as unknown and points at the list: " +
+               unknown);
+    const auto stillOnly = call(
+        "render", R"({"composition":1,"frame":0,"preset":"builtin:h264-mp4","destination":")" +
+                      (folder / "render.mp4").string() + R"("})");
+    expect(contains(stillOnly, R"("isError":true)") || contains(stillOnly, "-32602"),
+           "render still refuses a movie preset: " + stillOnly);
+
+    // No media worker: the movie presets are listed as unavailable with a reason, and export
+    // refuses them with that reason.
+    host::ExportEncoderStatus none;
+    none.probed = true;
+    makeQueue(none);
+    std::size_t refused = 0;
+    for (const auto& preset : list()) {
+        if (preset.available)
+            continue;
+        ++refused;
+        expect(!preset.reason.empty(), preset.id + " carries the reason it is unavailable");
+        const auto result = exportWith(preset, "refused-" + std::to_string(refused));
+        expect(!contains(result, "Unknown preset") && !contains(result, R"("isError":false)") &&
+                   contains(result, preset.reason),
+               "export refuses the unavailable " + preset.id + " with its reason: " + result);
+    }
+    expect(refused > 0, "without a media worker some presets are unavailable");
+}
+
 // #541: a Colorize's gradient is set as {"stops": [{position, color}]} and reads back the same way.
 void gradientReadBack() {
     Headless server;
@@ -2353,6 +2613,7 @@ int main() {
         liveSeams();
         exportReveal();
         retiredTransientJobs();
+        exportAcceptsEveryListedPreset();
         animationReadBack();
         mcpFold();
         secondProjectFile();
