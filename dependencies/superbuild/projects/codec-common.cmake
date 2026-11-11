@@ -21,6 +21,15 @@ if(BLOOM_NASM_REQUIRED)
     list(APPEND BLOOM_CODEC_DEPENDS bloom_dependency_nasm)
 endif()
 
+# macOS: the Meson-built codecs compile and link for the locked deployment target.
+if(BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG)
+    list(APPEND BLOOM_CODEC_MESON_ARGUMENTS
+        "-Dc_args=${BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG}"
+        "-Dc_link_args=${BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG}"
+        "-Dcpp_args=${BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG}"
+        "-Dcpp_link_args=${BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG}")
+endif()
+
 # FFmpeg's MSVC toolchain compiles with cl's default static runtime; the static codec archives
 # use the same runtime so libavcodec links one C runtime.
 if(MSVC)
@@ -41,3 +50,9 @@ else()
 endif()
 
 set(BLOOM_CODEC_STATIC_INSTALL_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/codec-static-install.cmake")
+
+# Where the codec recipes and FFmpeg build and install. Both are the ordinary build tree and
+# prefix; when either path contains whitespace they are the same directories reached through a
+# link without any (bloom_dependency_plain_path in the superbuild root).
+bloom_dependency_plain_path(BLOOM_CODEC_BUILD_ROOT "${CMAKE_CURRENT_BINARY_DIR}")
+bloom_dependency_plain_path(BLOOM_CODEC_PREFIX "${BLOOM_DEPENDENCY_PREFIX}")

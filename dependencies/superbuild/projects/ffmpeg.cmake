@@ -137,6 +137,7 @@ elseif(WIN32)
 endif()
 
 ExternalProject_Add(bloom_dependency_ffmpeg
+    PREFIX "${BLOOM_CODEC_BUILD_ROOT}/bloom_dependency_ffmpeg-prefix"
     URL "${BLOOM_FFMPEG_URL}"
     URL_HASH SHA256=${BLOOM_FFMPEG_SHA256}
     DOWNLOAD_DIR "${BLOOM_DEPENDENCY_DOWNLOAD_DIR}"
@@ -149,7 +150,7 @@ ExternalProject_Add(bloom_dependency_ffmpeg
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         CC=${CMAKE_C_COMPILER}
         CXX=${CMAKE_CXX_COMPILER}
-        PKG_CONFIG_PATH=${BLOOM_DEPENDENCY_PREFIX}/lib/pkgconfig
+        PKG_CONFIG_PATH=${BLOOM_CODEC_PREFIX}/lib/pkgconfig
         ${BLOOM_FFMPEG_SHELL}
         <SOURCE_DIR>/configure
         ${BLOOM_FFMPEG_COMPILER_ARGUMENTS}
@@ -159,7 +160,7 @@ ExternalProject_Add(bloom_dependency_ffmpeg
     INSTALL_COMMAND ${BLOOM_FFMPEG_MAKE} install
     ${BLOOM_DEPENDENCY_OFFLINE_ARGS}
     BUILD_ALWAYS OFF
-    INSTALL_DIR "${BLOOM_DEPENDENCY_PREFIX}"
+    INSTALL_DIR "${BLOOM_CODEC_PREFIX}"
     USES_TERMINAL_DOWNLOAD ON
     USES_TERMINAL_BUILD ON)
 

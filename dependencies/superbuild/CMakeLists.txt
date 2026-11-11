@@ -49,9 +49,77 @@ set(BLOOM_DEPENDENCY_COMMON_CMAKE_ARGS
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY:BOOL=OFF
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY:BOOL=OFF)
 
+# macOS: every component is built for the deployment target the lock's Apple profile records, the
+# same one the Bloom build takes from it. The lock is the authority; a different value given on
+# the command line is an error rather than a second source of truth.
+set(BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG)
+if(APPLE)
+    include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/BloomAppleDeploymentTarget.cmake")
+    bloom_locked_apple_deployment_target(bloom_locked_deployment_target)
+    if(NOT bloom_locked_deployment_target)
+        message(FATAL_ERROR "The dependency lock has no macOS profile to take a deployment "
+            "target from.")
+    endif()
+    if(CMAKE_OSX_DEPLOYMENT_TARGET
+       AND NOT CMAKE_OSX_DEPLOYMENT_TARGET VERSION_EQUAL bloom_locked_deployment_target)
+        message(FATAL_ERROR "CMAKE_OSX_DEPLOYMENT_TARGET is ${CMAKE_OSX_DEPLOYMENT_TARGET}, but "
+            "the dependency lock's macOS profile records ${bloom_locked_deployment_target}.")
+    endif()
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${bloom_locked_deployment_target}")
+    list(APPEND BLOOM_DEPENDENCY_COMMON_CMAKE_ARGS
+        -DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${CMAKE_OSX_DEPLOYMENT_TARGET})
+    # For the recipes that are not CMake projects (Meson, configure scripts).
+    set(BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    message(STATUS "Bloom dependencies: macOS deployment target "
+        "${CMAKE_OSX_DEPLOYMENT_TARGET} (from the dependency lock)")
+endif()
+
 if(NOT BLOOM_DEPENDENCY_ALLOW_DOWNLOADS)
     set(BLOOM_DEPENDENCY_OFFLINE_ARGS DOWNLOAD_NO_PROGRESS ON)
 endif()
+
+# The configure scripts and Makefiles of the codec libraries and FFmpeg split their arguments on
+# whitespace, so they cannot build in, install to, or compile against a path that contains any
+# (a volume or folder name with a space is ordinary on macOS and Windows). Those recipes reach
+# such a path through a symbolic link in a directory without whitespace. A path without
+# whitespace is returned unchanged, so nothing differs where there is none.
+set(BLOOM_DEPENDENCY_PLAIN_ROOT "" CACHE PATH
+    "Directory without whitespace in its path that holds the links used to reach a build tree,
+prefix or SDK whose path contains whitespace. Empty selects the system temporary directory.")
+function(bloom_dependency_plain_path output path)
+    if(NOT path MATCHES "[ \t]")
+        set(${output} "${path}" PARENT_SCOPE)
+        return()
+    endif()
+    set(bloom_plain_root "${BLOOM_DEPENDENCY_PLAIN_ROOT}")
+    if(NOT bloom_plain_root)
+        if(DEFINED ENV{TMPDIR} AND NOT "$ENV{TMPDIR}" STREQUAL "")
+            file(TO_CMAKE_PATH "$ENV{TMPDIR}" bloom_plain_root)
+        elseif(WIN32)
+            file(TO_CMAKE_PATH "$ENV{TEMP}" bloom_plain_root)
+        else()
+            set(bloom_plain_root /tmp)
+        endif()
+    endif()
+    string(REGEX REPLACE "/+$" "" bloom_plain_root "${bloom_plain_root}")
+    if(bloom_plain_root STREQUAL "" OR bloom_plain_root MATCHES "[ \t]")
+        message(FATAL_ERROR
+            "'${path}' contains whitespace, and so does the directory for the links that reach "
+            "it ('${bloom_plain_root}'). Set BLOOM_DEPENDENCY_PLAIN_ROOT to a directory whose "
+            "path has no whitespace.")
+    endif()
+    string(SHA256 bloom_plain_digest "${path}")
+    string(SUBSTRING "${bloom_plain_digest}" 0 16 bloom_plain_digest)
+    set(bloom_plain_link "${bloom_plain_root}/bloom-dependency-${bloom_plain_digest}")
+    file(MAKE_DIRECTORY "${bloom_plain_root}")
+    if(NOT IS_DIRECTORY "${path}")
+        file(MAKE_DIRECTORY "${path}")
+    endif()
+    file(CREATE_LINK "${path}" "${bloom_plain_link}" SYMBOLIC)
+    message(STATUS "Bloom dependencies: '${path}' contains whitespace; the codec recipes reach "
+        "it through ${bloom_plain_link}")
+    set(${output} "${bloom_plain_link}" PARENT_SCOPE)
+endfunction()
 
 add_subdirectory(projects)
 

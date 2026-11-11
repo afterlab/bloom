@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 
+# macOS: the deployment target comes from the dependency lock and has to be known before the first
+# project() call examines the toolchain.
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/BloomAppleDeploymentTarget.cmake")
+bloom_apply_apple_deployment_target()
+
 project(
     Bloom
     VERSION 0.1.0
@@ -85,6 +90,26 @@ add_custom_target(
 if(BLOOM_BUILD_DESKTOP)
     find_package(Qt6 6.8 REQUIRED COMPONENTS Network Svg Widgets)
     qt_standard_project_setup()
+
+    # Qt 6.8 links the AGL framework into every OpenGL consumer on macOS. The macOS 26 SDK no
+    # longer has that framework, and nothing in Qt or Bloom calls it, so the link line is the only
+    # thing that needs it. Drop the entry when the SDK in use cannot satisfy it; an SDK that still
+    # has AGL is left exactly as Qt set it up.
+    if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+        find_library(BLOOM_APPLE_AGL_FRAMEWORK AGL)
+        mark_as_advanced(BLOOM_APPLE_AGL_FRAMEWORK)
+        if(NOT BLOOM_APPLE_AGL_FRAMEWORK)
+            get_target_property(bloom_wrap_opengl_libraries
+                WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
+            if(bloom_wrap_opengl_libraries)
+                list(FILTER bloom_wrap_opengl_libraries EXCLUDE REGEX "(^|[ /])AGL(\\.framework)?$")
+                set_property(TARGET WrapOpenGL::WrapOpenGL PROPERTY
+                    INTERFACE_LINK_LIBRARIES "${bloom_wrap_opengl_libraries}")
+                message(STATUS "Bloom: this macOS SDK has no AGL framework; removed it from "
+                    "Qt's OpenGL link interface.")
+            endif()
+        endif()
+    endif()
 
     add_subdirectory(src/ui)
     add_subdirectory(apps/bloom)

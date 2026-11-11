@@ -17,6 +17,7 @@ endif()
 
 if(BLOOM_NV_CODEC_HEADERS_REQUIRED)
     ExternalProject_Add(bloom_dependency_nv_codec_headers
+        PREFIX "${BLOOM_CODEC_BUILD_ROOT}/bloom_dependency_nv_codec_headers-prefix"
         URL "${BLOOM_NV_CODEC_HEADERS_URL}"
         URL_HASH SHA256=${BLOOM_NV_CODEC_HEADERS_SHA256}
         DOWNLOAD_DIR "${BLOOM_DEPENDENCY_DOWNLOAD_DIR}"
@@ -31,6 +32,6 @@ if(BLOOM_NV_CODEC_HEADERS_REQUIRED)
             -P "${CMAKE_CURRENT_LIST_DIR}/nv-codec-headers-install.cmake"
         ${BLOOM_DEPENDENCY_OFFLINE_ARGS}
         BUILD_ALWAYS OFF
-        INSTALL_DIR "${BLOOM_DEPENDENCY_PREFIX}"
+        INSTALL_DIR "${BLOOM_CODEC_PREFIX}"
         USES_TERMINAL_DOWNLOAD ON)
 endif()

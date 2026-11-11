@@ -57,6 +57,14 @@ set(BLOOM_MINIZIP_NG_URL
     "https://github.com/zlib-ng/minizip-ng/archive/refs/tags/${BLOOM_MINIZIP_NG_VERSION}.tar.gz")
 set(BLOOM_MINIZIP_NG_SHA256 71af7b9799856d8b03619df3949e9c1be9703f8de0795af71399ba283cb27aac)
 
+# macOS only: minizip-ng defaults to Apple's libcompression there and then drops its zlib backend,
+# which leaves every consumer of the static archive needing -lcompression. MZ_LIBCOMP=OFF keeps
+# the zlib backend OpenColorIO expects, the same code path as every other platform. The option
+# does not exist elsewhere, so it is passed on macOS alone.
+set(BLOOM_MINIZIP_NG_PLATFORM_ARGUMENTS)
+if(APPLE)
+    list(APPEND BLOOM_MINIZIP_NG_PLATFORM_ARGUMENTS -DMZ_LIBCOMP:BOOL=OFF)
+endif()
 ExternalProject_Add(bloom_dependency_minizip-ng
     URL "${BLOOM_MINIZIP_NG_URL}"
     URL_HASH SHA256=${BLOOM_MINIZIP_NG_SHA256}
@@ -74,6 +82,7 @@ ExternalProject_Add(bloom_dependency_minizip-ng
         -DBUILD_SHARED_LIBS:BOOL=OFF
         -DMZ_COMPAT:BOOL=OFF
         -DMZ_ZLIB:BOOL=ON
+        ${BLOOM_MINIZIP_NG_PLATFORM_ARGUMENTS}
         -DMZ_BZIP2:BOOL=OFF
         -DMZ_LZMA:BOOL=OFF
         -DMZ_PPMD:BOOL=OFF

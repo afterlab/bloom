@@ -19,9 +19,48 @@ set(BLOOM_LIBVPX_ENV CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER})
 if(BLOOM_NASM_REQUIRED)
     list(APPEND BLOOM_LIBVPX_ENV AS=${BLOOM_NASM_EXECUTABLE})
 endif()
+if(APPLE)
+    # libvpx's configure asks xcrun for the macOS SDK and passes the answer to the compiler
+    # unquoted, so an SDK under a path with whitespace (Xcode on a volume whose name has a space)
+    # breaks every compile. Its configure then sees an xcrun that answers that one question with
+    # a link to the same SDK and hands everything else to the real tool.
+    execute_process(COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE BLOOM_LIBVPX_SDK OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE bloom_libvpx_sdk_result)
+    if(bloom_libvpx_sdk_result EQUAL 0 AND BLOOM_LIBVPX_SDK MATCHES "[ \t]")
+        bloom_dependency_plain_path(BLOOM_LIBVPX_PLAIN_SDK "${BLOOM_LIBVPX_SDK}")
+        find_program(BLOOM_LIBVPX_XCRUN xcrun REQUIRED)
+        set(BLOOM_LIBVPX_XCRUN_DIR "${BLOOM_CODEC_BUILD_ROOT}/bloom-libvpx-xcrun")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bloom-libvpx-xcrun")
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bloom-libvpx-xcrun/xcrun"
+            "#!/bin/sh\n"
+            "for argument in \"$@\"; do\n"
+            "    if [ \"$argument\" = --show-sdk-path ]; then\n"
+            "        echo '${BLOOM_LIBVPX_PLAIN_SDK}'\n"
+            "        exit 0\n"
+            "    fi\n"
+            "done\n"
+            "exec '${BLOOM_LIBVPX_XCRUN}' \"$@\"\n")
+        file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/bloom-libvpx-xcrun/xcrun"
+            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+                        WORLD_READ WORLD_EXECUTE)
+        list(APPEND BLOOM_LIBVPX_ENV "PATH=${BLOOM_LIBVPX_XCRUN_DIR}:$ENV{PATH}")
+    endif()
+endif()
 set(BLOOM_LIBVPX_SHELL)
 set(BLOOM_LIBVPX_MAKE make)
 set(BLOOM_LIBVPX_PLATFORM_ARGUMENTS)
+if(APPLE)
+    # libvpx's Makefile re-invokes $(MAKE) unquoted. macOS's make is a shim that reports the real
+    # tool's path inside the active Xcode, which breaks when that path has whitespace. Naming the
+    # program keeps the recursion on the shim.
+    set(BLOOM_LIBVPX_MAKE make MAKE=make)
+endif()
+if(BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG)
+    list(APPEND BLOOM_LIBVPX_PLATFORM_ARGUMENTS
+        "--extra-cflags=${BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG}"
+        "--extra-cxxflags=${BLOOM_DEPENDENCY_APPLE_MINIMUM_FLAG}")
+endif()
 set(BLOOM_LIBVPX_POST_INSTALL)
 if(WIN32)
     # libvpx's MSVC route: configure (a POSIX shell script, run from the same MSYS2 installation as
@@ -56,6 +95,7 @@ if(WIN32)
 endif()
 
 ExternalProject_Add(bloom_dependency_libvpx
+    PREFIX "${BLOOM_CODEC_BUILD_ROOT}/bloom_dependency_libvpx-prefix"
     URL "${BLOOM_LIBVPX_URL}"
     URL_HASH SHA256=${BLOOM_LIBVPX_SHA256}
     DOWNLOAD_DIR "${BLOOM_DEPENDENCY_DOWNLOAD_DIR}"
@@ -83,6 +123,6 @@ ExternalProject_Add(bloom_dependency_libvpx
         -P "${BLOOM_CODEC_STATIC_INSTALL_SCRIPT}"
     ${BLOOM_DEPENDENCY_OFFLINE_ARGS}
     BUILD_ALWAYS OFF
-    INSTALL_DIR "${BLOOM_DEPENDENCY_PREFIX}"
+    INSTALL_DIR "${BLOOM_CODEC_PREFIX}"
     USES_TERMINAL_DOWNLOAD ON
     USES_TERMINAL_BUILD ON)
