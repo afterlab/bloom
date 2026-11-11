@@ -108,11 +108,17 @@ if(BLOOM_BUILD_DESKTOP)
     # Qt 6.8 links the AGL framework into every OpenGL consumer on macOS. The macOS 26 SDK no
     # longer has that framework, and nothing in Qt or Bloom calls it, so the link line is the only
     # thing that needs it. Drop the entry when the SDK in use cannot satisfy it; an SDK that still
-    # has AGL is left exactly as Qt set it up.
+    # has AGL is left exactly as Qt set it up. The question is asked of the linker: the running
+    # system can still have an AGL.framework directory that no SDK links against, so a file
+    # search answers it wrongly.
     if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
-        find_library(BLOOM_APPLE_AGL_FRAMEWORK AGL)
-        mark_as_advanced(BLOOM_APPLE_AGL_FRAMEWORK)
-        if(NOT BLOOM_APPLE_AGL_FRAMEWORK)
+        include(CheckCXXSourceCompiles)
+        include(CMakePushCheckState)
+        cmake_push_check_state(RESET)
+        set(CMAKE_REQUIRED_LIBRARIES "-framework AGL")
+        check_cxx_source_compiles("int main() { return 0; }" BLOOM_APPLE_AGL_LINKS)
+        cmake_pop_check_state()
+        if(NOT BLOOM_APPLE_AGL_LINKS)
             get_target_property(bloom_wrap_opengl_libraries
                 WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
             if(bloom_wrap_opengl_libraries)
