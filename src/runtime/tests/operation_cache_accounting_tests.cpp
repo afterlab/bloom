@@ -32,7 +32,10 @@
 // report. A header in front of each block remembers its size.
 namespace {
 std::atomic<std::int64_t> gLiveHeapBytes{0};
-constexpr std::size_t kHeader = alignof(std::max_align_t);
+// Room for the two words, and no smaller than the alignment operator new promises. The strictest
+// scalar alignment alone is 8 bytes on arm64 macOS, which fits neither.
+constexpr std::size_t kHeader = std::max({alignof(std::max_align_t), 2 * sizeof(std::size_t),
+                                          std::size_t{__STDCPP_DEFAULT_NEW_ALIGNMENT__}});
 
 void* countedAllocate(const std::size_t size, const std::size_t alignment) {
     const auto header = alignment > kHeader ? alignment : kHeader;
