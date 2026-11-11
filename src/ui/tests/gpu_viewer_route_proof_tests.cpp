@@ -78,6 +78,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (!options.valid) {
         return 2;
     }
+    if (!routeproof::displayPlatformAvailable()) {
+        std::cout << "SKIP: viewer route proof needs a real Wayland platform (no display here)\n";
+        return options.requireDevice ? 1 : 0;
+    }
     QApplication application(argc, argv);
     const QString platformName = QApplication::platformName();
     if (platformName != QStringLiteral("wayland") &&

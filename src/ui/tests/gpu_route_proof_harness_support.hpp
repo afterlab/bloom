@@ -32,7 +32,67 @@
 #include <utility>
 #include <vector>
 
+#if defined(__linux__)
+#include <cstring>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
+
 namespace bloom::ui::routeproof {
+
+// Whether a QApplication can come up here (#379). Qt aborts the process when no platform plugin
+// can reach a display, so a route proof started by plain CTest on a machine with no session died
+// instead of reporting that it did not run. A harness asks this before it creates the
+// application and skips when the answer is no. A platform named by QT_QPA_PLATFORM is Qt's to
+// load; otherwise a Wayland or X11 display has to be named and its local socket has to accept a
+// connection. Nothing here selects or overrides a platform: the proofs still need a real one.
+[[nodiscard]] inline bool displayPlatformAvailable() {
+#if defined(__linux__)
+    const auto set = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && *value != '\0' ? std::string(value) : std::string();
+    };
+    if (!set("QT_QPA_PLATFORM").empty())
+        return true;
+    const auto accepts = [](const std::string& path) {
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        if (path.empty() || path.size() >= sizeof(address.sun_path))
+            return false;
+        std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+        const int descriptor = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (descriptor < 0)
+            return false;
+        const bool connected =
+            ::connect(descriptor, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) ==
+            0;
+        ::close(descriptor);
+        return connected;
+    };
+    if (const auto wayland = set("WAYLAND_DISPLAY"); !wayland.empty()) {
+        const auto runtime = set("XDG_RUNTIME_DIR");
+        if (accepts(wayland.front() == '/' ? wayland
+                                           : runtime.empty() ? std::string()
+                                                             : runtime + '/' + wayland))
+            return true;
+    }
+    if (const auto display = set("DISPLAY"); !display.empty()) {
+        // A local display ":N" or ":N.S" is a socket in the X11 directory; a remote one is not
+        // checked here.
+        if (display.front() != ':')
+            return true;
+        const auto number = display.substr(1, display.find('.') == std::string::npos
+                                                  ? std::string::npos
+                                                  : display.find('.') - 1);
+        if (accepts("/tmp/.X11-unix/X" + number))
+            return true;
+    }
+    return false;
+#else
+    return true;
+#endif
+}
 
 using bloom::gpu_route_proof_io::RouteProofIoStatus;
 using bloom::runtime::GpuRouteExecutionProof;
