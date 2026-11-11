@@ -947,8 +947,9 @@ struct Encoder::State {
             require(std::fflush(aacReference->file) == 0 &&
                         std::fseek(aacReference->file, 0, SEEK_SET) == 0,
                     "AAC reference reopen failed");
-        double squaredError = 0;
-        std::uint64_t comparedSamples = 0;
+        // Tolerance profile bloom.aac-f32.v2 (lossy_audio_compare.hpp).
+        LossyAudioCompare compare(settings.channels, settings.sampleRate);
+        std::vector<float> referenceBlock, decodedBlock;
         while (next(input, index, eof)) {
             const auto& f = *input.frame;
             require(f.nb_samples > 0 && f.nb_samples <= static_cast<int>(Limits::audioSamples) &&
@@ -975,25 +976,22 @@ struct Encoder::State {
                     : static_cast<unsigned>(f.nb_samples);
             if (lossyAudio(settings.audioCodec)) {
                 require(f.format == AV_SAMPLE_FMT_FLTP, "Lossy audio reopen sample format differs");
+                // The decoder has already discarded the priming the container declares, so frame
+                // `i` here is frame `qc.audioSamples + i` of what the encoder received.
+                const auto samples = static_cast<std::size_t>(count) * settings.channels;
+                referenceBlock.resize(samples);
+                decodedBlock.resize(samples);
+                require(samples == 0 ||
+                            std::fread(referenceBlock.data(), sizeof(float), samples,
+                                       aacReference->file) == samples,
+                        "AAC reference truncated");
                 for (std::size_t i = 0; i < count; ++i)
-                    for (std::size_t c = 0; c < settings.channels; ++c) {
-                        float reference = 0;
-                        require(std::fread(&reference, sizeof(reference), 1, aacReference->file) ==
-                                    1,
-                                "AAC reference truncated");
-                        const auto value = reinterpret_cast<const float*>(f.extended_data[c])[i];
-                        const auto error =
-                            static_cast<double>(value) - static_cast<double>(reference);
-                        require(std::isfinite(value) && std::abs(error) <= 0.25,
-                                (std::string("AAC sample exceeds tolerance at ") +
-                                 std::to_string(qc.audioSamples + i) + ": actual=" +
-                                 std::to_string(value) + "; expected=" + std::to_string(reference))
-                                    .c_str());
-                        require(actual.update(std::as_bytes(std::span(&value, 1))),
-                                "AAC digest failed");
-                        squaredError += error * error;
-                        ++comparedSamples;
-                    }
+                    for (std::size_t c = 0; c < settings.channels; ++c)
+                        decodedBlock[i * settings.channels + c] =
+                            reinterpret_cast<const float*>(f.extended_data[c])[i];
+                require(actual.update(std::as_bytes(std::span(decodedBlock))),
+                        "AAC digest failed");
+                compare.push(referenceBlock, decodedBlock);
             }
             if (settings.audioCodec.starts_with("pcm_")) {
                 const auto bytes = static_cast<std::size_t>(f.nb_samples) * settings.channels *
@@ -1006,10 +1004,24 @@ struct Encoder::State {
             av_frame_unref(input.frame);
         }
         require(qc.audioSamples == settings.audioSamples, "Reopened audio sample count differs");
-        if (lossyAudio(settings.audioCodec))
-            require(comparedSamples > 0 &&
-                        squaredError / static_cast<double>(comparedSamples) <= 0.0025,
-                    "Lossy audio RMS exceeds tolerance");
+        if (lossyAudio(settings.audioCodec)) {
+            // The container must declare exactly the priming the encoder added; otherwise a
+            // reader that honors the declaration starts early or late by the difference.
+            const auto priming = static_cast<std::uint32_t>(
+                std::max(0, audioTrack.codec->initial_padding));
+            const auto declared =
+                input.startSkip.value_or(0) != 0
+                    ? *input.startSkip
+                    : static_cast<std::uint32_t>(std::max(0, stream.codecpar->initial_padding));
+            require(declared == priming,
+                    ("Lossy audio priming differs: encoder=" + std::to_string(priming) +
+                     "; container=" + std::to_string(declared))
+                        .c_str());
+            const auto measure = compare.finish();
+            require(measure.frames == settings.audioSamples && measure.failure.empty(),
+                    measure.failure.empty() ? "Lossy audio comparison is incomplete"
+                                            : measure.failure.c_str());
+        }
         // WebM records no per-track duration for Opus; MP4 states AAC's exactly.
         if (settings.audioCodec == "aac") {
             require(stream.duration != AV_NOPTS_VALUE &&

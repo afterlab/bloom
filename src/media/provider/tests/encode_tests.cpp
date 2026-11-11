@@ -1,4 +1,5 @@
 #include "support.hpp"
+#include "program_audio.hpp"
 #include <algorithm>
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -234,18 +235,24 @@ void tests(const std::filesystem::path& directory) {
     settings.audioCodec = "aac";
     settings.container = "mov";
     (void)run(settings, directory / "export-aac.mov");
-    EncodeSessionV1 excessive({});
-    ok(excessive.begin(settings));
-    for (std::uint64_t offset = 0; offset < settings.audioSamples; offset += 2000) {
-        auto block = sound(settings, offset, 2000);
-        for (auto& channel : block.channels)
-            for (auto& sample : channel)
-                sample *= 2;
-        ok(excessive.audio(std::move(block)));
+    {
+        // #650: the same tone at twice the level, encoded cleanly. Profile v1 refused it on its
+        // per-sample limit; v2 compares levels and the low band, so a correct encode verifies at
+        // any level. What v2 refuses is in bloom.media.lossy-audio-compare.
+        EncodeSessionV1 louder({});
+        ok(louder.begin(settings));
+        for (std::uint64_t offset = 0; offset < settings.audioSamples; offset += 2000) {
+            auto block = sound(settings, offset, 2000);
+            for (auto& channel : block.channels)
+                for (auto& sample : channel)
+                    sample *= 2;
+            ok(louder.audio(std::move(block)));
+        }
+        const auto qc = get(louder.finish());
+        test::check(qc.audioSamples == settings.audioSamples,
+                    "a clean AAC encode at twice the level verifies");
+        ok(louder.close());
     }
-    const auto rejectedAac = excessive.finish();
-    test::check(std::holds_alternative<Unavailable>(rejectedAac),
-                "AAC outside immutable tolerance fails closed");
     settings = {};
     settings.width = 256;
     settings.height = 128;
@@ -377,6 +384,46 @@ void tests(const std::filesystem::path& directory) {
         mp4.container = "mp4";
         mp4.audioCodec = "aac";
         (void)run(mp4, directory / "export-h264.mp4");
+        {
+            // #650: thirty seconds of music-like audio with drum transients and full-scale clicks
+            // peaking at -0.3 dBFS, the kind of program profile v1 refused, exports to H.264
+            // MP4 with AAC and verifies. bloom.media.aac-sync reads the published file back
+            // through FFmpeg alone and checks its levels and its start against the same samples.
+            auto program = mp4;
+            program.frames = 720;
+            program.audioSamples = bloom::media::testing::kFrames;
+            const auto samples = bloom::media::testing::programAudio();
+            EncodeSessionV1 session({});
+            ok(session.begin(program));
+            for (std::uint64_t i = 0; i < program.frames; ++i) {
+                ok(session.video(image(program, i)));
+                AudioBlock block;
+                const std::uint64_t offset = i * 2000;
+                const auto divisor =
+                    std::gcd(offset, static_cast<std::uint64_t>(program.sampleRate));
+                block.pts = {static_cast<std::int64_t>(offset / divisor),
+                             static_cast<std::int64_t>(program.sampleRate / divisor)};
+                block.sampleRate = program.sampleRate;
+                block.channelLayout = {"FL", "FR"};
+                block.channels.resize(2, std::vector<float>(2000));
+                for (std::size_t frame = 0; frame < 2000; ++frame)
+                    for (std::size_t c = 0; c < 2; ++c)
+                        block.channels[c][frame] =
+                            samples[(static_cast<std::size_t>(i) * 2000 + frame) * 2 + c];
+                ok(session.audio(std::move(block)));
+            }
+            const auto qc = get(session.finish());
+            test::check(qc.frames == program.frames && qc.audioSamples == program.audioSamples,
+                        "thirty seconds of program audio verifies in H.264 MP4 with AAC");
+            std::ofstream file(directory / "export-h264-program.mp4", std::ios::binary);
+            for (std::uint64_t offset = 0; offset < qc.bytes;) {
+                const auto chunk = get(session.read(offset));
+                offset += chunk.bytes.size();
+                file.write(reinterpret_cast<const char*>(chunk.bytes.data()),
+                           static_cast<std::streamsize>(chunk.bytes.size()));
+            }
+            ok(session.close());
+        }
         // #619: short ranges whose audio is not a whole number of milliseconds keep
         // the exact logical duration in MP4 too.
         for (const std::uint64_t frames : {1U, 2U, 3U, 4U, 5U, 6U, 7U, 12U}) {

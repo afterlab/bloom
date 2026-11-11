@@ -339,16 +339,16 @@ void toleranceProfiles() {
     video.audioCodec = "aac";
     video.audioSamples = 96000;
     test::check(hex(encodeTolerance(video)) ==
-                        "17e72e34ef30897fc51fbba101d14a784be8e48a45a54e3c84dbc192a3541a84" &&
-                    encodeToleranceName(video) == "bloom.video-rgba16-srgb.v3+bloom.aac-f32.v1",
-                "video with AAC binds v3 then the unchanged AAC profile");
+                        "a5f27f9b15c60324550df4f2e2c7ae39f79a2a377a1251daf7aac1dd4ec8d7fc" &&
+                    encodeToleranceName(video) == "bloom.video-rgba16-srgb.v3+bloom.aac-f32.v2",
+                "video with AAC binds v3 then AAC profile v2");
     auto audio = video;
     audio.videoCodec.clear();
     audio.frames = 0;
     test::check(hex(encodeTolerance(audio)) ==
-                        "2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8" &&
-                    encodeToleranceName(audio) == "bloom.aac-f32.v1",
-                "AAC tolerance profile unchanged");
+                        "def0db04be097b284e354d338f2f4ea34ddfdcdc6d2cb6c6fd45bea45e1e8f19" &&
+                    encodeToleranceName(audio) == "bloom.aac-f32.v2",
+                "AAC binds tolerance profile v2 (#650)");
     audio.container = "wav";
     audio.audioCodec = "pcm_s24le";
     test::check(encodeDeterminism(audio) == MediaDeterminismV1::ByteExact &&

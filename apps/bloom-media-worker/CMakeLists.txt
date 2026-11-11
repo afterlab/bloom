@@ -85,7 +85,8 @@ endif()
 if(bloom_ffmpeg_worker)
     # The declared-sampling reopen comparison (tolerance profile v2): the encoder's output
     # conversion and the verifier's reference, shared by both provider builds and its unit test.
-    add_library(bloom_media_ffmpeg_reopen_compare STATIC ffmpeg_reopen_compare.cpp)
+    add_library(bloom_media_ffmpeg_reopen_compare STATIC ffmpeg_reopen_compare.cpp
+                lossy_audio_compare.cpp)
     target_include_directories(bloom_media_ffmpeg_reopen_compare PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(bloom_media_ffmpeg_reopen_compare PUBLIC cxx_std_20)
     target_link_libraries(bloom_media_ffmpeg_reopen_compare PUBLIC FFmpeg::swscale FFmpeg::avutil)
@@ -292,8 +293,18 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     bloom_enable_warnings(bloom_media_reopen_compare_test)
     bloom_add_test(NAME bloom.media.reopen-compare COMMAND bloom_media_reopen_compare_test
                    LABELS unit media TIMEOUT 60)
+    # The lossy-audio reopen comparison (tolerance profile bloom.aac-f32.v2) on synthetic streams:
+    # what a correct encode keeps, and the defects it must refuse.
+    add_executable(bloom_media_lossy_audio_compare_test tests/lossy_audio_compare_tests.cpp)
+    target_link_libraries(bloom_media_lossy_audio_compare_test PRIVATE bloom_media_ffmpeg_reopen_compare)
+    set_target_properties(bloom_media_lossy_audio_compare_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_lossy_audio_compare_test)
+    bloom_add_test(NAME bloom.media.lossy-audio-compare COMMAND bloom_media_lossy_audio_compare_test
+                   LABELS unit media TIMEOUT 60)
     add_executable(bloom_media_encode_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/encode_tests.cpp")
     target_link_libraries(bloom_media_encode_test PRIVATE bloom_media_worker_host)
+    target_include_directories(bloom_media_encode_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     bloom_enable_warnings(bloom_media_encode_test)
     add_dependencies(bloom_media_encode_test bloom-media-worker)
     bloom_add_test(NAME bloom.media.encode COMMAND bloom_media_encode_test
@@ -311,6 +322,19 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     bloom_add_test(NAME bloom.media.hevc-depth COMMAND bloom_media_hevc_depth_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 60)
     set_tests_properties(bloom.media.hevc-depth PROPERTIES FIXTURES_REQUIRED media-encode
+                         SKIP_RETURN_CODE 77)
+    # Issue #650: reads the thirty-second H.264 MP4 with AAC bloom.media.encode writes, through
+    # FFmpeg directly: frame count, start sync within one AAC frame, and levels against the source.
+    add_executable(bloom_media_aac_sync_test tests/aac_sync_tests.cpp)
+    target_link_libraries(bloom_media_aac_sync_test PRIVATE FFmpeg::avformat FFmpeg::avcodec
+                          FFmpeg::avutil)
+    target_compile_features(bloom_media_aac_sync_test PRIVATE cxx_std_20)
+    set_target_properties(bloom_media_aac_sync_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_aac_sync_test)
+    bloom_add_test(NAME bloom.media.aac-sync COMMAND bloom_media_aac_sync_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 60)
+    set_tests_properties(bloom.media.aac-sync PROPERTIES FIXTURES_REQUIRED media-encode
                          SKIP_RETURN_CODE 77)
     # NVIDIA NVENC needs the device: hold the machine GPU lock. Skipped (77) without a driver.
     bloom_add_test(NAME bloom.media.encode-nvenc COMMAND bloom_media_encode_test

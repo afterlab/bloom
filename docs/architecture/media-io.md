@@ -2538,12 +2538,49 @@ saturated red square in ProRes 4:2:2 because the edge pixels that share a chroma
 black reconstruct with about 40% of their red. Version 1's SHA-256 was
 `822d817ff9130218c44a4bd91de7327b349722681bb15f534894259138be3c56`. These are acceptance bounds, not predicted errors. An export outside
 the bound fails closed. AAC uses the exact profile
-`bloom.aac-f32.v1;sample-count=exact;priming=trim;absolute-max=0.25;rms=0.05`; video with AAC binds
-the SHA-256 of the two profile strings concatenated in video-then-audio order. PCM has no tolerance
-digest and uses `ByteExact`; TIFF uses `DecodedSemanticExact`.
-AAC profile SHA-256: `2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8`.
-Combined video/AAC SHA-256 (v3 video): `17e72e34ef30897fc51fbba101d14a784be8e48a45a54e3c84dbc192a3541a84`
-(with v2 video it was `88e3e40e56e68e465d0250f2e45f26b26959f8ce5ab1f8f723be88bceefd8d7e`).
+`bloom.aac-f32.v2;sample-count=exact;priming=declared;band=butterworth8-lowpass-3000hz;band-snr-db-min=6;window=2048;window-level-db-max=3;floor-dbfs=-60`;
+video with AAC binds the SHA-256 of the two profile strings concatenated in video-then-audio
+order. PCM has no tolerance digest and uses `ByteExact`; TIFF uses `DecodedSemanticExact`.
+AAC profile SHA-256: `def0db04be097b284e354d338f2f4ea34ddfdcdc6d2cb6c6fd45bea45e1e8f19`.
+Combined video/AAC SHA-256 (v3 video): `a5f27f9b15c60324550df4f2e2c7ae39f79a2a377a1251daf7aac1dd4ec8d7fc`.
+
+AAC profile version 2 (#650) is measured by `apps/bloom-media-worker/lossy_audio_compare.cpp`
+against the float samples the encoder received, per channel, and Opus in WebM is judged by the
+same measure. Each bound follows from what a transform codec keeps, not from one test signal:
+
+- `priming=declared`: the encoder adds priming samples (`initial_padding`), and the container
+  must declare the same count as the first packet's start skip (the MP4 edit list, the WebM codec
+  delay). The decoder discards them, so decoded frame *n* is source frame *n*; the reopened
+  timestamps must also start at zero and the sample count and duration stay exact.
+- `band=butterworth8-lowpass-3000hz`, `band-snr-db-min=6`: source and decoded pass through one
+  8th-order Butterworth low-pass at 3 kHz, and the energy of their difference must be at least
+  6 dB under the source's. Below 4 kHz the encoders code the waveform: FFmpeg's AAC encoder
+  substitutes noise and applies intensity stereo only above 4 kHz and 6.1 kHz, and at 192 kbit/s
+  its lowest automatic cutoff, for eight channels, is about 5.7 kHz. Quantization noise in a coded
+  band is kept under the masking threshold, which for the least favorable masker (noise masking a
+  tone) lies about 6 dB under the signal, so a correct encode cannot fall below the bound while a
+  stream that is shifted, swapped, silent or from another source does: a shift of *d* samples
+  leaves an error of `2 sin(pi f d / rate)` of a component at frequency *f*, which is above the
+  bound from 4 samples at 1 kHz.
+- `window=2048`, `window-level-db-max=3`: in each 2048-frame window (one long AAC transform
+  block) the decoded energy may not exceed the loudest of the source's same and adjacent windows
+  by more than 3 dB, in the band and over the full range, and the source's band energy must
+  reappear in the decoded same or adjacent windows within 3 dB. The adjacent windows absorb
+  pre-echo, which a long block spreads over at most its own 2048 frames, and a window boundary
+  through a transient. 3 dB covers the energy of the band above the cutoff that the encoder
+  drops, and a level change, added noise or a dropout exceeds it.
+- `floor-dbfs=-60`: energies under -60 dBFS are silence on both sides.
+
+Version 1 (`bloom.aac-f32.v1;sample-count=exact;priming=trim;absolute-max=0.25;rms=0.05`,
+SHA-256 `2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8`, combined
+`17e72e34ef30897fc51fbba101d14a784be8e48a45a54e3c84dbc192a3541a84`, and with v2 video
+`88e3e40e56e68e465d0250f2e45f26b26959f8ce5ab1f8f723be88bceefd8d7e`) bounded each decoded sample to
+0.25 of the source sample and the stream's RMS error to 0.05. It failed correct encodes of
+full-scale transients, where the error of one sample is large while the block's energy is
+right, and it bounded nothing in program quieter than those two numbers: silence, another
+source or a late stream passed at -30 dBFS. `bloom.media.lossy-audio-compare` holds both cases.
+What version 2 no longer bounds is the waveform above 3 kHz, where it checks level only: content
+there that is replaced by other content of the same level in the same windows is accepted.
 
 Wire protocol version 3 adds encode begin, frame/audio acknowledgements, finish/QC and bounded
 artifact chunks. `EncodeSettingsV1` canonical encoding orders container, codec, profile, audio codec,

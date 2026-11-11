@@ -1,5 +1,6 @@
 #include "ffmpeg_provider.hpp"
 #include "ffmpeg_reopen_compare.hpp"
+#include "lossy_audio_compare.hpp"
 #include <algorithm>
 #include <array>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -39,6 +40,7 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/display.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/intreadwrite.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
@@ -83,6 +85,9 @@ struct Input {
     std::unique_ptr<platform::WorkerSnapshotInput> snapshot;
     AVIOContext* io = nullptr;
     std::uint64_t offset = 0;
+    // The start skip the container declares on the first packet next() reads for its stream
+    // (an encoder's priming samples, which the decoder then discards); unset until that packet.
+    std::optional<std::uint32_t> startSkip;
     ~Input() {
         swr_free(&resample);
         sws_freeContext(scale);
@@ -468,6 +473,12 @@ bool next(Input& input, unsigned stream, bool& eof) {
             eof = true;
             require(avcodec_send_packet(input.codec, nullptr) >= 0, "Decoder flush failed");
         } else {
+            if (read >= 0 && !input.startSkip) {
+                std::size_t size = 0;
+                const auto* skip =
+                    av_packet_get_side_data(input.packet, AV_PKT_DATA_SKIP_SAMPLES, &size);
+                input.startSkip = skip != nullptr && size >= 4 ? AV_RL32(skip) : 0U;
+            }
             require(read >= 0 && avcodec_send_packet(input.codec, input.packet) >= 0,
                     "Invalid media packet");
         }

@@ -79,10 +79,10 @@ Digest encodeTolerance(const EncodeSettingsV1& v) {
         (void)hasher.update(
             std::as_bytes(std::span(kVideoToleranceV3.data(), kVideoToleranceV3.size())));
         (void)hasher.update(
-            std::as_bytes(std::span(kAacToleranceV1.data(), kAacToleranceV1.size())));
+            std::as_bytes(std::span(kAacToleranceV2.data(), kAacToleranceV2.size())));
         return hasher.finalize();
     }
-    const auto profile = v.videoCodec.empty() ? kAacToleranceV1 : kVideoToleranceV3;
+    const auto profile = v.videoCodec.empty() ? kAacToleranceV2 : kVideoToleranceV3;
     return digestBytes(std::as_bytes(std::span(profile.data(), profile.size())));
 }
 std::string encodeToleranceName(const EncodeSettingsV1& v) {
@@ -92,8 +92,8 @@ std::string encodeToleranceName(const EncodeSettingsV1& v) {
         return std::string(profile.substr(0, profile.find(';')));
     };
     if (v.videoCodec.empty())
-        return name(kAacToleranceV1);
-    return v.audioCodec == "aac" ? name(kVideoToleranceV3) + "+" + name(kAacToleranceV1)
+        return name(kAacToleranceV2);
+    return v.audioCodec == "aac" ? name(kVideoToleranceV3) + "+" + name(kAacToleranceV2)
                                  : name(kVideoToleranceV3);
 }
 Result<Digest> digest(const EncodeSettingsV1& v) {

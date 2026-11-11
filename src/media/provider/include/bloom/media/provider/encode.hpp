@@ -95,13 +95,24 @@ inline constexpr std::uint32_t kVideoToleranceAlphaMaximum = 64;
 // The 99.99th percentile sets aside floor(samples / 10000) color samples of each frame: never
 // more than 0.01%, so a frame under 10000 samples sets aside none.
 inline constexpr std::uint64_t kVideoToleranceSetAsideDivisor = 10000;
-inline constexpr std::string_view kAacToleranceV1 =
-    "bloom.aac-f32.v1;sample-count=exact;priming=trim;absolute-max=0.25;rms=0.05";
+// Lossy audio (AAC, and Opus through the same measure). v1 bounded every decoded sample to 0.25
+// of the sample the encoder received and the whole stream's RMS error to 0.05. That failed
+// correct encodes of loud transients, whose coding error is spread over a transform block
+// (#650), and it bounded nothing in program quieter than those limits. v2 requires the
+// container to declare the encoder's priming, then compares, per channel: the waveform below
+// 3 kHz (signal-to-error ratio of at least 6 dB through one 8th-order Butterworth low-pass on both
+// signals), and the level of every 2048-frame window against the source's same and neighbouring
+// windows (within 3 dB, band and full range). Energies under -60 dBFS count as silence. The
+// measure and its derivation are in apps/bloom-media-worker/lossy_audio_compare.hpp and
+// docs/architecture/media-io.md.
+inline constexpr std::string_view kAacToleranceV2 =
+    "bloom.aac-f32.v2;sample-count=exact;priming=declared;band=butterworth8-lowpass-3000hz;"
+    "band-snr-db-min=6;window=2048;window-level-db-max=3;floor-dbfs=-60";
 [[nodiscard]] bool valid(const EncodeSettingsV1& value);
 [[nodiscard]] MediaDeterminismV1 encodeDeterminism(const EncodeSettingsV1& value);
 [[nodiscard]] Digest encodeTolerance(const EncodeSettingsV1& value);
 // The versioned names of the tolerance profiles encodeTolerance binds
-// ("bloom.video-rgba16-srgb.v3", "bloom.aac-f32.v1", or both joined by '+' in video-then-audio
+// ("bloom.video-rgba16-srgb.v3", "bloom.aac-f32.v2", or both joined by '+' in video-then-audio
 // order); empty when it binds none.
 [[nodiscard]] std::string encodeToleranceName(const EncodeSettingsV1& value);
 [[nodiscard]] Result<Digest> digest(const EncodeSettingsV1& value);

@@ -216,6 +216,24 @@ each frame's samples are set aside (the two the check judges), and the largest s
 which is reported but not checked. The tooltip names the tolerance profile, and **Copy details**
 adds its digest.
 
+AAC and Opus audio are checked the same way: Bloom decodes the audio it just wrote and compares
+it with the audio it gave the encoder. These codecs do not return the same samples, so the check
+does not compare sample by sample. It requires three things of every channel:
+
+- The file declares the encoder's start padding, so a player that honors it starts the audio on
+  frame 0.
+- Below 3 kHz, where these encoders keep the waveform, the difference between the decoded audio
+  and the source stays at least 6 dB under the source. Audio that is late or early by a few
+  samples, comes from another source, has its channels swapped or is silent fails this, at any
+  level.
+- In every stretch of 2048 samples, the decoded audio is within 3 dB of the level of the source
+  in the same or the neighboring stretch, so added noise, a dropout or a level change fails.
+  Sound under -60 dBFS counts as silence.
+
+Loud transients such as drum hits pass, although single samples at a hit can differ a lot. The
+sample count and the audio's duration are still exact. The check is tolerance profile
+`bloom.aac-f32.v2`; PCM audio in MOV, MXF and WAV is compared exactly.
+
 **Add to Assets when done** adds the checked result to Assets (a movie as a video asset,
 a sequence as a sequence, a still as an image, a WAV as audio) with one undoable import. A file
 already in Assets is refreshed rather than duplicated. A failed import never fails the export; the
