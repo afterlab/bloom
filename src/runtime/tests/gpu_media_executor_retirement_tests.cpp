@@ -11,6 +11,7 @@
 
 #include "final_host_test_support.hpp"
 #include "gpu_image_upload_fault.hpp"
+#include "gpu_output_color_readback_fault.hpp"
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -25,6 +26,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -336,6 +338,141 @@ void testProductionUploadUnknown(Expectations& expectations, const Options& opti
     std::cout << "UPLOAD_OWNER_UNKNOWN incomplete50ms=1 nativeRetired=1 coveredClaims=0\n";
 }
 
+// #553: a frame that left a native submission unretired must not cost the next frame its device.
+// Each case leaves a real submitted job behind under a controlled observation (the fence is real
+// and signals; only what the poll reports is overridden), removes the observation, and asks for
+// the next frame: it must be evaluated on the device, never refused as "a prior native submission
+// is not retired". The outcome is judged by status, not by how long it took.
+void testNextFrameAfterUnretiredSubmission(Expectations& expectations, const Options& options,
+                                           const CpuCompositionEvaluator& cpu,
+                                           const MediaFixture& fixture) {
+    namespace upload = bloom::render::upload_detail;
+    namespace readback = bloom::render::output_color_readback_detail;
+    using bloom::runtime::GpuProcessFrameEvaluator;
+    using bloom::runtime::GpuProcessFrameEvaluatorOptions;
+    using bloom::runtime::GpuProcessFrameStatus;
+    enum class Leftover : std::uint8_t { UploadFence, ReadbackFence, StalledPastDeadline };
+    struct Case final {
+        Leftover leftover;
+        const char* name;
+    };
+    const Case cases[] = {
+        {Leftover::UploadFence, "an upload whose fence was not observed"},
+        {Leftover::ReadbackFence, "a readback whose fence was not observed"},
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+        {Leftover::StalledPastDeadline, "a job still pending at the frame deadline"},
+#endif
+    };
+    const auto clearObservations = [] {
+        upload::setUploadRetirementFaultForTest(upload::UploadRetirementFault::None);
+        readback::readbackFault().store(static_cast<std::uint8_t>(readback::ReadbackFault::None));
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+        bloom::render::gpu_scene_executor_fault::clear();
+#endif
+    };
+    struct Restore final {
+        decltype(clearObservations)& clear;
+        ~Restore() { clear(); }
+    } restore{clearObservations};
+    std::uint64_t planId = 2600;
+    // 32 requests is the application's root; 1 is the tightest one, where the leftover's phase is
+    // the only one the root admits.
+    for (const std::size_t capacity : {std::size_t{32}, std::size_t{1}})
+        for (const Case& entry : cases) {
+            const std::string name = std::string("next-frame: after ") + entry.name + " (root of " +
+                                     std::to_string(capacity) + ")";
+            bloom::render::test::FinalHostRetirementScope host;
+            auto policy =
+                std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(capacity, host.owner);
+            auto sample = bloom::runtime::memoryBudgetSample();
+            bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                                      sample.machine.availableBytes.value_or(0));
+            ledger.beginProcessSampling();
+            const auto now = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+            const auto delivered = ledger.applySample(std::move(sample), now);
+            policy->applyHostSample(delivered, ledger.physicalByteBudget(), now);
+            GpuProcessFrameEvaluatorOptions configured;
+            configured.loaderPath = options.loader_path;
+            configured.processingPhasePolicy = policy;
+            configured.mediaContext = GpuSceneMediaContext::fromEvaluator(cpu);
+            configured.requestByteBudget = 64ULL << 20;
+            configured.readbackByteBudget = 64ULL << 20;
+            configured.nativeDeadline = std::chrono::seconds(2);
+            configured.maxQueuedRequests = 1;
+            auto evaluator = GpuProcessFrameEvaluator::create(configured);
+            if (!evaluator || !evaluator->gpuAvailable()) {
+                expectations.expect(false, name + ": the native evaluator is available");
+                continue;
+            }
+            const auto plan = mediaPlan(format(8, 8), fixture.asset,
+                                        LayerValues{.position = {4.3, 3.1}}, planId++);
+            auto request = requestFor(*plan);
+            request.pixelStorageByteLimit = 64ULL << 20;
+            // The upload case starts cold: a frame evaluated beforehand would leave the footage
+            // resident, and the interrupted frame would have no upload to leave behind.
+            if (entry.leftover != Leftover::UploadFence) {
+                const auto clean = evaluator->evaluate(plan, request);
+                expectations.expect(clean.status == GpuProcessFrameStatus::Evaluated && clean.frame,
+                                    name + ": the frame evaluates on the device beforehand: " +
+                                        clean.diagnostic.message);
+            }
+            // A different composition, so the leftover is this request's own submission.
+            const auto edited = mediaPlan(format(8, 8), fixture.asset,
+                                          LayerValues{.position = {2.7, 2.4}}, planId++);
+            auto editedRequest = requestFor(*edited);
+            editedRequest.pixelStorageByteLimit = 64ULL << 20;
+            if (entry.leftover == Leftover::UploadFence) {
+                upload::setUploadRetirementFaultForTest(
+                    upload::UploadRetirementFault::ForceFenceTimeout);
+            } else if (entry.leftover == Leftover::ReadbackFence) {
+                readback::readbackFault().store(
+                    static_cast<std::uint8_t>(readback::ReadbackFault::ForceFenceTimeout));
+            } else {
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+                bloom::render::gpu_scene_executor_fault::set(
+                    bloom::render::gpu_scene_executor_fault::PollFault::StallPending);
+#endif
+            }
+            const auto interrupted = evaluator->evaluate(edited, editedRequest);
+            expectations.expect(interrupted.status != GpuProcessFrameStatus::Evaluated &&
+                                    !interrupted.frame,
+                                name + ": the interrupted frame publishes nothing");
+            std::cout << "NEXT_FRAME leftover=\"" << entry.name << "\" interrupted=\""
+                      << interrupted.diagnostic.message << "\"\n";
+            clearObservations();
+            // A root with no room beside the leftover answers AwaitingCapacity until the owner has
+            // retired it, and the caller asks again, as an export does. The attempt ceiling only
+            // keeps a leftover that is never retired from hanging the test.
+            const auto evaluateAdmitted = [&evaluator](const auto& askedPlan, const auto& asked) {
+                auto outcome = evaluator->evaluate(askedPlan, asked);
+                for (int attempt = 0;
+                     attempt < 2000 &&
+                     outcome.diagnostic.code ==
+                         bloom::runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity;
+                     ++attempt) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    outcome = evaluator->evaluate(askedPlan, asked);
+                }
+                return outcome;
+            };
+            const auto next = evaluateAdmitted(edited, editedRequest);
+            expectations.expect(next.status == GpuProcessFrameStatus::Evaluated && next.frame &&
+                                    next.counters.nativeDispatches > 0,
+                                name + ": the next frame is evaluated on the device: status " +
+                                    std::to_string(static_cast<int>(next.status)) + ", " +
+                                    next.diagnostic.message);
+            const auto again = evaluateAdmitted(plan, request);
+            expectations.expect(again.status == GpuProcessFrameStatus::Evaluated && again.frame,
+                                name + ": and so is the one after it: " + again.diagnostic.message);
+            evaluator->beginShutdown();
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!evaluator->retirementComplete() && std::chrono::steady_clock::now() < until)
+                std::this_thread::yield();
+            expectations.expect(evaluator->retirementComplete(),
+                                name + ": the evaluator retires completely");
+        }
+}
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -369,6 +506,7 @@ int main(const int argc, char** argv) {
 #endif
 
         testProductionUploadUnknown(expectations, options, evaluator, fixture);
+        testNextFrameAfterUnretiredSubmission(expectations, options, evaluator, fixture);
 
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media executor retirement expectations failed\n";
