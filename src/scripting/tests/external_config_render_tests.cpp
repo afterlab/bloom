@@ -396,12 +396,6 @@ bool run(const bool device, const bool requireDevice) {
 } // namespace
 
 int main(int argc, char** argv) {
-#ifndef __linux__
-    // No confined helper is qualified here; the color tests cover the typed refusal.
-    (void)argc;
-    (void)argv;
-    return 77;
-#else
     bool device = false;
     bool requireDevice = false;
     for (int index = 1; index < argc; ++index) {
@@ -417,5 +411,4 @@ int main(int argc, char** argv) {
     if (failures == 0)
         std::cout << "external config render tests passed\n";
     return failures == 0 ? 0 : 1;
-#endif
 }

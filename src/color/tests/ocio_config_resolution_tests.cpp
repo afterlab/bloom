@@ -54,6 +54,9 @@ void expect(const bool condition, const std::string& message) {
     }
 }
 
+#ifdef __linux__
+// Everything below drives the confined helper, which only Linux has; main() says what the
+// other targets check.
 void write(const std::filesystem::path& path, const std::string& contents) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream file(path, std::ios::binary);
@@ -754,6 +757,7 @@ void testSession(const std::filesystem::path& root) {
     expect(revision.has_value() && same(helperGraded(location), referenceGraded(folder)),
            "session: after its helpers were released the resolver starts a new one");
 }
+#endif
 
 } // namespace
 

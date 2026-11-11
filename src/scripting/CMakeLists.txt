@@ -173,6 +173,10 @@ if(BUILD_TESTING)
     )
     # #465: PNG, TIFF, flat EXR and ProRes with an external loose config, an external archive and
     # a project-relative archive, resolved through the supervised helper, against the built-in.
+    # Linux only: the config request group has a confined helper on Linux alone. Elsewhere an
+    # external config is refused as HelperUnavailable, which bloom.color.ocio-config-resolution
+    # checks, so there is no export to compare and the test is not built.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_find_dependency(OpenColorIO)
     add_executable(bloom_scripting_external_config_render_test
                    tests/external_config_render_tests.cpp)
@@ -212,6 +216,7 @@ if(BUILD_TESTING)
         TIMEOUT 300
     )
     set_tests_properties(bloom.scripting.external-config-render-gpu PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
     # #588: scratch-folder cleanup and the changed-media failure of Render::run.
     add_executable(bloom_scripting_render_cleanup_test tests/render_cleanup_tests.cpp)
     target_link_libraries(bloom_scripting_render_cleanup_test PRIVATE bloom_scripting)

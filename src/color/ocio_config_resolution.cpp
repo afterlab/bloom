@@ -77,6 +77,9 @@ constexpr std::string_view kLooseName = "config.ocio";
     return value;
 }
 
+#ifdef __linux__
+// Used only by the file resolution below, which needs the confined helper.
+
 // The local absolute path a file location names; empty when it names none on this machine (a
 // relative path, a file URI with an authority, a malformed escape).
 [[nodiscard]] std::string localPath(const std::string_view value) {
@@ -101,19 +104,20 @@ constexpr std::string_view kLooseName = "config.ocio";
         return std::string(value);
     return {};
 }
+#endif
 
 [[nodiscard]] OcioBuiltInResolutionResult helperFailed(const OcioHelperError error) noexcept {
     return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper,
                                              {}, OcioBuiltInInvalidReason::None, error);
 }
 
+#ifdef __linux__
+
 [[nodiscard]] OcioBuiltInResolutionResult
 invalid(const OcioBuiltInInvalidReason reason,
         const std::optional<core::Sha256Digest>& revision = {}) noexcept {
     return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Invalid, revision, reason);
 }
-
-#ifdef __linux__
 
 // What identifies a file's content cheaply between two resolutions.
 struct FileStamp final {
