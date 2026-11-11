@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -25,7 +26,7 @@ struct TaskUiBridge::CompletionDelivery final {
                                      std::to_string(static_cast<unsigned>(subscribed.status)) +
                                      ')');
         subscription = std::move(subscribed.subscription);
-        waiter = std::jthread([this](const std::stop_token& stop) {
+        waiter = bloom::core::StoppableWorkerThread([this](const std::stop_token& stop) {
             // Zero is lossless across subscription admission and thread startup. Existing terminal
             // history causes at most one initial drain, never one queued callback per old task.
             std::uint64_t observed = 0;
@@ -95,7 +96,7 @@ struct TaskUiBridge::CompletionDelivery final {
     std::condition_variable_any acknowledged;
     bool pending = false;
     std::uint64_t drainedSerial = 0;
-    std::jthread waiter;
+    bloom::core::StoppableWorkerThread waiter;
 };
 
 TaskUiBridge::TaskUiBridge(runtime::TaskScheduler& scheduler, QObject* parent,

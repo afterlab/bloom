@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/ui/mcp_server_adapter.hpp>
 
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -53,7 +54,7 @@ void McpServerAdapter::attach(TaskUiBridge& bridge) {
 void McpServerAdapter::startWaiter() {
     if (waiter_.joinable())
         return;
-    waiter_ = std::jthread([this](const std::stop_token stop) {
+    waiter_ = bloom::core::StoppableWorkerThread([this](const std::stop_token stop) {
         auto observed = port_.serial();
         while (!stop.stop_requested()) {
             const auto next = port_.waitForChange(observed, stop);

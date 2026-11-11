@@ -10,6 +10,7 @@
 // after a few idle seconds (decoded sounds stay resident), so Bloom does not hold an output open
 // while silent. If the device cannot be opened the engine stays silent and reports a diagnostic.
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/ui_feedback.hpp>
 
@@ -108,7 +109,7 @@ class UiSoundEngine final : public SoundPlayer {
     std::chrono::milliseconds idleClose_;
     std::condition_variable wake_;
     mutable std::mutex mutex_;
-    std::thread worker_;
+    bloom::core::WorkerThread worker_;
     std::thread::id workerId_;
 };
 

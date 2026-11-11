@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 
 #include <bloom/core/sha256.hpp>
@@ -270,7 +271,7 @@ MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config, runtime::MemoryBudge
                                   ? config.asyncQueueByteCapacity
                                   : kMediaDiskCacheAsyncQueueByteCapacity),
       enabled_(config.enabled) {
-    writer_ = std::thread([this] { writerLoop(); });
+    writer_ = bloom::core::WorkerThread([this] { writerLoop(); });
     try {
         ledger_.registerCache(
             this, static_cast<std::size_t>(asyncQueueByteCapacity()),

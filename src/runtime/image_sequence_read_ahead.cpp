@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/image_sequence_read_ahead.hpp>
 
 #include <bloom/media/image.hpp>
@@ -35,7 +36,7 @@ struct ImageSequenceReadAheadState final {
     std::set<std::string> pending;
     // Revision keys being captured now.
     std::set<std::string> capturing;
-    std::vector<std::thread> workers;
+    std::vector<bloom::core::WorkerThread> workers;
     std::atomic<bool> stopping{false};
     // Frames reading their own source file now; no capture starts while any is.
     std::size_t foregroundReads = 0;

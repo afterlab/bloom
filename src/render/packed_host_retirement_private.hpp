@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 
 #include <condition_variable>
@@ -37,6 +38,6 @@ struct PackedHostRetirementState final {
 struct PackedHostRetirementOwner::Impl final {
     std::shared_ptr<detail::PackedHostRetirementState> state =
         std::make_shared<detail::PackedHostRetirementState>();
-    std::thread worker;
+    bloom::core::WorkerThread worker;
 };
 } // namespace bloom::render

@@ -3,6 +3,7 @@
 
 #include <QCoreApplication>
 #include <QTimer>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 
@@ -86,7 +87,7 @@ bool ScriptPanelRuntime::enqueue(const QString& source,
             {source.toStdString(), state_->cancellation.load(), std::move(done), program});
     }
     if (!worker_.joinable())
-        worker_ = std::jthread([state = state_] { work(state); });
+        worker_ = bloom::core::StoppableWorkerThread([state = state_] { work(state); });
     state_->ready.notify_one();
     emit activityChanged(QStringLiteral("Queued"), true);
     return true;

@@ -3,6 +3,7 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_input_processor.hpp>
+#include <bloom/core/worker_thread.hpp>
 
 #include <ImathBox.h>
 #include <ImfChannelList.h>
@@ -1104,7 +1105,7 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const std::span<const std::by
     std::size_t bandsRunning = ranges.size() - 1U;
     std::vector<std::optional<ImageDiagnosticCode>> bandErrors(ranges.size());
     std::vector<std::uint64_t> bandRepairs(ranges.size(), 0U);
-    std::vector<std::jthread> workers;
+    std::vector<bloom::core::StoppableWorkerThread> workers;
     workers.reserve(ranges.size() - 1U);
     const auto stopRequested = [&stopBands] { return stopBands.load(std::memory_order_relaxed); };
     for (std::size_t band = 1; band < ranges.size(); ++band)

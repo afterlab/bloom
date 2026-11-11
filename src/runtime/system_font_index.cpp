@@ -1,10 +1,14 @@
 #include <bloom/runtime/system_font_index.hpp>
 
+#include <bloom/core/worker_thread.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <future>
 #include <string>
+#include <utility>
 
 namespace bloom::runtime::fonts {
 namespace {
@@ -35,9 +39,12 @@ SystemFontIndex::~SystemFontIndex() {
 
 void SystemFontIndex::startLocked() {
     started_ = true;
-    future_ = std::async(std::launch::async,
-                         [] { return platform::FontCatalogueProvider{}.enumerate({}, false); })
-                  .share();
+    // A Bloom worker thread, not std::async: the enumeration gets the stated stack size. The
+    // destructor waits on the future, so the detached thread never outlives this index's result.
+    std::packaged_task<platform::FontCatalogue()> task(
+        [] { return platform::FontCatalogueProvider{}.enumerate({}, false); });
+    future_ = task.get_future().share();
+    core::WorkerThread(std::move(task)).detach();
 }
 
 void SystemFontIndex::refresh() {

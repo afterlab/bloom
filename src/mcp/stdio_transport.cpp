@@ -1,6 +1,7 @@
 // The stdio transport (newline-delimited UTF-8 JSON-RPC), moved from apps/bloom-mcp/transport.cpp:
 // a bounded reader thread, the 16-message inbox, cancellation intercepted while a call runs, and
 // one protocol session. Cancellation now stops only the cancelled request's own work.
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/mcp/server_core.hpp>
 
 #include <condition_variable>
@@ -46,7 +47,7 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
     auto session = core.openSession();
     // The reader touches only the shared inbox and `input`, never the core, the session or
     // `output`, so it can be left blocked on idle input when `stop` fires.
-    std::thread reader([shared, &input, limits] {
+    bloom::core::WorkerThread reader([shared, &input, limits] {
         auto& box = *shared;
         const auto send = [&](Message message) {
             std::unique_lock lock(box.mutex);
@@ -94,7 +95,7 @@ void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
     // input.
     struct Release final {
         Inbox& box;
-        std::thread& thread;
+        bloom::core::WorkerThread& thread;
         ~Release() {
             bool finished = false;
             {

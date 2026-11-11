@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
@@ -197,7 +198,7 @@ class MediaDiskCache final {
     std::uint64_t droppedAsyncWrites_ = 0;
     std::size_t inFlight_ = 0;
     bool stopping_ = false;
-    std::thread writer_;
+    bloom::core::WorkerThread writer_;
 };
 
 // physical-free-space-derived default budget for a cache rooted at `root` (or its nearest

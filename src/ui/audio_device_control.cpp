@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/ui/audio_device_control.hpp>
 
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -292,7 +293,7 @@ void AudioDeviceControl::drainAfterEventLoop() noexcept {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if (state_->engine) {
         auto state = state_;
-        std::thread disposal([state] {
+        bloom::core::WorkerThread disposal([state] {
             state->engine->stop();
             state->engine.reset();
             state->retired.store(true, std::memory_order_release);

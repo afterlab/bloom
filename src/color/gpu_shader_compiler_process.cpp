@@ -10,6 +10,7 @@
 #include <system_error>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace bloom::color::gpu_shader_detail {
 
@@ -30,7 +31,8 @@ BoundedHash hashFileBounded(const std::string& path, std::size_t ceiling,
         return result;
     }
     core::Sha256Hasher hasher;
-    std::array<std::byte, 1u << 20> chunk{};
+    // On the heap: 1 MiB does not fit the stack of a worker thread on every platform.
+    std::vector<std::byte> chunk(std::size_t{1} << 20);
     std::uintmax_t remaining = size;
     while (remaining > 0) {
         if (cancel && cancel()) {

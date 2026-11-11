@@ -1,5 +1,7 @@
 #include "packed_host_retirement_private.hpp"
 
+#include <bloom/core/worker_thread.hpp>
+
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -14,9 +16,10 @@ void runRetirement(const std::shared_ptr<detail::PackedHostRetirementState>& sta
         if (state->beforeAckRegistration) {
             state->beforeAckRegistration(state->testContext);
         }
-        // Some implementations allocate their at-thread-exit registration. Admit no backing
-        // until this succeeds; normal shutdown then needs no fallible registration operation.
-        state->exitPromise.set_value_at_thread_exit();
+        // The registration may allocate. Admit no backing until this succeeds; normal shutdown
+        // then needs no fallible registration operation. The promise is fulfilled when this
+        // thread exits (core::runAtThreadExit, which works on every thread and library).
+        core::runAtThreadExit([state] { state->exitPromise.set_value(); });
         {
             const std::lock_guard lock(state->mutex);
             state->ackRegistered = true;
@@ -65,8 +68,8 @@ std::shared_ptr<PackedHostRetirementOwner> PackedHostRetirementOwner::create() {
 PackedHostRetirementOwner::~PackedHostRetirementOwner() {
     if (impl_->worker.joinable()) {
         // A frontend must keep this lifecycle owner alive while it reports pending retirement.
-        // Collection is explicit even after exit: a std::thread join may have an OS tail and must
-        // not be hidden in a destructor that can run on an active UI event loop.
+        // Collection is explicit even after exit: a thread join may have an OS tail and must not
+        // be hidden in a destructor that can run on an active UI event loop.
         std::terminate();
     }
 }
@@ -90,7 +93,7 @@ bool PackedHostRetirementOwner::prepare() noexcept {
             state->beforeStart(state->testContext);
         }
         // Thread creation holds no mutex shared with UI beginShutdown/poll/enqueue.
-        impl_->worker = std::thread([state] { runRetirement(state); });
+        impl_->worker = bloom::core::WorkerThread([state] { runRetirement(state); });
         bool accepting = false;
         {
             std::unique_lock lock(state->mutex);

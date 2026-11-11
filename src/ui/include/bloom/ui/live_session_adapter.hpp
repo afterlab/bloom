@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
+
 #include <QObject>
 
 #include <atomic>
@@ -68,7 +70,7 @@ class LiveSessionAdapter final : public QObject {
     std::shared_ptr<int> observerLife_;
     std::atomic_bool drainQueued_ = false;
     std::atomic_bool shutDown_ = false;
-    std::jthread waiter_;
+    bloom::core::StoppableWorkerThread waiter_;
 };
 
 } // namespace bloom::ui

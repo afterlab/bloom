@@ -1,5 +1,6 @@
 // The UI thread's side of the shared live session (ADR 0034, section 4). Moved out of the Script
 // editor's private runtime so the Script editor and MCP share one mirror and one commit marshal.
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/ui/live_session_adapter.hpp>
 
 #include <QCoreApplication>
@@ -87,7 +88,7 @@ LiveSessionAdapter::LiveSessionAdapter(scripting::LiveSessionHost& host,
         connect(application, &QCoreApplication::aboutToQuit, this, &LiveSessionAdapter::shutdown);
     // Commits are not scheduler work, so the completion drain would not see them: a stop-aware
     // waiter turns each queued commit into one queued drain on the UI thread.
-    waiter_ = std::jthread(
+    waiter_ = bloom::core::StoppableWorkerThread(
         [this, subscription = host_.subscribeCommits()](const std::stop_token& stop) mutable {
             auto observed = subscription.serial();
             while (const auto serial = subscription.waitForChange(observed, stop)) {

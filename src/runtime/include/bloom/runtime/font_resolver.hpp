@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/runtime/font_fallback.hpp>
 #include <bloom/runtime/font_fetch.hpp>
@@ -219,7 +220,7 @@ class FontResolver final {
     std::map<std::string, CachedFace> memory_;
     std::map<std::string, LoadedFace> instances_;
     std::vector<std::string> announced_;
-    std::thread worker_;
+    bloom::core::WorkerThread worker_;
     bool stopping_ = false;
     std::atomic<std::uint64_t> epoch_{0};
     std::atomic<std::uint64_t> previewEpoch_{0};

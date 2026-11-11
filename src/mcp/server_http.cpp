@@ -4,6 +4,7 @@
 // publishes.
 #include "server_service_state.hpp"
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/platform/owner_only_secret.hpp>
 
 #include <algorithm>
@@ -593,7 +594,7 @@ void McpServerService::State::startNetwork(std::unique_ptr<platform::LoopbackLis
     }
     // The accept thread.
     ++net.threads;
-    net.acceptor = std::jthread([this, &net, stop] {
+    net.acceptor = bloom::core::StoppableWorkerThread([this, &net, stop] {
         while (!stop.stop_requested()) {
             auto accepted = net.listener->accept(500ms, stop);
             if (accepted.status == platform::LoopbackAcceptStatus::Failed) {
@@ -639,22 +640,23 @@ void McpServerService::State::startNetwork(std::unique_ptr<platform::LoopbackLis
             net.connections.push_back(connection);
             ++net.threads;
             auto done = std::make_shared<std::atomic_bool>(false);
-            net.connectionThreads.emplace_back(done, std::jthread([this, &net, connection, done] {
-                                                   ConnectionWorker(*this, net, connection).run();
-                                                   connection->close();
-                                                   {
-                                                       const std::lock_guard guard(net.mutex);
-                                                       std::erase(net.connections, connection);
-                                                   }
-                                                   {
-                                                       const std::lock_guard facts(factsMutex);
-                                                       if (openConnections > 0)
-                                                           --openConnections;
-                                                   }
-                                                   done->store(true);
-                                                   --net.threads;
-                                                   wake();
-                                               }));
+            net.connectionThreads.emplace_back(
+                done, bloom::core::StoppableWorkerThread([this, &net, connection, done] {
+                    ConnectionWorker(*this, net, connection).run();
+                    connection->close();
+                    {
+                        const std::lock_guard guard(net.mutex);
+                        std::erase(net.connections, connection);
+                    }
+                    {
+                        const std::lock_guard facts(factsMutex);
+                        if (openConnections > 0)
+                            --openConnections;
+                    }
+                    done->store(true);
+                    --net.threads;
+                    wake();
+                }));
         }
         --net.threads;
         wake();

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/shared_frame_arena.hpp>
@@ -270,7 +271,7 @@ struct MediaWorkerPool::State {
     // Reaps an idle retained worker as soon as it ends, so it is never left defunct and what it
     // held (frame arena, source handle, Profiler entry) is released. Started with the first
     // retained worker and joined by the pool's destructor.
-    std::thread monitor;
+    bloom::core::WorkerThread monitor;
     std::mutex monitorMutex;
     std::condition_variable monitorWake;
     bool monitorStop = false;
@@ -292,7 +293,7 @@ struct MediaWorkerPool::State {
     void startMonitor() {
         if (monitor.joinable())
             return;
-        monitor = std::thread([this] {
+        monitor = bloom::core::WorkerThread([this] {
             std::unique_lock lock(monitorMutex);
             while (!monitorStop) {
                 monitorWake.wait_for(lock, std::chrono::milliseconds(200));

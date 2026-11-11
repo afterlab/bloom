@@ -1,4 +1,5 @@
 #include "viewer_editor_text_layout.hpp"
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <chrono>
 #include <thread>
@@ -12,7 +13,7 @@ ViewerTextLayout::ViewerTextLayout(QObject* parent) : QObject(parent) {
     config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
     scheduler_ = std::make_shared<runtime::TaskScheduler>(config);
     retire_ = std::make_shared<std::atomic_bool>(false);
-    std::thread([scheduler = scheduler_, retire = retire_] {
+    bloom::core::WorkerThread([scheduler = scheduler_, retire = retire_] {
         retire->wait(false);
         while (!scheduler->isQuiescent())
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

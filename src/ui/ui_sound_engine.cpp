@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/ui/ui_sound_engine.hpp>
 
 #include <QFile>
@@ -81,7 +82,7 @@ void UiSoundEngine::start() {
         return;
     }
     started_.store(true);
-    worker_ = std::thread([this] { run(); });
+    worker_ = bloom::core::WorkerThread([this] { run(); });
 }
 
 void UiSoundEngine::run() {
@@ -228,7 +229,7 @@ void UiSoundEngine::render(std::span<float> output) noexcept {
 void UiSoundEngine::shutdown() noexcept {
     stopRequested_.store(true);
     wake_.notify_all();
-    std::thread worker;
+    bloom::core::WorkerThread worker;
     {
         const std::lock_guard lock(mutex_);
         worker = std::move(worker_);

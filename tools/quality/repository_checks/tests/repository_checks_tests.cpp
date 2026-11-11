@@ -274,6 +274,32 @@ void testArchitecture(int& failures) {
     expect(containsMessage(qtLink, "links directly to Qt"),
            "non-UI modules cannot link Qt through CMake", failures);
 
+    for (const std::string_view starter : {"std::thread worker([] {});\n", "std::jthread worker;\n",
+                                           "auto result = std::async(std::launch::async, [] {});\n",
+                                           "std::vector<std::thread> workers;\n"}) {
+        expect(containsMessage(architectureFixture("src/runtime/pool.cpp", starter),
+                               "worker_thread.hpp"),
+               "production code may not start a standard-library thread", failures);
+        expect(containsMessage(architectureFixture("apps/bloom/main.cpp", starter),
+                               "worker_thread.hpp"),
+               "an application may not start a standard-library thread", failures);
+        expect(architectureFixture("src/runtime/tests/pool_tests.cpp", starter).empty(),
+               "a test may start a standard-library thread", failures);
+    }
+    expect(architectureFixture("src/runtime/pool.cpp",
+                               "const auto count = std::thread::hardware_concurrency();\n"
+                               "std::thread::id owner;\n"
+                               "// a std::thread join may have an OS tail\n"
+                               "bloom::core::WorkerThread worker;\n")
+               .empty(),
+           "thread facts, comments and Bloom worker threads are accepted", failures);
+    expect(containsMessage(architectureFixture("src/render/retire.cpp",
+                                               "promise.set_value_at_thread_exit();\n"),
+                           "runAtThreadExit"),
+           "production code may not use the standard at-thread-exit calls", failures);
+    expect(architectureFixture("src/core/worker_thread.cpp", "std::thread reference;\n").empty(),
+           "the worker thread implementation itself is exempt", failures);
+
     const auto lineFinding = architectureFixture(
         "src/core/value.cpp", "// first line\n#include <bloom/document/project.hpp>\n");
     expect(std::ranges::any_of(lineFinding, [](const auto& finding) { return finding.line == 2; }),

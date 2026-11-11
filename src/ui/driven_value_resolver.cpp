@@ -1,8 +1,9 @@
 #include "driven_value_resolver.hpp"
 #include "composition_driver_probe.hpp"
+#include "properties_value_outputs.hpp"
 #include <QTimer>
 #include <algorithm>
-#include "properties_value_outputs.hpp"
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/image_statistics.hpp>
@@ -207,7 +208,7 @@ void DrivenValueResolver::start() {
         retire_ = std::make_shared<std::atomic_bool>(false);
         // Start the Qt-free reaper while construction can report a thread-start failure. Closing
         // the panel only requests cancellation; it never creates or joins a thread.
-        std::thread([scheduler = scheduler_, retire = retire_] {
+        bloom::core::WorkerThread([scheduler = scheduler_, retire = retire_] {
             retire->wait(false);
             while (!scheduler->isQuiescent())
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));

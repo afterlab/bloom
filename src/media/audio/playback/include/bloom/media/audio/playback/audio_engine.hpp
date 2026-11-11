@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/audio/effects.hpp>
 
@@ -12,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace bloom::media::audio::playback {
@@ -295,8 +297,36 @@ class AudioEngine final {
     std::atomic<std::uint64_t> silenceState_{1};
     std::atomic<std::uint64_t> framesWritten_{0};
     std::atomic<std::uint64_t> ringWakeEpoch_{0};
-    std::atomic<std::shared_ptr<const ClockState>> clockState_;
-    std::thread mixerThread_;
+    // The published playback clock. It is std::atomic<std::shared_ptr<T>> where the standard
+    // library provides it; a library without it (Apple's libc++) exchanges the same pointer through
+    // the std::atomic_load and std::atomic_store overloads for shared_ptr. A reader gets a whole
+    // state either way.
+    class ClockStateCell final {
+      public:
+        [[nodiscard]] std::shared_ptr<const ClockState> load() const noexcept {
+#if defined(__cpp_lib_atomic_shared_ptr)
+            return value_.load(std::memory_order_acquire);
+#else
+            return std::atomic_load_explicit(&value_, std::memory_order_acquire);
+#endif
+        }
+        void store(std::shared_ptr<const ClockState> next) noexcept {
+#if defined(__cpp_lib_atomic_shared_ptr)
+            value_.store(std::move(next), std::memory_order_release);
+#else
+            std::atomic_store_explicit(&value_, std::move(next), std::memory_order_release);
+#endif
+        }
+
+      private:
+#if defined(__cpp_lib_atomic_shared_ptr)
+        std::atomic<std::shared_ptr<const ClockState>> value_;
+#else
+        std::shared_ptr<const ClockState> value_;
+#endif
+    };
+    ClockStateCell clockState_;
+    bloom::core::WorkerThread mixerThread_;
     std::uint64_t framesProduced_ = 0;
     std::uint64_t writtenAtOrigin_ = 0;
     core::RationalTime clockOrigin_{};

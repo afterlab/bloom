@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
+
 #include <QObject>
 #include <QString>
 #include <functional>
@@ -48,6 +50,6 @@ class ScriptPanelRuntime final : public QObject {
                                bool program);
     static void work(const std::shared_ptr<State>& state);
     std::shared_ptr<State> state_;
-    std::jthread worker_;
+    bloom::core::StoppableWorkerThread worker_;
 };
 } // namespace bloom::ui

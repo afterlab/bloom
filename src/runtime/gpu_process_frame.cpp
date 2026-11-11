@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 
 #include "gpu_process_frame_preparation_private.hpp"
@@ -82,7 +83,7 @@ struct GpuProcessFrameRequest final {
 struct GpuProcessFrameEvaluator::Impl final {
     GpuProcessFrameEvaluatorOptions options;
 
-    std::jthread thread;
+    bloom::core::StoppableWorkerThread thread;
     mutable std::mutex mutex;
     std::condition_variable cv;
 
@@ -946,7 +947,8 @@ GpuProcessFrameEvaluator::create(const GpuProcessFrameEvaluatorOptions& options)
     }
     auto* implPointer = impl.get();
     if (options.enabled) {
-        impl->thread = std::jthread([implPointer] { implPointer->runOwner(); });
+        impl->thread =
+            bloom::core::StoppableWorkerThread([implPointer] { implPointer->runOwner(); });
     } else {
         std::lock_guard lock(impl->mutex);
         impl->initialized = true;

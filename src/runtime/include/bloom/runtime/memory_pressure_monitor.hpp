@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
 #include <atomic>
@@ -94,7 +95,7 @@ class MemoryPressureMonitor final {
     std::atomic<std::uint64_t> deliveries_{0};
     std::atomic<std::uint64_t> trims_{0};
     std::atomic<std::uint64_t> samples_{0};
-    std::thread thread_;
+    bloom::core::WorkerThread thread_;
 };
 
 } // namespace bloom::runtime

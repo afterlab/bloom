@@ -15,6 +15,7 @@
 // passes a thin port over mcp::McpServerService; tests pass a scripted one. Every member except
 // waitForChange() is non-blocking.
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/mcp/server_service.hpp>
 
 #include <QObject>
@@ -155,7 +156,7 @@ class McpServerAdapter final : public QObject {
     std::function<QString(std::uint64_t)> compositionNamer_;
     std::vector<McpCompileFailureNote> compileFailures_;
     std::atomic<bool> wakePending_{false};
-    std::jthread waiter_;
+    bloom::core::StoppableWorkerThread waiter_;
 };
 
 } // namespace bloom::ui

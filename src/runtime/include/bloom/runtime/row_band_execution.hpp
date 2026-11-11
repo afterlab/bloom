@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/cancellation.hpp>
 
 #include <algorithm>
@@ -100,7 +101,7 @@ class CpuRowBandExecutor final {
     std::condition_variable available_;
     std::condition_variable completed_;
     std::deque<Job*> jobs_;
-    std::vector<std::thread> workers_;
+    std::vector<bloom::core::WorkerThread> workers_;
     bool stopping_ = false;
     std::atomic<std::uint64_t> queuedBands_{0};
     std::atomic<std::uint64_t> busyNs_{0};

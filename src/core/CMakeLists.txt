@@ -19,6 +19,7 @@ target_sources(
         file_uri.cpp
         safe_parse.cpp
         telemetry_counters.cpp
+        worker_thread.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -45,6 +46,7 @@ target_sources(
             include/bloom/core/utf8.hpp
             include/bloom/core/file_uri.hpp
             include/bloom/core/value_primitives.hpp
+            include/bloom/core/worker_thread.hpp
 )
 
 # #525: the field kernel is one source compiled as C++ (field_program.cpp includes it) and handed to
@@ -63,6 +65,9 @@ file(CONFIGURE
 target_sources(bloom_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/field_kernel_source.cpp")
 
 target_compile_features(bloom_core PUBLIC cxx_std_20)
+# worker_thread.cpp starts native threads with a stated stack size.
+find_package(Threads REQUIRED)
+target_link_libraries(bloom_core PUBLIC Threads::Threads)
 bloom_enable_warnings(bloom_core)
 
 # Scalar primitives are the backend-neutral CPU reference. Keep ordinary expressions unfused,
@@ -77,6 +82,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.pixel_aspect_ratio
         COMMAND bloom_core_pixel_aspect_ratio_test
+        LABELS unit
+    )
+
+    add_executable(bloom_core_worker_thread_test tests/worker_thread_tests.cpp)
+    target_link_libraries(bloom_core_worker_thread_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_worker_thread_test)
+    bloom_add_test(
+        NAME bloom.core.worker_thread
+        COMMAND bloom_core_worker_thread_test
         LABELS unit
     )
 

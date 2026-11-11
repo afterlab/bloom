@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 
 #include <algorithm>
@@ -326,7 +327,7 @@ AudioEngine::AudioEngine(std::unique_ptr<Backend> backend, const Config config)
     : backend_(std::move(backend)), config_(config),
       ring_(std::make_unique<SpscRing>(config.ringBufferFrames, config.channels)),
       mixScratch_(kMixerBlockFrames * config.channels), effectFrame_(config.channels), warmFrame_(config.channels) {
-    clockState_.store(std::make_shared<const ClockState>(), std::memory_order_release);
+    clockState_.store(std::make_shared<const ClockState>());
     // Built here, never on the mixer.
     static_cast<void>(sincTable());
 }
@@ -502,9 +503,8 @@ AudioStatus AudioEngine::play(const RationalTime at, const std::uint64_t silence
         clockOrigin_ = at;
         writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
         clockState_.store(std::make_shared<const ClockState>(
-                              ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_,
-                                         playbackRateNumerator_, playbackRateDenominator_}),
-                          std::memory_order_release);
+            ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_, playbackRateNumerator_,
+                       playbackRateDenominator_}));
         resetTransportLocked();
     }
     ringWakeEpoch_.fetch_add(1, std::memory_order_release);
@@ -516,7 +516,7 @@ AudioStatus AudioEngine::play(const RationalTime at, const std::uint64_t silence
         return status;
     }
     if (dynamic_cast<NullBackend*>(backend_.get()) == nullptr) {
-        mixerThread_ = std::thread(&AudioEngine::mixerLoop, this);
+        mixerThread_ = bloom::core::WorkerThread(&AudioEngine::mixerLoop, this);
     }
     auto expected = (silenceGeneration << 1) | 1;
     (void)silenceState_.compare_exchange_strong(expected, silenceGeneration << 1,
@@ -555,7 +555,7 @@ AudioStatus AudioEngine::seek(const RationalTime at) {
         writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
         *nextClock = ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_,
                                 playbackRateNumerator_, playbackRateDenominator_};
-        clockState_.store(std::move(nextClock), std::memory_order_release);
+        clockState_.store(std::move(nextClock));
         resetTransportLocked();
     }
     ringWakeEpoch_.fetch_add(1, std::memory_order_release);
@@ -593,7 +593,7 @@ bool AudioEngine::setRate(const double rate) noexcept {
     playbackRate_ = rate;
     playbackRateNumerator_ = scaled / divisor;
     playbackRateDenominator_ = 1'000'000 / divisor;
-    clockState_.store(std::move(state), std::memory_order_release);
+    clockState_.store(std::move(state));
     return true;
 }
 
@@ -752,13 +752,13 @@ AudioStatus AudioEngine::renderForTesting(const std::size_t frames) {
 std::size_t AudioEngine::queuedFramesForTesting() const noexcept { return ring_->queued(); }
 
 RationalTime AudioEngine::playbackRateRatio() const noexcept {
-    const auto state = clockState_.load(std::memory_order_acquire);
+    const auto state = clockState_.load();
     return RationalTime::create(state->rateNumerator, state->rateDenominator)
         .value_or(RationalTime{});
 }
 
 RationalTime AudioEngine::positionNow() const noexcept {
-    const auto state = clockState_.load(std::memory_order_acquire);
+    const auto state = clockState_.load();
     const auto totalWritten = framesWritten_.load(std::memory_order_acquire);
     const auto frames = totalWritten - state->writtenAtOrigin;
     if (state->rateNumerator == state->rateDenominator) {

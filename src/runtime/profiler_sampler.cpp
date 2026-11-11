@@ -1,4 +1,5 @@
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/profiler_process_reads.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -71,7 +72,7 @@ void ProfilerSampler::acquire() {
     // The staging peak is the peak since sampler start.
     telemetry::resetStagingPeak();
     telemetry::setProfilerActive(true);
-    thread_ = std::thread([this] { run(); });
+    thread_ = bloom::core::WorkerThread([this] { run(); });
 }
 
 void ProfilerSampler::release() {

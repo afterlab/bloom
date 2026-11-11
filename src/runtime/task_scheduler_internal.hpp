@@ -1,6 +1,7 @@
 #ifndef BLOOM_RUNTIME_TASK_SCHEDULER_INTERNAL_HPP
 #define BLOOM_RUNTIME_TASK_SCHEDULER_INTERNAL_HPP
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/row_band_execution.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -154,7 +155,7 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
         std::condition_variable available;
         std::size_t active = 0;
         std::size_t capacity = 0;
-        std::vector<std::jthread> workers;
+        std::vector<bloom::core::StoppableWorkerThread> workers;
         // Cumulative nanoseconds workers spent running tasks (the Profiler's busy time).
         std::atomic<std::uint64_t> busyNs{0};
     };
@@ -211,7 +212,7 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     ExecutorState gpu;
     std::vector<std::shared_ptr<TaskRecord>> cancellationQueue;
     std::condition_variable cancellationAvailable;
-    std::optional<std::jthread> finalizerWorker;
+    std::optional<bloom::core::StoppableWorkerThread> finalizerWorker;
     std::unordered_map<TaskId, std::shared_ptr<TaskRecord>> records;
     std::vector<std::shared_ptr<TaskRecord>> running;
     std::vector<TaskId> terminalRing;

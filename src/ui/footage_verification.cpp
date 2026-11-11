@@ -1,5 +1,6 @@
 #include "footage_verification.hpp"
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/platform/thread_priority.hpp>
@@ -86,7 +87,7 @@ FootageVerificationReport verifyFootageFiles(const std::vector<FootageVerificati
     // The pass runs on its own thread, which exits with it, so Linux can put it in SCHED_IDLE
     // (an unprivileged thread cannot leave that policy, which rules out the shared I/O worker).
     std::exception_ptr failure;
-    std::thread([&] {
+    bloom::core::WorkerThread([&] {
         const platform::IdleThreadPriorityScope idle(true);
         try {
             hashAll(items, cancel, progress, report);

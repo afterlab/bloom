@@ -421,13 +421,46 @@ void appendArchitectureContentFindings(const Path& relative, const std::string& 
     static const std::regex moduleInclude{
         R"bloom(#\s*include\s*[<"]bloom/([a-z][a-z0-9_]*)/)bloom"};
 
+    // A thread the standard library starts takes the platform's default stack, which is 8 MiB on
+    // one platform and 512 KiB on another. Production code starts threads through
+    // bloom/core/worker_thread.hpp, which states the size once. std::thread::id and
+    // std::thread::hardware_concurrency start nothing and stay allowed.
+    static const std::regex standardThread{
+        R"bloom(\bstd::(?:jthread\b|async\b|thread\b(?!::)))bloom"};
+    // The standard at-thread-exit calls work only on threads one standard library started
+    // itself, so they fail on Bloom's worker threads there. core::runAtThreadExit works on all.
+    static const std::regex standardThreadExit{R"bloom(\b\w+_at_thread_exit\b)bloom"};
+
     const auto module = sourceModule(relative);
     const auto parts = pathParts(relative);
+    const bool startsThreadsThroughCore =
+        !parts.empty() && (parts[0] == "src" || parts[0] == "apps") &&
+        std::ranges::find(parts, "tests") == parts.end() &&
+        !relative.stem().generic_string().ends_with("_tests") && relative.stem() != "worker_thread";
     std::istringstream lines{text};
     std::string line;
     auto lineNumber = std::size_t{0};
     while (std::getline(lines, line)) {
         ++lineNumber;
+        if (startsThreadsThroughCore && (line.find("std::") != std::string::npos ||
+                                         line.find("_at_thread_exit") != std::string::npos)) {
+            const auto comment = line.find("//");
+            const auto code = std::string_view(line).substr(0, comment);
+            if (std::regex_search(code.begin(), code.end(), standardThread)) {
+                findings.push_back(
+                    {relative, "architecture",
+                     "production code starts threads through bloom/core/worker_thread.hpp, not "
+                     "std::thread, std::jthread or std::async",
+                     lineNumber});
+            }
+            if (std::regex_search(code.begin(), code.end(), standardThreadExit)) {
+                findings.push_back(
+                    {relative, "architecture",
+                     "production code registers thread-exit work through core::runAtThreadExit "
+                     "(bloom/core/worker_thread.hpp), not the standard at-thread-exit calls",
+                     lineNumber});
+            }
+        }
         if (isNonUiSource(relative) && line.find('Q') != std::string::npos &&
             std::regex_search(line, qtToken)) {
             findings.push_back({relative, "architecture",

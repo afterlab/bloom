@@ -4,6 +4,7 @@
 #include "core_internal.hpp"
 
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/host/export_presets.hpp>
 
 #include <algorithm>
@@ -1005,13 +1006,14 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
             throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
         // Bounded by the request's own timeout: wake at the deadline even if the queue is idle.
         std::stop_source wake;
-        std::jthread timer([&wake, deadline](const std::stop_token& cancelTimer) {
-            std::mutex mutex;
-            std::condition_variable_any idle;
-            std::unique_lock lock(mutex);
-            idle.wait_until(lock, cancelTimer, deadline, [] { return false; });
-            wake.request_stop();
-        });
+        bloom::core::StoppableWorkerThread timer(
+            [&wake, deadline](const std::stop_token& cancelTimer) {
+                std::mutex mutex;
+                std::condition_variable_any idle;
+                std::unique_lock lock(mutex);
+                idle.wait_until(lock, cancelTimer, deadline, [] { return false; });
+                wake.request_stop();
+            });
         const std::stop_callback forward(stop, [&wake] { wake.request_stop(); });
         waitForQueue(core, sub, observed, wake.get_token());
     }

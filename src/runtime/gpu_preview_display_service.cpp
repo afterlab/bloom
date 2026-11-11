@@ -1,6 +1,7 @@
 #include "gpu_preview_display_service_loop.hpp"
 #include "gpu_preview_display_service_private.hpp"
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/gpu_preview_display_product.hpp>
 
 #include <algorithm>
@@ -479,7 +480,7 @@ std::size_t previewRequestDeviceAllowance(const PreviewDisplayServiceCore& core,
 
 struct GpuPreviewDisplayService::Impl final {
     std::shared_ptr<detail::PreviewDisplayServiceCore> core;
-    std::jthread thread;
+    bloom::core::StoppableWorkerThread thread;
     bool attached = false;
 };
 
@@ -561,7 +562,7 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     }
     core->trackRoot(startup.handle.id());
 
-    impl_->thread = std::jthread([core] { runServiceLoop(core); });
+    impl_->thread = bloom::core::StoppableWorkerThread([core] { runServiceLoop(core); });
 }
 
 GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
@@ -648,7 +649,7 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     }
     core->trackRoot(startup.handle.id());
 
-    impl_->thread = std::jthread([core] { runServiceLoop(core); });
+    impl_->thread = bloom::core::StoppableWorkerThread([core] { runServiceLoop(core); });
 }
 
 GpuPreviewDisplayService::~GpuPreviewDisplayService() {

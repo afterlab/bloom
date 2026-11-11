@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 
 #include <algorithm>
@@ -149,7 +150,7 @@ MemoryPressureMonitor::MemoryPressureMonitor(MemoryBudgetLedger& ledger, Deliver
                                              Options options)
     : ledger_(ledger), deliver_(std::move(deliver)), options_(std::move(options)) {
     configureHostMemoryReturn();
-    thread_ = std::thread([this] { run(); });
+    thread_ = bloom::core::WorkerThread([this] { run(); });
 }
 
 MemoryPressureMonitor::~MemoryPressureMonitor() { stop(); }
@@ -160,7 +161,7 @@ void MemoryPressureMonitor::stop() noexcept {
         stopping_ = true;
     }
     wakeCondition_.notify_all();
-    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id())
+    if (thread_.joinable() && !thread_.isCurrent())
         thread_.join();
 }
 

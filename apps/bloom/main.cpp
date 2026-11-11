@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bloom/core/telemetry_counters.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/host/export_queue.hpp>
@@ -87,6 +88,7 @@
 #include <QPointer>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QThreadPool>
 #include <QSettings>
 #include <QTimer>
 
@@ -101,6 +103,9 @@
 
 int main(int argc, char* argv[]) try {
     QApplication application(argc, argv);
+    // Qt's shared pool runs Bloom work too; give its threads the stack every Bloom thread has.
+    QThreadPool::globalInstance()->setStackSize(
+        static_cast<uint>(bloom::core::kWorkerThreadStackBytes));
 
     QCoreApplication::setApplicationName("Bloom");
     QCoreApplication::setApplicationVersion("0.1.0");
@@ -1126,7 +1131,7 @@ int main(int argc, char* argv[]) try {
         // Recording has stopped with the event loop. The worker owns formatting and file I/O;
         // joining here cannot stall an active viewer or hold up an event-loop publication.
         bool exported = false;
-        std::thread writer([&] {
+        bloom::core::WorkerThread writer([&] {
             try {
                 std::ofstream output(previewTraceDestination.toStdString());
                 previewTrace->writeJson(output);

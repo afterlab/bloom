@@ -2,6 +2,7 @@
 
 #include <bloom/commands/path_write_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/scripting/node_path_query.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -59,7 +60,7 @@ void NodePathWriter::request(const document::NodeId node,
         scheduler_ = std::make_shared<runtime::TaskScheduler>(config);
         retire_ = std::make_shared<std::atomic_bool>(false);
         // The Qt-free reaper: closing the editor only requests cancellation and never joins.
-        std::thread([scheduler = scheduler_, retire = retire_] {
+        bloom::core::WorkerThread([scheduler = scheduler_, retire = retire_] {
             retire->wait(false);
             while (!scheduler->isQuiescent())
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));

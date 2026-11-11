@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <atomic>
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/composition_output_stream.hpp>
@@ -613,7 +614,7 @@ struct SequenceExportRetirementOwnerV1::State {
     std::condition_variable ready;
     std::unique_ptr<Ticket> first;
     Ticket* last = nullptr;
-    std::thread worker;
+    bloom::core::WorkerThread worker;
     TestGate gate;
     std::size_t liveRunners = 0;
     bool closing = false;
@@ -624,7 +625,7 @@ SequenceExportRetirementOwnerV1::SequenceExportRetirementOwnerV1(TestGate gate)
     : state_(std::make_unique<State>()) {
     auto* const state = state_.get();
     state->gate = std::move(gate);
-    state->worker = std::thread([state] {
+    state->worker = bloom::core::WorkerThread([state] {
         for (;;) {
             std::unique_ptr<Ticket> ticket;
             {

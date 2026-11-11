@@ -1,3 +1,4 @@
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/font_resolver.hpp>
 
 #include <bloom/platform/cache_directory.hpp>
@@ -237,7 +238,7 @@ std::shared_ptr<FontResolver::Job> FontResolver::enqueue(const document::FontId&
         jobs_[key] = job;
         queue_.push_back(job);
         if (!worker_.joinable())
-            worker_ = std::thread([this] { workerLoop(); });
+            worker_ = bloom::core::WorkerThread([this] { workerLoop(); });
     }
     wake_.notify_all();
     return job;

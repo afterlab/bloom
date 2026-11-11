@@ -9,6 +9,7 @@
 // - the published snapshot and event ring (publishMutex), read by any thread.
 // Network threads never publish; pump() turns recorded facts into the next snapshot.
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/mcp/server_service.hpp>
 #include <bloom/platform/loopback_listener.hpp>
 
@@ -93,10 +94,11 @@ struct Network {
     std::size_t executing = 0;
     // Threads still running (acceptor, connections, workers); the network is quiescent at zero.
     std::atomic<std::size_t> threads = 0;
-    std::vector<std::jthread> workers;
-    std::jthread acceptor;
+    std::vector<bloom::core::StoppableWorkerThread> workers;
+    bloom::core::StoppableWorkerThread acceptor;
     // Each connection thread and whether it finished (finished ones are joined by the acceptor).
-    std::list<std::pair<std::shared_ptr<std::atomic_bool>, std::jthread>> connectionThreads;
+    std::list<std::pair<std::shared_ptr<std::atomic_bool>, bloom::core::StoppableWorkerThread>>
+        connectionThreads;
     std::atomic_bool failed = false;
 };
 

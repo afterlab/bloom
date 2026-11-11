@@ -11,6 +11,7 @@
 // that polls the ledger, and the playback, RAM Preview and export rates) arrive through
 // publishHostInputs(), which the UI-side hook calls on its own thread.
 
+#include <bloom/core/worker_thread.hpp>
 #include <bloom/runtime/profiler_ledger_adapter.hpp>
 #include <bloom/runtime/profiler_seqlock.hpp>
 #include <bloom/runtime/profiler_snapshot.hpp>
@@ -107,7 +108,7 @@ class ProfilerSampler final {
     // Guards stopping_ for the thread's wait.
     mutable std::mutex mutex_;
     std::condition_variable wake_;
-    std::thread thread_;
+    bloom::core::WorkerThread thread_;
     int subscribers_ = 0;
     bool stopping_ = false;
     std::atomic<std::int64_t> intervalNs_;
