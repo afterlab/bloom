@@ -2,8 +2,8 @@
 #
 #   cmake -DBUNDLE=<path to Bloom.app> -P sign_bundle.cmake
 #
-# Only what macdeployqt put in or rewrote is signed here: the Qt frameworks and plugins. Then the
-# bundle itself is signed, which seals everything inside it. The programs Bloom packages (the
+# Only what macdeployqt put in or rewrote is signed here: the Qt frameworks and plugins, and a
+# packaged library it changed. Then the bundle itself is signed, which seals everything inside it. The programs Bloom packages (the
 # shader tools, the workers, the Vulkan loader and driver) already carry the linker's ad hoc
 # signature and are left byte for byte as they are: Bloom checks the shader tools against the
 # digests in their inventory before it runs them, and signing them again changes those bytes, so
@@ -25,6 +25,23 @@ file(GLOB_RECURSE plugins "${BUNDLE}/Contents/PlugIns/*.dylib")
 file(GLOB frameworks LIST_DIRECTORIES TRUE "${BUNDLE}/Contents/Frameworks/*.framework")
 foreach(item IN LISTS plugins frameworks)
     bloom_sign("${item}")
+endforeach()
+
+# The libraries Bloom put in Contents/Frameworks (the Vulkan loader and driver, the Python
+# interpreter) and the interpreter's extension modules carry the linker's signature. One that
+# macdeployqt rewrote no longer verifies and is signed again; the others are left as they are.
+file(GLOB libraries "${BUNDLE}/Contents/Frameworks/*.dylib")
+file(GLOB_RECURSE modules "${BUNDLE}/Contents/Resources/python/*.so"
+                          "${BUNDLE}/Contents/Resources/python/*.dylib")
+foreach(item IN LISTS libraries modules)
+    if(IS_SYMLINK "${item}")
+        continue()
+    endif()
+    execute_process(COMMAND codesign --verify "${item}"
+                    RESULT_VARIABLE unsigned OUTPUT_QUIET ERROR_QUIET)
+    if(NOT unsigned EQUAL 0)
+        bloom_sign("${item}")
+    endif()
 endforeach()
 
 # Everything under Contents/MacOS counts as code to the bundle's seal, including the shader tools'

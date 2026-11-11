@@ -1,0 +1,61 @@
+{
+  "name": "xz",
+  "version": "5.8.4",
+  "source": {
+    "url": "https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz",
+    "archiveSha256": "sha256:0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9",
+    "archiveSizeBytes": 2799797,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "required",
+    "provenanceReview": {
+      "path": "dependencies/licenses/xz/provenance.md",
+      "sha256": "sha256:d130d5cf2616d2971ad8bf444628d929069eb25a87f19f7362f9cc4ed3d40b8d"
+    },
+    "provenance": [
+      {
+        "kind": "detached-signature",
+        "evidence": {
+          "path": "dependencies/licenses/xz/xz-5.8.4.tar.gz.sig",
+          "sha256": "sha256:486b23126c9b36e34ab98a9b4894b5ca00a0c6105bf25dd1e5660ae5b2e01cf9"
+        },
+        "identity": "3690C240CE51B4670D30AD1C38EE757D69184620",
+        "issuer": "Lasse Collin <lasse.collin@tukaani.org>",
+        "policy": "Official XZ Utils release detached signature verified with the maintainer key published on the project site"
+      }
+    ]
+  },
+  "license": {
+    "spdxExpression": "0BSD",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/xz/COPYING",
+        "sha256": "sha256:616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8"
+      },
+      {
+        "path": "dependencies/licenses/xz/LICENSE",
+        "sha256": "sha256:0b01625d853911cd0e2e088dcfb743261034a091bb379246cb25a14cc4c74bf1"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/xz/review.md",
+      "sha256": "sha256:4466585f19a2f488106bd9d2d05e75b8f7821f36bfe951670992cd791259781d"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/xz/security.md",
+      "sha256": "sha256:01320ec9354e9cfdc3e733515c4e2922a3c9d349655f4ad81718a3cc0091291e"
+    },
+    "vulnerabilities": []
+  }
+}

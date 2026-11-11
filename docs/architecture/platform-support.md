@@ -318,10 +318,15 @@ where the binaries are allowed to start, not where they were tested.
 
 The application bundle is `org.kinetik.bloom`, with its icon, the minimum system version of the
 deployment target, the media workers under `Contents/libexec/bloom/media`, the color worker and
-the shader tools beside the executable, and the loader and driver as above. The
-`bloom-deploy-macos` target adds Qt with `macdeployqt` and signs the result ad hoc; there is no
-Developer ID signature or notarization, so a copy downloaded from the internet is stopped by
-Gatekeeper until the person opening it allows it.
+the shader tools beside the executable, and the loader and driver as above. It carries its own
+Python interpreter, built from locked source: the library in `Contents/Frameworks`, the standard
+library in `Contents/Resources/python` and Bloom's Python package in
+`Contents/Resources/bloom-python` ([Dependency intake](dependency-intake.md)). The
+`bloom-deploy-macos` target adds Qt with `macdeployqt`, signs the result ad hoc, and then checks
+that every program and library in the bundle resolves inside it or in the operating system and
+that none was built for a newer system than the bundle declares; there is no Developer ID
+signature or notarization, so a copy downloaded from the internet is stopped by Gatekeeper until
+the person opening it allows it.
 
 Media on macOS is read and encoded by the Apple frameworks first, with the bundled FFmpeg worker
 behind them ([Media I/O](media-io.md)). Continuous integration builds macOS in qualified mode on

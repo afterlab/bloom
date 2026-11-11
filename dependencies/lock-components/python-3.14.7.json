@@ -1,0 +1,83 @@
+{
+  "name": "python",
+  "version": "3.14.7",
+  "source": {
+    "url": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tar.xz",
+    "archiveSha256": "sha256:3b48dac8fb59f62eaa67ac83c1eb12bda1b7a08406dd286e252c11a66be27f81",
+    "archiveSizeBytes": 24053924,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "required",
+    "provenanceReview": {
+      "path": "dependencies/licenses/python/provenance.md",
+      "sha256": "sha256:a80cabb3da22ca2ee4aa5259a72b7b71ba58fe0ca5ca6659abff07299925b68e"
+    },
+    "provenance": [
+      {
+        "kind": "sigstore-bundle",
+        "evidence": {
+          "path": "dependencies/licenses/python/Python-3.14.7.tar.xz.sigstore",
+          "sha256": "sha256:6f41efc358b146b5548dbfc0414e9247441f8524fb6ef59f1c4ca946ffc70701"
+        },
+        "identity": "hugo@python.org",
+        "issuer": "https://github.com/login/oauth",
+        "policy": "Official CPython release Sigstore bundle verified against the 3.14 release manager identity published on python.org"
+      }
+    ]
+  },
+  "license": {
+    "spdxExpression": "PSF-2.0 AND BSD-2-Clause AND MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/python/HACL-LICENSE",
+        "sha256": "sha256:328a079d376d3e1e966317c647906004d38d42b7624531456b90ae1b710ddc0c"
+      },
+      {
+        "path": "dependencies/licenses/python/LICENSE",
+        "sha256": "sha256:b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [
+      {
+        "path": "dependencies/licenses/python/incorporated-software.rst",
+        "sha256": "sha256:cd6f471c0bfdb099efefc25ddff9b3df8bf62e10428987f1f05e6f2f9e35d563"
+      }
+    ],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/python/review.md",
+      "sha256": "sha256:210c6a15012f8571c48a91e20c8f7d233df06318018727dc9646bd4b2f88dc46"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "expat",
+      "relationship": "link"
+    },
+    {
+      "name": "openssl",
+      "relationship": "link"
+    },
+    {
+      "name": "xz",
+      "relationship": "link"
+    },
+    {
+      "name": "zstd",
+      "relationship": "link"
+    }
+  ],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/python/security.md",
+      "sha256": "sha256:73ad2ae1e7f2d2e530cf09a86802ce7b388b4875e95f31d15232d15cde64299b"
+    },
+    "vulnerabilities": []
+  }
+}

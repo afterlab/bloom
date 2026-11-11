@@ -1,0 +1,57 @@
+{
+  "name": "zstd",
+  "version": "1.5.7",
+  "source": {
+    "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+    "archiveSha256": "sha256:eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+    "archiveSizeBytes": 2434947,
+    "retrievedAt": "2026-11-12",
+    "commit": null,
+    "provenancePolicy": "required",
+    "provenanceReview": {
+      "path": "dependencies/licenses/zstd/provenance.md",
+      "sha256": "sha256:63e354dfb019ac641b4937c538d60c616547f58f63bc52c1e37ff8248f7f8fd4"
+    },
+    "provenance": [
+      {
+        "kind": "detached-signature",
+        "evidence": {
+          "path": "dependencies/licenses/zstd/zstd-1.5.7.tar.gz.sig",
+          "sha256": "sha256:24425933fb954f4608ae9383bc37ad8398e50364c1ec30bbdb5adbfe88209fb1"
+        },
+        "identity": "4EF4AC63455FC9F4545D9B7DEF8FE99528B52FFD",
+        "issuer": "Zstandard Release Signing Key <signing@zstd.net>",
+        "policy": "Official Zstandard release detached signature verified with the release signing key fetched by fingerprint from a public key server"
+      }
+    ]
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/zstd/LICENSE",
+        "sha256": "sha256:7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/zstd/review.md",
+      "sha256": "sha256:647ec4f66ad046b8dd3d22a7e1f59afafa92e61fcc8275e4253288aa0c580f76"
+    },
+    "reviewedAt": "2026-11-12"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-12",
+    "record": {
+      "path": "dependencies/licenses/zstd/security.md",
+      "sha256": "sha256:83a845cd888013f68746e208bfa0b420205b69a35269762f4b53352103abdba9"
+    },
+    "vulnerabilities": []
+  }
+}

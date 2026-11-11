@@ -161,11 +161,39 @@ if(APPLE)
         add_dependencies(bloom-bundle-workers bloom)
     endif()
 
+    # The locked interpreter, its standard library and Bloom's Python package inside the bundle
+    # (macos/bundle_python.cmake), so scripting starts on a Mac without Python (issue #668). The
+    # executable finds the interpreter through the bundle's Frameworks directory.
+    set(bloom_bundle_python OFF)
+    if(BLOOM_BUILD_PYTHON AND BLOOM_LOCKED_PYTHON_HOME)
+        set(bloom_bundle_python ON)
+        set_property(TARGET bloom APPEND PROPERTY BUILD_RPATH "@executable_path/../Frameworks")
+        add_custom_target(
+            bloom-bundle-python ALL
+            COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                "-DPYTHON_HOME=${BLOOM_LOCKED_PYTHON_HOME}"
+                "-DPACKAGE_DIR=${CMAKE_BINARY_DIR}/python"
+                "-DLICENSES=${PROJECT_SOURCE_DIR}/dependencies/licenses"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/bundle_python.cmake"
+            DEPENDS _bloom
+            COMMENT "Refreshing the Python interpreter inside Bloom.app"
+            VERBATIM
+        )
+        add_dependencies(bloom-bundle-python bloom)
+    elseif(BLOOM_BUILD_PYTHON)
+        message(STATUS "Bloom.app links the host's Python and does not carry it: a "
+            "developer-system build is for this machine only")
+    endif()
+
     # Self-contained .app: copy the Qt frameworks (and plugins) the desktop needs beside the
-    # executable, then give the finished bundle its ad hoc signature (macos/sign_bundle.cmake; no
-    # Developer ID signing, an ad hoc signature is what a local build can carry). Optional --
-    # it requires Qt's macdeployqt, which is present in a normal Qt install but not in a headless
-    # CI checkout that only links Qt -- so the target appears only when found.
+    # executable, give the finished bundle its ad hoc signature (macos/sign_bundle.cmake; no
+    # Developer ID signing, an ad hoc signature is what a local build can carry), then check that
+    # nothing in it needs the build machine (macos/verify_bundle.cmake): every library resolves
+    # inside the bundle or in the operating system, and nothing was built for a newer system than
+    # the bundle declares. macdeployqt reports a library it cannot find and still succeeds, so
+    # the check is what makes the target fail. Optional -- it requires Qt's macdeployqt, which is
+    # present in a normal Qt install but not in a headless CI checkout that only links Qt -- so
+    # the target appears only when found.
     get_target_property(bloom_qmake Qt6::qmake IMPORTED_LOCATION)
     if(bloom_qmake)
         get_filename_component(bloom_qt_bin "${bloom_qmake}" DIRECTORY)
@@ -176,12 +204,18 @@ if(APPLE)
                 COMMAND "${BLOOM_MACDEPLOYQT}" "$<TARGET_BUNDLE_DIR:bloom>" -always-overwrite
                 COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/sign_bundle.cmake"
+                COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                    "-DREQUIRE_PYTHON=${bloom_bundle_python}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/verify_bundle.cmake"
                 DEPENDS bloom
-                COMMENT "Bundling Qt into Bloom.app with macdeployqt and signing it ad hoc"
+                COMMENT "Bundling Qt into Bloom.app, signing it ad hoc and checking it is self-contained"
                 VERBATIM
             )
             if(TARGET bloom-bundle-workers)
                 add_dependencies(bloom-deploy-macos bloom-bundle-workers)
+            endif()
+            if(TARGET bloom-bundle-python)
+                add_dependencies(bloom-deploy-macos bloom-bundle-python)
             endif()
         endif()
     endif()

@@ -193,6 +193,40 @@ FFmpeg's x86 SIMD is enabled. NASM 2.16.03 is a source-built, build-host-only to
 installed into a superbuild-private `tools/` directory rather than the dependency prefix and is
 passed to FFmpeg through `--x86asmexe` on x86 targets only.
 
+### Bundled Python interpreter (macOS)
+
+The macOS application bundle carries its own CPython, so scripting starts on a Mac that has no
+Python (issue #668). CPython is a lock component of the Apple silicon profile only, built from its
+release archive with the profile's deployment target as a shared library
+(`@rpath/libpython3.X.dylib`) and installed under `python/` in the dependency prefix. Linux has no
+build of it and uses the system's CPython.
+
+Three more Apple-profile components exist only for its modules and are linked statically into
+them from a private `python-support/` directory of the prefix: OpenSSL (`ssl`, `hashlib`),
+XZ Utils' liblzma (`lzma`) and Zstandard (`compression.zstd`). `pyexpat` links the locked Expat.
+The remaining modules use libraries of the operating system (`sqlite3`, `zlib`, `bz2`, `ctypes`
+through libffi, `curses`, `readline` through libedit). `_tkinter` and `_gdbm` are not built: the
+operating system has no library for them and none is locked. pkg-config is off for CPython's
+configure step, so no library of the build machine can be picked up, and the recipe's install
+step (`python-install.cmake`) imports the modules Bloom requires and refuses an interpreter in
+which any module loads a library from outside the operating system.
+
+OpenSSL is built with a configuration directory that does not exist, so it trusts no certificate
+by accident. When Bloom starts the carried interpreter it sets `SSL_CERT_FILE` to the operating
+system's certificate file (`/etc/ssl/cert.pem`), unless `SSL_CERT_FILE` or `SSL_CERT_DIR` is
+already set; HTTPS requests from scripts are verified against it.
+
+A qualified macOS build takes CPython from the prefix and from nowhere else (`Python3_ROOT_DIR`
+in the top-level `CMakeLists.txt`); with `BLOOM_BUILD_PYTHON=ON` and no interpreter in the prefix
+it refuses to configure. nanobind's static core is built against the same interpreter.
+`apps/bloom/macos/bundle_python.cmake` copies the interpreter to `Contents/Frameworks`, the
+standard library to `Contents/Resources/python`, Bloom's package to
+`Contents/Resources/bloom-python` and the license texts to `Contents/Resources/python/licenses`.
+The `bloom-deploy-macos` target ends with `apps/bloom/macos/verify_bundle.cmake`, which fails when a
+program or library in the bundle loads something that is neither in the bundle nor part of the
+operating system, carries a library search path that leaves the bundle, or was built for a newer
+system than the bundle's `LSMinimumSystemVersion`.
+
 ### Closed Resource Limits
 
 Limits are checked on encoded bytes before allocation and during parsing with checked arithmetic.

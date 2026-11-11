@@ -26,6 +26,10 @@ own records explain why the lock cannot represent it.
 | NASM | 2.16.03 | BSD-2-Clause | Build-host-only assembler for FFmpeg's x86 SIMD; installed outside the dependency prefix, never linked or shipped | `dependencies/licenses/nasm/`, `dependencies/dependencies.lock.json` |
 | glslang | 16.4.0 | BSD-3-Clause AND BSD-2-Clause AND MIT AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 | Runtime `glslangValidator` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with its full `LICENSES/` set | `dependencies/licenses/glslang/`, `dependencies/dependencies.lock.json` |
 | SPIRV-Tools | b707790a898e44038547df54580022fc1cf89c3d | Apache-2.0 | Runtime `spirv-val` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with the Apache-2.0 text | `dependencies/licenses/spirv-tools/`, `dependencies/dependencies.lock.json` |
+| CPython | 3.14.7 | PSF-2.0 AND BSD-2-Clause AND MIT | macOS only: the interpreter library, standard library and extension modules built from source and carried inside the application bundle; Linux uses the system's CPython | `dependencies/licenses/python/`, `dependencies/dependencies.lock.json` |
+| OpenSSL | 3.5.9 | Apache-2.0 | macOS only: static `libssl` and `libcrypto` inside the bundled interpreter's `ssl` and `hashlib` modules | `dependencies/licenses/openssl/`, `dependencies/dependencies.lock.json` |
+| XZ Utils (liblzma) | 5.8.4 | 0BSD | macOS only: static `liblzma` inside the bundled interpreter's `lzma` module | `dependencies/licenses/xz/`, `dependencies/dependencies.lock.json` |
+| Zstandard | 1.5.7 | BSD-3-Clause | macOS only: static library inside the bundled interpreter's `compression.zstd` module | `dependencies/licenses/zstd/`, `dependencies/dependencies.lock.json` |
 
 glslang and SPIRV-Tools ship as Bloom's GPU colour-compilation tooling: they are staged by
 `cmake/BloomGpuShaderTools.cmake` from the qualified prefix into the executable-relative
@@ -33,6 +37,11 @@ glslang and SPIRV-Tools ship as Bloom's GPU colour-compilation tooling: they are
 generated digest inventory. The glslang Bison Exception 2.2 covers the Bison-generated
 `glslang_tab.cpp`/`.h` content; an independent counsel review of that exception remains a release
 gate and no approval is asserted here.
+
+The macOS application bundle carries CPython so that scripting starts on a Mac without Python. Its
+license, the license of the HACL* code it contains, its list of incorporated software, and the
+license texts of OpenSSL, liblzma, Zstandard and Expat, which are linked into its modules, are in
+the bundle under `Contents/Resources/python/licenses/`.
 
 FFmpeg's corresponding-source obligation is the exact locked official release archive plus the
 reviewed patches under `dependencies/patches/ffmpeg/`. The lock, recipe, detached-signature evidence,

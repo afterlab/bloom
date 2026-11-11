@@ -3,17 +3,18 @@ set(BLOOM_NANOBIND_VERSION 3.0.1)
 set(BLOOM_NANOBIND_URL
     "https://files.pythonhosted.org/packages/07/11/69cf231c4f3ac4fa724a0b1933c3650fb65aff6b9d7a4c2573b9e4e40077/nanobind-3.0.1.tar.gz")
 set(BLOOM_NANOBIND_SHA256 f7f0a889c8fb80deaacb95e918d88e05148850a32d2b8eda28446291b2bf7c35)
-# nanobind's CMake build needs a host interpreter of Python 3.10 or later. Linux uses the system
-# one. macOS has no suitable interpreter at a fixed location (its /usr/bin/python3 is older), so
-# it takes the interpreter the superbuild's own environment resolves, the active virtual
-# environment first.
+# nanobind's CMake build needs the interpreter Bloom embeds, for its headers and version. Linux
+# uses the system one. macOS uses the locked interpreter (python.cmake), so the binding library is
+# compiled against the same Python the application carries.
 if(APPLE)
-    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
-    set(BLOOM_NANOBIND_PYTHON "${Python3_EXECUTABLE}")
+    set(BLOOM_NANOBIND_PYTHON "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3.14")
+    set(BLOOM_NANOBIND_DEPENDS DEPENDS bloom_dependency_python)
 else()
     set(BLOOM_NANOBIND_PYTHON /usr/bin/python3)
+    set(BLOOM_NANOBIND_DEPENDS)
 endif()
 ExternalProject_Add(bloom_dependency_nanobind
+    ${BLOOM_NANOBIND_DEPENDS}
     URL "${BLOOM_NANOBIND_URL}"
     URL_HASH SHA256=${BLOOM_NANOBIND_SHA256}
     DOWNLOAD_DIR "${BLOOM_DEPENDENCY_DOWNLOAD_DIR}"

@@ -46,6 +46,27 @@ bloom_disable_floating_point_contraction()
 # package, and conformance builds use qualified mode.
 bloom_consume_dependency_prefix()
 
+# A qualified macOS build takes CPython from the dependency prefix, where the superbuild puts the
+# locked interpreter, and from nowhere else: the application bundle carries that interpreter, so
+# every part of the build (the embedded runtime, the extension module, the tests that run scripts)
+# must agree on it. Other platforms use the host's CPython.
+if(APPLE AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+    if(EXISTS "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3")
+        set(BLOOM_LOCKED_PYTHON_HOME "${BLOOM_DEPENDENCY_PREFIX}/python")
+        set(Python3_ROOT_DIR "${BLOOM_LOCKED_PYTHON_HOME}")
+        set(Python3_FIND_FRAMEWORK NEVER)
+        set(Python3_FIND_VIRTUALENV STANDARD)
+    elseif(BLOOM_BUILD_PYTHON)
+        message(FATAL_ERROR
+            "BLOOM_BUILD_PYTHON is ON, but the dependency prefix has no locked CPython "
+            "(${BLOOM_DEPENDENCY_PREFIX}/python). Build the superbuild's bloom_dependency_python "
+            "target; a qualified macOS build does not use another interpreter.")
+    else()
+        # No discovery: a host interpreter must not be embedded by accident.
+        set(BLOOM_BUILD_PYTHON OFF CACHE BOOL "Build the Python bridge and embedded interpreter")
+    endif()
+endif()
+
 bloom_configure_quality_tools()
 
 # Tests that read media made by the FFmpeg worker's fixture generator. They are registered where

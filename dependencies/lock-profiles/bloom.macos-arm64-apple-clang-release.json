@@ -905,6 +905,24 @@
       ],
       "conformanceFixtureSets": []
     },
+    "openssl": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.openssl.libraries-only",
+          "state": "enabled",
+          "reason": "Static libssl and libcrypto only (no-shared no-tests no-apps no-docs no-module no-legacy no-engine), linked into the bundled interpreter's _ssl and _hashlib modules; no configuration or certificate directory is compiled in"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.openssl.tls"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "opus": {
       "linkage": "static",
       "cmakeOptions": [],
@@ -945,6 +963,48 @@
         "cmake-package",
         "library",
         "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "python": {
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.python.mimalloc",
+          "state": "disabled",
+          "reason": "The allocator CPython carries serves the free-threaded build, which Bloom does not use (--without-mimalloc)"
+        },
+        {
+          "id": "bloom.feature.python.pip",
+          "state": "disabled",
+          "reason": "--without-ensurepip: the bundled interpreter runs Bloom scripts and installs nothing"
+        },
+        {
+          "id": "bloom.feature.python.system-expat",
+          "state": "enabled",
+          "reason": "pyexpat links the locked expat component instead of the copy CPython carries"
+        },
+        {
+          "id": "bloom.feature.python.test-modules",
+          "state": "disabled",
+          "reason": "--disable-test-modules: the standard library test extension modules are not built"
+        },
+        {
+          "id": "bloom.feature.python.tkinter-gdbm",
+          "state": "disabled",
+          "reason": "The operating system has no Tk or GDBM library and none is locked; _tkinter and _gdbm are not built"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.python.embedded-interpreter"
+      ],
+      "shippingRoles": [
+        "data",
+        "executable",
+        "library",
+        "license",
+        "notice"
       ],
       "conformanceFixtureSets": []
     },
@@ -1194,6 +1254,24 @@
       ],
       "conformanceFixtureSets": []
     },
+    "xz": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.xz.liblzma-only",
+          "state": "enabled",
+          "reason": "Static liblzma only, from the CMake project; the command line tools, scripts, translations, documentation and tests are off; linked into the bundled interpreter's _lzma module"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.xz.lzma"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
     "yaml-cpp": {
       "linkage": "static",
       "cmakeOptions": [
@@ -1331,6 +1409,24 @@
       "shippingRoles": [
         "cmake-package",
         "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "zstd": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.zstd.library-only",
+          "state": "enabled",
+          "reason": "Static library only; programs, shared library, tests, contributed code and legacy frame formats are off; linked into the bundled interpreter's _zstd module"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.zstd.zstandard"
+      ],
+      "shippingRoles": [
         "license"
       ],
       "conformanceFixtureSets": []

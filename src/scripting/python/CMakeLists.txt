@@ -48,6 +48,12 @@ target_link_libraries(bloom_python_runtime PUBLIC bloom_scripting PRIVATE nanobi
 target_include_directories(bloom_python_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(bloom_python_runtime PRIVATE
     BLOOM_PYTHON_PACKAGE_PATH="${CMAKE_BINARY_DIR}/python")
+if(BLOOM_LOCKED_PYTHON_HOME)
+    # CPython compiles in the directory it was installed to, which the superbuild reaches through
+    # a temporary link. Programs run from the build tree are told where the interpreter is.
+    target_compile_definitions(bloom_python_runtime PRIVATE
+        BLOOM_PYTHON_HOME="${BLOOM_LOCKED_PYTHON_HOME}")
+endif()
 bloom_enable_warnings(bloom_python_runtime)
 
 if(BUILD_TESTING)

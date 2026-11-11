@@ -354,7 +354,7 @@ jobs:
             -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix" \
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/build/dependency-prefix" \
             -DBLOOM_BUILD_DESKTOP=OFF \
-            -DBLOOM_BUILD_PYTHON=OFF \
+            -DBLOOM_BUILD_PYTHON=ON \
             -DBLOOM_WARNINGS_AS_ERRORS=ON \
             -DBUILD_TESTING=ON \
             -DCMAKE_BUILD_TYPE=Release
@@ -429,7 +429,7 @@ jobs:
             -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix" \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/qt/6.8.3/macos" \
             -DBLOOM_BUILD_DESKTOP=ON \
-            -DBLOOM_BUILD_PYTHON=OFF \
+            -DBLOOM_BUILD_PYTHON=ON \
             -DBLOOM_WARNINGS_AS_ERRORS=ON \
             -DBUILD_TESTING=ON \
             -DCMAKE_BUILD_TYPE=Release
@@ -446,7 +446,9 @@ jobs:
         # a genuine regression still fails both attempts.
         run: ctest --test-dir build/macos-desktop --output-on-failure -j 3 --timeout 900 --repeat until-pass:2
 
-      # Qt inside the bundle, then the ad hoc signature over everything in it, verified.
+      # Qt inside the bundle, then the ad hoc signature over everything in it, verified, then the
+      # check that the bundle is self-contained: the locked Python interpreter is inside it and
+      # no program or library in it needs anything but the bundle and the operating system.
       - name: Package Bloom.app with macdeployqt
         run: cmake --build build/macos-desktop --target bloom-deploy-macos
 
