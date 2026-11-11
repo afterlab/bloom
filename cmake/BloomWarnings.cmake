@@ -26,6 +26,28 @@ function(bloom_enable_strict_floating_point target)
     endif()
 endfunction()
 
+# Every target built in this tree computes a product of two numbers and a sum as two rounded
+# operations, never as one fused multiply-add. A compiler may fuse them where the processor has the
+# instruction (every arm64 processor does; the x86-64 baseline does not), and the fused result
+# differs in the last bit, so the same source would give different pixels on different machines.
+# bloom_enable_strict_floating_point adds the rest of what a reference kernel needs; this is the
+# floor for everything else, including code added later to a target that is not a reference kernel.
+function(bloom_disable_floating_point_contraction)
+    if(MSVC)
+        # /fp:precise, the default, does not fuse.
+        return()
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        add_compile_options(-ffp-contract=off)
+    else()
+        message(
+            FATAL_ERROR
+            "Bloom does not know how to turn off floating-point contraction for "
+            "${CMAKE_CXX_COMPILER_ID}"
+        )
+    endif()
+endfunction()
+
 function(bloom_enable_warnings target)
     if(NOT TARGET ${target})
         message(FATAL_ERROR "bloom_enable_warnings expected an existing target: ${target}")

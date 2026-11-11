@@ -3,3 +3,4 @@ target_include_directories(bloom_media_video PUBLIC include)
 target_link_libraries(bloom_media_video PUBLIC bloom_media_worker_host bloom_media_audio bloom_color_video bloom_render bloom_runtime bloom_color_ocio
                       bloom_platform)
 bloom_enable_warnings(bloom_media_video)
+bloom_enable_strict_floating_point(bloom_media_video)

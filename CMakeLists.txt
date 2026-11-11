@@ -37,6 +37,9 @@ include(BloomWarnings)
 include(BloomDependencyPrefix)
 include(BloomVulkanRuntime)
 
+# Before any target is added, so it reaches all of them.
+bloom_disable_floating_point_contraction()
+
 # Dependency-prefix consumption is implemented, so an explicit mode is required: 'qualified'
 # validates the reviewed lock and resolves dependency packages only from the superbuild prefix;
 # 'developer-system' iterates against host packages and is labeled Unqualified. CI, release,
@@ -44,6 +47,16 @@ include(BloomVulkanRuntime)
 bloom_consume_dependency_prefix()
 
 bloom_configure_quality_tools()
+
+# Tests that read media made by the FFmpeg worker's fixture generator. They are registered where
+# that worker is always built and its process isolation is supported: Linux, and a qualified macOS
+# build. Set here because src/runtime's tests need it before apps/bloom-media-worker is added.
+set(BLOOM_MEDIA_FIXTURE_TESTS OFF)
+if(BUILD_TESTING
+   AND (CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        OR (APPLE AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")))
+    set(BLOOM_MEDIA_FIXTURE_TESTS ON)
+endif()
 
 add_subdirectory(tools/quality/json)
 add_subdirectory(tools/quality/project_schema_checks)
