@@ -1085,8 +1085,25 @@ void gradientsOnTheDevice(Expectations& expectations, const Device& device, Fixt
                           << static_cast<double>(peak) / kGradientFrameBytes
                           << " frames; the phase claims "
                           << static_cast<double>(claimed) / kGradientFrameBytes << " frames\n";
-                expectations.expect(peak <= claimed + kGradientFrameBytes,
-                                    "memory: the serial live set is within what the phase claims");
+                // The executor is charged each image's real allocation size, which a device
+                // rounds up by its own granularity (a whole page per image on Apple silicon), so
+                // the claim to hold it to is the one made with the device's sizes. A device that
+                // reports none is held to the claim by extent, with one frame of room.
+                const auto budget = device.device->availableAllocationBudget();
+                auto limit = claimed + kGradientFrameBytes;
+                if (budget.allocation_sizes && budget.allocation_sizes->image &&
+                    budget.allocation_sizes->buffer) {
+                    const auto extent =
+                        frame->frame->processImage().descriptor()->dataWindow().extent();
+                    limit = runtime::detail::gpuExecutorLivePeakBytes(
+                        *frame->plan, frame->request.output.value(),
+                        budget.allocation_sizes->image(extent.width(), extent.height()), &windows,
+                        &*budget.allocation_sizes, {extent.width(), extent.height()});
+                }
+                expectations.expect(
+                    peak <= limit, "memory: the serial live set is within what the phase claims (" +
+                                       std::to_string(peak) + " against " + std::to_string(limit) +
+                                       ")");
                 allocationClaim(expectations, device, *frame, scene, windows);
             }
             const auto halfExtent =
