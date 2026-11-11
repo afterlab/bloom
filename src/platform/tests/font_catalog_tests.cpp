@@ -45,22 +45,35 @@ int main() {
         setenv("FONTCONFIG_FILE", previousValue.c_str(), 1);
     std::filesystem::remove_all(root, error);
 
-    expectations.expect(catalogue.available(), "fontconfig catalogue is available");
+    expectations.expect(catalogue.available(), "the installed-font catalogue is available");
     expectations.expect(catalogue.faces.size() >= 4, "embedded faces are always present");
+#if defined(__APPLE__)
+    // The macOS catalogue lists what Core Text reports, not a fontconfig database, so the fixture
+    // folder above does not reach it. Helvetica is part of every macOS installation.
+    constexpr const char* kInstalledFamily = "Helvetica";
+    constexpr std::size_t kInstalledFaces = 1;
+    constexpr const char* kListed = "installed fonts are listed from the system's font database";
+#else
     // The installed-font listing returns the fonts fontconfig knows (here, the fixture folder), not
     // only the embedded ones.
+    constexpr const char* kInstalledFamily = "Inter";
+    constexpr std::size_t kInstalledFaces = 3;
+    constexpr const char* kListed = "installed fonts are listed from the fontconfig database";
+#endif
     std::size_t systemFaces = 0;
     for (const auto& face : catalogue.faces)
-        if (face.source == bloom::platform::FontSource::System && face.family.starts_with("Inter"))
+        if (face.source == bloom::platform::FontSource::System &&
+            face.family.starts_with(kInstalledFamily))
             ++systemFaces;
-    expectations.expect(systemFaces >= 3, "installed fonts are listed from the fontconfig database");
+    expectations.expect(systemFaces >= kInstalledFaces, kListed);
     // Weights are the CSS/OpenType ones (a fontconfig regular is 400, not its own 80).
     bool weightsInRange = systemFaces > 0;
     for (const auto& face : catalogue.faces)
-        if (face.source == bloom::platform::FontSource::System && face.family.starts_with("Inter") &&
-            (face.weight < 100 || face.weight > 900))
+        if (face.source == bloom::platform::FontSource::System &&
+            face.family.starts_with(kInstalledFamily) && (face.weight < 100 || face.weight > 900))
             weightsInRange = false;
-    expectations.expect(weightsInRange, "installed faces report OpenType weights between 100 and 900");
+    expectations.expect(weightsInRange,
+                        "installed faces report OpenType weights between 100 and 900");
     if (catalogue.faces.size() >= 4) {
         expectations.expect(catalogue.faces[0].source == bloom::platform::FontSource::Embedded,
                             "embedded faces sort before system faces");

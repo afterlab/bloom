@@ -228,6 +228,14 @@ if(BUILD_TESTING)
             list(APPEND _bloom_render_injected_test_environment
                  "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
         endif()
+    elseif(APPLE AND BLOOM_RENDER_ENABLE_VULKAN)
+        # The locked loader in the qualified prefix; the driver manifest that sits with it is found
+        # from its path (src/render/vulkan/gpu_packaged_runtime.hpp).
+        bloom_prefix_vulkan_loader(_bloom_scripting_prefix_loader)
+        if(_bloom_scripting_prefix_loader)
+            list(APPEND _bloom_render_injected_test_environment
+                 "BLOOM_TEST_VULKAN_LOADER=${_bloom_scripting_prefix_loader}")
+        endif()
     endif()
     bloom_add_test(
         NAME bloom.scripting.render-injected-provider

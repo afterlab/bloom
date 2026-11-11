@@ -120,7 +120,7 @@ std::filesystem::path writeWav(const std::filesystem::path& path, const WavEncod
         for (std::uint32_t frame = 0; frame < rate; ++frame) {
             const double value =
                 encoding == WavEncoding::ConstantStereo
-                    ? double{kConstantLevel}
+                    ? static_cast<double>(kConstantLevel)
                     : 0.25 * std::sin(2.0 * 3.141592653589793 * 440.0 * frame / double(rate));
             for (std::uint32_t channel = 0; channel < channels; ++channel) {
                 if (floating) {
@@ -464,7 +464,7 @@ void testLevelAutomationRampsWithinBlocks() {
         largest = std::max(largest, std::abs(samples[frame * 2] - samples[(frame - 1) * 2]));
     expect(largest < 1e-3, "level ramp: the fade is continuous, the largest sample step is " +
                                std::to_string(largest));
-    expect(std::abs(samples[12000 * 2] - 0.5 * double{kConstantLevel}) < 1e-3,
+    expect(std::abs(samples[12000 * 2] - 0.5 * static_cast<double>(kConstantLevel)) < 1e-3,
            "level ramp: a quarter second in, the level is halfway (got " +
                std::to_string(samples[12000 * 2]) + ")");
 }

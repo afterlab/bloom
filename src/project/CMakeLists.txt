@@ -496,7 +496,7 @@ if(BUILD_TESTING)
         LABELS unit project persistence security
     )
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
         add_executable(bloom_project_staged_save_test tests/staged_save_tests.cpp)
         target_link_libraries(bloom_project_staged_save_test PRIVATE bloom_project)
         bloom_enable_warnings(bloom_project_staged_save_test)

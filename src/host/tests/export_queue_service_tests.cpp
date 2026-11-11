@@ -1,5 +1,6 @@
 // ADR 0033: the export queue's runtime owner, presets, destinations and runner, driven headlessly
 // through a real ProjectSession, scheduler, staged publication and the media worker.
+#include <bloom/core/file_uri.hpp>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
@@ -66,7 +67,10 @@ std::filesystem::path scratch(const std::string& name) {
     return path;
 }
 
-std::string fileUri(const std::filesystem::path& path) { return "file://" + path.string(); }
+// Percent-encoded, so a build directory with a space in its path gives a valid URI.
+std::string fileUri(const std::filesystem::path& path) {
+    return bloom::core::fileUriFromAbsolutePath(path).value();
+}
 
 host::ExportEncoderStatus linuxEncoders(const bool openh264 = true, const bool vaapi = false) {
     host::ExportEncoderStatus status;

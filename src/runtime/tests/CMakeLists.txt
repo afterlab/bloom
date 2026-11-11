@@ -1186,7 +1186,7 @@ set_tests_properties(bloom.runtime.gpu_zero_scale_layer_native
 # no caller has to supply a directory. On a platform without that generator the path stays empty and
 # the video fixture reports an explicit test-environment-missing result rather than a fake pass.
 set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "")
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(BLOOM_MEDIA_FIXTURE_TESTS)
     set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")
 endif()
 
@@ -1213,7 +1213,7 @@ bloom_package_gpu_shader_tools(bloom_runtime_gpu_coverage_contract_test)
 # apps/bloom-media-worker is added after src/runtime, so a TARGET guard here would be false at
 # configure time; mirror the video-scene-preparation tests and take the real worker + fixture
 # generator as build-order dependencies on the platform that defines them.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(BLOOM_MEDIA_FIXTURE_TESTS)
     add_dependencies(bloom_runtime_gpu_coverage_contract_test
         bloom-media-worker bloom_media_generate_fixtures)
 endif()
@@ -1444,12 +1444,11 @@ set_tests_properties(bloom.runtime.gpu_layer_mask_animation_native
 set(BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES
     gpu_route_proof_viewer
     gpu_route_proof_ram)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(BLOOM_MEDIA_FIXTURE_TESTS)
     set_tests_properties(bloom.runtime.gpu_coverage_contract PROPERTIES FIXTURES_REQUIRED media3)
-    # The export route-proof writers are Linux-only (the host/scripting harnesses they extend are),
-    # so the native acceptance fixture chain includes their writers only on Linux. The chained
-    # fixtures guarantee order: gpu_route_proofs (fresh nonce) -> gpu_route_proof_writers ->
-    # native acceptance.
+    # The chained fixtures guarantee order: gpu_route_proofs (fresh nonce) ->
+    # gpu_route_proof_writers (the export route-proof writers in the host and scripting test
+    # trees) -> native acceptance.
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
         PROPERTIES FIXTURES_REQUIRED
             "media3;gpu_route_proofs;gpu_route_proof_writers;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
@@ -1637,10 +1636,10 @@ bloom_add_test(
 # VideoDecodeSession/worker the evaluator uses. It includes the private src/runtime/video_source.hpp
 # only to read the decoded-cache resident-byte counter, and it must run with a worker built from the
 # same provider archive as the host (a stale worker rejects the signed handshake). It is registered
-# only where the FFmpeg worker and its fixture generator exist (the same Linux-only condition
-# apps/bloom-media-worker uses), so a platform without an actual generated media-worker fixture never
+# only where the FFmpeg worker and its fixture generator exist (BLOOM_MEDIA_FIXTURE_TESTS, the
+# condition apps/bloom-media-worker uses), so a platform without an actual generated media-worker fixture never
 # registers a test that could only skip.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(BLOOM_MEDIA_FIXTURE_TESTS)
     add_executable(bloom_runtime_gpu_media_video_scene_preparation_test
         gpu_media_video_scene_preparation_tests.cpp)
     target_include_directories(bloom_runtime_gpu_media_video_scene_preparation_test
@@ -1816,9 +1815,9 @@ bloom_enable_warnings(bloom_runtime_gpu_media_color_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_media_color_test)
 target_compile_options(bloom_runtime_gpu_media_color_test PRIVATE -Wno-unused-function)
 # The real decoded video vectors need the media worker and its generated fixtures. They are
-# registered only where those exist (the same Linux-only condition apps/bloom-media-worker uses);
+# registered only where those exist (BLOOM_MEDIA_FIXTURE_TESTS, as apps/bloom-media-worker uses);
 # elsewhere the test prints an explicit NOTE for the video vectors rather than passing them.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(BLOOM_MEDIA_FIXTURE_TESTS)
     add_dependencies(bloom_runtime_gpu_media_color_test
         bloom-media-worker bloom_media_generate_fixtures)
     bloom_add_test(

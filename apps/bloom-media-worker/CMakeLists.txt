@@ -236,7 +236,13 @@ if(APPLE)
     endif()
 endif()
 
-if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# The FFmpeg worker's tests and its generated fixtures (BLOOM_MEDIA_FIXTURE_TESTS, top level).
+if(BLOOM_MEDIA_FIXTURE_TESTS)
+    if(APPLE)
+        set(bloom_media_origin "@loader_path")
+    else()
+        set(bloom_media_origin "$ORIGIN")
+    endif()
     add_library(bloom_media_ffmpeg_fixture_worker_provider STATIC ffmpeg_provider.cpp)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
@@ -251,7 +257,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         PROPERTIES BUILD_RPATH_USE_ORIGIN TRUE
                    BUILD_WITH_INSTALL_RPATH TRUE
                    BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib"
-                   INSTALL_RPATH "$ORIGIN/lib"
+                   INSTALL_RPATH "${bloom_media_origin}/lib"
                    INSTALL_RPATH_USE_LINK_PATH FALSE)
     bloom_enable_warnings(bloom_media_generate_fixtures)
     add_executable(bloom_media_reopen_compare_test tests/reopen_compare_tests.cpp)

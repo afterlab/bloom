@@ -3,6 +3,7 @@
 #include "image_effect.hpp"
 
 #include <OpenColorIO/OpenColorIO.h>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -1662,7 +1663,7 @@ void testFileTransform() {
         asset.id = document::AssetId::fromRaw(77);
         asset.kind = document::AssetKind::Lut;
         asset.name = "Show LUT";
-        asset.locator = {"file", "project-relative", "show.cube", "file://" + path.string()};
+        asset.locator = {"file", "project-relative", "show.cube", bloom::core::fileUriFromAbsolutePath(path).value()};
         asset.contentDigest = resource.digest;
         return runtime::FileTransformKernel{asset.id, 1, 0, "ACEScct", asset};
     };
@@ -1699,7 +1700,7 @@ void testFileTransform() {
             throw std::logic_error("Missing LUT fixture asset");
         auto& captured = *capturedAsset;
         captured.locator.path = "same-bytes.spi1d";
-        captured.locator.relinkHint = "file://" + renamed.string();
+        captured.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(renamed).value();
         const auto separatelyPrepared =
             context.prepare(differentFormat, requestFor(*source).colorIntent);
         expect(separatelyPrepared.cacheIdentity != first.cacheIdentity &&

@@ -192,10 +192,10 @@ if(BUILD_TESTING)
         LABELS unit host rendering
     )
 
-    # Gated Linux-only exactly as bloom.project.staged_save is gated: this exercises a real
-    # platform::StagedArtifactCoordinator over per-test temporary directories, and only the Linux
-    # platform backend is implemented today (see src/platform/staged_artifact_unsupported.cpp).
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Gated exactly as bloom.project.staged_save is gated: this exercises a real
+    # platform::StagedArtifactCoordinator over per-test temporary directories, which Linux and
+    # macOS implement (Windows: src/platform/staged_artifact_unsupported.cpp).
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
         add_executable(bloom_host_save_publication_test tests/save_publication_tests.cpp)
         target_link_libraries(bloom_host_save_publication_test PRIVATE bloom_host)
         bloom_enable_warnings(bloom_host_save_publication_test)
@@ -205,9 +205,9 @@ if(BUILD_TESTING)
             LABELS unit host persistence security
         )
 
-        # Gated Linux-only exactly as bloom.host.save-publication is gated: saveProjectSession()
+        # Gated exactly as bloom.host.save-publication is gated: saveProjectSession()
         # drives the same real platform::StagedArtifactCoordinator.
-        # Gated Linux-only for the same reason: the recovery writer drives the same real
+        # Gated for the same reason: the recovery writer drives the same real
         # platform::StagedArtifactCoordinator that a save does.
         add_executable(bloom_host_session_recovery_test tests/session_recovery_tests.cpp)
         target_link_libraries(bloom_host_session_recovery_test PRIVATE bloom_host)
@@ -227,7 +227,7 @@ if(BUILD_TESTING)
             LABELS unit host persistence security
         )
 
-        # Gated Linux-only exactly as bloom.host.session-save is gated: openSessionArchive()'s own
+        # Gated exactly as bloom.host.session-save is gated: openSessionArchive()'s own
         # full-cycle tests drive saveProjectSession() over the same real
         # platform::StagedArtifactCoordinator to produce a published file to reopen.
         #
@@ -248,7 +248,7 @@ if(BUILD_TESTING)
             LABELS unit host persistence security
         )
 
-        # Gated Linux-only exactly as bloom.host.session-save/session-open are gated: drives
+        # Gated exactly as bloom.host.session-save/session-open are gated: drives
         # beginSessionSave()/beginSessionOpen() (session_async_io.cpp, task A1, issue #68) against
         # the same real platform::StagedArtifactCoordinator over a real bloom::runtime::TaskScheduler
         # with a real TaskExecutor::BlockingIo worker.
@@ -261,7 +261,7 @@ if(BUILD_TESTING)
             LABELS unit host persistence security
         )
 
-        # Gated Linux-only exactly as bloom.host.save-publication is gated: executeCopyPublication()
+        # Gated exactly as bloom.host.save-publication is gated: executeCopyPublication()
         # drives the same real platform::StagedArtifactCoordinator.
         add_executable(bloom_host_copy_publication_test tests/copy_publication_tests.cpp)
         target_link_libraries(bloom_host_copy_publication_test PRIVATE bloom_host)
@@ -272,7 +272,7 @@ if(BUILD_TESTING)
             LABELS unit host persistence security
         )
 
-        # Gated Linux-only exactly as bloom.host.session-async-io is gated: drives
+        # Gated exactly as bloom.host.session-async-io is gated: drives
         # beginCopyPublication() against the same real platform::StagedArtifactCoordinator over a
         # real bloom::runtime::TaskScheduler with a real TaskExecutor::BlockingIo worker.
         add_executable(bloom_host_copy_async_io_test tests/copy_async_io_tests.cpp)
@@ -286,7 +286,7 @@ if(BUILD_TESTING)
 
         # Task F2 (issue #101): drives beginOutputAnalysisAttemptV1() against a real
         # platform::StagedArtifactCoordinator over a real bloom::runtime::TaskScheduler with real
-        # BlockingIo/Cpu workers -- gated Linux-only exactly as bloom.host.session-async-io is
+        # BlockingIo/Cpu workers -- gated exactly as bloom.host.session-async-io is
         # gated.
         add_executable(bloom_host_output_analysis_attempt_runner_test
                        tests/output_analysis_attempt_runner_tests.cpp)
@@ -407,6 +407,14 @@ if(BUILD_TESTING)
             if(TARGET Vulkan::Loader)
                 list(APPEND BLOOM_HOST_ROUTE_PROOF_LOADER_ENV
                      "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
+            endif()
+        elseif(APPLE AND BLOOM_RENDER_ENABLE_VULKAN)
+            # The locked loader in the qualified prefix; the driver manifest that sits with it is
+            # found from its path (src/render/vulkan/gpu_packaged_runtime.hpp).
+            bloom_prefix_vulkan_loader(bloom_host_prefix_loader)
+            if(bloom_host_prefix_loader)
+                list(APPEND BLOOM_HOST_ROUTE_PROOF_LOADER_ENV
+                     "BLOOM_TEST_VULKAN_LOADER=${bloom_host_prefix_loader}")
             endif()
         endif()
 

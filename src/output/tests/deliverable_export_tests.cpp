@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/output/dpx_export_write.hpp>
@@ -49,7 +50,7 @@ planWithLook(const std::filesystem::path& lutPath) {
     asset.id = AssetId::fromRaw(77);
     asset.kind = AssetKind::Lut;
     asset.name = "Double gain";
-    asset.locator = {"file", "project-relative", "gain.cube", "file://" + lutPath.string()};
+    asset.locator = {"file", "project-relative", "gain.cube", bloom::core::fileUriFromAbsolutePath(lutPath).value()};
     asset.contentDigest = color::readLutFile(lutPath).digest;
     std::vector<CompiledOperation> operations;
     operations.emplace_back(

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/animation_operations.hpp>
@@ -335,7 +336,7 @@ struct Fixture {
         record.kind = document::AssetKind::Audio;
         record.name = "PCM reference";
         record.locator.path = "reference.wav";
-        record.locator.relinkHint = "file://" + source.string();
+        record.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(source).value();
         record.contentDigest = media::provider::digestBytes(pcm);
         record.rate = 48000;
         record.channels = 2;

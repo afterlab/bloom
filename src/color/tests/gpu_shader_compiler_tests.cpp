@@ -197,7 +197,8 @@ void testStaticRejections(Expectations& expectations, const std::string& glslang
     request = baseRequest("/nonexistent/glslangValidator", spirvVal);
     expectations.expect(code(compiler.compile(request)) == GpuShaderCompileError::InvalidTool,
                         "a nonexistent tool path is rejected");
-    request = baseRequest("/bin/true", spirvVal);
+    // /usr/bin/true exists on Linux and macOS; /bin/true is not on macOS.
+    request = baseRequest("/usr/bin/true", spirvVal);
     expectations.expect(code(compiler.compile(request)) == GpuShaderCompileError::ToolCrashed,
                         "a wrong tool that writes no SPIR-V is rejected");
     request = baseRequest(glslang, spirvVal);
