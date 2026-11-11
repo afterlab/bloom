@@ -781,6 +781,10 @@
         {
           "name": "OCIO_USE_OIIO_FOR_APPS",
           "value": "OFF"
+        },
+        {
+          "name": "OCIO_USE_SSE2NEON",
+          "value": "ON"
         }
       ],
       "featureDecisions": [],
@@ -1072,6 +1076,18 @@
       ],
       "shippingRoles": [
         "executable",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "sse2neon": {
+      "linkage": "header-only",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.sse2neon"
+      ],
+      "shippingRoles": [
         "license"
       ],
       "conformanceFixtureSets": []

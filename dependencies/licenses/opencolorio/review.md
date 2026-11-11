@@ -46,7 +46,9 @@ against the downloaded archive lists exactly the options in this table plus the
 `OCIO_USE_SIMD`/`OCIO_USE_SSE*`/`OCIO_USE_AVX*`/`OCIO_USE_F16C` CPU-dispatch group, which are left
 at their upstream defaults — they select CPU instruction-set codepaths inside the CPU display
 path color-management.md requires, not an external capability or dependency, and introduce no new
-attack surface or license obligation):
+attack surface or license obligation; the one exception is the Arm build, which states
+`OCIO_USE_SSE2NEON=ON` and takes the header from the locked `sse2neon` component, see
+"Vendored/No-Switch Surface" below):
 
 | CMake option | Value | Contract justification |
 | --- | --- | --- |
@@ -153,5 +155,16 @@ Unlike OpenEXR's OpenJPH, OCIO 2.5.2's `ext/` and `vendor/` trees (`add_subdirec
 external library that lacks a corresponding `find_package`-based off-switch reachable by this
 recipe's option set: `vendor/` holds OCIO's own utility code (not a third-party library), and
 `ext/sse2neon` is guarded by `if(NOT (x86 or x86_64))` (non-x86 SIMD shim, irrelevant on Bloom's
-x86-64 CI target and never installed regardless). No openjph-style "forced vendored, no lock
+x86-64 target and never installed regardless). No openjph-style "forced vendored, no lock
 record" component applies to OpenColorIO itself.
+
+On Arm (the Apple silicon profile) the shim is not irrelevant. OpenColorIO compiles its SSE
+renderers through the `sse2neon` header and, when it finds none, clones one from the network while
+it configures (`share/cmake/modules/install/Installsse2neon.cmake`); `OCIO_INSTALL_EXT_PACKAGES`
+does not govern that fetch. When its compile check of the header fails it turns the SSE renderers
+off without an error and builds scalar ones that compute different values, and that check fails for
+any header path that contains whitespace. The Arm build therefore takes the header from the locked
+`sse2neon` component (a `build` dependency with its own record under
+`dependencies/licenses/sse2neon/`) through `sse2neon_ROOT`, reaches it by a path without
+whitespace, and runs `dependencies/superbuild/projects/opencolorio-require-sse2neon.cmake` after
+configuring, which stops the build unless OpenColorIO used that header and kept the SSE renderers.

@@ -121,6 +121,16 @@ Metal's fast-math shader compilation is off, in the MoltenVK build and again in 
 makes when it creates the instance. With it on, colour transforms, optical flow and vignette did
 not match the CPU reference.
 
+SPIRV-Cross carries one reviewed patch. It wrote a multiply that must not be fused with an add as
+`fma(l, r, 0)`, and adding positive zero turns a product of negative zero into positive zero; the
+patched helper adds negative zero, which changes no value. Sample conversion reached it with a
+negative-zero half-float sample.
+
+The Apple silicon build of OpenColorIO takes the `sse2neon` header from the lock and has to build
+its SSE renderers through it. Without the header OpenColorIO builds scalar renderers that give
+different values from the x86-64 build, and Bloom's GPU colour programs reproduce the SSE
+arithmetic. The recipe stops a build that would have dropped them.
+
 The dependency lock's Apple silicon profile records the deployment target, macOS 13.3. It is the
 oldest release whose system C++ library formats floating-point numbers the way Bloom's canonical
 text needs; reading them goes through `bloom::core::fromChars`. Bloom has been built and run on

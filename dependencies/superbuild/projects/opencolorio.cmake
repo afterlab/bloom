@@ -54,6 +54,22 @@
 # and pystring never calls find_package at all). This build has no ambient host `zlib-ng` probe of
 # its own (that risk is specific to minizip-ng's own CMakeLists), so no
 # CMAKE_DISABLE_FIND_PACKAGE_ZLIB-NG override is needed here.
+#
+# Arm (macOS): OpenColorIO compiles its SSE renderers through the sse2neon header, which its own
+# build would clone from the network at configure time, outside OCIO_INSTALL_EXT_PACKAGES. The
+# locked header from sse2neon.cmake is handed over as sse2neon_ROOT, so nothing is fetched, and a
+# step after configure (opencolorio-require-sse2neon.cmake) stops the build unless OpenColorIO
+# used that header and kept the SSE renderers. Bloom's GPU color programs reproduce those
+# renderers' arithmetic, and the scalar fallback computes different values.
+set(BLOOM_OPENCOLORIO_PLATFORM_DEPENDS)
+set(BLOOM_OPENCOLORIO_PLATFORM_ARGS)
+if(APPLE)
+    list(APPEND BLOOM_OPENCOLORIO_PLATFORM_DEPENDS bloom_dependency_sse2neon)
+    list(APPEND BLOOM_OPENCOLORIO_PLATFORM_ARGS
+        -DOCIO_USE_SSE2NEON:BOOL=ON
+        "-Dsse2neon_ROOT:PATH=${BLOOM_SSE2NEON_SOURCE_DIR}")
+endif()
+
 set(BLOOM_OPENCOLORIO_VERSION 2.5.2)
 set(BLOOM_OPENCOLORIO_URL
     "https://github.com/AcademySoftwareFoundation/OpenColorIO/archive/refs/tags/v${BLOOM_OPENCOLORIO_VERSION}.tar.gz")
@@ -73,6 +89,7 @@ ExternalProject_Add(bloom_dependency_opencolorio
         bloom_dependency_yaml-cpp
         bloom_dependency_pystring
         bloom_dependency_minizip-ng
+        ${BLOOM_OPENCOLORIO_PLATFORM_DEPENDS}
     CMAKE_ARGS
         ${BLOOM_DEPENDENCY_COMMON_CMAKE_ARGS}
         -DCMAKE_PREFIX_PATH:PATH=${BLOOM_DEPENDENCY_PREFIX}
@@ -88,8 +105,20 @@ ExternalProject_Add(bloom_dependency_opencolorio
         -DOCIO_BUILD_PYTHON:BOOL=OFF
         -DOCIO_BUILD_JAVA:BOOL=OFF
         -DOCIO_USE_OIIO_FOR_APPS:BOOL=OFF
+        ${BLOOM_OPENCOLORIO_PLATFORM_ARGS}
     BUILD_ALWAYS OFF
     INSTALL_DIR "${BLOOM_DEPENDENCY_PREFIX}"
     LIST_SEPARATOR |
     USES_TERMINAL_DOWNLOAD ON
     USES_TERMINAL_BUILD ON)
+
+if(APPLE)
+    ExternalProject_Add_Step(bloom_dependency_opencolorio require-sse2neon
+        COMMAND "${CMAKE_COMMAND}"
+            -DBLOOM_OPENCOLORIO_CACHE:FILEPATH=<BINARY_DIR>/CMakeCache.txt
+            "-DBLOOM_SSE2NEON_SOURCE_DIR:PATH=${BLOOM_SSE2NEON_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_LIST_DIR}/opencolorio-require-sse2neon.cmake"
+        COMMENT "Checking that OpenColorIO builds its SSE renderers through the locked sse2neon"
+        DEPENDEES configure
+        DEPENDERS build)
+endif()

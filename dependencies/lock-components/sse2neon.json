@@ -1,0 +1,46 @@
+{
+  "name": "sse2neon",
+  "version": "227cc413fb2d50b2a10073087be96b59d5364aea",
+  "source": {
+    "url": "https://codeload.github.com/DLTcollab/sse2neon/tar.gz/227cc413fb2d50b2a10073087be96b59d5364aea",
+    "archiveSha256": "sha256:3427a495743bb6fd1b5f9f806b80f57d67b1ac7ccf39a5f44aedd487fd7e6da1",
+    "archiveSizeBytes": 136342,
+    "retrievedAt": "2026-11-11",
+    "commit": "227cc413fb2d50b2a10073087be96b59d5364aea",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/sse2neon/provenance.md",
+      "sha256": "sha256:29dec7d64cebab9ad73d34a4fb8e3e32e336186237bfa1811357d6b1d76c301b"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/sse2neon/LICENSE",
+        "sha256": "sha256:5c347d431a555ec6e5bc9720ceba2119570357dab5203372d469be9bcce374cc"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/sse2neon/review.md",
+      "sha256": "sha256:2a0c9c1bed51c6f55f641e6890880b9b67a2281c3989c1e040ead687a3c5a2a6"
+    },
+    "reviewedAt": "2026-11-11"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [],
+  "securityReview": {
+    "reviewedAt": "2026-11-11",
+    "record": {
+      "path": "dependencies/licenses/sse2neon/security.md",
+      "sha256": "sha256:b396a66a10844b0152c33a1c52743c6e9e9699eafd2fa1c7188679c1e636377c"
+    },
+    "vulnerabilities": []
+  }
+}

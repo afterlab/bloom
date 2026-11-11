@@ -78,6 +78,15 @@ if(NOT BLOOM_DEPENDENCY_ALLOW_DOWNLOADS)
     set(BLOOM_DEPENDENCY_OFFLINE_ARGS DOWNLOAD_NO_PROGRESS ON)
 endif()
 
+# A component's own CMake build can fetch sources while it configures (OpenColorIO cloned sse2neon
+# that way), which the archive check below cannot see. With downloads off, FetchContent in every
+# CMake component is disconnected, so such a fetch gets nothing instead of reaching the network.
+# This covers CMake's FetchContent only, and so far the macOS build only: the other platforms'
+# superbuilds have not been run with it.
+if(APPLE AND NOT BLOOM_DEPENDENCY_ALLOW_DOWNLOADS)
+    list(APPEND BLOOM_DEPENDENCY_COMMON_CMAKE_ARGS -DFETCHCONTENT_FULLY_DISCONNECTED:BOOL=ON)
+endif()
+
 # The configure scripts and Makefiles of the codec libraries and FFmpeg split their arguments on
 # whitespace, so they cannot build in, install to, or compile against a path that contains any
 # (a volume or folder name with a space is ordinary on macOS and Windows). Those recipes reach
