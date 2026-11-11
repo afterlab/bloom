@@ -167,6 +167,17 @@ struct GpuProcessFrameEvaluator::Impl final {
     std::atomic<std::uint64_t> retainedBytes{0};
     // Owner thread: gives the scene cache back after `options.idleTrimDelay` without work.
     void trimIdleRetention(bool preparing);
+    // Owner thread, between requests (#553). A request that ended with a native submission not
+    // proven retired leaves it, and its processing phase, held on this generation. The next
+    // admitted request advances that retirement before it runs, but a root with no room beside
+    // the leftover phase admits no next request, so the leftover was never retired and every
+    // later frame waited for capacity and then took the CPU. The idle owner advances it here
+    // instead: it polls the executor, the output color stage and the display-only uploader, and
+    // once each of their fences is observed it proves the leftover phase retired, which returns
+    // its claims to the root. Nothing is released under a fence that has not signaled. Returns
+    // whether a leftover is still pending, so the idle wait stays short until it is gone.
+    [[nodiscard]] bool retireLeftovers() noexcept;
+    bool leftoverPending = false;
     GpuProcessFrameOutcome
     runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                const EvaluationRequest& request,
@@ -725,11 +736,12 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
         std::shared_ptr<GpuProcessFrameRequest> active;
         {
             std::unique_lock lock(mutex);
-            cv.wait_for(lock, std::chrono::milliseconds(50),
+            cv.wait_for(lock, std::chrono::milliseconds(leftoverPending ? 1 : 50),
                         [this] { return stopping || !queue.empty() || deviceReclaim->pending(); });
             if (!stopping && queue.empty()) {
                 const bool preparing = inFlightPreparations != 0;
                 lock.unlock();
+                leftoverPending = retireLeftovers();
                 reportDevice();
                 trimIdleRetention(preparing);
                 // #457: an idle owner writes pipelines created since the last write.
@@ -872,6 +884,37 @@ void GpuProcessFrameEvaluator::Impl::reportDevice() {
     if (wanted != 0 && reclaimDevice(wanted) != 0)
         live = device->availableAllocationBudget();
     static_cast<void>(options.processingPhasePolicy->reportDevice(device->ownershipEpoch(), live));
+}
+
+bool GpuProcessFrameEvaluator::Impl::retireLeftovers() noexcept {
+    if (!device || !executor)
+        return false;
+    const auto unretired = [this] {
+        return executor->ownerDrainRequired() || executor->hasUnretiredSubmission() ||
+               (outputColor != nullptr && outputColor->hasUnretiredSubmission()) ||
+               (uploader != nullptr && uploader->hasUnretiredSubmission());
+    };
+    if (unretired()) {
+        // One non-blocking turn. The executor's poll also drains the generation's quarantined
+        // uploads, transfers, readbacks and programs.
+        static_cast<void>(executor->poll());
+        if (outputColor != nullptr)
+            static_cast<void>(outputColor->poll());
+        if (uploader != nullptr && uploader->hasUnretiredSubmission())
+            static_cast<void>(uploader->poll());
+        if (unretired())
+            return true;
+    }
+    if (!device->processingPhaseOccupied())
+        return false;
+    // Every fence this owner submitted is observed. The failed output color job gives up what it
+    // held, and the device-wide idle wait inside the recovery returns at once. A lost device is
+    // reported by the next request, not here.
+    if (outputColor != nullptr)
+        static_cast<void>(outputColor->discardRetiredFailure());
+    static_cast<void>(device->recoverUnprovenProcessingPhase());
+    device->reclaimReleasedImages();
+    return false;
 }
 
 void GpuProcessFrameEvaluator::Impl::trimIdleRetention(const bool preparing) {

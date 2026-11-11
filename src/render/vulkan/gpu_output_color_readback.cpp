@@ -190,6 +190,9 @@ struct GpuOutputColorReadback::Impl final {
         fence = vk::raii::Fence{nullptr};
         slotToken = 0;
         submitted = false;
+        // The reservation now owns everything the submission references, each charged through
+        // its own token. This alias would only keep the phase admitted after they retire (#553).
+        phaseLease.reset();
         return true;
     }
 

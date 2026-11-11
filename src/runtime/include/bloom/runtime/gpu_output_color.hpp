@@ -156,6 +156,11 @@ class GpuOutputColorStage final {
     // Unknown native/LUT work, another phase, or another owner cannot satisfy this proof.
     [[nodiscard]] bool
     retiredReadbackFailure(const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) noexcept;
+    // Owner thread, between jobs (#553): a failed job whose every submission has since retired
+    // gives up what it still held (its command, images and processing phase), whatever the
+    // failure was. False, and nothing changes, on a foreign thread, without such a failure, or
+    // while a submission is unretired.
+    bool discardRetiredFailure() noexcept;
 
     // Non-blocking owner-thread advance across the dispatch and readback phases.
     [[nodiscard]] GpuOutputColorPollResult poll();

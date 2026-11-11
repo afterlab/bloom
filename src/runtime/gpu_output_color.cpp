@@ -163,6 +163,15 @@ bool GpuOutputColorStage::retiredReadbackFailure(
     return true;
 }
 
+bool GpuOutputColorStage::discardRetiredFailure() noexcept {
+    if (ownerThread_ != std::this_thread::get_id() || phase_ != Phase::Failure || !device_ ||
+        !device_->isOwnerThread() || ownershipEpoch_ != device_->ownershipEpoch() ||
+        !executor_->isBoundTo(*device_) || executor_->deviceLost() || hasUnretiredSubmission())
+        return false;
+    discardProvenFailure();
+    return true;
+}
+
 GpuOutputColorDiagnostic
 GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command,
                            std::shared_ptr<const render::GpuImage> processImage,

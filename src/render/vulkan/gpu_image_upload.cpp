@@ -916,6 +916,10 @@ GpuImageUploadPollResult GpuImageUpload::poll() {
         impl.staging.release();
     }
     if (!pending) {
+        // A job that already failed has now proved its fence (#553). Its resident image can
+        // never be taken, so it is released here with the staging instead of at the next begin:
+        // held, it kept the failed job's processing phase admitted with nothing to end it.
+        impl.releaseResident();
         return GpuImageUploadPollResult::Failure;
     }
     if (impl.discardRequested.load()) {
