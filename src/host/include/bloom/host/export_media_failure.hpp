@@ -1,7 +1,8 @@
 #pragma once
 
 #include <bloom/host/export_queue.hpp>
-#include <bloom/media/provider/contract.hpp>
+// The provider reason reaches the host through the output layer, which owns the media session.
+#include <bloom/output/media_output.hpp>
 
 #include <optional>
 #include <string>
