@@ -202,7 +202,26 @@ class ConnectionWorker final {
             reply = statusReply(400);
             break;
         }
-        static_cast<void>(writeAll(*connection_, reply.bytes, limits_, stop));
+        if (!writeAll(*connection_, reply.bytes, limits_, stop))
+            return;
+        // The client may still be sending the request this refused. Closing with its bytes
+        // unread makes the system reset the connection, and the client can then lose the answer
+        // it has not read yet (it does on macOS). So this side ends its half, then reads and
+        // discards what the client still sends, for a bounded time and amount, until it closes.
+        connection_->shutdownWrite();
+        constexpr std::size_t kDiscardLimit = 8 * kMcpMessageLimits.requestBytes;
+        const auto until = SteadyClock::now() + std::chrono::seconds(2);
+        std::array<std::byte, 16 * 1024> discard{};
+        for (std::size_t discarded = 0; discarded < kDiscardLimit && !stop.stop_requested();) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                until - SteadyClock::now());
+            if (remaining <= 0ms)
+                break;
+            const auto read = connection_->read(discard, remaining, stop);
+            if (read.status != platform::LoopbackIoStatus::Ok || read.bytes == 0)
+                break;
+            discarded += read.bytes;
+        }
     }
 
     void reject(const McpHttpRejection rejection, const std::shared_ptr<Client>& client) {
