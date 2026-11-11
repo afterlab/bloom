@@ -2,13 +2,18 @@
 // host::ExportJobRunner. This test keeps the previous Render::run implementation verbatim as the
 // reference (legacyRender) and proves the new route writes the same files with the same bytes for
 // the deterministic image formats, a still and a range, and the same result summary.
+#include <bloom/commands/export_queue_operations.hpp>
+#include <bloom/commands/operations.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/export_job_runner.hpp>
+#include <bloom/host/export_presets.hpp>
+#include <bloom/host/export_queue.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
+#include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -703,10 +708,220 @@ void testParity() {
     std::filesystem::remove_all(root);
 }
 
+// #379: one saved composition renders the same pixels through the desktop and the headless path.
+// The project is authored once and saved; each route opens the saved file on its own. The desktop
+// route is the export queue the application runs (host::ExportQueueService on the opened project's
+// session, a queued PNG sequence job); the headless route is Render::run, which bloom-cli and the
+// Python package call. Both write one PNG per frame and every frame must match byte for byte.
+void testDesktopQueueMatchesHeadless() {
+    const auto root = std::filesystem::temp_directory_path() / "bloom-desktop-headless-parity";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "project");
+    std::filesystem::create_directories(root / "headless");
+    const auto project = root / "project" / "parity.bloom";
+    {
+        auto created = Session::createNew("Parity", "Main", core::RationalTime::fromInteger(2),
+                                          *document::CompositionFormat::create(320, 180));
+        expect(static_cast<bool>(created), "desktop/headless: the authoring session opens");
+        if (!created)
+            return;
+        auto author = std::move(created).takeSession();
+        // Partial coverage, text, a blurred layer and an animated opacity: the frames differ from
+        // one another and exercise filtering, not only flat fills.
+        const auto script = parseScriptJson(
+            R"([{"op":"bloom.layer.add-solid","args":{"composition":1,"name":"Back",)"
+            R"("color":[0.1,0.3,0.8,1],"position":[160,90]}},)"
+            R"({"op":"bloom.layer.add-solid","args":{"composition":1,"name":"Card",)"
+            R"("color":[0.8,0.2,0.1,1],"width":121,"height":67,"position":[140.5,80.25]}},)"
+            R"({"op":"bloom.layer.add-text","args":{"composition":1,"name":"Text",)"
+            R"("text":"PARITY","position":[60,100],"size":36,"color":[1,1,1,1]}}])");
+        expect(static_cast<bool>(script), "desktop/headless: the authoring script parses");
+        if (!script)
+            return;
+        for (const auto& transaction : script.transactions()) {
+            const auto applied =
+                author->executeJsonOperation(transaction.operation, transaction.arguments);
+            expect(applied.succeeded(),
+                   "desktop/headless: the authoring script applies: " + transaction.operation);
+        }
+        // Every constant 2D parameter (positions, anchors, scales) moves across the range.
+        const auto authored = author->snapshot();
+        const auto& main = authored.project().compositions().front();
+        std::size_t keyed = 0;
+        for (const auto& record : main.parameters().records()) {
+            const auto* constant = std::get_if<document::ConstantValueSource>(&record.source);
+            const auto* point = constant ? std::get_if<document::Vec2d>(&constant->value) : nullptr;
+            if (point == nullptr)
+                continue;
+            bool both = true;
+            for (const std::int64_t time : {std::int64_t{0}, std::int64_t{3}})
+                both =
+                    author
+                        ->executeJsonOperation(
+                            "bloom.animation.set-keyframe-at-time-for-parameter",
+                            {{"composition", Value(StableId{main.id().value()})},
+                             {"parameter", Value(StableId{record.id.value()})},
+                             {"time", Value(time)},
+                             {"value", Value(document::Vec2d{
+                                           point->x + 2.5 * static_cast<double>(time), point->y})}})
+                        .succeeded() &&
+                    both;
+            keyed += both ? 1 : 0;
+        }
+        expect(keyed >= 3, "desktop/headless: the layers are animated");
+        const auto saved = author->saveAs(project);
+        expect(saved.succeeded(), "desktop/headless: the project saves: " + saved.message);
+        if (!saved.succeeded())
+            return;
+    }
+
+    auto config = runtime::TaskSchedulerConfig::defaults();
+    config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
+    runtime::TaskScheduler scheduler(config);
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = false;
+    const auto provider = host::GpuExportProvider::create(options);
+    constexpr std::uint64_t kFirst = 0;
+    constexpr std::uint64_t kLast = 3;
+
+    // Headless.
+    {
+        auto opened = Session::open(project);
+        expect(static_cast<bool>(opened), "desktop/headless: the headless route opens the file");
+        if (opened) {
+            auto session = std::move(opened).takeSession();
+            const auto rendered = Render::run(
+                *session, scheduler, compiler,
+                RenderRequest{.composition =
+                                  session->snapshot().project().compositions().front().id(),
+                              .frame = std::nullopt,
+                              .range = std::pair<std::uint64_t, std::uint64_t>{kFirst, kLast},
+                              .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+                              .destination = root / "headless" / "Main.png"},
+                root / "scratch-headless", provider);
+            expect(rendered.succeeded && rendered.publishedFrames == kLast - kFirst + 1,
+                   "desktop/headless: the headless route publishes every frame: " +
+                       rendered.diagnostic);
+        }
+    }
+
+    // Desktop.
+    {
+        auto opened = Session::open(project);
+        expect(static_cast<bool>(opened), "desktop/headless: the desktop route opens the file");
+        if (opened) {
+            auto session = std::move(opened).takeSession();
+            const auto retirement = host::SequenceExportRetirementOwnerV1::create();
+            host::ExportEncoderStatus encoders;
+            encoders.probed = true;
+            std::filesystem::create_directories(root / "scratch-desktop");
+            auto queue =
+                std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
+                    .session = *session->hostSession(),
+                    .scheduler = scheduler,
+                    .compiler = compiler,
+                    .publications = *session->publicationCoordinator(),
+                    .artifacts = *session->artifactCoordinator(),
+                    .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
+                    .gpu = provider,
+                    .retirement = retirement,
+                    .presets = host::ExportPresetCatalogue::create(
+                        {.userDataDirectory = std::nullopt, .initialEncoders = encoders}),
+                    .limits = {},
+                    .displayProcessor = nullptr,
+                    .scratchDirectory = root / "scratch-desktop",
+                    .backend = nullptr});
+            document::ExportJob job;
+            job.composition = session->snapshot().project().compositions().front().id();
+            job.render.range = {document::ExportRangeKind::Custom, kFirst, kLast};
+            document::ExportOutput target;
+            target.presetId = "parity";
+            target.settings.format = document::ExportFormat::Png;
+            target.settings.includeAudio = false;
+            target.destination = {"project-relative", "desktop/{name}.png",
+                                  document::ExportOverwritePolicy::Replace};
+            job.outputs = {target};
+            commands::Transaction transaction("Add export job");
+            transaction.emplace<commands::AddExportJob>(job);
+            const auto added = session->hostSession()->execute(std::move(transaction));
+            expect(added.changed(), "desktop/headless: the export job is queued");
+            std::optional<host::ExportJobView> finished;
+            if (added.changed()) {
+                const auto id =
+                    *added.command->outputId<document::ExportJobId>(commands::kExportJobOutput);
+                const auto pumpUntil = [&](const auto& done) {
+                    const auto deadline =
+                        std::chrono::steady_clock::now() + std::chrono::seconds(240);
+                    while (std::chrono::steady_clock::now() < deadline) {
+                        queue->pump();
+                        if (done())
+                            return true;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    }
+                    return false;
+                };
+                expect(pumpUntil([&] { return queue->canStart(id).available; }),
+                       "desktop/headless: the queued job becomes startable");
+                const document::ExportJobId ids[] = {id};
+                expect(queue->start(ids).accepted, "desktop/headless: the queued job starts");
+                const auto terminal = pumpUntil([&] {
+                    for (const auto& view : queue->snapshot()->jobs)
+                        if (view.id == id && host::isTerminal(view.state)) {
+                            finished = view;
+                            return true;
+                        }
+                    return false;
+                });
+                // The disabled provider makes every frame a reported CPU reference frame, which
+                // the queue states as a warning.
+                expect(terminal && finished &&
+                           (finished->state == host::ExportJobState::Done ||
+                            finished->state == host::ExportJobState::DoneWithWarnings),
+                       "desktop/headless: the desktop route finishes");
+            }
+            queue->beginShutdown(host::ExportStopCause::ApplicationQuit);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!queue->quiescent() && std::chrono::steady_clock::now() < deadline) {
+                queue->pump();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            queue.reset();
+            retirement->beginShutdown();
+            while (!retirement->retirementComplete())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            while (!retirement->collect())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    const auto desktop = root / "project" / "desktop";
+    std::error_code missing;
+    if (!std::filesystem::is_directory(desktop, missing)) {
+        expect(false, "desktop/headless: the desktop route wrote its folder");
+    } else {
+        expect(names(root / "headless").size() == kLast - kFirst + 1,
+               "desktop/headless: one file per frame");
+        compare(root / "headless", desktop, "desktop/headless");
+        // The frames are not all one image, so a route that repeated a frame could not pass.
+        const auto frames = names(desktop);
+        expect(frames.size() > 1 &&
+                   bytes(desktop / frames.front()) != bytes(desktop / frames.back()),
+               "desktop/headless: the first and last frames differ");
+    }
+    expect(provider->shutdownAndWait(std::chrono::seconds(10)),
+           "desktop/headless: the provider retires");
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::filesystem::remove_all(root);
+}
+
 } // namespace
 } // namespace bloom::scripting
 
 int main() {
     bloom::scripting::testParity();
+    bloom::scripting::testDesktopQueueMatchesHeadless();
     return bloom::scripting::failures == 0 ? 0 : 1;
 }
