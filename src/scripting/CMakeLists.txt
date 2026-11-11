@@ -171,6 +171,47 @@ if(BUILD_TESTING)
         LABELS unit scripting host output
         TIMEOUT 300
     )
+    # #465: PNG, TIFF, flat EXR and ProRes with an external loose config, an external archive and
+    # a project-relative archive, resolved through the supervised helper, against the built-in.
+    bloom_find_dependency(OpenColorIO)
+    add_executable(bloom_scripting_external_config_render_test
+                   tests/external_config_render_tests.cpp)
+    target_link_libraries(bloom_scripting_external_config_render_test
+                          PRIVATE bloom_scripting OpenColorIO::OpenColorIO)
+    add_dependencies(bloom_scripting_external_config_render_test bloom-media-worker)
+    bloom_enable_warnings(bloom_scripting_external_config_render_test)
+    bloom_add_test(
+        NAME bloom.scripting.external-config-render
+        COMMAND bloom_scripting_external_config_render_test
+        LABELS unit scripting host output color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.scripting.external-config-render PROPERTIES SKIP_RETURN_CODE 77)
+    # The same renders on a real device: the external config's display transform runs on the GPU
+    # from the program the helper reflected, with no CPU reference frame. Skips (77) without a
+    # device or the packaged tools.
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_scripting_external_config_render_test)
+    set(_bloom_external_config_test_environment)
+    if(UNIX
+       AND NOT APPLE
+       AND BLOOM_RENDER_ENABLE_VULKAN
+       AND DEFINED BLOOM_DEPENDENCY_MODE
+       AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        find_package(VulkanLoader QUIET CONFIG PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+        if(TARGET Vulkan::Loader)
+            list(APPEND _bloom_external_config_test_environment
+                 "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
+        endif()
+    endif()
+    bloom_add_test(
+        NAME bloom.scripting.external-config-render-gpu
+        COMMAND bloom_scripting_external_config_render_test --device
+        LABELS unit scripting host output color gpu
+        ENVIRONMENT ${_bloom_external_config_test_environment}
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.scripting.external-config-render-gpu PROPERTIES SKIP_RETURN_CODE 77)
     # #588: scratch-folder cleanup and the changed-media failure of Render::run.
     add_executable(bloom_scripting_render_cleanup_test tests/render_cleanup_tests.cpp)
     target_link_libraries(bloom_scripting_render_cleanup_test PRIVATE bloom_scripting)
