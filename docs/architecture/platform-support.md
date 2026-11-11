@@ -294,7 +294,7 @@ program that renders: inside `Bloom.app` (`Contents/Frameworks`, with the driver
 device is reached with nothing set in the environment. Metal's fast-math is turned off for Bloom,
 because it breaks parity with the CPU reference. A Metal device has one memory pool shared with
 the system; Bloom plans against it with its own budget
-([GPU backend](gpu-backend.md)).
+([ADR 0039](../decisions/0039-unified-memory-devices.md)).
 
 What was measured, on an Apple M4 running macOS 26 (2026-11-12), in a qualified build at the
 13.3 deployment target:

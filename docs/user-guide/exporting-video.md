@@ -125,7 +125,10 @@ used; the panel does not edit them.
   Windows. Each has an **8-bit** and a **10-bit** profile, and both write real 10-bit. They are
   encoded on the processor at a fixed quality for web delivery; the bit rate and the encoder choice
   do not apply to them, and the Bit rate field is not shown.
-- **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
+- **ProRes** is written by the system's encoder on macOS. If the system refuses an export, Bloom
+  asks whether to write it with its own FFmpeg encoder instead, and does not switch without
+  asking. On Linux and Windows, and on macOS with the encoder set to **Software**, ProRes is
+  written by FFmpeg; that is not an Apple-authorized ProRes implementation.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.
 - **DPX** sequences are 10-bit or 16-bit RGB files, one per frame, with no alpha (the color is what

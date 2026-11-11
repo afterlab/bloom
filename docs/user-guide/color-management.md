@@ -138,9 +138,9 @@ thumbnail, proxy, and rendered frame; no stale color conversion is reused.
 The File Transform performs ACEScg → ACEScct → LUT → ACEScct → ACEScg. It preserves alpha and keeps
 imported media unchanged. An identity LUT is exactly equivalent to bypass. A missing, changed or
 refused LUT leaves the image unchanged and reports why; use Assets → Replace Footage… to adopt an updated
-file. LUT files are capped at 64 MiB with 3D edges no larger than 129. LUT import currently requires
-Linux, and execution needs its qualified helper. Other targets preserve saved nodes and assets and
-show an unavailable diagnostic.
+file. LUT files are capped at 64 MiB with 3D edges no larger than 129. LUT import and the File
+Transform run on Linux and macOS, in a build that carries the qualified helper. Windows preserves
+saved nodes and assets and shows an unavailable diagnostic.
 
 **OCIO Color Space Transform** offers explicit **From** and **To** selectors from the project
 config. Empty selectors mean the composition working space. For an explicit graph with CSTs on

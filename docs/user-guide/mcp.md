@@ -716,9 +716,10 @@ bottom of the composition.
 `{name}` (the composition name), `{job}`, `{format}` and `{date}` expand as they do for a queued
 output, and a name with any other `{...}` token is refused instead of written. A frame, or a range
 whose first and last frames are the same, writes one file named as given; a longer range of a still
-preset needs one `####` or `{frame}`. ProRes output retains its existing
-non-authorized preview status. Worker exports currently have a Linux implementation; macOS and
-Windows return the host provider's unavailable diagnostic. See [Exporting video](exporting-video.md)
+preset needs one `####` or `{frame}`. ProRes made by Bloom's FFmpeg
+encoder retains its non-authorized preview status; on macOS the system's encoder makes ProRes
+unless `encoder` is `software`. Worker exports run on Linux and macOS; Windows returns the host
+provider's unavailable diagnostic. See [Exporting video](exporting-video.md)
 for profiles and preservation limits. The destination directory must exist.
 
 Send `notifications/cancelled` with `params.requestId` matching the active tool request to cancel

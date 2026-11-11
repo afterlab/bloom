@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-02
+Updated: 2026-11-12
 
 ## Purpose
 
@@ -50,8 +50,20 @@ version alone. [Vulkan specification](https://registry.khronos.org/vulkan/specs/
 ## Implementation Status
 
 Status vocabulary: `implemented` means present in the repository and locally exercised on Linux;
-`pending` means defined but not yet built or qualified. Nothing below makes a Windows or macOS GPU
-claim. This section is the current ownership/behavior/gate summary.
+`pending` means defined but not yet built or qualified. Nothing below makes a Windows GPU claim.
+This section is the current ownership/behavior/gate summary.
+
+macOS (2026-11-12). The entries below record what was exercised on Linux when each was written,
+and where one says macOS GPU execution is unqualified it describes that date. Since then the same
+backend runs on Apple silicon through a locked, source-built MoltenVK: the GPU coverage contract
+and the native acceptance pass there with every render route proven, and the node sweep renders
+every sweepable node type on the device against the CPU reference. What was run, on which machine
+and what was not is in [platform-support.md](platform-support.md#macos); the decisions are in
+[ADR 0006](../decisions/0006-gpu-backend.md) and, for a device whose memory is the system's,
+[ADR 0039](../decisions/0039-unified-memory-devices.md). macOS has no native presentation route:
+its preview is prepared on the device and painted by the widget, and the route proof contract
+holds its preview proofs to that rule. The Cross-Platform Spike Gate at the end of this document
+has not been run as a whole on macOS or Windows, so the direction's acceptance still waits on it.
 
 Capability surface and device bootstrap. A Qt-free and Vulkan-free `bloom::render` public surface
 (`bloom/render/gpu_device.hpp`) exposes typed device state, per-operation-and-precision
