@@ -737,6 +737,16 @@ void describeAudio(AVAssetTrack* track, provider::StreamDescriptor& stream, Audi
             std::llround(CMTimeGetSeconds(duration) * static_cast<double>(audio.sampleRate)));
         stream.frameCount = stream.codec == "aac" ? (frames + 1023U) / 1024U : frames;
     }
+    // AAC: the coded packets of the track's sample table, the encoder's priming packets ahead of
+    // the edit among them, which is the FFmpeg reader's count.
+    if (stream.codec == "aac")
+        if (AVSampleCursor* cursor = [track makeSampleCursorAtFirstSampleInDecodeOrder]) {
+            std::uint64_t packets = 1;
+            for (std::int64_t stepped = 0; (stepped = [cursor stepInDecodeOrderByCount:4096]) > 0 &&
+                                           packets < Limits::indexEntries;)
+                packets += static_cast<std::uint64_t>(stepped);
+            stream.frameCount = packets;
+        }
     stream.sampleRate = audio.sampleRate;
     stream.channelLayout =
         audio.channels == 1 ? std::vector<std::string>{"FC"} : std::vector<std::string>{"FL", "FR"};

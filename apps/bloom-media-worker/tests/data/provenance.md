@@ -26,3 +26,18 @@ ffmpeg -f lavfi -i "color=c=0x3366cc:s=64x48:r=24:d=0.5,format=yuv420p" \
 
 The AV1 files use `-c:v libaom-av1 -crf 10 -g 12 -cpu-used 8 -threads 1` with the same input
 (`format=yuv420p10le` for the 10-bit file).
+
+# Apple-written AAC references (issue #370)
+
+Two tiny, original synthetic clips written by the macOS system encoder (AVAssetWriter), whose AAC
+starts with priming packets ahead of the track's edit: 2112 sample frames, the last 64 of them
+inside the first packet of the edit. No other system writes this layout, so the bytes cannot be
+generated at test time on Linux or Windows. They contain no third-party content.
+
+| File | Content | Written by | SHA-256 |
+| --- | --- | --- | --- |
+| `apple-aac.mp4` | One second of 48 kHz stereo AAC (a 440 Hz and a 1 kHz tone with low noise), no pictures | `writeAac` in `videotoolbox_parity_tests.mm` | `9cb776a60afa644abb99a7ef7ba6e85bdac57a6ebc64f462fcc988339d6fb3bd` |
+| `apple-h264-aac.mp4` | Two seconds of 64x48 H.264 High at 24 fps with 48 kHz stereo AAC | `export-h264.mp4` of `bloom.media.encode` on macOS (the VideoToolbox provider) | `5543692dc5f24b5db2966951a7b0056fed5976eb84dcc11c22efe65040820942` |
+
+Generated 2026-11-12 on macOS (Apple silicon). `bloom.media.ffmpeg` decodes both from sample 0 on
+every system, and `bloom.media.videotoolbox-parity` compares the two readers on them.

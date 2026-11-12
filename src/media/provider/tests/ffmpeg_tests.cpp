@@ -582,11 +582,40 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
     std::filesystem::remove(path);
 }
 } // namespace
+// Issue #370: AAC written by the macOS system encoder starts with priming packets ahead of the
+// track's edit (2112 sample frames, the last 64 of them inside the first packet of the edit). The
+// reader follows the edit list as FFmpeg's demuxer and decoder do: sample 0 of the stream is the
+// first sample of the edit, a block from sample 0 decodes, and the stream is as long as the edit.
+void appleWrittenAac(const std::filesystem::path& data) {
+    for (const auto& [name, track, length] :
+         {std::tuple{"apple-aac.mp4", 0U, 48000U}, std::tuple{"apple-h264-aac.mp4", 1U, 96000U}}) {
+        Fixture fixture;
+        const auto path = data / name;
+        const auto probe = std::get<ProbeResult>(fixture.run(Role::Probe, path));
+        test::check(probe.streams.size() > track && probe.streams[track].codec == "aac" &&
+                        probe.streams[track].sampleRate == 48000,
+                    "an Apple-written AAC stream is described");
+        // From the start, onward from there, from the middle, and the end of the edit.
+        for (const std::uint64_t first : {std::uint64_t{0}, std::uint64_t{1024},
+                                          std::uint64_t{20000}, std::uint64_t{length - 1024U}}) {
+            const auto reply = fixture.run(Role::AudioDecode, path, &probe, first, track);
+            const auto* block = std::get_if<AudioBlock>(&reply);
+            test::check(
+                block != nullptr && valid(*block) && block->channels.size() == 2 &&
+                    !block->channels[0].empty() &&
+                    block->pts.numerator * 48000 ==
+                        static_cast<std::int64_t>(first) * block->pts.denominator,
+                (std::string(name) + ": an AAC block decodes from sample " + std::to_string(first))
+                    .c_str());
+        }
+    }
+}
 int main(int argc, char** argv) {
     try {
         test::check(argc == 2, "fixture directory");
         run(argv[1]);
         sequentialAudioIsLinear(argv[1]);
+        appleWrittenAac(BLOOM_MEDIA_CODEC_FIXTURES);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

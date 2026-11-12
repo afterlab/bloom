@@ -190,8 +190,12 @@ void compare(const std::filesystem::path& path, const bool exact) {
         return entries;
     };
     const auto appleEntries = videoKeys(appleKeys), referenceEntries = videoKeys(referenceKeys);
-    check(appleKeys != nullptr && referenceKeys != nullptr && !appleEntries.empty() &&
-              appleEntries == referenceEntries,
+    const bool pictures = std::ranges::any_of(apple->streams, [](const auto& described) {
+        return described.kind == provider::MediaKind::Video;
+    });
+    // A source without pictures has no video entries to compare.
+    check(appleKeys != nullptr && referenceKeys != nullptr &&
+              (!pictures || !appleEntries.empty()) && appleEntries == referenceEntries,
           file + ": the video sync sample index equals the FFmpeg reader's");
 
     for (std::uint32_t stream = 0; stream < apple->streams.size(); ++stream) {
@@ -247,10 +251,21 @@ void compare(const std::filesystem::path& path, const bool exact) {
                       file + ": ProRes decode is within prores-decode-v1");
             }
         } else if (described.kind == provider::MediaKind::Audio) {
+            // A codec the macOS provider declares is decoded by it and must equal the FFmpeg
+            // reader's samples. One it does not declare is decoded by the FFmpeg reader in Bloom
+            // (the host never sends it to the macOS reader); it is decoded here all the same, to
+            // print how far the system decoder is from the FFmpeg one.
+            const bool declared = std::ranges::any_of(appleHello.declarations, [&](const auto& d) {
+                return d.capability.role == provider::Role::AudioDecode &&
+                       d.capability.codec == described.codec;
+            });
+            float furthest = 0, loudest = 0;
+            std::size_t measured = 0;
             // From the start, from an arbitrary sample, and continuing where that one ended.
             for (const std::uint64_t first :
                  {std::uint64_t{0}, std::uint64_t{1234}, std::uint64_t{1234 + 4800}}) {
                 auto call = request(appleHello, provider::Role::AudioDecode, name, apple, stream);
+                call.capability.codec = described.codec;
                 auto referenceCall =
                     request(referenceHello, provider::Role::AudioDecode, name, reference, stream);
                 call.frame = referenceCall.frame = first;
@@ -274,11 +289,129 @@ void compare(const std::filesystem::path& path, const bool exact) {
                      number);
                 check(appleBlock->channelLayout == referenceBlock->channelLayout,
                       label + ": channel layout");
-                // PCM is the stored samples; nothing is decoded that could differ.
-                check(appleBlock->channels == referenceBlock->channels,
-                      label + ": equals the FFmpeg reader's samples");
+                if (declared)
+                    // Stored samples, or a decoder that returns the FFmpeg decoder's.
+                    check(appleBlock->channels == referenceBlock->channels,
+                          label + ": equals the FFmpeg reader's samples");
+                check(appleBlock->channels.size() == referenceBlock->channels.size(),
+                      label + ": channel count");
+                for (std::size_t channel = 0; channel < appleBlock->channels.size() &&
+                                              channel < referenceBlock->channels.size();
+                     ++channel) {
+                    const auto& ours = appleBlock->channels[channel];
+                    const auto& theirs = referenceBlock->channels[channel];
+                    check(ours.size() == theirs.size(), label + ": sample count");
+                    for (std::size_t index = 0; index < ours.size() && index < theirs.size();
+                         ++index) {
+                        furthest = std::max(furthest, std::abs(ours[index] - theirs[index]));
+                        loudest = std::max(loudest, std::abs(theirs[index]));
+                        ++measured;
+                    }
+                }
             }
+            // What a decoder (not stored samples) returned, measured either way.
+            if (declared && !described.codec.starts_with("pcm"))
+                std::printf("%s stream %u: %s decoded by the system decoder: %zu samples, largest "
+                            "difference from the FFmpeg decoder %.9g of full scale (loudest "
+                            "sample %.6g)\n",
+                            file.c_str(), stream, described.codec.c_str(), measured,
+                            static_cast<double>(furthest), static_cast<double>(loudest));
+            if (!declared)
+                std::printf("%s stream %u: %s is left to the FFmpeg reader (the system decoder's "
+                            "samples differ from it by at most %.9g of full scale)\n",
+                            file.c_str(), stream, described.codec.c_str(),
+                            static_cast<double>(furthest));
         }
+    }
+}
+
+// An AAC file written by the system encoder: one second of 48 kHz stereo (two tones and noise)
+// in MPEG-4. The generated fixture set has no AAC.
+[[nodiscard]] bool writeAac(const std::filesystem::path& path) {
+    @autoreleasepool {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+        NSError* error = nil;
+        AVAssetWriter* writer = [[AVAssetWriter alloc] initWithURL:url
+                                                          fileType:AVFileTypeMPEG4
+                                                             error:&error];
+        if (writer == nil)
+            return false;
+        AVAssetWriterInput* input =
+            [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio
+                                               outputSettings:@{
+                                                   AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+                                                   AVSampleRateKey : @48000,
+                                                   AVNumberOfChannelsKey : @2,
+                                                   AVEncoderBitRateKey : @192000,
+                                               }];
+        if (![writer canAddInput:input])
+            return false;
+        [writer addInput:input];
+        if (![writer startWriting])
+            return false;
+        [writer startSessionAtSourceTime:kCMTimeZero];
+        AudioStreamBasicDescription layout{};
+        layout.mSampleRate = 48000;
+        layout.mFormatID = kAudioFormatLinearPCM;
+        layout.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+        layout.mBytesPerPacket = layout.mBytesPerFrame = 8;
+        layout.mFramesPerPacket = 1;
+        layout.mChannelsPerFrame = 2;
+        layout.mBitsPerChannel = 32;
+        CMAudioFormatDescriptionRef description = nullptr;
+        if (CMAudioFormatDescriptionCreate(kCFAllocatorDefault, &layout, 0, nullptr, 0, nullptr,
+                                           nullptr, &description) != noErr)
+            return false;
+        constexpr int kBlock = 4800;
+        std::uint32_t noise = 0x2545F491U;
+        bool appended = true;
+        for (int block = 0; block < 10 && appended; ++block) {
+            std::vector<float> samples(static_cast<std::size_t>(kBlock) * 2U);
+            for (int index = 0; index < kBlock; ++index) {
+                const double time = static_cast<double>(block * kBlock + index) / 48000.0;
+                noise = noise * 1664525U + 1013904223U;
+                const double hiss = (static_cast<double>(noise >> 8U) / 8388608.0 - 1.0) * 0.05;
+                samples[static_cast<std::size_t>(index) * 2U] =
+                    static_cast<float>(0.4 * std::sin(6.283185307179586 * 440.0 * time) + hiss);
+                samples[static_cast<std::size_t>(index) * 2U + 1U] =
+                    static_cast<float>(0.4 * std::sin(6.283185307179586 * 1000.0 * time) - hiss);
+            }
+            const std::size_t bytes = samples.size() * sizeof(float);
+            CMBlockBufferRef data = nullptr;
+            CMSampleBufferRef sample = nullptr;
+            appended = CMBlockBufferCreateWithMemoryBlock(
+                           kCFAllocatorDefault, nullptr, bytes, kCFAllocatorDefault, nullptr, 0,
+                           bytes, kCMBlockBufferAssureMemoryNowFlag, &data) == noErr &&
+                       CMBlockBufferReplaceDataBytes(samples.data(), data, 0, bytes) == noErr &&
+                       CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+                           kCFAllocatorDefault, data, description, kBlock,
+                           CMTimeMake(static_cast<std::int64_t>(block) * kBlock, 48000), nullptr,
+                           &sample) == noErr;
+            if (appended) {
+                while (!input.isReadyForMoreMediaData)
+                    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+                appended = [input appendSampleBuffer:sample];
+            }
+            if (sample != nullptr)
+                CFRelease(sample);
+            if (data != nullptr)
+                CFRelease(data);
+        }
+        CFRelease(description);
+        if (!appended)
+            return false;
+        [input markAsFinished];
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        [writer finishWritingWithCompletionHandler:^{
+          dispatch_semaphore_signal(done);
+        }];
+        while (dispatch_semaphore_wait(done, DISPATCH_TIME_NOW) != 0)
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        return writer.status == AVAssetWriterStatusCompleted;
     }
 }
 
@@ -397,6 +530,18 @@ int main(int argc, char** argv) {
         check(writeHevc(path, tenBit), path.filename().string() + ": the system encoder wrote it");
         if (std::filesystem::exists(path))
             compare(path, true);
+    }
+    // AAC (the coordinator's ruling on #370: equal to the FFmpeg decoder's samples, or decoded by
+    // the FFmpeg reader).
+    {
+        const auto path = scratch / "aac-system.mp4";
+        check(writeAac(path), "aac-system.mp4: the system encoder wrote it");
+        if (std::filesystem::exists(path))
+            compare(path, true);
+        // The committed Apple-written files the FFmpeg reader's own test reads on every system
+        // (tests/data/provenance.md): AAC alone, and H.264 with AAC.
+        for (const char* name : {"apple-aac.mp4", "apple-h264-aac.mp4"})
+            compare(std::filesystem::path(BLOOM_MEDIA_CODEC_FIXTURES) / name, true);
     }
     for (const char* name : {"numbered-prores.mov", "alpha-prores.mov", "untagged-hd-prores.mov",
                              "uhd8k-prores.mov", "chroma-edge-422.mov"})

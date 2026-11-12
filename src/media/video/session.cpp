@@ -6,6 +6,8 @@
 #include <bloom/media/provider/media_workers.hpp>
 #if defined(__APPLE__)
 #include <bloom/media/provider/videotoolbox_manifest.hpp>
+#elif defined(_WIN32)
+#include <bloom/media/provider/mediafoundation_manifest.hpp>
 #endif
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/cache_directory.hpp>
@@ -106,12 +108,15 @@ bool VideoDecodeSession::hardwareDecodePossible() {
 namespace {
 using namespace provider;
 // The video read providers (ADR 0035): the bundled FFmpeg worker on every platform, preceded by
-// the platform media framework where Bloom has one (VideoToolbox on macOS). The host and each
-// worker build the same handshake, so validation agrees.
+// the platform media framework where Bloom has one (VideoToolbox on macOS, Media Foundation on
+// Windows). The host and each worker build the same handshake, so validation agrees.
 PipelineQualificationV1 providerPipeline(const ProviderDeclaration& declaration) {
 #if defined(__APPLE__)
     if (declaration.execution.provider == "bloom.videotoolbox")
         return videoToolboxPipeline(declaration);
+#elif defined(_WIN32)
+    if (declaration.execution.provider == "bloom.mediafoundation")
+        return mediaFoundationPipeline(declaration);
 #endif
     return ffmpegPipeline(declaration);
 }
@@ -153,6 +158,9 @@ struct VideoDecodeSession::State {
     std::unique_ptr<MediaWorkerPool> nativePool;
     std::atomic<bool> nativeRetired{false};
     std::string nativeFallback;
+    // Streams whose codec the platform provider does not declare, already reported (guarded by
+    // the session mutex, as every call is).
+    std::set<std::uint32_t> undeclaredNoted;
     // Hardware decode generation (Linux: VA-API or NVDEC, ADR 0027). Created on first eligible
     // request and permanently retired for this session after its first typed hardware refusal.
     HardwareRoute hardwareRoute = HardwareRoute::None;
@@ -231,6 +239,7 @@ struct VideoDecodeSession::State {
             }
             WorkerPoolOptions o;
             o.process.executable = native;
+            o.process.arguments = nativeWorkerArguments();
             o.expected = nativeHello;
             o.capacity = 1;
             o.timeout = std::chrono::seconds(30);
@@ -361,6 +370,14 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
             state_->retireNative(error->detail);
             std::cerr << "Bloom media: " << nativeMediaProviderId() << " read failed ("
                       << error->detail << "); FFmpeg serves this source\n";
+        } else if (source && (role == Role::VideoDecode || role == Role::AudioDecode) &&
+                   state_->undeclaredNoted.insert(stream).second) {
+            // The platform provider reads the source but does not declare this stream's codec
+            // (AAC, whose system decoders do not return the FFmpeg decoder's samples): FFmpeg
+            // decodes the stream. Recorded once per stream, as the fallbacks are.
+            std::cerr << "Bloom media: " << nativeMediaProviderId() << " does not declare "
+                      << source->streams[stream].codec << " decode; FFmpeg decodes stream "
+                      << stream << " of this source\n";
         }
     }
     auto* workers = hardware ? state_->hardwareWorkers() : &state_->pool;

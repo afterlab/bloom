@@ -60,7 +60,11 @@ Handshake videoToolboxHandshake(const bool hardwareEncoder) {
     add(Role::DemuxIndex, "intake-discovery");
     for (const auto* codec : {"h264", "hevc", "prores"})
         add(Role::VideoDecode, codec);
-    for (const auto* codec : {"aac", "pcm_s16le", "pcm_s24le", "pcm_f32le"})
+    // Uncompressed audio is the stored samples. AAC is not declared (issue #370): the system's
+    // AAC decoder returns samples that are not the FFmpeg decoder's (measured: up to 2.4e-07 of
+    // full scale apart), so the FFmpeg reader decodes the AAC of a source whose pictures this
+    // provider reads, as on Windows.
+    for (const auto* codec : {"pcm_s16le", "pcm_s24le", "pcm_f32le"})
         add(Role::AudioDecode, codec);
 
     // Encode roles are declared for exactly what the AVAssetWriter provider implements: ProRes,
