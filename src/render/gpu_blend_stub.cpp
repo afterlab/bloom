@@ -38,6 +38,10 @@ std::string_view gpuBlendShaderIdentity(const core::BlendMode mode,
                            : std::string_view{"blend-v1-f32-portable"};
 }
 
+// No shader exists in this build, so there is no digest to name; plans that carry the identity are
+// never executed here.
+std::string_view gpuImageCombineShaderIdentity() noexcept { return "image-combine-unavailable"; }
+
 std::string_view GpuBlend::shaderIdentity(core::BlendMode mode) const noexcept {
     return gpuBlendShaderIdentity(mode, false);
 }
