@@ -36,6 +36,7 @@
 // The FFmpeg one is renamed for this file; it names no symbol, so nothing else changes.
 #define AVMediaType BloomFfmpegMediaType
 #include "ffmpeg_reopen_compare.hpp"
+#include "ffmpeg_stream_color_tags.hpp"
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
@@ -885,6 +886,12 @@ provider::EncodeQcV1 Encoder::State::finish() {
                        "/" + stream.codec;
     }
     qc.encoder = encoder.name + (encoder.hardware ? " (hardware)" : " (software)");
+    // Issue #667: the H.264 stream has to say about its color what the container says.
+    if (settings.videoCodec == "h264") {
+        const auto failure = ffmpeg::h264StreamTagFailure(
+            path, 0, settings.colour.range == 2 ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG);
+        require(failure.empty(), failure);
+    }
     if (audioInput != nil) {
         const auto& sound = probe->streams[1];
         require(sound.kind == provider::MediaKind::Audio &&

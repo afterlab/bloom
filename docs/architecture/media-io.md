@@ -2764,6 +2764,19 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   the matrix selects the RGB to YUV coefficients. `EncodeSettingsV1` is version 2 for this; the
   reopen reads the tags and `<container>/<codec>` back into `EncodeQcV1`/`MediaQcEvidenceV1` for the
   ColourTags and Container checks.
+- **H.264 stream tags.** A container's tags reach a reader of the file. A reader of the stream
+  alone, and every reader of a QuickTime file's range (its color box has no place for one), sees
+  only what the stream's own parameter set says. The reopen check of every H.264 export
+  therefore reads both (`h264StreamTagFailure`, in the FFmpeg worker and in the macOS worker):
+  the container's tags from a demuxer that has only been opened, and the stream's from its first
+  picture, decoded by a decoder that is given the parameter sets and none of the container's
+  tags. Primaries, transfer and matrix have to be equal, the stream's range has to be the
+  requested one (a stream that states none is limited range), and a container that states a
+  range has to state the same. An export whose encoder did not write them fails with the reason
+  and both sets of tags: `The H.264 stream's color tags differ from the container's: stream
+  primaries=… transfer=… matrix=… range=…, container …, requested range …`.
+  `bloom.media.stream-color-tags` holds the rule on movies that agree and that differ in each
+  tag. HEVC streams are not compared this way.
 - **Multithreaded encode.** The worker uses an automatic thread count for video. Lossy codecs
   already declare `DecodedSemanticTolerance`, so threading can change bytes but not the decoded
   tolerance; PCM stays `ByteExact` and TIFF single-threaded `DecodedSemanticExact`. ProRes

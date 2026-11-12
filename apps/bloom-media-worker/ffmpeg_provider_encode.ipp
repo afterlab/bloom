@@ -939,9 +939,27 @@ struct Encoder::State {
                                                 (settings.audioCodec.empty() ? 0U : 1U),
                 "Reopened stream layout differs");
     }
+    // Issue #667: an H.264 stream has to say about its color what the container around it says.
+    // Read from a demuxer that has only been opened, so its tags are still the container's own.
+    void verifyStreamTags() {
+        if (videoTrack.codec == nullptr || videoTrack.codec->codec_id != AV_CODEC_ID_H264)
+            return;
+        PrivateAvio reader(file, false);
+        Input input;
+        require(std::fseek(file.file, 0, SEEK_SET) == 0, "Cannot reopen spool", Error::Io);
+        input.format = avformat_alloc_context();
+        require(input.format, "Reopen allocation");
+        input.format->pb = reader.context;
+        input.format->flags |= AVFMT_FLAG_CUSTOM_IO;
+        require(avformat_open_input(&input.format, nullptr, nullptr, nullptr) >= 0,
+                "Reopen demux failed");
+        const auto failure = h264StreamTagFailure(*input.format, 0, videoTrack.codec->color_range);
+        require(failure.empty(), failure.c_str());
+    }
     void verifyVideo(EncodeQcV1& qc) {
         if (settings.videoCodec.empty())
             return;
+        verifyStreamTags();
         PrivateAvio reader(file, false);
         Input input;
         openInput(input, reader);

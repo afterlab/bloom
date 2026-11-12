@@ -85,9 +85,18 @@ if(bloom_ffmpeg_worker)
     target_compile_features(bloom_media_ffmpeg_reopen_compare PUBLIC cxx_std_20)
     target_link_libraries(bloom_media_ffmpeg_reopen_compare PUBLIC FFmpeg::swscale FFmpeg::avutil)
     bloom_enable_warnings(bloom_media_ffmpeg_reopen_compare)
+    # The color tags an H.264 stream carries against its container's (issue #667), for the reopen
+    # check of both provider builds and its unit test.
+    add_library(bloom_media_ffmpeg_stream_color_tags STATIC ffmpeg_stream_color_tags.cpp)
+    target_include_directories(bloom_media_ffmpeg_stream_color_tags
+                               PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(bloom_media_ffmpeg_stream_color_tags PUBLIC cxx_std_20)
+    target_link_libraries(bloom_media_ffmpeg_stream_color_tags
+                          PUBLIC FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+    bloom_enable_warnings(bloom_media_ffmpeg_stream_color_tags)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
-                          bloom_media_ffmpeg_reopen_compare
+                          bloom_media_ffmpeg_reopen_compare bloom_media_ffmpeg_stream_color_tags
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample)
     if(WIN32)
         # The worker's Media Foundation generation (ADR 0035; issue #370), first in the Windows
@@ -205,7 +214,8 @@ if(APPLE)
                                    PRIVATE BLOOM_VIDEOTOOLBOX_LAYOUT_CONVERSION)
         # The encoder's output conversion and reopen check are the FFmpeg worker's.
         target_link_libraries(bloom_media_videotoolbox_worker_provider
-                              PRIVATE bloom_media_ffmpeg_reopen_compare FFmpeg::swscale
+                              PRIVATE bloom_media_ffmpeg_reopen_compare
+                                      bloom_media_ffmpeg_stream_color_tags FFmpeg::swscale
                                       FFmpeg::avutil)
     endif()
     bloom_enable_warnings(bloom_media_videotoolbox_worker_provider)
@@ -285,7 +295,7 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     add_library(bloom_media_ffmpeg_fixture_worker_provider STATIC ffmpeg_provider.cpp)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
-                          bloom_media_ffmpeg_reopen_compare
+                          bloom_media_ffmpeg_reopen_compare bloom_media_ffmpeg_stream_color_tags
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample)
     if(WIN32)
         target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider
@@ -310,6 +320,15 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     bloom_enable_warnings(bloom_media_reopen_compare_test)
     bloom_add_test(NAME bloom.media.reopen-compare COMMAND bloom_media_reopen_compare_test
                    LABELS unit media TIMEOUT 60)
+    # Issue #667: movies whose H.264 stream and container agree and disagree about color.
+    add_executable(bloom_media_stream_color_tags_test tests/stream_color_tags_tests.cpp)
+    target_link_libraries(bloom_media_stream_color_tags_test
+                          PRIVATE bloom_media_ffmpeg_stream_color_tags)
+    set_target_properties(bloom_media_stream_color_tags_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_stream_color_tags_test)
+    bloom_add_test(NAME bloom.media.stream-color-tags
+                   COMMAND bloom_media_stream_color_tags_test LABELS unit media TIMEOUT 60)
     # The lossy-audio reopen comparison (tolerance profile bloom.aac-f32.v2) on synthetic streams:
     # what a correct encode keeps, and the defects it must refuse.
     add_executable(bloom_media_lossy_audio_compare_test tests/lossy_audio_compare_tests.cpp)
