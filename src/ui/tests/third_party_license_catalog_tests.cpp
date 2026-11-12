@@ -2,6 +2,10 @@
 #include <bloom/ui/third_party_license_catalog.hpp>
 
 #include <QApplication>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QString>
@@ -12,8 +16,10 @@
 #include <iostream>
 #include <set>
 #include <source_location>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -36,8 +42,133 @@ class Expectations final {
 
 using namespace bloom::ui;
 
-// The set of component directory names that carry a LICENSE file under one root -- exactly the
-// discovery rule generate_third_party_license_catalog.cmake itself applies.
+// A component name in lower case with its punctuation removed: the lock and a license folder can
+// spell one component with a hyphen and an underscore.
+[[nodiscard]] std::string nameKey(const std::string_view name) {
+    std::string key;
+    for (const char character : name) {
+        if ((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')) {
+            key.push_back(character);
+        } else if (character >= 'A' && character <= 'Z') {
+            key.push_back(static_cast<char>(character - 'A' + 'a'));
+        }
+    }
+    return key;
+}
+
+[[nodiscard]] std::string withoutCarriageReturns(const std::string_view text) {
+    std::string result;
+    result.reserve(text.size());
+    for (const char character : text) {
+        if (character != '\r') {
+            result.push_back(character);
+        }
+    }
+    return result;
+}
+
+// Issue #674. What the dependency lock requires the window to show: for every locked component,
+// every license and notice file the lock names for it, whatever the file is called. Returns one
+// line per thing that is not shown, so an empty result is the pass.
+[[nodiscard]] std::vector<std::string>
+lockedLicensesNotShown(const std::filesystem::path& repositoryRoot,
+                       const std::span<const ThirdPartyLicenseEntry> catalog) {
+    std::vector<std::string> missing;
+    QFile lockFile(QString::fromStdString(
+        (repositoryRoot / "dependencies" / "dependencies.lock.json").generic_string()));
+    if (!lockFile.open(QIODevice::ReadOnly)) {
+        return {"the dependency lock could not be read"};
+    }
+    const auto components =
+        QJsonDocument::fromJson(lockFile.readAll()).object().value("components").toArray();
+    if (components.isEmpty()) {
+        return {"the dependency lock lists no component"};
+    }
+    for (const auto& value : components) {
+        const auto component = value.toObject();
+        const auto name = component.value("name").toString().toStdString();
+        const auto license = component.value("license").toObject();
+        const auto licenseFiles = license.value("licenseFiles").toArray();
+        if (licenseFiles.isEmpty()) {
+            missing.push_back(name + ": the lock names no license file");
+            continue;
+        }
+        // Qt's entry is named for the product; every other entry carries the lock's name.
+        const auto entryKey = name == "qt" ? std::string{"qt6"} : nameKey(name);
+        const ThirdPartyLicenseEntry* entry = nullptr;
+        for (const auto& candidate : catalog) {
+            if (nameKey(candidate.component) == entryKey) {
+                entry = &candidate;
+            }
+        }
+        if (entry == nullptr) {
+            missing.push_back(name + ": no entry in the window");
+            continue;
+        }
+        const auto shown = withoutCarriageReturns(entry->licenseText);
+        for (const auto* const list : {"licenseFiles", "noticeFiles"}) {
+            for (const auto& file : license.value(list).toArray()) {
+                const auto path = file.toObject().value("path").toString();
+                QFile text(
+                    QString::fromStdString((repositoryRoot / path.toStdString()).generic_string()));
+                if (!text.open(QIODevice::ReadOnly)) {
+                    missing.push_back(name + ": " + path.toStdString() + " could not be read");
+                    continue;
+                }
+                const auto bytes = text.readAll();
+                const auto expected = withoutCarriageReturns(
+                    std::string_view{bytes.constData(), static_cast<std::size_t>(bytes.size())});
+                if (expected.empty() || shown.find(expected) == std::string::npos) {
+                    missing.push_back(name + ": " + path.toStdString() + " is not shown");
+                }
+            }
+        }
+    }
+    return missing;
+}
+
+void testEveryLockedComponentShowsItsLicense(Expectations& expectations,
+                                             const std::filesystem::path& repositoryRoot) {
+    const auto catalog = thirdPartyLicenseCatalog();
+    for (const auto& line : lockedLicensesNotShown(repositoryRoot, catalog)) {
+        expectations.expect(false, "a locked component's license is not shown: " + line);
+    }
+
+    // The check itself: take a component away, or cut its text short, and it is named. numpy is
+    // the one with the most files, none of them called LICENSE.
+    const auto reports = [&](const std::vector<ThirdPartyLicenseEntry>& changed,
+                             const std::string_view fragment) {
+        for (const auto& line : lockedLicensesNotShown(repositoryRoot, changed)) {
+            if (line.find(fragment) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+    std::vector<ThirdPartyLicenseEntry> without;
+    std::vector<ThirdPartyLicenseEntry> truncated;
+    bool found = false;
+    for (const auto& entry : catalog) {
+        if (std::string_view{entry.component} != "numpy") {
+            without.push_back(entry);
+            truncated.push_back(entry);
+            continue;
+        }
+        found = true;
+        auto shortened = entry;
+        shortened.licenseText = shortened.licenseText.substr(0, shortened.licenseText.size() / 2);
+        truncated.push_back(shortened);
+    }
+    expectations.expect(found,
+                        "the catalog lists numpy, whose license files are not named LICENSE");
+    expectations.expect(reports(without, "numpy: no entry in the window"),
+                        "a locked component with no entry is reported");
+    expectations.expect(reports(truncated, "numpy: ") && reports(truncated, " is not shown"),
+                        "a locked component with one of its named files missing is reported");
+}
+
+// The set of component directory names that carry a LICENSE file under one root -- the rule
+// generate_third_party_license_catalog.cmake applies to what the dependency lock does not list.
 [[nodiscard]] std::set<std::string>
 licensedComponentDirectories(const std::filesystem::path& root) {
     std::set<std::string> names;
@@ -69,21 +200,36 @@ void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations
                         "the kit third-party license root really has components to require");
 
     std::set<std::string> catalogComponents;
+    std::set<std::string> catalogKeys;
     for (const auto& entry : thirdPartyLicenseCatalog()) {
         catalogComponents.emplace(entry.component);
+        catalogKeys.insert(nameKey(entry.component));
         expectations.expect(!entry.licenseText.empty(), std::string{"the catalog entry for "} +
                                                             std::string{entry.component} +
                                                             " has non-empty license text");
     }
 
+    // A locked component is listed under the lock's name, which can differ from its folder's by
+    // punctuation.
     for (const auto& name : dependencyComponents) {
-        expectations.expect(catalogComponents.contains(name),
+        expectations.expect(catalogKeys.contains(nameKey(name)),
                             "the catalog lists dependency-license component: " + name);
     }
     for (const auto& name : kitComponents) {
         expectations.expect(catalogComponents.contains(name),
                             "the catalog lists kit third-party component: " + name);
     }
+    // The vendored media sources keep their license next to the source.
+    const auto mediaComponents =
+        licensedComponentDirectories(repositoryRoot / "src" / "media" / "third_party");
+    expectations.expect(!mediaComponents.empty(),
+                        "the media third-party root really has components to require");
+    for (const auto& name : mediaComponents) {
+        expectations.expect(catalogComponents.contains(name),
+                            "the catalog lists media third-party component: " + name);
+    }
+    expectations.expect(catalogComponents.size() == thirdPartyLicenseCatalog().size(),
+                        "no component is listed twice");
     expectations.expect(catalogComponents.contains("Qt 6"),
                         "the catalog also carries the Qt/ADR-0014 notice");
 #if defined(__linux__)
@@ -189,6 +335,7 @@ int main(int argumentCount, char** arguments) {
     QApplication application(argumentCount, arguments);
     Expectations expectations;
     testCatalogCoversEveryLicensedComponentDirectory(expectations, repositoryRoot);
+    testEveryLockedComponentShowsItsLicense(expectations, repositoryRoot);
     testSoundCreditIsInTheCatalog(expectations);
     testLicensesWindowListsEveryCatalogEntryWithText(expectations);
     return expectations.failures() == 0 ? 0 : 1;

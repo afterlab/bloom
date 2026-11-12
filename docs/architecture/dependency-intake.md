@@ -499,6 +499,13 @@ evidence array and a reviewed explanation at `provenanceReview`. A non-empty pat
 `licenseFiles` is a non-empty array of artifact references; `copyrightFiles` and `noticeFiles` may
 be empty only when the reviewed SPDX/license obligations permit it.
 
+The application's Open Source Licenses window is generated from these arrays: every locked
+component has an entry that carries each file its `licenseFiles` and `noticeFiles` name, whatever
+the file is called. A component with no license file, or a named file that is missing, stops the
+configure, and `bloom.ui.third_party_license_catalog` fails when a named file is not shown. Qt's
+entry is its generated notice with the texts it names. Vendored sources that the lock does not
+list are shown from the `LICENSE` file in their own folder.
+
 `operatingSystem` is `linux`, `macos`, or `windows`; `architecture` is `x86_64` or `aarch64`;
 `buildConfiguration` is `debug` or `release`; `cxxRuntimeLinkage` is `dynamic` or `static`; component
 `linkage` is `static` or `shared` under lock schemas 1.0–1.2, and schemas 1.3 and 1.4 additionally
