@@ -4,6 +4,7 @@
 #include "export_output_drivers.hpp"
 #include "export_preset_store.hpp"
 
+#include <bloom/core/file_uri.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 
 #include <algorithm>
@@ -96,6 +97,13 @@ Expansion expand(const std::string_view text, const TokenValues& values, std::st
 }
 
 std::optional<std::filesystem::path> fromFileUri(const std::string_view uri) {
+#if defined(_WIN32)
+    // The shared RFC 8089 reader decodes UTF-8 into a wide path and maps a remote authority to a
+    // UNC path. A narrow-string decode would garble non-ASCII names and turn the authority of
+    // file://server/share/x into a relative path.
+    if (auto strict = core::absolutePathFromFileUri(uri))
+        return strict;
+#endif
     std::string_view rest;
     if (uri.starts_with("file://"))
         rest = uri.substr(7);
@@ -118,10 +126,19 @@ std::optional<std::filesystem::path> fromFileUri(const std::string_view uri) {
 #if defined(_WIN32)
     if (decoded.size() > 2 && decoded[0] == '/' && decoded[2] == ':')
         decoded.erase(0, 1);
-#endif
+    // An authority the strict reader refused is not a local path; never read it as relative.
+    if (decoded.empty() || (uri.starts_with("file://") && decoded.front() != '/' &&
+                            !(decoded.size() > 1 && decoded[1] == ':')))
+        return std::nullopt;
+    // The bytes are UTF-8; a narrow std::filesystem::path would reinterpret them in the ANSI code
+    // page.
+    return std::filesystem::path(
+        std::u8string(reinterpret_cast<const char8_t*>(decoded.data()), decoded.size()));
+#else
     if (decoded.empty())
         return std::nullopt;
     return std::filesystem::path(decoded);
+#endif
 }
 
 std::string displayName(const document::ExportJob& job, const ExportDestinationContext& context) {

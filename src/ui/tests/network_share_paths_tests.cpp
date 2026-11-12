@@ -279,15 +279,38 @@ int main(int argc, char** argv) {
     qputenv("XDG_CACHE_HOME", QFile::encodeName(home.path() + QStringLiteral("/cache")));
     QStandardPaths::setTestModeEnabled(true);
     QApplication app(argc, argv);
-    if (!QDir::homePath().startsWith(home.path())) {
+    // Windows takes the home folder from the account, not from the environment, and Qt keeps the
+    // widget file dialog's saved places in the user's registry there, which cannot be redirected.
+    // The sidebar case creates that dialog, so it runs only where the home is private; it is a
+    // Linux file-manager feature (GVFS mounts) with nothing to configure on Windows.
+    const bool privateHome = QDir::homePath().startsWith(home.path());
+#if !defined(Q_OS_WIN)
+    if (!privateHome) {
         std::cerr << "the test does not run under its private home directory\n";
         return 1;
     }
+#endif
     try {
+        // The other cases build a stand-in for a GVFS mount folder, whose names carry a colon. A
+        // Windows folder cannot be named that way, and Windows has no such mounts: a share there
+        // is a UNC path, which a file URL already names.
+#if defined(Q_OS_WIN)
+        const bool mounts = false;
+#else
+        const bool mounts = true;
+#endif
+        shareLabelTests();
+        if (!mounts) {
+            std::cout << "SKIP: GVFS mount cases: no such mounts on this platform\n";
+            return 0;
+        }
         mappingTests();
         mountedSharesTest();
-        shareLabelTests();
-        sidebarTest();
+        if (privateHome)
+            sidebarTest();
+        else
+            std::cout << "SKIP: sidebar case: the saved file dialog places cannot be made "
+                         "private on this platform\n";
         assetTreeDropTest();
         return 0;
     } catch (const std::exception& error) {

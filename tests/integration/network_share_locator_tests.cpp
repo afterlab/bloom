@@ -33,6 +33,7 @@
 #include <iostream>
 #include <random>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace {
@@ -107,8 +108,18 @@ int main() {
     // included: a purely lexical relative path from the project directory can't avoid that colon
     // showing up as one of its own components.
     const auto projectDirectory = scratchRoot / "project";
+#if defined(_WIN32)
+    // Windows has no colon in a folder name, and a share there is another root (a drive letter or
+    // \\server\share), which this test cannot make. The folder beside the project is therefore
+    // reached by a project-relative locator, and the same import, relink and save/open steps are
+    // checked for that; file_uri_tests.cpp covers the share spelling itself.
+    const auto mountDirectory = scratchRoot / "mount" / "smb-share,server=10.10.10.20";
+    const std::string expectedPortability = "project-relative";
+#else
     const auto mountDirectory =
         scratchRoot / "mount" / "smb-share:server=10.10.10.20,share=production";
+    const std::string expectedPortability = "external";
+#endif
     std::filesystem::create_directories(projectDirectory);
     std::filesystem::create_directories(mountDirectory);
     const auto sourcePath = mountDirectory / "network-photo.png";
@@ -123,6 +134,12 @@ int main() {
     if (!context.ok())
         return 1;
     const auto& prepared = import.prepared().front();
+#if defined(_WIN32)
+    context.expect(prepared.locator.portability == expectedPortability &&
+                       prepared.locator.path.starts_with("../mount/") &&
+                       prepared.locator.relinkHint.starts_with("file:///"),
+                   "a folder beside the project uses a relative path and an absolute URI hint");
+#else
     context.expect(prepared.locator.portability == "external",
                    "a colon-bearing mount uses an external locator");
     context.expect(prepared.locator.path.starts_with("file://") &&
@@ -130,10 +147,13 @@ int main() {
                    "the external locator stores one absolute URI as its path and hint");
     context.expect(prepared.locator.path.find("%3A") != std::string::npos,
                    "the mount's colon is encoded in the URI path");
+#endif
     document::AssetRecord validated = prepared;
     validated.id = document::AssetId::fromRaw(1);
     context.expect(validated.validate().ok(),
                    "the prepared asset record satisfies document::AssetRecord::validate()");
+    // The foreign spellings below are external locators on every platform.
+    validated.locator.portability = "external";
     for (const auto* portableUri : {"file://server/share/image.png", "file:///C:/Media/image.png",
                                     "file:///tmp/image.png", "file:///tmp/back%5Cslash.png"}) {
         validated.locator.path = portableUri;
@@ -234,8 +254,8 @@ int main() {
     context.expect(relinkedAsset != nullptr, "relinked asset still present");
     if (relinkedAsset == nullptr)
         return 5;
-    context.expect(relinkedAsset->locator.portability == "external",
-                   "relink preserves explicit external portability");
+    context.expect(relinkedAsset->locator.portability == expectedPortability,
+                   "relink preserves the locator's portability");
     const auto resolvedAfterRelink = media::resolveImagePath(
         relinkedAsset->locator.path, relinkedAsset->locator.relinkHint, projectDirectory);
     context.expect(std::filesystem::equivalent(resolvedAfterRelink, relinkPath),
@@ -283,7 +303,7 @@ int main() {
     if (!context.ok())
         return 12;
     const auto& reopenedAsset = reopenedAssets.front();
-    context.expect(reopenedAsset.locator.portability == "external" &&
+    context.expect(reopenedAsset.locator.portability == expectedPortability &&
                        reopenedAsset.locator.path == relinkedAsset->locator.path &&
                        reopenedAsset.locator.relinkHint == relinkedAsset->locator.relinkHint,
                    "the locator survives the save/open round trip byte-for-byte");

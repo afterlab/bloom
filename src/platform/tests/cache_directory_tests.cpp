@@ -1,3 +1,4 @@
+#include <bloom/core/environment.hpp>
 #include <bloom/platform/cache_directory.hpp>
 
 #include <cstdlib>
@@ -24,8 +25,7 @@ class Expectations final {
     int failures_ = 0;
 };
 
-// setenv/unsetenv are POSIX-only; this test binary is built only on Linux (see
-// src/platform/CMakeLists.txt's `if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")`).
+// Sets a variable for one scope and puts the earlier value back.
 class EnvironmentVariable final {
   public:
     explicit EnvironmentVariable(std::string name) : name_(std::move(name)) {
@@ -35,16 +35,16 @@ class EnvironmentVariable final {
     }
     ~EnvironmentVariable() {
         if (saved_.has_value())
-            static_cast<void>(::setenv(name_.c_str(), saved_->c_str(), 1));
+            static_cast<void>(bloom::core::setEnvironmentVariable(name_.c_str(), saved_->c_str()));
         else
-            static_cast<void>(::unsetenv(name_.c_str()));
+            static_cast<void>(bloom::core::unsetEnvironmentVariable(name_.c_str()));
     }
     EnvironmentVariable(const EnvironmentVariable&) = delete;
     EnvironmentVariable& operator=(const EnvironmentVariable&) = delete;
     void set(const std::string& value) const {
-        static_cast<void>(::setenv(name_.c_str(), value.c_str(), 1));
+        static_cast<void>(bloom::core::setEnvironmentVariable(name_.c_str(), value.c_str()));
     }
-    void unset() const { static_cast<void>(::unsetenv(name_.c_str())); }
+    void unset() const { static_cast<void>(bloom::core::unsetEnvironmentVariable(name_.c_str())); }
 
   private:
     std::string name_;
@@ -57,6 +57,28 @@ int main() {
     Expectations check;
     namespace platform = bloom::platform;
 
+#if defined(_WIN32)
+    // Windows keeps per-user caches under the local application data folder.
+    EnvironmentVariable local("LOCALAPPDATA");
+    local.set("C:/bloom-cache-directory-test-local");
+    const auto fromLocal = platform::userCacheDirectory("bloom");
+    check.expect(fromLocal.has_value() &&
+                     *fromLocal ==
+                         std::filesystem::path("C:/bloom-cache-directory-test-local/bloom/Cache"),
+                 "the local application data folder gets the app subdirectory and Cache appended");
+    check.expect(!platform::userCacheDirectory("").has_value(),
+                 "an empty app subdirectory is refused");
+    // #457: the GPU pipeline cache lives under the same per-user root.
+    check.expect(platform::gpuPipelineCacheDirectory() ==
+                     std::filesystem::path(
+                         "C:/bloom-cache-directory-test-local/bloom/Cache/gpu-pipeline-cache"),
+                 "the pipeline cache directory is a leaf of the Bloom cache root");
+    local.unset();
+    check.expect(!platform::userCacheDirectory("bloom").has_value(),
+                 "no local application data folder returns nullopt rather than a relative path");
+    check.expect(platform::gpuPipelineCacheDirectory().empty(),
+                 "no cache root leaves the pipeline cache in memory");
+#else
     EnvironmentVariable xdg("XDG_CACHE_HOME");
     EnvironmentVariable home("HOME");
 
@@ -100,6 +122,8 @@ int main() {
     home.unset();
     check.expect(platform::gpuPipelineCacheDirectory().empty(),
                  "no cache root leaves the pipeline cache in memory");
+
+#endif
 
     return check.failures() == 0 ? 0 : 1;
 }

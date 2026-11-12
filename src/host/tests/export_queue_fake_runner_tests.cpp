@@ -19,6 +19,13 @@
 #include <iostream>
 #include <thread>
 
+// An absolute path needs a drive on Windows; the same fixtures, under one root per platform.
+#if defined(_WIN32)
+#define BLOOM_TEST_URI_ROOT "/C:"
+#else
+#define BLOOM_TEST_URI_ROOT ""
+#endif
+
 namespace {
 
 using namespace bloom;
@@ -449,7 +456,7 @@ void testTransientAndPlatform() {
         request.composition = currentSnapshot(f.session).project().compositions().front().id();
         request.range = {document::ExportRangeKind::Frame, 0, 0};
         request.settings.format = document::ExportFormat::Png;
-        request.destination = {"external", "file:///renders/capture.png",
+        request.destination = {"external", "file://" BLOOM_TEST_URI_ROOT "/renders/capture.png",
                                document::ExportOverwritePolicy::Replace};
         const auto submitted = f.service->submitTransient(request);
         expect(submitted.accepted && submitted.job && f.view(*submitted.job)->transient,
@@ -539,7 +546,7 @@ void testWorkerLimitsAndReport() {
         .composition = currentSnapshot(f.session).project().compositions().front().id(),
         .range = {document::ExportRangeKind::Custom, 0, 3},
         .settings = host::builtInExportPreset("builtin:h264-mp4")->settings,
-        .destination = {"external", "file:///tmp/limits-test.mp4",
+        .destination = {"external", "file://" BLOOM_TEST_URI_ROOT "/tmp/limits-test.mp4",
                         document::ExportOverwritePolicy::Replace},
         .name = {},
         .presetId = "builtin:h264-mp4",

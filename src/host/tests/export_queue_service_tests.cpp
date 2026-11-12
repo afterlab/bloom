@@ -38,6 +38,15 @@
 #include <stop_token>
 #include <thread>
 
+// An absolute path needs a drive on Windows; the same fixtures, under one root per platform.
+#if defined(_WIN32)
+#define BLOOM_TEST_ROOT "C:"
+#define BLOOM_TEST_URI_ROOT "/C:"
+#else
+#define BLOOM_TEST_ROOT ""
+#define BLOOM_TEST_URI_ROOT ""
+#endif
+
 namespace {
 
 using namespace bloom;
@@ -93,7 +102,7 @@ void testResolveDestination() {
     document::ExportOutput movie;
     movie.destination.path = "Exports/{name}_{job}_{date}.{format}";
     host::ExportDestinationContext context;
-    context.projectFolder = std::filesystem::path("/projects/show");
+    context.projectFolder = std::filesystem::path(BLOOM_TEST_ROOT "/projects/show");
     context.compositionName = "Shot: 10";
     context.range = host::ExportResolvedRange{8, 12};
     context.year = 2026;
@@ -101,7 +110,8 @@ void testResolveDestination() {
     context.day = 30;
     auto resolved = host::resolveDestination(job, movie, context);
     expect(resolved.issues.empty() &&
-               resolved.firstPath == "/projects/show/Exports/Shot_ 10_Final_2026-10-30.mp4" &&
+               resolved.firstPath == BLOOM_TEST_ROOT
+                   "/projects/show/Exports/Shot_ 10_Final_2026-10-30.mp4" &&
                resolved.fileCount == 1,
            "tokens expand, values are sanitized and the movie is one file");
 
@@ -119,9 +129,10 @@ void testResolveDestination() {
     movie.destination.path = "../outside.mp4";
     expect(!host::resolveDestination(job, movie, context).issues.empty(),
            "a project-relative destination stays below the project");
-    movie.destination = {"external", "file:///renders/a%20b.mp4",
+    movie.destination = {"external", "file://" BLOOM_TEST_URI_ROOT "/renders/a%20b.mp4",
                          document::ExportOverwritePolicy::Replace};
-    expect(host::resolveDestination(job, movie, context).firstPath == "/renders/a b.mp4",
+    expect(host::resolveDestination(job, movie, context).firstPath == BLOOM_TEST_ROOT
+               "/renders/a b.mp4",
            "an external file URI resolves");
     context.projectFolder.reset();
     movie.destination = {};
@@ -132,18 +143,46 @@ void testResolveDestination() {
     document::ExportOutput frames;
     frames.settings.format = document::ExportFormat::OpenExr;
     frames.settings.naming = {1001, 4, "{job}.<base>.####.<ext>"};
-    frames.destination = {"external", "file:///renders/plate.exr",
+    frames.destination = {"external", "file://" BLOOM_TEST_URI_ROOT "/renders/plate.exr",
                           document::ExportOverwritePolicy::AskBeforeReplacing};
     resolved = host::resolveDestination(job, frames, context);
-    expect(resolved.issues.empty() && resolved.firstPath == "/renders/Final.plate.1001.exr" &&
-               resolved.lastPath == "/renders/Final.plate.1005.exr" && resolved.fileCount == 5 &&
-               resolved.basePath == "/renders/plate.exr",
+    expect(resolved.issues.empty() &&
+               resolved.firstPath == BLOOM_TEST_ROOT "/renders/Final.plate.1001.exr" &&
+               resolved.lastPath == BLOOM_TEST_ROOT "/renders/Final.plate.1005.exr" &&
+               resolved.fileCount == 5 && resolved.basePath == BLOOM_TEST_ROOT "/renders/plate.exr",
            "a sequence names its first and last files from the start frame");
     job.render.range = {document::ExportRangeKind::Frame, 9, 0};
     context.range = host::ExportResolvedRange{9, 9};
     resolved = host::resolveDestination(job, frames, context);
-    expect(resolved.firstPath == "/renders/plate.exr" && resolved.fileCount == 1,
+    expect(resolved.firstPath == BLOOM_TEST_ROOT "/renders/plate.exr" && resolved.fileCount == 1,
            "an image output with a one-frame range writes one still");
+}
+
+// An external destination is a file URI: its UTF-8 bytes must reach the filesystem unchanged and a
+// remote authority is a network share, never a relative path (Windows only; POSIX has no UNC form).
+void testWindowsFileUriDestinations() {
+#if defined(_WIN32)
+    document::ExportJob job;
+    job.name = "Final";
+    job.render.range = {document::ExportRangeKind::Custom, 8, 12};
+    document::ExportOutput movie;
+    host::ExportDestinationContext context;
+    context.compositionName = "Shot";
+    context.range = host::ExportResolvedRange{8, 12};
+    movie.destination = {"external", "file:///C:/Renders/caf%C3%A9/clip.mp4",
+                         document::ExportOverwritePolicy::Replace};
+    auto resolved = host::resolveDestination(job, movie, context);
+    expect(resolved.issues.empty() &&
+               resolved.firstPath == std::filesystem::path(u8"C:/Renders/caf\u00e9/clip.mp4"),
+           "a non-ASCII drive path keeps its UTF-8 name");
+    movie.destination = {"external", "file://server/share/dir/clip.mp4",
+                         document::ExportOverwritePolicy::Replace};
+    resolved = host::resolveDestination(job, movie, context);
+    expect(resolved.issues.empty() && resolved.firstPath.is_absolute() &&
+               resolved.firstPath.has_root_name() &&
+               resolved.firstPath == std::filesystem::path(L"\\\\server\\share\\dir\\clip.mp4"),
+           "a file URI authority is a UNC path");
+#endif
 }
 
 void testScript() {
@@ -248,24 +287,26 @@ void testFormatTokens() {
 
 // The 1.22 locator rule for a chosen path.
 void testDestinationForPath() {
-    const std::filesystem::path project = "/projects/shot";
-    auto inside = host::exportDestinationForPath("/projects/shot/Renders/final.mov", project);
+    const std::filesystem::path project = BLOOM_TEST_ROOT "/projects/shot";
+    auto inside =
+        host::exportDestinationForPath(BLOOM_TEST_ROOT "/projects/shot/Renders/final.mov", project);
     expect(inside && inside->portability == "project-relative" &&
                inside->path == "Renders/final.mov" &&
                inside->overwrite == document::ExportOverwritePolicy::AskBeforeReplacing,
            "a path inside the project becomes project-relative");
-    auto outside = host::exportDestinationForPath("/renders/final.mov", project,
+    auto outside = host::exportDestinationForPath(BLOOM_TEST_ROOT "/renders/final.mov", project,
                                                   document::ExportOverwritePolicy::Replace);
     expect(outside && outside->portability == "external" &&
-               outside->path == "file:///renders/final.mov" &&
+               outside->path == "file://" BLOOM_TEST_URI_ROOT "/renders/final.mov" &&
                outside->overwrite == document::ExportOverwritePolicy::Replace,
            "a path outside the project becomes an external file URI");
-    auto sibling = host::exportDestinationForPath("/projects/shot-old/final.mov", project);
+    auto sibling =
+        host::exportDestinationForPath(BLOOM_TEST_ROOT "/projects/shot-old/final.mov", project);
     expect(sibling && sibling->portability == "external",
            "a sibling folder with the same prefix is outside");
-    auto unsaved = host::exportDestinationForPath("/renders/a b.mov", std::nullopt);
+    auto unsaved = host::exportDestinationForPath(BLOOM_TEST_ROOT "/renders/a b.mov", std::nullopt);
     expect(unsaved && unsaved->portability == "external" &&
-               unsaved->path == "file:///renders/a%20b.mov",
+               unsaved->path == "file://" BLOOM_TEST_URI_ROOT "/renders/a%20b.mov",
            "an unsaved project always gets an external URI");
     expect(!host::exportDestinationForPath("relative.mov", project) &&
                !host::exportDestinationForPath("", project),
@@ -279,7 +320,7 @@ void testDestinationForPath() {
     output.destination = *inside;
     job.outputs.push_back(output);
     expect(host::resolveDestination(job, output, context).firstPath ==
-               std::filesystem::path("/projects/shot/Renders/final.mov"),
+               std::filesystem::path(BLOOM_TEST_ROOT "/projects/shot/Renders/final.mov"),
            "a project-relative record resolves to the chosen path");
 }
 
@@ -1467,6 +1508,7 @@ void testVideoEndToEnd(const document::ExportFormat format,
 int main() {
     try {
         testResolveDestination();
+        testWindowsFileUriDestinations();
         testScript();
         testPresets();
         testDefaults();
