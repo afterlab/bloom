@@ -185,6 +185,19 @@ bloom_add_test(
     LABELS runtime unit
     TIMEOUT 30
 )
+# Auto Exposure's logarithm and power, held to the same bits on every platform.
+add_executable(bloom_runtime_auto_exposure_math_test auto_exposure_math_tests.cpp)
+target_include_directories(bloom_runtime_auto_exposure_math_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_compile_features(bloom_runtime_auto_exposure_math_test PRIVATE cxx_std_20)
+bloom_enable_warnings(bloom_runtime_auto_exposure_math_test)
+bloom_enable_strict_floating_point(bloom_runtime_auto_exposure_math_test)
+bloom_add_test(
+    NAME bloom.runtime.auto-exposure-math
+    COMMAND bloom_runtime_auto_exposure_math_test
+    LABELS runtime unit
+)
+
 
 bloom_add_test(
     NAME bloom.runtime.value_graph

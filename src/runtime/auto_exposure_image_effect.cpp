@@ -12,6 +12,7 @@
 //  32 atlas position (x, y) of each mean, oldest first, (-1, -1) when absent (Filter)
 
 #include "auto_exposure_image_effect.hpp"
+#include "auto_exposure_math.hpp"
 
 #include "cpu_composition_evaluator_support.hpp"
 #include "image_effect.hpp"
@@ -68,14 +69,14 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
     const float limit = k[7];
     const float quotientRed = g / r;
     const float quotientBlue = g / b;
-    const float logRed = std::min(std::max(std::log2(quotientRed), -limit), limit);
-    const float logBlue = std::min(std::max(std::log2(quotientBlue), -limit), limit);
+    const float logRed = std::min(std::max(detail::autoExposureLog2(quotientRed), -limit), limit);
+    const float logBlue = std::min(std::max(detail::autoExposureLog2(quotientBlue), -limit), limit);
     const float wr = logRed * k[6];
     const float wb = logBlue * k[6];
-    const float correctedRed = r * std::exp2(wr);
-    const float correctedBlue = b * std::exp2(wb);
+    const float correctedRed = r * detail::autoExposureExp2(wr);
+    const float correctedBlue = b * detail::autoExposureExp2(wb);
     const float luma = kLumaRed * correctedRed + kLumaGreen * g + kLumaBlue * correctedBlue;
-    const float stops = k[3] - std::log2(std::max(luma, kAutoExposureFloor));
+    const float stops = k[3] - detail::autoExposureLog2(std::max(luma, kAutoExposureFloor));
     const float e = std::min(std::max(stops, k[4]), k[5]) * k[2];
     return {e, wr, wb};
 }
@@ -533,9 +534,9 @@ ImageEffectResult applyAutoExposure(const PreparedColorGrade& grade,
         float gainBlue = 1.0F;
         if (gain.present()) {
             const auto& s = gain.at(gain.originX, gain.originY);
-            gainRed = std::exp2(s.red() + s.green());
-            gainGreen = std::exp2(s.red());
-            gainBlue = std::exp2(s.red() + s.blue());
+            gainRed = detail::autoExposureExp2(s.red() + s.green());
+            gainGreen = detail::autoExposureExp2(s.red());
+            gainBlue = detail::autoExposureExp2(s.red() + s.blue());
         }
         const auto geometry = autoExposureGrid(source.width, source.height,
                                                static_cast<std::int64_t>(k[1]));
