@@ -12,7 +12,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <new>
 #include <utility>
@@ -247,9 +250,14 @@ struct Kept final {
     std::shared_ptr<detail::ConfigSession> session;
 };
 
+// The kept configs and the resolutions in progress. The mutex guards only these two lists and is
+// never held while a file is read or a helper parses: a slow config delays only a second request
+// for that same config, which waits for it and then finds it kept.
 struct KeptConfigs final {
     std::mutex mutex;
+    std::condition_variable finished;
     std::deque<Kept> entries;
+    std::vector<Key> inProgress;
 };
 
 [[nodiscard]] KeptConfigs& kept() {
@@ -290,9 +298,13 @@ struct KeptConfigs final {
     return detail::OcioConfigAccess::ready(entry.resolved);
 }
 
-[[nodiscard]] OcioBuiltInResolutionResult resolveFile(const OcioConfigLocation& location,
-                                                      const core::Sha256Digest& expectedRevision,
-                                                      const std::string_view working) {
+[[nodiscard]] bool cancelled(const std::function<bool()>& cancellation) {
+    return cancellation && cancellation();
+}
+
+[[nodiscard]] OcioBuiltInResolutionResult
+resolveFile(const OcioConfigLocation& location, const core::Sha256Digest& expectedRevision,
+            const std::string_view working, const std::function<bool()>& cancellation) {
     const auto path = localPath(location.value);
     const bool loose = location.kind == OcioConfigLocatorKind::ExternalLooseConfig;
     if (path.empty() || !endsWith(path, loose ? kLooseName : kArchiveSuffix) ||
@@ -301,8 +313,8 @@ struct KeptConfigs final {
         return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
 
     auto& cache = kept();
-    // One resolution at a time: a second caller of the same config waits and then finds it kept.
-    const std::lock_guard lock(cache.mutex);
+    if (cancelled(cancellation))
+        return helperFailed(OcioHelperError::HelperCancelled);
     std::vector<FileStamp> stamps;
     switch (currentStamps(location, path, stamps)) {
     case Scan::Missing:
@@ -313,15 +325,45 @@ struct KeptConfigs final {
         break;
     }
     const Key key{location, std::string(working)};
-    for (auto entry = cache.entries.begin(); entry != cache.entries.end();) {
-        if (entry->session->failure() != OcioHelperError::None ||
-            (entry->key == key && entry->stamps != stamps)) {
-            entry = cache.entries.erase(entry);
-            continue;
+    // A kept config answers at once. A config another caller is parsing right now is waited for
+    // (cancellably) and then found kept, or parsed here if that attempt did not keep it. Any other
+    // config parses without waiting for either.
+    struct Claim final {
+        KeptConfigs& cache;
+        const Key& key;
+        bool held = false;
+        ~Claim() {
+            if (!held)
+                return;
+            {
+                const std::lock_guard lock(cache.mutex);
+                std::erase(cache.inProgress, key);
+            }
+            cache.finished.notify_all();
         }
-        if (entry->key == key)
-            return answer(*entry, expectedRevision);
-        ++entry;
+    } claim{cache, key};
+    {
+        std::unique_lock lock(cache.mutex);
+        while (true) {
+            for (auto entry = cache.entries.begin(); entry != cache.entries.end();) {
+                if (entry->session->failure() != OcioHelperError::None ||
+                    (entry->key == key && entry->stamps != stamps)) {
+                    entry = cache.entries.erase(entry);
+                    continue;
+                }
+                if (entry->key == key)
+                    return answer(*entry, expectedRevision);
+                ++entry;
+            }
+            if (std::ranges::find(cache.inProgress, key) == cache.inProgress.end()) {
+                cache.inProgress.push_back(key);
+                claim.held = true;
+                break;
+            }
+            if (cancelled(cancellation))
+                return helperFailed(OcioHelperError::HelperCancelled);
+            cache.finished.wait_for(lock, std::chrono::milliseconds(20));
+        }
     }
 
     // Read the files into one sealed shared file: the archive itself, or the loose resource
@@ -419,7 +461,7 @@ struct KeptConfigs final {
     parameters.workingColorSpaceId = working;
     for (const auto& variable : location.context)
         parameters.context.push_back({variable.name, variable.value});
-    auto opened = detail::ConfigSession::open(parameters, sealed.get(), sealedBytes);
+    auto opened = detail::ConfigSession::open(parameters, sealed.get(), sealedBytes, cancellation);
     if (!opened.session || !opened.reply)
         return helperFailed(opened.helperError == OcioHelperError::None
                                 ? OcioHelperError::HelperProtocolViolation
@@ -466,6 +508,7 @@ struct KeptConfigs final {
     if (!resolved)
         return helperFailed(OcioHelperError::HelperProtocolViolation);
     constexpr std::size_t maximumKept = 4;
+    const std::lock_guard lock(cache.mutex);
     while (cache.entries.size() >= maximumKept)
         cache.entries.pop_front();
     cache.entries.push_back({key, std::move(stamps), std::move(*resolved), opened.session});
@@ -523,13 +566,14 @@ OcioConfigLocation parseOcioConfigLocation(const std::string_view text) {
 
 OcioBuiltInResolutionResult resolveOcioConfig(const OcioConfigLocation& location,
                                               const core::Sha256Digest& expectedRevision,
-                                              const std::string_view workingColorSpaceId) noexcept {
+                                              const std::string_view workingColorSpaceId,
+                                              const std::function<bool()>& cancellation) noexcept {
     if (location.kind == OcioConfigLocatorKind::BloomBuiltIn)
         return resolveOcioBuiltIn(location.kind, location.value, expectedRevision,
                                   workingColorSpaceId);
 #ifdef __linux__
     try {
-        return resolveFile(location, expectedRevision, workingColorSpaceId);
+        return resolveFile(location, expectedRevision, workingColorSpaceId, cancellation);
     } catch (const std::bad_alloc&) {
         return helperFailed(OcioHelperError::HelperMemoryLimit);
     } catch (const std::exception&) {
@@ -542,10 +586,11 @@ OcioBuiltInResolutionResult resolveOcioConfig(const OcioConfigLocation& location
 
 OcioBuiltInResolutionResult resolveOcioConfig(const std::string_view locationText,
                                               const core::Sha256Digest& expectedRevision,
-                                              const std::string_view workingColorSpaceId) noexcept {
+                                              const std::string_view workingColorSpaceId,
+                                              const std::function<bool()>& cancellation) noexcept {
     try {
         return resolveOcioConfig(parseOcioConfigLocation(locationText), expectedRevision,
-                                 workingColorSpaceId);
+                                 workingColorSpaceId, cancellation);
     } catch (const std::exception&) {
         return helperFailed(OcioHelperError::HelperMemoryLimit);
     }

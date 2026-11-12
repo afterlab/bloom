@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -34,6 +35,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef __linux__
@@ -641,6 +643,88 @@ void testRefusals(const std::filesystem::path& root) {
            "refusal: a resource key never leaves the root");
 }
 
+// A slow parse blocks nobody else, and a resolution can be cancelled. The slow one is held in its
+// cancellation callback, which the helper wait polls: the callback does not return until the
+// other config has resolved, so the other config resolving at all proves no lock is held across
+// the first one's parse.
+void testConcurrentAndCancelled(const std::filesystem::path& root) {
+    const auto slowLocation = loose(root / "graded");
+    const auto fastLocation = loose(root / "aces");
+    const std::string slowWorking = "lin";
+    const std::string fastWorking(kAcesCgV1SceneLinearColorSpaceId);
+    const auto slowRevision = revisionOf(slowLocation, slowWorking);
+    const auto fastRevision = revisionOf(fastLocation, fastWorking);
+    expect(slowRevision && fastRevision, "concurrent: both configs have a revision");
+    if (!slowRevision || !fastRevision)
+        return;
+    releaseExternalOcioConfigs();
+
+    std::atomic<int> calls{0};
+    std::atomic<bool> fastDone{false};
+    std::atomic<bool> slowHeld{false};
+    std::atomic<bool> slowFinished{false};
+    std::atomic<bool> slowReady{false};
+    const auto slowCancellation = [&] {
+        // Calls 1 and 2 are the resolution's own checks; the third is inside the helper wait.
+        if (++calls >= 3) {
+            slowHeld = true;
+            const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            while (!fastDone && std::chrono::steady_clock::now() < limit)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    };
+    std::thread slow([&] {
+        slowReady = resolveOcioConfig(slowLocation, *slowRevision, slowWorking, slowCancellation)
+                        .ready();
+        slowFinished = true;
+    });
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!slowHeld && std::chrono::steady_clock::now() < limit)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    expect(slowHeld, "concurrent: the slow resolution reached the helper wait");
+
+    // A second request for the slow config waits for it and can be cancelled while it waits.
+    std::atomic<int> waits{0};
+    const auto waiter = resolveOcioConfig(slowLocation, *slowRevision, slowWorking,
+                                          [&] { return ++waits >= 3; });
+    expect(waiter.outcome() == OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper &&
+               waiter.helperError() == OcioHelperError::HelperCancelled && !slowFinished,
+           "concurrent: a request waiting for the same config is cancellable");
+
+    // A different config resolves while the slow one is still parsing.
+    const auto fast = resolveOcioConfig(fastLocation, *fastRevision, fastWorking);
+    expect(fast.ready() && !slowFinished,
+           "concurrent: another config resolves while a slow parse is in progress");
+    fastDone = true;
+    slow.join();
+    expect(slowReady, "concurrent: the slow resolution completes after it was released");
+
+    // The released one is kept: a second request answers without a callback being polled.
+    std::atomic<int> polled{0};
+    const auto again = resolveOcioConfig(slowLocation, *slowRevision, slowWorking, [&] {
+        ++polled;
+        return false;
+    });
+    expect(again.ready() && polled <= 1, "concurrent: the finished config is kept");
+
+    // Cancellation reaches the helper wait and leaves nothing kept.
+    releaseExternalOcioConfigs();
+    const auto before = resolveOcioConfig(slowLocation, *slowRevision, slowWorking,
+                                          [] { return true; });
+    expect(before.outcome() == OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper &&
+               before.helperError() == OcioHelperError::HelperCancelled,
+           "cancel: a resolution cancelled before it starts is HelperCancelled");
+    std::atomic<int> during{0};
+    const auto cancelled = resolveOcioConfig(slowLocation, *slowRevision, slowWorking,
+                                             [&] { return ++during >= 3; });
+    expect(cancelled.outcome() == OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper &&
+               cancelled.helperError() == OcioHelperError::HelperCancelled && during >= 3,
+           "cancel: a resolution cancelled in the helper wait is HelperCancelled");
+    expect(resolveOcioConfig(slowLocation, *slowRevision, slowWorking).ready(),
+           "cancel: a cancelled resolution leaves the config resolvable");
+}
+
 // The session itself: a hostile resource, a helper that dies, and tokens that die with it.
 void testSession(const std::filesystem::path& root) {
     detail::ConfigParameters parameters;
@@ -784,6 +868,7 @@ int main() {
     testArchives(root);
     testContextVariables(root);
     testRefusals(root);
+    testConcurrentAndCancelled(root);
     testSession(root);
     releaseExternalOcioConfigs();
     std::error_code ignored;

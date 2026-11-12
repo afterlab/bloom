@@ -3,6 +3,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/core/sha256.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -53,12 +54,19 @@ struct OcioConfigLocation final {
 // A Ready file config is kept, with its helper, while the file's size, time and identity (for a
 // loose root: of every candidate file) are unchanged, so the same config is not parsed again for
 // every frame. Blocking: call it where a processor build may block.
+//
+// `cancellation`, when set, is polled while the resolution waits (for the helper, or for another
+// caller's resolution of the same config); returning true ends it with
+// LocatorKindRequiresHelper and HelperCancelled, and the helper is stopped. Different configs
+// resolve concurrently: a slow parse delays only another request for that same config.
 [[nodiscard]] OcioBuiltInResolutionResult
 resolveOcioConfig(const OcioConfigLocation& location, const core::Sha256Digest& expectedRevision,
-                  std::string_view workingColorSpaceId = {}) noexcept;
+                  std::string_view workingColorSpaceId = {},
+                  const std::function<bool()>& cancellation = {}) noexcept;
 [[nodiscard]] OcioBuiltInResolutionResult
 resolveOcioConfig(std::string_view locationText, const core::Sha256Digest& expectedRevision,
-                  std::string_view workingColorSpaceId = {}) noexcept;
+                  std::string_view workingColorSpaceId = {},
+                  const std::function<bool()>& cancellation = {}) noexcept;
 
 // The current content revision of a location, for a caller that proposes a durable reference.
 // Empty when the config cannot be read or, for a loose config, when the helper did not accept it.
