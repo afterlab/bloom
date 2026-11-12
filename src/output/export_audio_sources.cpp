@@ -55,8 +55,10 @@ exportAudioSourcesV1(const runtime::CompiledCompositionPlan& plan) {
 }
 
 bool exportAudioPathDecodesV1(const std::string& codec) {
+    // Kept in a variable: the declaration found points into the handshake.
+    const auto handshake = media::provider::ffmpegHandshake();
     const auto* found = media::provider::findDecodeDeclarationV1(
-        media::provider::ffmpegHandshake(), media::provider::Role::AudioDecode, codec);
+        handshake, media::provider::Role::AudioDecode, codec);
     return found != nullptr && found->capability.codec == codec;
 }
 
