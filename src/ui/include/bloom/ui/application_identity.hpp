@@ -18,7 +18,9 @@ namespace bloom::ui {
 //   * the organization name is kPackageCheckOrganization, so the per-user data and cache folders
 //     Qt names after it are not Bloom's own either.
 //
-// The variable is the check's; it is not a way to run Bloom with a second profile.
+// The variable is the check's; it is not a way to run Bloom with a second profile. Setting it
+// at all gives up Bloom's own names: a value that is not an absolute directory does not fall
+// back to them, it stops the program (ApplicationIdentity::refusal).
 inline constexpr char kPackageCheckProfileVariable[] = "BLOOM_PACKAGE_CHECK_PROFILE";
 inline constexpr char kPackageCheckOrganization[] = "BloomPackageCheck";
 
@@ -27,6 +29,11 @@ struct ApplicationIdentity final {
     QString application;
     // Empty unless the package check's profile directory is in use.
     QString settingsDirectory;
+    // Not empty when the check's variable is set to something that is not an absolute
+    // directory. The names are then already the check's, never Bloom's own, and the program
+    // must stop with this message: a mistake in a check must not become a run that reads or
+    // writes the settings of the person whose computer it is.
+    QString refusal;
 };
 
 // Applies the identity to QCoreApplication and QSettings and returns what it applied.

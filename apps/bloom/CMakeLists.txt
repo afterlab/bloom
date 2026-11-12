@@ -292,3 +292,16 @@ if(APPLE)
         endforeach()
     endif()
 endif()
+
+# The application itself refuses a package-check profile that is not an absolute directory,
+# instead of starting under Bloom's own names (src/ui/include/bloom/ui/application_identity.hpp).
+if(BUILD_TESTING)
+    include(BloomTesting)
+    bloom_add_test(
+        NAME bloom.ui.application-identity-refusal
+        COMMAND ${CMAKE_COMMAND} "-DPROGRAM=$<TARGET_FILE:bloom>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/identity-refusal"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/application_refuses_relative_profile.cmake"
+        LABELS ui integration
+        TIMEOUT 90)
+endif()

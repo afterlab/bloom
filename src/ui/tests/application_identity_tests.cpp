@@ -35,12 +35,18 @@ int main(int argc, char** argv) {
                QCoreApplication::applicationName() == QStringLiteral("Bloom"),
            "the names reach QCoreApplication");
 
-    // A relative directory is not a profile: the settings stay where they are.
+    expect(identity.refusal.isEmpty(), "nothing is refused without the check's variable");
+
+    // A relative directory is not a profile, and it is not a reason to run as Bloom either:
+    // the names are the check's from the moment the variable is set, and the run is refused.
     qputenv(bloom::ui::kPackageCheckProfileVariable, "relative/profile");
     identity = bloom::ui::installApplicationIdentity();
-    expect(identity.organization == QStringLiteral("Kinetik") &&
-               identity.settingsDirectory.isEmpty(),
-           "a relative profile directory is ignored");
+    expect(identity.organization == QString::fromLatin1(bloom::ui::kPackageCheckOrganization) &&
+               identity.settingsDirectory.isEmpty() && !identity.refusal.isEmpty(),
+           "a relative profile directory is refused");
+    expect(QCoreApplication::organizationName() != QStringLiteral("Kinetik") &&
+               QSettings::defaultFormat() == QSettings::IniFormat,
+           "a refused run is not Bloom's own: another organization and no system store");
 
     QTemporaryDir directory;
     expect(directory.isValid(), "temporary directory");

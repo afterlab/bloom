@@ -94,6 +94,7 @@
 #include <QTimer>
 
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -110,7 +111,11 @@ int main(int argc, char* argv[]) try {
 
     // Bloom's names and settings store; the package check's own when it starts this program
     // (application_identity.hpp). Before anything reads a setting.
-    static_cast<void>(bloom::ui::installApplicationIdentity());
+    if (const auto identity = bloom::ui::installApplicationIdentity();
+        !identity.refusal.isEmpty()) {
+        std::fprintf(stderr, "Bloom: %s\n", identity.refusal.toUtf8().constData());
+        return 2;
+    }
 
     // The Kinetik visual language is installed once, application-wide, before any widget exists
     // (task U1, issue #117). It replaces MainWindow::applyFoundationTheme(): the palette, the
