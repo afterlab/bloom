@@ -14,6 +14,7 @@
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
@@ -205,7 +206,8 @@ imageAsset(const std::filesystem::path& path, const std::string& name, const std
     asset.locator.kind = "file";
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
-    asset.locator.relinkHint = "file:" + path.string();
+    asset.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(path))
+                                   .value_or(std::string{});
     asset.contentDigest = probe.value->contentDigest;
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
     asset.width = probe.value->width;

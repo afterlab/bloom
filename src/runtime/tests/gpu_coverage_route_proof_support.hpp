@@ -156,6 +156,17 @@ inline void routeProofSinkRejectsFakes(std::vector<std::string>& failures) {
                                "' did not validate as expected");
         }
     };
+    // Which display each platform's preview proofs are held to is part of the contract: a build
+    // that silently changed it would accept the other platform's proofs.
+#if defined(__APPLE__) || defined(_WIN32)
+    constexpr auto kPlatformDisplay = GpuPreviewRouteDisplay::HostPainted;
+#else
+    constexpr auto kPlatformDisplay = GpuPreviewRouteDisplay::Resident;
+#endif
+    if (bloom::runtime::gpuPreviewRouteDisplay() != kPlatformDisplay) {
+        failures.push_back("route-proof host-painted: this platform reports the wrong preview "
+                           "display (macOS and Windows are host-painted, Linux is resident)");
+    }
     auto painted = representativeRouteProof();
     painted.harness = GpuRouteHarnessKind::ViewerPreviewHostPainted;
     painted.verifiedFrames = 3;

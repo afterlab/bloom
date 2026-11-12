@@ -22,6 +22,7 @@
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 #include <bloom/runtime/preview_cpu_stage.hpp>
+#include <bloom/runtime/profiler_process_reads.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <QGuiApplication>
@@ -39,7 +40,6 @@
 #include <source_location>
 #include <string>
 #include <string_view>
-#include <sys/resource.h>
 #include <thread>
 #include <utility>
 
@@ -213,12 +213,8 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
 // Isolated-fixture total-process CPU. The caller measures this across a quiet window in which the
 // UI thread only sleeps, so a busy owner service thread would show up as roughly one full core.
 [[nodiscard]] double processCpuSeconds() {
-    struct rusage usage{};
-    static_cast<void>(getrusage(RUSAGE_SELF, &usage));
-    return static_cast<double>(usage.ru_utime.tv_sec) +
-           static_cast<double>(usage.ru_utime.tv_usec) * 1e-6 +
-           static_cast<double>(usage.ru_stime.tv_sec) +
-           static_cast<double>(usage.ru_stime.tv_usec) * 1e-6;
+    const auto nanoseconds = bloom::runtime::readProfilerProcessCpuNs();
+    return nanoseconds ? static_cast<double>(*nanoseconds) * 1e-9 : 0.0;
 }
 
 [[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {

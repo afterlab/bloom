@@ -17,13 +17,12 @@
 
 #include <QApplication>
 #include <QEventLoop>
+#include <QLibrary>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <vulkan/vulkan.h>
-
-#include <dlfcn.h>
 
 #include <chrono>
 #include <cstdint>
@@ -95,14 +94,14 @@ class Expectations final {
 class BareInstance final {
   public:
     [[nodiscard]] bool create(const std::string& loaderPath) {
-        lib_ = dlopen(loaderPath.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (lib_ == nullptr) {
+        lib_.setFileName(QString::fromStdString(loaderPath));
+        if (!lib_.load()) {
             return false;
         }
         auto createInstance =
-            reinterpret_cast<PFN_vkCreateInstance>(dlsym(lib_, "vkCreateInstance"));
+            reinterpret_cast<PFN_vkCreateInstance>(lib_.resolve("vkCreateInstance"));
         destroyInstance_ =
-            reinterpret_cast<PFN_vkDestroyInstance>(dlsym(lib_, "vkDestroyInstance"));
+            reinterpret_cast<PFN_vkDestroyInstance>(lib_.resolve("vkDestroyInstance"));
         if (createInstance == nullptr || destroyInstance_ == nullptr) {
             return false;
         }
@@ -121,16 +120,14 @@ class BareInstance final {
         if (instance_ != VK_NULL_HANDLE && destroyInstance_ != nullptr) {
             destroyInstance_(instance_, nullptr);
         }
-        if (lib_ != nullptr) {
-            dlclose(lib_);
-        }
+        lib_.unload();
     }
     [[nodiscard]] std::uint64_t bits() const noexcept {
         return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(instance_));
     }
 
   private:
-    void* lib_ = nullptr;
+    QLibrary lib_;
     PFN_vkDestroyInstance destroyInstance_ = nullptr;
     VkInstance instance_ = VK_NULL_HANDLE;
 };
