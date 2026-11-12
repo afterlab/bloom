@@ -2,13 +2,14 @@
 
 Status: working
 
-Implementation status: the portable staged-artifact interface has a tested Linux foundation with
-checked writer close, no-follow exact-stage reopen, bounded verifier reads, explicit acceptance or
-rejection, and publication blocked until acceptance. Non-Linux providers currently fail explicitly
-as unsupported. Format-specific semantic validators, cancellation/progress integration, macOS and
-Windows providers, and three-platform parity qualification remain pending.
+Implementation status: the portable staged-artifact interface has tested Linux, macOS and Windows
+providers with checked writer close, no-follow exact-stage reopen, bounded verifier reads, explicit
+acceptance or rejection, and publication blocked until acceptance. Any other system fails
+explicitly as unsupported. Format-specific semantic validators and cancellation/progress
+integration remain pending. What was measured on each platform is in the macOS and Windows
+sections below.
 
-Updated: 2026-10-13
+Updated: 2026-11-12
 
 ## Objective
 
@@ -225,8 +226,9 @@ source-revision, CPU evaluation, processing-budget and host-lifetime tests. It b
 and does not repeat the repository-wide quality sweep. Locked superbuild archive hashes and library
 versions are reused and Linux uses the locked Clang 22 family. The default matrix is Linux. The
 native job also accepts a macOS runner (the lock's Apple silicon profile, Apple clang, the locked
-MoltenVK as the device); the helper retains portable MSVC configuration support, and no Windows
-execution is claimed.
+MoltenVK as the device). The helper configures a Windows build with MSVC in qualified mode; the
+workflow has no Windows runner, and what was run by hand on a Windows machine is in the Windows
+section.
 
 Before the new workflow is on the default branch, the existing `ci.yml` dispatch entry calls it
 from the selected branch with `focused_gpu_gate=true`. That explicit manual mode skips the four
@@ -241,10 +243,11 @@ example `["self-hosted","linux","gpu"]`. No workflow is dispatched by saving the
 
 Dependency provenance remains separate from functional test results. The production lock holds a
 Linux Clang profile and an Apple silicon macOS profile (Apple clang, deployment target 13.3); a run
-on either consumes its source-built prefix in `qualified` mode. A Windows run consumes its exact
-source-built prefix in `developer-system` mode and reports **Unqualified**, even if its CPU tests
-pass. No accepted MSVC ABI profile, release qualification or native GPU capability is fabricated.
-The `Qualified-pending-manifest` state is preserved rather than upgraded by this focused gate.
+on either consumes its source-built prefix in `qualified` mode. The lock also holds a Windows x86-64
+MSVC profile (minimum Windows 10 version 1903), and a Windows run consumes its source-built prefix
+in `qualified` mode the same way; Qt comes from its official binaries there and is not locked.
+No release qualification is fabricated: the `Qualified-pending-manifest` state is preserved rather
+than upgraded by this focused gate.
 
 The reusable [`gpu_qualification.py`](../../tools/ci/gpu_qualification.py) runner writes JSON with
 separate CPU fallback, native, dependency-provenance and qualified-native fields. The fallback gate
@@ -280,10 +283,10 @@ python3 tools/ci/gpu_qualification.py --build-dir build/gpu-native-evidence \
   --mode native --build --require-device --output build/gpu-evidence/native.json
 ```
 
-An available Windows Vulkan driver may support a native probe, but a prepared workflow is not proof
-that a particular Windows machine has that device or that Bloom's Windows GPU routes are qualified;
-Windows execution remains **NotRun**. The optional job probes the actual selected runner and retains
-unavailable/failure evidence. Actual target evidence is required before platform parity is claimed.
+A prepared workflow is not proof that a particular machine has a device or that Bloom's GPU routes
+pass on it. The optional job probes the actual selected runner and retains unavailable/failure
+evidence, and a platform's parity claim rests on what was measured on a real device of that
+platform (the macOS and Windows sections).
 
 ## macOS
 
@@ -346,11 +349,60 @@ Linux video source preparation now owns a disk-backed, SHA-256-verified anonymou
 The process supervisor installs that typed host capability on a dedicated inherited descriptor; the
 FFmpeg provider consumes the exact descriptor through custom AVIO. Source-byte quotas include live
 captures and pending retirement until the worker closes the backing. The macOS video provider keeps
-its existing fresh-verification path and does not advertise retained-video hash elision; Windows
-keeps the typed unavailable worker fallback. Portable descriptor plumbing alone is not Apple video
-qualification. The Linux source fixture covers same-size/same-mtime replacement, removed originals,
+its existing fresh-verification path and does not advertise retained-video hash elision. Windows
+prepares the same verified private copy, without a pathname, and hands it to the worker as a
+read-only inherited handle ([Media I/O](media-io.md)). Portable descriptor plumbing alone is not
+Apple video qualification. The Linux source fixture covers same-size/same-mtime replacement, removed originals,
 uncached frame parity from retained bytes, cancellation, quota, final revalidation, refresh/reconnect,
 gesture read-only behavior and charged worker retirement.
+
+## Windows
+
+Windows uses the system's Vulkan driver through the locked Vulkan loader, which is built with the
+dependency prefix and found beside the programs. Bloom targets x86-64 Windows 10 version 1903 and
+later, built with MSVC. Every executable carries a manifest that makes the process code page
+UTF-8 and the process long-path aware, so a name in any script and a path longer than 260
+characters reach the system as written, in Bloom's code and in the libraries it links; version
+1903 is the first that honors the code page. The main thread of every executable has an 8 MiB
+stack, as the other platforms' main threads do.
+
+What was measured, on an x86-64 desktop with an NVIDIA GeForce RTX 3080 Ti running Windows 11
+(2026-11-12), in a qualified build:
+
+- The GPU coverage contract and the native acceptance pass with the contract's exception lists
+  unchanged and all six render routes proven.
+- `bloom.sweep.nodes` renders all 98 node types that have an image output and a buildable graph
+  on the GPU with no failure, and the recorded baseline is byte-identical to the Linux x86-64
+  one: the CPU reference gives the same bits on both, which `bloom.sweep.baselines-windows`
+  holds.
+- The Viewer uses the adopted preview route (prepared on the GPU, painted through the widget), as
+  on macOS, and the route proof contract holds the Windows preview proofs to the same
+  host-painted rule. The resident presentation route needs a Wayland surface and is not built
+  for Windows; no Win32 surface route exists.
+- Run-time shader compilation, OCIO GPU programs, LUT import and the File Transform work. The LUT
+  helper is confined with a restricted token at untrusted integrity inside a job object
+  ([Color management](color-management.md)).
+- The focused gate above, run by hand: native mode with a required device passes its ten suites
+  on the discrete GPU, and fallback mode passes in a build with Vulkan off.
+- Projects, imports and renders work in folders with non-ASCII names and under paths longer than
+  260 characters. A project named by a network share path (UNC) saves and renders; the share
+  tried was one the machine serves to itself, not a second machine.
+
+Not measured: any Windows release other than the one named, Windows 10 in particular; a GPU from
+another vendor; a machine with no Vulkan device; the desktop file dialogs and drag and drop with
+non-ASCII names, which need a person at the screen. The minimum version says where the binaries
+are allowed to start, not where they were tested.
+
+Video and audio on Windows are read and encoded by the bundled FFmpeg worker alone; there is no
+Media Foundation provider ([Media I/O](media-io.md)). AV1 export holds SVT-AV1 to its SSE4.2 code
+([Dependency intake](dependency-intake.md)). Installed fonts are the files in the system font
+folder and the per-user one. There is no installer or package yet: Bloom runs from a build folder
+with Qt's and the prefix's libraries on the search path. Continuous integration has a Windows job
+on a hosted runner in qualified mode, which is not a required check; a hosted runner has no usable
+GPU device, and its GPU tests then report not run.
+
+Tests that hide the GPU do it through the Vulkan loader's driver variables, which the loader
+ignores in an elevated process; run the suite from an ordinary, non-elevated account.
 
 ## Export Queue Platforms
 

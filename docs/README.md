@@ -202,8 +202,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   final-render routes both evaluate through it, including the general GPU output-color production
   context, a 6000x4000 media+CST+text export with locally verified native execution, and
   capacity-aware resident sizing. The CPU reference evaluator remains the correctness oracle and
-  explicit supported fallback; GPU execution is locally exercised on Linux only, and macOS and
-  Windows have an explicit supported CPU fallback. Vulkan/MoltenVK remains a working GPU direction
+  explicit supported fallback; GPU execution has been exercised on Linux, macOS and Windows
+  ([platform support](architecture/platform-support.md)). Vulkan/MoltenVK remains a working GPU direction
   until its cross-platform parity and lifecycle spike passes.
 - Ordinary Viewer preview now uses genuine GPU scene/display preparation followed by an asynchronous
   final RGBA8 transfer and QWidget painting, explicitly labelled GPU-prepared/CPU-painted. Bounded

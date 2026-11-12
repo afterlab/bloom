@@ -65,6 +65,12 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
                       "${bloom_sweep}/baselines/macos-arm64.json"
             --cross-platform "${bloom_sweep}/cross_platform.json"
         LABELS sweep unit)
+    bloom_add_test(NAME bloom.sweep.baselines-windows
+        COMMAND "${Python3_EXECUTABLE}" -I "${bloom_sweep}/node_sweep.py"
+            --compare "${bloom_sweep}/baselines/linux-x86_64.json"
+                      "${bloom_sweep}/baselines/windows-x86_64.json"
+            --cross-platform "${bloom_sweep}/cross_platform.json"
+        LABELS sweep unit)
     # Defects an agent found live-testing the MCP server, each pinned at the protocol level.
     bloom_add_test(NAME bloom.mcp.agent-feedback
         COMMAND "${Python3_EXECUTABLE}" -I

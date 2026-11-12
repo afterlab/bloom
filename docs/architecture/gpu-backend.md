@@ -50,7 +50,7 @@ version alone. [Vulkan specification](https://registry.khronos.org/vulkan/specs/
 ## Implementation Status
 
 Status vocabulary: `implemented` means present in the repository and locally exercised on Linux;
-`pending` means defined but not yet built or qualified. Nothing below makes a Windows GPU claim.
+`pending` means defined but not yet built or qualified.
 This section is the current ownership/behavior/gate summary.
 
 macOS (2026-11-12). The entries below record what was exercised on Linux when each was written,
@@ -64,6 +64,13 @@ and what was not is in [platform-support.md](platform-support.md#macos); the dec
 its preview is prepared on the device and painted by the widget, and the route proof contract
 holds its preview proofs to that rule. The Cross-Platform Spike Gate at the end of this document
 has not been run as a whole on macOS or Windows, so the direction's acceptance still waits on it.
+
+Windows (2026-11-12). Where an entry below says Windows GPU execution is unqualified it describes
+its date too. The same backend runs on Windows through the system's Vulkan driver: the GPU
+coverage contract and the native acceptance pass on an NVIDIA device with every render route
+proven, and the node sweep renders every sweepable node type with a baseline byte-identical to
+the Linux one. Its preview is host-painted, as on macOS. What was run, on which machine and what
+was not is in [platform-support.md](platform-support.md#windows).
 
 Capability surface and device bootstrap. A Qt-free and Vulkan-free `bloom::render` public surface
 (`bloom/render/gpu_device.hpp`) exposes typed device state, per-operation-and-precision

@@ -136,6 +136,20 @@ oldest release whose system C++ library formats floating-point numbers the way B
 text needs; reading them goes through `bloom::core::fromChars`. Bloom has been built and run on
 macOS 26 only. [ADR 0039](0039-unified-memory-devices.md) covers memory on Apple silicon.
 
+### 2026-11-12: Windows runs the same backend on the system driver
+
+The backend runs on Windows through the system's Vulkan driver and the locked loader, with no
+Windows-specific render code: the GPU coverage contract and the native acceptance pass on an NVIDIA
+device with every render route proven, and the node sweep renders every sweepable node type with
+a baseline byte-identical to Linux's. The cause that had kept every run-time shader from compiling
+there was in the process supervisor, not in the backend: the end of a tool's output was reported
+with a system error code and read as a crash. Windows has no native presentation route; its
+preview is prepared on the device and painted by the widget, under the host-painted rule of the
+route proof contract, as on macOS. The dependency lock's Windows profile records the minimum
+system, Windows 10 version 1903, the first that honors the UTF-8 process code page Bloom's path
+handling relies on. Bloom has been built and run on Windows 11 only; what was measured is in
+[platform-support.md](../architecture/platform-support.md#windows).
+
 ## References
 
 - [GPU backend architecture and acceptance gate](../architecture/gpu-backend.md)

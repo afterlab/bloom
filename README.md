@@ -117,9 +117,10 @@ The full, current priority order lives in [issue #384](https://github.com/kineti
   and audio-analysis nodes.
 
 **Platforms.** Linux, macOS and Windows are all first-class targets, and a feature isn't finished
-until it works the same on all three. Today Bloom is developed and tested on Linux. GPU rendering
-has only been exercised on Linux so far: macOS and Windows fall back to the CPU renderer, and their
-native video providers are still in progress
+until it works the same on all three. Today Bloom is developed on Linux, and its test suite also
+runs on macOS and on Windows. GPU rendering has been exercised on all three, on one machine each
+([what was measured](docs/architecture/platform-support.md)). Windows reads and writes video
+through the bundled FFmpeg only, and has no installer yet
 ([#304](https://github.com/kinetik-gg/bloom/issues/304),
 [#370](https://github.com/kinetik-gg/bloom/issues/370),
 [#371](https://github.com/kinetik-gg/bloom/issues/371)).

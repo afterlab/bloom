@@ -452,6 +452,103 @@ jobs:
       - name: Package Bloom.app with macdeployqt
         run: cmake --build build/macos-desktop --target bloom-deploy-macos
 
+  # Windows desktop build with MSVC, in qualified mode: the dependencies are the locked superbuild
+  # prefix (the lock's Windows x86-64 MSVC profile) and Qt comes from its official archive. The
+  # superbuild needs a Visual Studio developer environment, the runner's MSYS2 for the recipes that
+  # use make, and Meson. A hosted runner has no usable GPU device: the GPU tests report not run, as
+  # skips, and never as passes. Non-required: Linux remains the automated merge gate.
+  windows-desktop:
+    if: github.event_name != 'workflow_dispatch' || (!inputs.focused_gpu_gate && !inputs.linux_only)
+    name: Windows MSVC Qt desktop
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      MSYS2_ROOT: C:\msys64
+      MSYS2_PATH_TYPE: inherit
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Build tools only. Every library Bloom links comes from the locked prefix.
+      - name: Install build tools
+        shell: cmd
+        run: |
+          python -m venv "%RUNNER_TEMP%\tools-venv"
+          "%RUNNER_TEMP%\tools-venv\Scripts\pip" install --quiet meson==1.12.1 ninja==1.13.2 aqtinstall==3.3.0
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make patch pkgconf perl
+
+      - name: Install Qt
+        # aqt writes aqtinstall.log into its working directory; run it outside the checkout so the
+        # repository hygiene check never sees it.
+        working-directory: ${{ runner.temp }}
+        shell: cmd
+        run: |
+          "%RUNNER_TEMP%\tools-venv\Scripts\aqt" install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir "%RUNNER_TEMP%\qt"
+
+      - name: Cache dependency archives
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/bloom-dependency-downloads
+          key: bloom-dependency-archives-windows-${{ hashFiles('dependencies/dependencies.lock.json') }}
+
+      - name: Cache dependency build
+        id: cache-dependency-prefix
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          # The superbuild tree restores alongside the prefix so a cache hit skips every recipe.
+          path: |
+            ${{ runner.temp }}/bloom-superbuild
+            build/dependency-prefix
+          key: bloom-dependency-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dependencies/dependencies.lock.json', 'dependencies/superbuild/**') }}
+
+      # Each step that compiles starts from the Visual Studio developer environment of the newest
+      # installed toolset, found with vswhere, and adds the build tools and MSYS2 after it.
+      - name: Build dependency superbuild prefix
+        if: steps.cache-dependency-prefix.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%;C:\msys64\usr\bin"
+          cmake -S dependencies/superbuild -B "%RUNNER_TEMP%\bloom-superbuild" -G Ninja ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_BUILD_TYPE=Release ^
+            -DBLOOM_DEPENDENCY_DOWNLOAD_DIR="%RUNNER_TEMP%\bloom-dependency-downloads" ^
+            -DBLOOM_DEPENDENCY_PREFIX="%GITHUB_WORKSPACE%\build\dependency-prefix" || exit /b 1
+          cmake --build "%RUNNER_TEMP%\bloom-superbuild"
+
+      - name: Configure
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%"
+          cmake -S . -B build/windows-desktop -G Ninja ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl ^
+            -DBLOOM_DEPENDENCY_MODE=qualified ^
+            -DBLOOM_DEPENDENCY_PREFIX="%GITHUB_WORKSPACE%\build\dependency-prefix" ^
+            -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\build\dependency-prefix;%RUNNER_TEMP%\qt\6.8.3\msvc2022_64" ^
+            -DBLOOM_BUILD_DESKTOP=ON ^
+            -DBLOOM_BUILD_PYTHON=ON ^
+            -DBLOOM_WARNINGS_AS_ERRORS=ON ^
+            -DBUILD_TESTING=ON ^
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%"
+          cmake --build build/windows-desktop --parallel
+
+      # The tests find Qt and the prefix's libraries through PATH, as a build-folder run does.
+      - name: Test
+        shell: cmd
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set "PATH=%RUNNER_TEMP%\qt\6.8.3\msvc2022_64\bin;%GITHUB_WORKSPACE%\build\dependency-prefix\bin;%PATH%"
+          set "QT_PLUGIN_PATH=%RUNNER_TEMP%\qt\6.8.3\msvc2022_64\plugins"
+          ctest --test-dir build/windows-desktop --output-on-failure -j 3 --timeout 900
+
   focused-gpu:
     if: github.event_name == 'workflow_dispatch' && inputs.focused_gpu_gate
     uses: ./.github/workflows/gpu-qualification.yml
