@@ -1,6 +1,7 @@
 #include "ocio_config_worker.hpp"
 
 #include "lut_worker_ipc.hpp"
+#include "ocio_config_archive.hpp"
 #include "ocio_config_protocol.hpp"
 #include "ocio_gpu_program_extract.hpp"
 #include "ocio_gpu_program_serialize.hpp"
@@ -18,7 +19,7 @@
 
 namespace bloom::color::detail {
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 namespace {
 
 [[nodiscard]] std::string compilerId() {
@@ -46,34 +47,15 @@ namespace {
 #endif
 }
 
-// Reads exactly `bytes.size()` bytes at `offset`, without moving the descriptor's position.
-[[nodiscard]] bool readAt(const int fd, std::span<std::byte> bytes, std::uint64_t offset) {
-    while (!bytes.empty()) {
-        const auto count = ::pread(fd, bytes.data(), bytes.size(), static_cast<off_t>(offset));
-        if (count <= 0)
-            return false;
-        bytes = bytes.subspan(static_cast<std::size_t>(count));
-        offset += static_cast<std::uint64_t>(count);
-    }
-    return true;
-}
-
-[[nodiscard]] std::optional<std::vector<std::byte>> readAll(const int fd,
-                                                            const std::uint64_t bytes) {
-    std::vector<std::byte> value(static_cast<std::size_t>(bytes));
-    if (!readAt(fd, value, 0))
-        return std::nullopt;
-    return value;
-}
-
-// Reads the index of a sealed resource table in place: keys and payload positions only.
+// Reads the index of a resource table in memory: keys and payload positions only.
 [[nodiscard]] std::optional<std::vector<ConfigResourceSlice>>
-readResourceIndex(const int fd, const std::uint64_t bytes) {
+readResourceIndex(const std::span<const std::byte> table) {
+    const std::uint64_t bytes = table.size();
     std::uint64_t at = 0;
     const auto u32 = [&](std::uint32_t& value) {
-        if (bytes - at < sizeof(value) ||
-            !readAt(fd, std::as_writable_bytes(std::span(&value, 1)), at))
+        if (bytes - at < sizeof(value))
             return false;
+        std::memcpy(&value, table.data() + at, sizeof(value));
         at += sizeof(value);
         return true;
     };
@@ -90,13 +72,11 @@ readResourceIndex(const int fd, const std::uint64_t bytes) {
             bytes - at < keyBytes)
             return std::nullopt;
         ConfigResourceSlice slice;
-        slice.key.resize(keyBytes);
-        if (!readAt(fd, std::as_writable_bytes(std::span(slice.key)), at))
-            return std::nullopt;
+        slice.key.assign(reinterpret_cast<const char*>(table.data() + at), keyBytes);
         at += keyBytes;
-        if (bytes - at < sizeof(slice.size) ||
-            !readAt(fd, std::as_writable_bytes(std::span(&slice.size, 1)), at))
+        if (bytes - at < sizeof(slice.size))
             return std::nullopt;
+        std::memcpy(&slice.size, table.data() + at, sizeof(slice.size));
         at += sizeof(slice.size);
         if (slice.size > kOcioLooseMaximumResourceBytes || bytes - at < slice.size)
             return std::nullopt;
@@ -117,17 +97,18 @@ readResourceIndex(const int fd, const std::uint64_t bytes) {
 // Every key that was found is recorded: together they are the consumed resource set.
 class TableProxy final : public OCIO::ConfigIOProxy {
   public:
-    TableProxy(const int fd, std::vector<ConfigResourceSlice> index)
-        : fd_(fd), index_(std::move(index)) {}
+    TableProxy(const std::span<const std::byte> payload, std::vector<ConfigResourceSlice> index)
+        : payload_(payload), index_(std::move(index)) {}
 
     std::vector<std::uint8_t> getLutData(const char* const path) const override {
         const auto* const slice = find(path);
         if (slice == nullptr)
             return {};
-        std::vector<std::uint8_t> data(static_cast<std::size_t>(slice->size));
-        if (!readAt(fd_, std::as_writable_bytes(std::span(data)), slice->offset))
-            return {};
-        return data;
+        const auto content =
+            payload_.subspan(static_cast<std::size_t>(slice->offset),
+                             static_cast<std::size_t>(slice->size));
+        return {reinterpret_cast<const std::uint8_t*>(content.data()),
+                reinterpret_cast<const std::uint8_t*>(content.data()) + content.size()};
     }
     std::string getConfigData() const override {
         const auto data = getLutData("config.ocio");
@@ -164,7 +145,7 @@ class TableProxy final : public OCIO::ConfigIOProxy {
         consumed_.insert(key);
         return &*found;
     }
-    int fd_;
+    std::span<const std::byte> payload_;
     std::vector<ConfigResourceSlice> index_;
     mutable std::set<std::string> consumed_;
     bool closed_ = false;
@@ -227,46 +208,25 @@ void collectFiles(const OCIO::ConstTransformRcPtr& transform, std::set<std::stri
     return files;
 }
 
-class Mapping final {
-  public:
-    Mapping(const int descriptor, const std::size_t size, const int protection)
-        : data_(::mmap(nullptr, size, protection, MAP_SHARED, descriptor, 0)), size_(size) {}
-    ~Mapping() {
-        if (data_ != MAP_FAILED)
-            ::munmap(data_, size_);
-    }
-    Mapping(const Mapping&) = delete;
-    Mapping& operator=(const Mapping&) = delete;
-    [[nodiscard]] bool valid() const { return data_ != MAP_FAILED; }
-    [[nodiscard]] std::span<float> floats() const {
-        return {static_cast<float*>(data_), size_ / sizeof(float)};
-    }
-
-  private:
-    void* data_;
-    std::size_t size_;
-};
-
-[[nodiscard]] bool writeReply(const int fd, const std::uint64_t extent,
+[[nodiscard]] bool writeReply(const LutHelperFile& file, const std::uint64_t extent,
                               const std::span<const std::byte> bytes) {
-    return bytes.size() <= extent && ::lseek(fd, 0, SEEK_SET) == 0 && writeFd(fd, bytes);
+    return bytes.size() <= extent && writeHelperFile(file, bytes);
 }
 
 } // namespace
 
 struct ConfigWorker::State final {
     std::optional<ConfigParameters> parameters;
-    int resource = -1;
+    // The archive or resource table, copied out of the shared file, and the table it serves from.
+    // The bytes stay in place for the helper's life: files are read when a processor needs them.
+    std::vector<std::byte> resourceBytes;
+    bool opened = false;
     std::shared_ptr<TableProxy> table;
     std::optional<ResolvedBloomNeutralConfig> resolved;
     OCIO::ConstContextRcPtr context;
     std::vector<OCIO::ConstCPUProcessorRcPtr> processors;
 
     State() = default;
-    ~State() {
-        if (resource >= 0)
-            ::close(resource);
-    }
     State(const State&) = delete;
     State& operator=(const State&) = delete;
 
@@ -335,40 +295,38 @@ struct ConfigWorker::State final {
     [[nodiscard]] LutError begin(const LutPacket& message, const int socket, bool (*confine)()) {
         if (parameters || !message[4] || message[4] > kConfigMaximumParameterBytes)
             return LutError::HelperProtocolViolation;
-        const auto descriptors = receiveDescriptors(socket, 1);
-        const LutFd file(descriptors[0]);
-        if (file.get() < 0 || !validSharedFile(file.get(), message[7], message[4], true))
+        const auto files = receiveFiles(socket, 1, {message[7], 0});
+        if (!validHelperFile(files[0], message[7], message[4], true))
             return LutError::HelperProtocolViolation;
         if (!confine())
             return LutError::HelperUnavailable;
-        const auto bytes = readAll(file.get(), message[4]);
-        if (!bytes)
+        std::vector<std::byte> bytes(static_cast<std::size_t>(message[4]));
+        if (!readHelperFile(files[0], bytes))
             return LutError::HelperProtocolViolation;
-        parameters = decodeConfigParameters(*bytes);
+        parameters = decodeConfigParameters(bytes);
         return parameters ? LutError::None : LutError::HelperProtocolViolation;
     }
 
     [[nodiscard]] LutError open(const LutPacket& message, const int socket,
-                                std::uint64_t& payload) {
+                                std::uint64_t& replyBytes) {
         const bool loose =
             parameters && parameters->kind == OcioConfigLocatorKind::ExternalLooseConfig;
-        if (!parameters || resolved || resource >= 0 || !message[4] ||
+        if (!parameters || resolved || opened || !message[4] ||
             message[4] > (loose ? kOcioLooseMaximumAggregateBytes + kConfigMaximumReplyBytes
                                 : kConfigMaximumArchiveBytes) ||
             !message[8] || message[8] > kConfigMaximumReplyBytes)
             return LutError::HelperProtocolViolation;
-        const auto descriptors = receiveDescriptors(socket, 2);
-        LutFd input(descriptors[0]);
-        const LutFd output(descriptors[1]);
-        if (input.get() < 0 || output.get() < 0 ||
-            !validSharedFile(input.get(), message[7], message[4], true) ||
-            !validSharedFile(output.get(), message[9], message[8], false))
+        const auto files = receiveFiles(socket, 2, {message[7], message[9]});
+        const auto& output = files[1];
+        if (!validHelperFile(files[0], message[7], message[4], true) ||
+            !validHelperFile(output, message[9], message[8], false))
             return LutError::HelperProtocolViolation;
-        // The resource stays open for the helper's life: files are read when a processor needs
-        // them.
-        resource = ::dup(input.get());
-        if (resource < 0)
+        // The resource is copied into this process before anything parses it: nothing seals a
+        // shared file on every system, and the table must not change under the parser.
+        resourceBytes.resize(static_cast<std::size_t>(message[4]));
+        if (!readHelperFile(files[0], resourceBytes))
             return LutError::HelperProtocolViolation;
+        opened = true;
 
         ConfigOpenReply reply;
         const auto invalid = [&](const OcioBuiltInInvalidReason reason) {
@@ -377,24 +335,31 @@ struct ConfigWorker::State final {
         };
         OCIO::ConstConfigRcPtr config;
         try {
+            std::optional<std::vector<ConfigResourceSlice>> index;
             if (loose) {
-                auto index = readResourceIndex(resource, message[4]);
+                index = readResourceIndex(resourceBytes);
                 if (!index)
                     return LutError::HelperProtocolViolation;
-                table = std::make_shared<TableProxy>(resource, std::move(*index));
-                if (!table->has("config.ocio"))
-                    return LutError::HelperProtocolViolation;
-                config = OCIO::Config::CreateFromConfigIOProxy(table);
             } else {
-                std::array<std::byte, 4> head{};
-                if (!readAt(resource, head, 0))
-                    return LutError::HelperProtocolViolation;
-                if (!looksLikeConfigArchive(head))
+                if (!looksLikeConfigArchive(std::span<const std::byte>(resourceBytes)
+                                                .first(std::min<std::size_t>(
+                                                    resourceBytes.size(), 4))))
                     throw OCIO::Exception("not an archive");
-                // OpenColorIO reads an archive by path; the sealed descriptor has one under /proc.
-                const auto path = "/proc/self/fd/" + std::to_string(resource);
-                config = OCIO::Config::CreateFromFile(path.c_str());
+                // The archive becomes the same table a loose config is served from: OpenColorIO
+                // is given no path, so a confined helper that can open nothing reads it too.
+                auto extracted = readConfigArchive(resourceBytes);
+                if (!extracted)
+                    throw OCIO::Exception("unreadable archive");
+                resourceBytes = std::move(extracted->payload);
+                index = std::move(extracted->index);
             }
+            table = std::make_shared<TableProxy>(resourceBytes, std::move(*index));
+            if (!table->has("config.ocio")) {
+                if (loose)
+                    return LutError::HelperProtocolViolation;
+                throw OCIO::Exception("no config.ocio");
+            }
+            config = OCIO::Config::CreateFromConfigIOProxy(table);
         } catch (const std::bad_alloc&) {
             return LutError::HelperMemoryLimit;
         } catch (const std::exception&) {
@@ -474,36 +439,32 @@ struct ConfigWorker::State final {
             table->close();
         }
         const auto bytes = encodeConfigOpenReply(reply);
-        if (!writeReply(output.get(), message[8], bytes))
+        if (!writeReply(output, message[8], bytes))
             return LutError::HelperProtocolViolation;
-        payload = bytes.size();
+        replyBytes = bytes.size();
         return LutError::None;
     }
 
-    // Receives a sealed recipe and the reply file of a build or extraction command. The reply
-    // descriptor is the caller's to close.
-    [[nodiscard]] std::optional<std::vector<std::byte>> recipeBytes(const LutPacket& message,
-                                                                    const int socket, int& output) {
-        output = -1;
-        if (!resolved || !message[4] || message[4] > kConfigMaximumParameterBytes || !message[8])
+    // Reads and checks the recipe file of a build or extraction command; `files[1]` is its reply
+    // file.
+    [[nodiscard]] std::optional<std::vector<std::byte>>
+    readRecipe(const LutPacket& message, const std::array<LutHelperFile, 2>& files) {
+        if (!resolved || !message[4] || message[4] > kConfigMaximumParameterBytes || !message[8] ||
+            !validHelperFile(files[0], message[7], message[4], true) ||
+            !validHelperFile(files[1], message[9], message[8], false))
             return std::nullopt;
-        const auto descriptors = receiveDescriptors(socket, 2);
-        const LutFd input(descriptors[0]);
-        output = descriptors[1];
-        if (input.get() < 0 || output < 0 ||
-            !validSharedFile(input.get(), message[7], message[4], true) ||
-            !validSharedFile(output, message[9], message[8], false))
+        std::vector<std::byte> bytes(static_cast<std::size_t>(message[4]));
+        if (!readHelperFile(files[0], bytes))
             return std::nullopt;
-        return readAll(input.get(), message[4]);
+        return bytes;
     }
 
     [[nodiscard]] LutError build(const LutPacket& message, const int socket,
                                  std::uint64_t& payload) {
         if (message[8] > kConfigMaximumReplyBytes)
             return LutError::HelperProtocolViolation;
-        int outputDescriptor = -1;
-        const auto bytes = recipeBytes(message, socket, outputDescriptor);
-        const LutFd output(outputDescriptor);
+        const auto files = receiveFiles(socket, 2, {message[7], message[9]});
+        const auto bytes = readRecipe(message, files);
         const auto recipe = bytes ? decodeConfigProcessorRecipe(*bytes) : std::nullopt;
         if (!recipe)
             return LutError::HelperProtocolViolation;
@@ -536,7 +497,7 @@ struct ConfigWorker::State final {
             reply.error = ConfigProcessorError::BuildFailed;
         }
         const auto encoded = encodeConfigProcessorReply(reply);
-        if (!writeReply(output.get(), message[8], encoded))
+        if (!writeReply(files[1], message[8], encoded))
             return LutError::HelperProtocolViolation;
         payload = encoded.size();
         return LutError::None;
@@ -550,22 +511,16 @@ struct ConfigWorker::State final {
             message[10] == 0 || message[10] > processors.size() ||
             message[11] > static_cast<std::uint64_t>(ConfigApplyMode::Packed))
             return LutError::HelperProtocolViolation;
-        const auto descriptors = receiveDescriptors(socket, 2);
-        const LutFd input(descriptors[0]);
-        const LutFd output(descriptors[1]);
-        if (input.get() < 0 || output.get() < 0 ||
-            !validSharedFile(input.get(), message[7], message[4], true) ||
-            !validSharedFile(output.get(), message[9], message[4], false))
+        const auto files = receiveFiles(socket, 2, {message[7], message[9]});
+        if (!validHelperFile(files[0], message[7], message[4], true) ||
+            !validHelperFile(files[1], message[9], message[4], false))
             return LutError::HelperProtocolViolation;
-        const Mapping in(input.get(), message[4], PROT_READ);
-        const Mapping out(output.get(), message[4], PROT_READ | PROT_WRITE);
-        if (!in.valid() || !out.valid())
-            return LutError::HelperMemoryLimit;
+        // The slab is read into this process, transformed there and written back once.
+        std::vector<float> pixels(static_cast<std::size_t>(message[4]) / sizeof(float));
+        if (!readHelperFile(files[0], std::as_writable_bytes(std::span(pixels))))
+            return LutError::HelperProtocolViolation;
         const auto& cpu = processors[static_cast<std::size_t>(message[10] - 1)];
         try {
-            const auto source = in.floats();
-            const auto pixels = out.floats();
-            std::ranges::copy(source, pixels.begin());
             const std::size_t count = pixels.size() / 4;
             const auto finite = [&] {
                 for (std::size_t index = 0; index < count; ++index)
@@ -598,6 +553,8 @@ struct ConfigWorker::State final {
         } catch (const std::exception&) {
             return LutError::TransformBuildFailed;
         }
+        if (!writeHelperFile(files[1], std::as_bytes(std::span(pixels))))
+            return LutError::HelperProtocolViolation;
         return LutError::None;
     }
 
@@ -607,9 +564,8 @@ struct ConfigWorker::State final {
                                    std::uint64_t& payload) {
         if (message[8] > kMaximumGpuProgramBytes || message[8] <= sizeof(std::uint32_t))
             return LutError::HelperProtocolViolation;
-        int outputDescriptor = -1;
-        const auto bytes = recipeBytes(message, socket, outputDescriptor);
-        const LutFd output(outputDescriptor);
+        const auto files = receiveFiles(socket, 2, {message[7], message[9]});
+        const auto bytes = readRecipe(message, files);
         const auto recipe = bytes ? decodeConfigGpuProgramRecipe(*bytes) : std::nullopt;
         if (!recipe)
             return LutError::HelperProtocolViolation;
@@ -646,7 +602,7 @@ struct ConfigWorker::State final {
         writer.u32(static_cast<std::uint32_t>(error));
         auto reply = std::move(writer).take();
         reply.insert(reply.end(), program.begin(), program.end());
-        if (!writeReply(output.get(), message[8], reply))
+        if (!writeReply(files[1], message[8], reply))
             return LutError::HelperProtocolViolation;
         payload = reply.size();
         return LutError::None;

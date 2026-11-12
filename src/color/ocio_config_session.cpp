@@ -3,6 +3,7 @@
 #include "lut_resource_budget.hpp"
 #include "lut_worker_ipc.hpp"
 #include "lut_worker_protocol.hpp"
+#include "ocio_gpu_program_worker.hpp"
 
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/core/telemetry_counters.hpp>
@@ -42,7 +43,6 @@ using Clock = std::chrono::steady_clock;
     }
 }
 
-#ifdef __linux__
 [[nodiscard]] LutError processError(const platform::ProcessFailure failure) noexcept {
     switch (failure.code) {
     case platform::ProcessError::Unavailable:
@@ -61,54 +61,6 @@ using Clock = std::chrono::steady_clock;
     }
     return LutError::HelperProtocolViolation;
 }
-
-[[nodiscard]] std::string workerPath() {
-    std::error_code error;
-    const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
-    if (!error) {
-        const auto installed = executable.parent_path() / "../libexec/bloom/bloom-color-worker";
-        if (std::filesystem::is_regular_file(installed, error))
-            return installed.lexically_normal().string();
-    }
-#ifdef BLOOM_COLOR_WORKER
-    return BLOOM_COLOR_WORKER;
-#else
-    return {};
-#endif
-}
-
-// A sealed shared file holding exactly `bytes`.
-[[nodiscard]] int sealedFile(const std::span<const std::byte> bytes) {
-    const int fd = sharedFile();
-    if (fd < 0)
-        return -1;
-    if (!writeFd(fd, bytes) || !sealInput(fd)) {
-        ::close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-// A shared file of a fixed extent for the helper to write a reply into.
-[[nodiscard]] int replyFile(const std::uint64_t extent) {
-    const int fd = sharedFile();
-    if (fd < 0)
-        return -1;
-    if (::ftruncate(fd, static_cast<off_t>(extent)) != 0 || !sealExtent(fd)) {
-        ::close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-[[nodiscard]] std::optional<std::vector<std::byte>> readReply(const int fd,
-                                                              const std::uint64_t bytes) {
-    std::vector<std::byte> value(static_cast<std::size_t>(bytes));
-    if (::lseek(fd, 0, SEEK_SET) != 0 || !readFd(fd, value))
-        return std::nullopt;
-    return value;
-}
-#endif
 
 // One token of a session. It keeps the session, and so the helper, alive.
 class SessionProcessor final : public RemoteRgbProcessor {
@@ -133,20 +85,17 @@ struct ConfigSession::Impl final {
     // Listed for the Profiler while the colour worker lives (#423).
     core::telemetry::HelperProcessRegistration listed;
     std::shared_ptr<const LutReservation> reservation;
-    int descriptorSocket = -1;
+    // How the shared files reach the helper: descriptors over a socket (Linux, macOS) or handles
+    // the supervisor duplicates into it (Windows). The same channel the LUT requests use.
+    LutFileChannel channel;
     std::uint64_t nonce = 1;
     std::atomic<LutError> failure{LutError::None};
 
     ~Impl() {
-#ifdef __linux__
-        if (descriptorSocket >= 0)
-            ::close(descriptorSocket);
-#endif
         if (worker)
             worker->stop();
     }
 
-#ifdef __linux__
     // One command and its reply. The reply must echo the command, its nonce and every request
     // field; the helper's status and payload come back in fields 5 and 6. Any failure ends the
     // session.
@@ -181,40 +130,41 @@ struct ConfigSession::Impl final {
         worker->stop();
     }
 
-    // Sends a sealed request record and a reply file with one command and returns the reply
-    // bytes. Caller holds the mutex.
+    // Sends a request record and a reply file of `replyExtent` bytes with one command and returns
+    // the reply bytes. Caller holds the mutex.
     [[nodiscard]] std::optional<std::vector<std::byte>>
     request(const std::uint64_t command, const std::span<const std::byte> record,
             const std::uint64_t replyExtent, const std::chrono::seconds deadline,
             const std::function<bool()>& cancellation) {
         if (failure != LutError::None)
             return std::nullopt;
-        const LutFd input(sealedFile(record));
-        const LutFd output(replyFile(replyExtent));
-        if (input.get() < 0 || output.get() < 0)
+        const LutSharedFile input(record);
+        const LutSharedFile output(replyExtent);
+        if (!input.valid() || !output.valid())
             return std::nullopt;
-        const std::array descriptors{input.get(), output.get()};
-        if (!sendDescriptors(descriptorSocket, descriptors)) {
+        const auto shared = channel.send(input, &output);
+        if (!shared) {
             fail(LutError::HelperProtocolViolation);
             return std::nullopt;
         }
         auto message = packet(command, nonce++);
         message[4] = record.size();
-        message[7] = inode(input.get());
+        message[7] = (*shared)[0];
         message[8] = replyExtent;
-        message[9] = inode(output.get());
+        message[9] = (*shared)[1];
         if (exchange(message, deadline, cancellation) != LutError::None)
             return std::nullopt;
         if (message[6] == 0 || message[6] > replyExtent) {
             fail(LutError::HelperProtocolViolation);
             return std::nullopt;
         }
-        auto reply = readReply(output.get(), message[6]);
-        if (!reply)
+        std::vector<std::byte> reply(static_cast<std::size_t>(message[6]));
+        if (!output.read(reply)) {
             fail(LutError::HelperProtocolViolation);
+            return std::nullopt;
+        }
         return reply;
     }
-#endif
 };
 
 ConfigSession::ConfigSession(std::unique_ptr<Impl> impl, ConfigParameters parameters)
@@ -229,20 +179,10 @@ OcioHelperError ConfigSession::failure() const noexcept {
     return helperError(impl_->failure.load());
 }
 
-ConfigSession::Opened ConfigSession::open(const ConfigParameters& parameters, const int resource,
-                                          const std::uint64_t resourceBytes,
+ConfigSession::Opened ConfigSession::open(const ConfigParameters& parameters,
+                                          const std::span<const std::byte> resource,
                                           const std::function<bool()>& cancellation) {
     Opened result;
-#ifndef __linux__
-    // No confinement is qualified for the config group on this target: external configs are
-    // unavailable here and are never parsed in-process.
-    (void)parameters;
-    (void)resource;
-    (void)resourceBytes;
-    (void)cancellation;
-    result.helperError = OcioHelperError::HelperUnavailable;
-    return result;
-#else
     const auto failed = [&](const LutError error) {
         result.session.reset();
         result.reply.reset();
@@ -252,21 +192,16 @@ ConfigSession::Opened ConfigSession::open(const ConfigParameters& parameters, co
     if (cancellation && cancellation())
         return failed(LutError::HelperCancelled);
     auto impl = std::make_unique<Impl>();
-    // The sealed resource stays resident while the helper lives, beside the session's own
-    // records and slabs.
-    impl->reservation =
-        LutReservation::acquire(static_cast<std::size_t>(resourceBytes) + 2 * kLutSlabBytes);
+    if (!impl->channel.valid())
+        return failed(LutError::HelperUnavailable);
+    // The resource stays resident while the helper lives, beside the session's own records and
+    // slabs.
+    impl->reservation = LutReservation::acquire(resource.size() + 2 * kLutSlabBytes);
     if (!impl->reservation)
         return failed(LutError::HelperMemoryLimit);
-    const auto generation = nextLutGeneration();
-    const LutFd listener(::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
-    const auto address = lutSocketAddress(static_cast<std::uint64_t>(::getpid()), generation);
-    if (listener.get() < 0 ||
-        ::bind(listener.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
-        ::listen(listener.get(), 1) != 0)
-        return failed(LutError::HelperUnavailable);
     platform::ProcessOptions options;
-    options.executable = workerPath();
+    options.executable = lutWorkerPath();
+    options.confined = kLutLaunchConfined;
     options.addressSpaceBytes = std::uint64_t{512} * 1024U * 1024U;
     options.messageGrace = std::chrono::milliseconds(50);
     options.termGrace = std::chrono::milliseconds(100);
@@ -277,56 +212,52 @@ ConfigSession::Opened ConfigSession::open(const ConfigParameters& parameters, co
     impl->listed = core::telemetry::HelperProcessRegistration(impl->worker->processId(),
                                                               "Colour worker", impl.get());
     auto hello = packet(kLutCommandHello, impl->nonce++);
-    hello[5] = static_cast<std::uint64_t>(::getpid());
-    hello[6] = generation;
+    impl->channel.announce(hello);
     if (const auto error = impl->exchange(hello, std::chrono::seconds(5), cancellation);
         error != LutError::None)
         return failed(error);
-    impl->descriptorSocket =
-        ::accept4(listener.get(), nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
-    ucred peer{};
-    socklen_t peerSize = sizeof(peer);
-    if (impl->descriptorSocket < 0 ||
-        ::getsockopt(impl->descriptorSocket, SOL_SOCKET, SO_PEERCRED, &peer, &peerSize) != 0 ||
-        peer.pid != impl->worker->processId())
+    if (!impl->channel.attach(*impl->worker))
         return failed(LutError::HelperProtocolViolation);
 
     // Begin: the parameters, after which the helper is confined.
     const auto record = encodeConfigParameters(parameters);
     {
-        const LutFd file(sealedFile(record));
-        if (file.get() < 0)
+        const LutSharedFile file(record);
+        if (!file.valid())
             return failed(LutError::HelperMemoryLimit);
-        const std::array descriptors{file.get()};
-        if (!sendDescriptors(impl->descriptorSocket, descriptors))
+        const auto shared = impl->channel.send(file);
+        if (!shared)
             return failed(LutError::HelperProtocolViolation);
         auto message = packet(kConfigCommandBegin, impl->nonce++);
         message[4] = record.size();
-        message[7] = inode(file.get());
+        message[7] = (*shared)[0];
         if (const auto error = impl->exchange(message, std::chrono::seconds(5), cancellation);
             error != LutError::None)
             return failed(error);
     }
-    // Open: the sealed archive or resource table in, the description out.
+    // Open: the archive or resource table in, the description out.
     std::optional<std::vector<std::byte>> replyBytes;
     {
-        const LutFd output(replyFile(kConfigMaximumReplyBytes));
-        if (output.get() < 0 || !validSharedFile(resource, inode(resource), resourceBytes, true))
+        const LutSharedFile input(resource);
+        const LutSharedFile output(kConfigMaximumReplyBytes);
+        if (!input.valid() || !output.valid())
             return failed(LutError::HelperMemoryLimit);
-        const std::array descriptors{resource, output.get()};
-        if (!sendDescriptors(impl->descriptorSocket, descriptors))
+        const auto shared = impl->channel.send(input, &output);
+        if (!shared)
             return failed(LutError::HelperProtocolViolation);
         auto message = packet(kConfigCommandOpen, impl->nonce++);
-        message[4] = resourceBytes;
-        message[7] = inode(resource);
+        message[4] = resource.size();
+        message[7] = (*shared)[0];
         message[8] = kConfigMaximumReplyBytes;
-        message[9] = inode(output.get());
+        message[9] = (*shared)[1];
         if (const auto error = impl->exchange(message, std::chrono::seconds(30), cancellation);
             error != LutError::None)
             return failed(error);
         if (message[6] == 0 || message[6] > kConfigMaximumReplyBytes)
             return failed(LutError::HelperProtocolViolation);
-        replyBytes = readReply(output.get(), message[6]);
+        std::vector<std::byte> bytes(static_cast<std::size_t>(message[6]));
+        if (output.read(bytes))
+            replyBytes = std::move(bytes);
     }
     auto reply = replyBytes ? decodeConfigOpenReply(*replyBytes) : std::nullopt;
     if (!reply)
@@ -335,7 +266,6 @@ ConfigSession::Opened ConfigSession::open(const ConfigParameters& parameters, co
     result.session->description_ = reply->description;
     result.reply = std::move(reply);
     return result;
-#endif
 }
 
 RemoteProcessorBuild ConfigSession::buildProcessor(const std::uint32_t kind,
@@ -343,7 +273,6 @@ RemoteProcessorBuild ConfigSession::buildProcessor(const std::uint32_t kind,
                                                    const std::string_view b) const noexcept {
     RemoteProcessorBuild build;
     build.error = kRemoteHelperFailed;
-#ifdef __linux__
     try {
         const auto record = encodeConfigProcessorRecipe(
             {static_cast<ConfigProcessorKind>(kind), std::string(a), std::string(b)});
@@ -377,11 +306,6 @@ RemoteProcessorBuild ConfigSession::buildProcessor(const std::uint32_t kind,
         build.processor.reset();
         build.error = kRemoteHelperFailed;
     }
-#else
-    (void)kind;
-    (void)a;
-    (void)b;
-#endif
     return build;
 }
 
@@ -390,7 +314,6 @@ std::vector<std::byte> ConfigSession::extractGpuProgram(
     const render::OcioGpuProgramStage stage, const std::string_view semanticsId,
     const render::OcioGpuProgramLimits& limits, render::OcioGpuProgramError& error) const noexcept {
     error = render::OcioGpuProgramError::GpuProcessorUnavailable;
-#ifdef __linux__
     try {
         const auto reservation = LutReservation::acquire(kMaximumGpuProgramBytes);
         if (!reservation) {
@@ -432,46 +355,32 @@ std::vector<std::byte> ConfigSession::extractGpuProgram(
     } catch (const std::exception&) {
         error = render::OcioGpuProgramError::ShaderExtractionFailed;
     }
-#else
-    (void)kind;
-    (void)a;
-    (void)b;
-    (void)stage;
-    (void)semanticsId;
-    (void)limits;
-#endif
     return {};
 }
 
 bool ConfigSession::apply(const std::uint64_t token, std::span<float> rgba,
                           const bool packed) const noexcept {
-#ifndef __linux__
-    (void)token;
-    (void)rgba;
-    (void)packed;
-    return false;
-#else
     try {
         if (rgba.size() % 4 != 0)
             return false;
         while (!rgba.empty()) {
             const auto slab = rgba.first(std::min(rgba.size(), kLutSlabBytes / sizeof(float)));
-            const LutFd input(sealedFile(std::as_bytes(slab)));
-            const LutFd output(replyFile(slab.size_bytes()));
-            if (input.get() < 0 || output.get() < 0)
+            const LutSharedFile input(std::as_bytes(slab));
+            const LutSharedFile output(static_cast<std::uint64_t>(slab.size_bytes()));
+            if (!input.valid() || !output.valid())
                 return false;
             const std::lock_guard lock(impl_->mutex);
             if (impl_->failure != LutError::None)
                 return false;
-            const std::array descriptors{input.get(), output.get()};
-            if (!sendDescriptors(impl_->descriptorSocket, descriptors)) {
+            const auto shared = impl_->channel.send(input, &output);
+            if (!shared) {
                 impl_->fail(LutError::HelperProtocolViolation);
                 return false;
             }
             auto message = packet(kConfigCommandApplySlab, impl_->nonce++);
             message[4] = slab.size_bytes();
-            message[7] = inode(input.get());
-            message[9] = inode(output.get());
+            message[7] = (*shared)[0];
+            message[9] = (*shared)[1];
             message[10] = token;
             message[11] = static_cast<std::uint64_t>(packed ? ConfigApplyMode::Packed
                                                             : ConfigApplyMode::PerPixel);
@@ -486,8 +395,7 @@ bool ConfigSession::apply(const std::uint64_t token, std::span<float> rgba,
                 return false;
             // Nothing is published until the whole slab was validated here.
             std::vector<float> result(slab.size());
-            if (!sealInput(output.get()) || ::lseek(output.get(), 0, SEEK_SET) != 0 ||
-                !readFd(output.get(), std::as_writable_bytes(std::span(result)))) {
+            if (!output.freeze() || !output.read(std::as_writable_bytes(std::span(result)))) {
                 impl_->fail(LutError::HelperProtocolViolation);
                 return false;
             }
@@ -505,7 +413,6 @@ bool ConfigSession::apply(const std::uint64_t token, std::span<float> rgba,
     } catch (const std::exception&) {
         return false;
     }
-#endif
 }
 
 } // namespace bloom::color::detail

@@ -57,9 +57,9 @@ void expect(const bool condition, const std::string& message) {
     }
 }
 
-#ifdef __linux__
-// Everything below drives the confined helper, which only Linux has; main() says what the
-// other targets check.
+// Everything below drives the confined helper, which every target has (Landlock and seccomp on
+// Linux, the system sandbox on macOS, a restricted token on Windows); only the part of the session
+// test that signals the helper process is Linux's own.
 void write(const std::filesystem::path& path, const std::string& contents) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream file(path, std::ios::binary);
@@ -603,8 +603,10 @@ void testRefusals(const std::filesystem::path& root) {
     std::error_code linked;
     std::filesystem::create_symlink(root / "real" / "config.ocio", root / "linked" / "config.ocio",
                                     linked);
-    expect(!linked && outcome(loose(root / "linked")) == OcioBuiltInRegistryOutcome::Missing,
-           "refusal: a config that is a symbolic link is Missing");
+    // Windows creates a link only with the right privilege; without it there is nothing to refuse.
+    if (!linked)
+        expect(outcome(loose(root / "linked")) == OcioBuiltInRegistryOutcome::Missing,
+               "refusal: a config that is a symbolic link is Missing");
 
     const auto crowded = root / "crowded";
     write(crowded / "config.ocio", lutConfig("grade.spi1d"));
@@ -729,29 +731,13 @@ void testConcurrentAndCancelled(const std::filesystem::path& root) {
 void testSession(const std::filesystem::path& root) {
     detail::ConfigParameters parameters;
     parameters.kind = OcioConfigLocatorKind::ExternalLooseConfig;
-    const auto sealed = [](const std::span<const std::byte> bytes) {
-        const int fd = detail::sharedFile();
-        if (fd >= 0 && (!detail::writeFd(fd, bytes) || !detail::sealInput(fd))) {
-            ::close(fd);
-            return -1;
-        }
-        return fd;
-    };
 
     // Bytes that are not a resource table end the helper as a protocol violation.
     const std::string noise = "definitely not a resource table";
-    const detail::LutFd bad(sealed(std::as_bytes(std::span(noise))));
-    const auto refused = detail::ConfigSession::open(parameters, bad.get(), noise.size());
+    const auto refused =
+        detail::ConfigSession::open(parameters, std::as_bytes(std::span(noise)));
     expect(!refused.session && refused.helperError == OcioHelperError::HelperProtocolViolation,
            "session: a malformed resource table is a protocol violation");
-
-    // An unsealed resource is never sent.
-    const detail::LutFd open(detail::sharedFile());
-    expect(open.get() >= 0 && detail::writeFd(open.get(), std::as_bytes(std::span(noise))),
-           "session: the unsealed fixture is written");
-    const auto unsealed = detail::ConfigSession::open(parameters, open.get(), noise.size());
-    expect(!unsealed.session && unsealed.helperError != OcioHelperError::None,
-           "session: an unsealed resource is refused before the helper reads it");
 
     // A real table: one config and its LUT.
     const auto config = lutConfig("grade.spi1d");
@@ -762,8 +748,7 @@ void testSession(const std::filesystem::path& root) {
     detail::appendConfigResource(table, "config.ocio", std::as_bytes(std::span(config)));
     detail::appendConfigResource(table, "luts/grade.spi1d", std::as_bytes(std::span(lut)));
     const auto bytes = std::move(table).take();
-    const detail::LutFd good(sealed(bytes));
-    auto opened = detail::ConfigSession::open(parameters, good.get(), bytes.size());
+    auto opened = detail::ConfigSession::open(parameters, bytes);
     expect(opened.session && opened.reply &&
                opened.reply->outcome == detail::ConfigOpenOutcome::Ready &&
                opened.reply->consumedKeys ==
@@ -795,6 +780,7 @@ void testSession(const std::filesystem::path& root) {
                !unknown.processor && session->failure() == OcioHelperError::None,
            "session: an unknown color space is answered without ending the helper");
 
+#ifdef __linux__
     // The helper is killed from outside: every token is dead and says why.
     const auto pid = session->processId();
     expect(pid > 0 && ::kill(static_cast<pid_t>(pid), SIGKILL) == 0,
@@ -810,8 +796,7 @@ void testSession(const std::filesystem::path& root) {
 
     // A helper that stops answering is ended at the slab deadline, and the session says so.
     {
-        const detail::LutFd again(sealed(bytes));
-        const auto stalled = detail::ConfigSession::open(parameters, again.get(), bytes.size());
+        const auto stalled = detail::ConfigSession::open(parameters, bytes);
         const auto token =
             stalled.session
                 ? stalled.session->buildProcessor(
@@ -843,22 +828,12 @@ void testSession(const std::filesystem::path& root) {
     releaseExternalOcioConfigs();
     expect(revision.has_value() && same(helperGraded(location), referenceGraded(folder)),
            "session: after its helpers were released the resolver starts a new one");
-}
 #endif
+}
 
 } // namespace
 
 int main() {
-#ifndef __linux__
-    // No confinement is qualified here: an external config is refused, never parsed in-process.
-    const auto refused = resolveOcioConfig(
-        OcioConfigLocation{OcioConfigLocatorKind::ExternalLooseConfig, "/nowhere/config.ocio", {}},
-        core::Sha256Digest{});
-    expect(refused.outcome() == OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper &&
-               refused.helperError() == OcioHelperError::HelperUnavailable,
-           "an external config is HelperUnavailable on a target without a confined helper");
-    return failures == 0 ? 0 : 1;
-#else
     const auto root = std::filesystem::temp_directory_path() /
                       ("bloom-ocio-config-" +
                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -876,5 +851,4 @@ int main() {
     if (failures == 0)
         std::cout << "ocio config resolution tests passed\n";
     return failures == 0 ? 0 : 1;
-#endif
 }

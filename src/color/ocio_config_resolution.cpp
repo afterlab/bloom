@@ -9,21 +9,38 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_content_revision.hpp>
 #include <bloom/color/ocio_loose_content_revision.hpp>
+#include <bloom/core/file_uri.hpp>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <new>
 #include <utility>
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+#ifdef __linux__
 #include <linux/openat2.h>
 #include <sys/syscall.h>
+#endif
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 namespace bloom::color {
@@ -80,41 +97,18 @@ constexpr std::string_view kLooseName = "config.ocio";
     return value;
 }
 
-#ifdef __linux__
-// Used only by the file resolution below, which needs the confined helper.
-
-// The local absolute path a file location names; empty when it names none on this machine (a
-// relative path, a file URI with an authority, a malformed escape).
-[[nodiscard]] std::string localPath(const std::string_view value) {
-    constexpr std::string_view scheme = "file:";
-    if (value.substr(0, scheme.size()) == scheme) {
-        auto rest = value.substr(scheme.size());
-        if (rest.substr(0, 2) == "//") {
-            // file://<authority>/path: only this machine is local.
-            const auto slash = rest.find('/', 2);
-            const auto authority =
-                rest.substr(2, slash == std::string_view::npos ? rest.size() - 2 : slash - 2);
-            if (slash == std::string_view::npos || !(authority.empty() || authority == "localhost"))
-                return {};
-            rest = rest.substr(slash);
-        }
-        if (rest.empty() || rest.front() != '/')
-            return {};
-        const auto decoded = percentDecode(rest);
-        return decoded ? *decoded : std::string{};
-    }
-    if (!value.empty() && value.front() == '/' && value.find('\0') == std::string_view::npos)
-        return std::string(value);
-    return {};
-}
-#endif
-
 [[nodiscard]] OcioBuiltInResolutionResult helperFailed(const OcioHelperError error) noexcept {
     return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper,
                                              {}, OcioBuiltInInvalidReason::None, error);
 }
 
-#ifdef __linux__
+// Everything from here to the end of the anonymous namespace reads the files of an external config
+// on the host and hands the bytes to the confined helper. Linux and macOS share one POSIX
+// implementation (descriptor-relative, never following a symbolic link); Windows has its own
+// (handles opened without following a link). The two differ only in how a file is found and
+// read: the table, the revision and the helper request that follow are the same code.
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+#define BLOOM_OCIO_HOST_RESOLVES_FILES 1
 
 [[nodiscard]] OcioBuiltInResolutionResult
 invalid(const OcioBuiltInInvalidReason reason,
@@ -133,6 +127,39 @@ struct FileStamp final {
     friend bool operator==(const FileStamp&, const FileStamp&) = default;
 };
 
+enum class Scan : std::uint8_t { Ok, Missing, TooLarge };
+
+// The local absolute path a file location names; empty when it names none on this machine (a
+// relative path, a file URI with an authority, a malformed escape).
+[[nodiscard]] std::filesystem::path localPath(const std::string_view value);
+
+// The current stamps of a location's files: the archive, or every candidate of a loose root.
+[[nodiscard]] Scan currentStamps(const OcioConfigLocation& location,
+                                 const std::filesystem::path& path,
+                                 std::vector<FileStamp>& stamps);
+
+// Appends exactly the bytes of the archive at `path` to `bytes`, and refreshes `stamp` from the
+// opened file.
+enum class ReadResult : std::uint8_t { Ok, Missing };
+[[nodiscard]] ReadResult readArchive(const std::filesystem::path& path,
+                                     std::vector<std::byte>& bytes, FileStamp& stamp,
+                                     std::uint64_t& size);
+
+// Opens the loose root that holds `config.ocio` and appends each stamped candidate to `bytes`
+// through `append(key, expectedSize, stamp)`, which a platform backend provides as a reader.
+class LooseRoot {
+  public:
+    virtual ~LooseRoot() = default;
+    [[nodiscard]] virtual bool valid() const = 0;
+    // Appends the file's exact bytes; false when it vanished, changed kind or size.
+    [[nodiscard]] virtual bool read(const std::string& key, std::uint64_t size,
+                                    std::vector<std::byte>& bytes, FileStamp& stamp) = 0;
+};
+[[nodiscard]] std::unique_ptr<LooseRoot> openLooseRoot(const std::filesystem::path& configPath);
+
+#if defined(__linux__) || defined(__APPLE__)
+
+#ifdef __linux__
 [[nodiscard]] FileStamp stamp(std::string key, const struct stat& info) {
     return {std::move(key),
             static_cast<std::uint64_t>(info.st_size),
@@ -141,8 +168,39 @@ struct FileStamp final {
             static_cast<std::uint64_t>(info.st_ino),
             static_cast<std::uint64_t>(info.st_dev)};
 }
+#else
+[[nodiscard]] FileStamp stamp(std::string key, const struct stat& info) {
+    return {std::move(key),
+            static_cast<std::uint64_t>(info.st_size),
+            static_cast<std::int64_t>(info.st_mtimespec.tv_sec),
+            static_cast<std::int64_t>(info.st_mtimespec.tv_nsec),
+            static_cast<std::uint64_t>(info.st_ino),
+            static_cast<std::uint64_t>(info.st_dev)};
+}
+#endif
 
-enum class Scan : std::uint8_t { Ok, Missing, TooLarge };
+std::filesystem::path localPath(const std::string_view value) {
+    constexpr std::string_view scheme = "file:";
+    if (value.substr(0, scheme.size()) == scheme) {
+        auto rest = value.substr(scheme.size());
+        if (rest.substr(0, 2) == "//") {
+            // file://<authority>/path: only this machine is local.
+            const auto slash = rest.find('/', 2);
+            const auto authority =
+                rest.substr(2, slash == std::string_view::npos ? rest.size() - 2 : slash - 2);
+            if (slash == std::string_view::npos || !(authority.empty() || authority == "localhost"))
+                return {};
+            rest = rest.substr(slash);
+        }
+        if (rest.empty() || rest.front() != '/')
+            return {};
+        const auto decoded = percentDecode(rest);
+        return decoded ? std::filesystem::path(*decoded) : std::filesystem::path{};
+    }
+    if (!value.empty() && value.front() == '/' && value.find('\0') == std::string_view::npos)
+        return std::filesystem::path(std::string(value));
+    return {};
+}
 
 // Every candidate regular file under a loose root, by canonical root-relative key. Nothing is
 // opened or interpreted: names and sizes only, symbolic links never followed. A file larger than
@@ -194,48 +252,313 @@ enum class Scan : std::uint8_t { Ok, Missing, TooLarge };
 
 // Opens `key` beneath `root` without following any symbolic link.
 [[nodiscard]] int openBeneath(const int root, const std::string& key) {
+#ifdef __linux__
     open_how how{};
     how.flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW;
     how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS;
     return static_cast<int>(::syscall(SYS_openat2, root, key.c_str(), &how, sizeof(how)));
+#else
+    // No openat2 here: walk the canonical key (no empty, "." or ".." segment) one component at a
+    // time, each opened relative to the last without following a link.
+    int current = ::dup(root);
+    std::size_t start = 0;
+    while (current >= 0) {
+        const auto end = key.find('/', start);
+        const bool last = end == std::string::npos;
+        const auto part = key.substr(start, last ? std::string::npos : end - start);
+        const int next = ::openat(current, part.c_str(),
+                                  O_RDONLY | O_CLOEXEC | O_NOFOLLOW | (last ? 0 : O_DIRECTORY));
+        ::close(current);
+        if (next < 0 || last)
+            return next;
+        current = next;
+        start = end + 1;
+    }
+    return -1;
+#endif
 }
 
-// Appends exactly `size` bytes of `source` to `target`.
-[[nodiscard]] bool copyBytes(const int source, const int target, std::uint64_t size) {
-    std::vector<std::byte> buffer(std::size_t{1} << 20);
-    while (size > 0) {
-        const auto want = static_cast<std::size_t>(std::min<std::uint64_t>(size, buffer.size()));
-        const auto count = ::read(source, buffer.data(), want);
-        if (count <= 0 ||
-            !detail::writeFd(target, std::span(buffer).first(static_cast<std::size_t>(count))))
+// Appends exactly `size` bytes of `source` to `bytes`.
+[[nodiscard]] bool copyBytes(const int source, std::vector<std::byte>& bytes, std::uint64_t size) {
+    const auto at = bytes.size();
+    bytes.resize(at + static_cast<std::size_t>(size));
+    auto target = std::span(bytes).subspan(at);
+    while (!target.empty()) {
+        const auto count = ::read(source, target.data(), target.size());
+        if (count <= 0)
             return false;
-        size -= static_cast<std::uint64_t>(count);
+        target = target.subspan(static_cast<std::size_t>(count));
     }
     // The file must end where its size said it does.
     std::byte extra{};
     return ::read(source, &extra, 1) == 0;
 }
 
-class ReadOnlyMapping final {
-  public:
-    ReadOnlyMapping(const int fd, const std::size_t size)
-        : data_(size == 0 ? MAP_FAILED : ::mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0)),
-          size_(size) {}
-    ~ReadOnlyMapping() {
-        if (data_ != MAP_FAILED)
-            ::munmap(data_, size_);
+Scan currentStamps(const OcioConfigLocation& location, const std::filesystem::path& file,
+                   std::vector<FileStamp>& stamps) {
+    stamps.clear();
+    const auto& path = file.native();
+    if (path.empty())
+        return Scan::Missing;
+    struct stat info{};
+    if (::lstat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode))
+        return Scan::Missing;
+    if (location.kind != OcioConfigLocatorKind::ExternalLooseConfig) {
+        stamps.push_back(stamp({}, info));
+        return Scan::Ok;
     }
-    ReadOnlyMapping(const ReadOnlyMapping&) = delete;
-    ReadOnlyMapping& operator=(const ReadOnlyMapping&) = delete;
-    [[nodiscard]] bool valid() const noexcept { return data_ != MAP_FAILED; }
-    [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
-        return {static_cast<const std::byte*>(data_), size_};
+    const auto slash = path.rfind('/');
+    const auto root = slash == 0 ? std::string("/") : path.substr(0, slash);
+    const detail::LutFd directory(::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (directory.get() < 0)
+        return Scan::Missing;
+    if (const auto scanned = scanLooseRoot(directory.get(), {}, 0, stamps); scanned != Scan::Ok)
+        return scanned;
+    std::ranges::sort(stamps, {}, &FileStamp::key);
+    return Scan::Ok;
+}
+
+ReadResult readArchive(const std::filesystem::path& path, std::vector<std::byte>& bytes,
+                       FileStamp& result, std::uint64_t& size) {
+    const detail::LutFd file(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+    struct stat info{};
+    if (file.get() < 0 || ::fstat(file.get(), &info) != 0 || !S_ISREG(info.st_mode))
+        return ReadResult::Missing;
+    size = static_cast<std::uint64_t>(info.st_size);
+    result = stamp({}, info);
+    if (size == 0 || size > detail::kConfigMaximumArchiveBytes)
+        return ReadResult::Ok;
+    return copyBytes(file.get(), bytes, size) ? ReadResult::Ok : ReadResult::Missing;
+}
+
+class PosixLooseRoot final : public LooseRoot {
+  public:
+    explicit PosixLooseRoot(const std::filesystem::path& configPath)
+        : directory_(::open(rootOf(configPath).c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC)) {}
+    [[nodiscard]] bool valid() const override { return directory_.get() >= 0; }
+    [[nodiscard]] bool read(const std::string& key, const std::uint64_t size,
+                            std::vector<std::byte>& bytes, FileStamp& result) override {
+        const detail::LutFd source(openBeneath(directory_.get(), key));
+        struct stat info{};
+        // A file that vanished or changed kind since the scan: the root is changing under the
+        // read, so nothing is published from it.
+        if (source.get() < 0 || ::fstat(source.get(), &info) != 0 || !S_ISREG(info.st_mode) ||
+            static_cast<std::uint64_t>(info.st_size) != size)
+            return false;
+        result = stamp(key, info);
+        return copyBytes(source.get(), bytes, size);
     }
 
   private:
-    void* data_;
-    std::size_t size_;
+    [[nodiscard]] static std::string rootOf(const std::filesystem::path& configPath) {
+        const auto& path = configPath.native();
+        return path.size() == kLooseName.size() + 1
+                   ? std::string("/")
+                   : path.substr(0, path.size() - kLooseName.size() - 1);
+    }
+    detail::LutFd directory_;
 };
+
+std::unique_ptr<LooseRoot> openLooseRoot(const std::filesystem::path& configPath) {
+    return std::make_unique<PosixLooseRoot>(configPath);
+}
+
+#else // _WIN32
+
+std::filesystem::path localPath(const std::string_view value) {
+    if (value.find('\0') != std::string_view::npos)
+        return {};
+    std::filesystem::path path;
+    if (value.substr(0, 5) == "file:") {
+        const auto resolved = core::absolutePathFromFileUri(value);
+        if (!resolved)
+            return {};
+        path = *resolved;
+    } else {
+        path = std::filesystem::path(
+            std::u8string(reinterpret_cast<const char8_t*>(value.data()), value.size()));
+    }
+    // A drive-qualified path only: a relative path, a root-relative one and a network share
+    // (UNC, or the extended `\\?\` form) are not local files of this machine.
+    const auto text = path.generic_string();
+    if (!path.is_absolute() || !path.has_root_name() || text.substr(0, 2) == "//" ||
+        path.root_name().native().size() != 2 || path.root_name().native()[1] != L':')
+        return {};
+    return path;
+}
+
+struct Facts final {
+    std::uint64_t size = 0;
+    std::int64_t written = 0;
+    std::uint64_t index = 0;
+    std::uint64_t volume = 0;
+    bool regular = false;
+};
+
+[[nodiscard]] FileStamp stampOf(std::string key, const Facts& facts) {
+    return {std::move(key), facts.size, facts.written, 0, facts.index, facts.volume};
+}
+
+class Handle final {
+  public:
+    explicit Handle(const HANDLE value) : value_(value) {}
+    ~Handle() {
+        if (value_ != INVALID_HANDLE_VALUE)
+            CloseHandle(value_);
+    }
+    Handle(const Handle&) = delete;
+    Handle& operator=(const Handle&) = delete;
+    [[nodiscard]] HANDLE get() const { return value_; }
+    [[nodiscard]] bool valid() const { return value_ != INVALID_HANDLE_VALUE; }
+
+  private:
+    HANDLE value_;
+};
+
+// Opens a file for reading without following a link in its last name. A name-surrogate reparse
+// point (a symbolic link, a junction) is refused; any other (a cloud-synced file) is opened as the
+// file it stands for, as the LUT reader does.
+[[nodiscard]] Handle openNoLink(const std::filesystem::path& path, const DWORD access) {
+    const auto open = [&](const DWORD flags) {
+        return CreateFileW(path.c_str(), access,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, flags, nullptr);
+    };
+    HANDLE file = open(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN);
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    if (file != INVALID_HANDLE_VALUE &&
+        GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tag, sizeof(tag)) &&
+        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        CloseHandle(file);
+        file = IsReparseTagNameSurrogate(tag.ReparseTag) ? INVALID_HANDLE_VALUE
+                                                         : open(FILE_FLAG_SEQUENTIAL_SCAN);
+    }
+    return Handle(file);
+}
+
+[[nodiscard]] bool factsOf(const Handle& file, Facts& facts) {
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!file.valid() || !GetFileInformationByHandle(file.get(), &info))
+        return false;
+    facts.size = static_cast<std::uint64_t>(info.nFileSizeHigh) << 32U | info.nFileSizeLow;
+    facts.written = static_cast<std::int64_t>(
+        static_cast<std::uint64_t>(info.ftLastWriteTime.dwHighDateTime) << 32U |
+        info.ftLastWriteTime.dwLowDateTime);
+    facts.index = static_cast<std::uint64_t>(info.nFileIndexHigh) << 32U | info.nFileIndexLow;
+    facts.volume = info.dwVolumeSerialNumber;
+    facts.regular = GetFileType(file.get()) == FILE_TYPE_DISK &&
+                    (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    return true;
+}
+
+// Appends exactly `size` bytes of `file` to `bytes`.
+[[nodiscard]] bool readBytes(const Handle& file, std::vector<std::byte>& bytes,
+                             const std::uint64_t size) {
+    const auto at = bytes.size();
+    bytes.resize(at + static_cast<std::size_t>(size));
+    auto target = std::span(bytes).subspan(at);
+    while (!target.empty()) {
+        DWORD count = 0;
+        if (!ReadFile(file.get(), target.data(),
+                      static_cast<DWORD>(std::min<std::size_t>(1U << 20U, target.size())), &count,
+                      nullptr) ||
+            count == 0)
+            return false;
+        target = target.subspan(count);
+    }
+    // The file must end where its size said it does.
+    std::byte extra{};
+    DWORD more = 0;
+    return ReadFile(file.get(), &extra, 1, &more, nullptr) && more == 0;
+}
+
+Scan currentStamps(const OcioConfigLocation& location, const std::filesystem::path& path,
+                   std::vector<FileStamp>& stamps) {
+    stamps.clear();
+    Facts facts;
+    const auto config = openNoLink(path, FILE_READ_ATTRIBUTES);
+    if (!factsOf(config, facts) || !facts.regular)
+        return Scan::Missing;
+    if (location.kind != OcioConfigLocatorKind::ExternalLooseConfig) {
+        stamps.push_back(stampOf({}, facts));
+        return Scan::Ok;
+    }
+    const auto root = path.parent_path();
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::none,
+                                                     error);
+    if (error)
+        return Scan::Missing;
+    for (; it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+        if (error)
+            return Scan::Missing;
+        const auto status = it->symlink_status(error);
+        if (error) {
+            error.clear();
+            continue;
+        }
+        if (status.type() == std::filesystem::file_type::directory) {
+            // Directories are entered unless too deep; a link or junction is a different type and
+            // is never entered.
+            if (it.depth() >= 15)
+                it.disable_recursion_pending();
+            continue;
+        }
+        it.disable_recursion_pending();
+        if (status.type() != std::filesystem::file_type::regular)
+            continue;
+        const auto key = it->path().lexically_relative(root).generic_string();
+        Facts one;
+        const auto file = openNoLink(it->path(), FILE_READ_ATTRIBUTES);
+        if (!factsOf(file, one) || !one.regular || key.size() > kOcioLooseMaximumKeyBytes ||
+            detail::canonicalConfigResourceKey(key) != key ||
+            one.size > kOcioLooseMaximumResourceBytes)
+            continue;
+        if (stamps.size() >= kOcioLooseMaximumEntryCount)
+            return Scan::TooLarge;
+        stamps.push_back(stampOf(key, one));
+    }
+    std::ranges::sort(stamps, {}, &FileStamp::key);
+    return Scan::Ok;
+}
+
+ReadResult readArchive(const std::filesystem::path& path, std::vector<std::byte>& bytes,
+                       FileStamp& result, std::uint64_t& size) {
+    const auto file = openNoLink(path, GENERIC_READ);
+    Facts facts;
+    if (!factsOf(file, facts) || !facts.regular)
+        return ReadResult::Missing;
+    size = facts.size;
+    result = stampOf({}, facts);
+    if (size == 0 || size > detail::kConfigMaximumArchiveBytes)
+        return ReadResult::Ok;
+    return readBytes(file, bytes, size) ? ReadResult::Ok : ReadResult::Missing;
+}
+
+class WindowsLooseRoot final : public LooseRoot {
+  public:
+    explicit WindowsLooseRoot(const std::filesystem::path& configPath)
+        : root_(configPath.parent_path()) {}
+    [[nodiscard]] bool valid() const override { return !root_.empty(); }
+    [[nodiscard]] bool read(const std::string& key, const std::uint64_t size,
+                            std::vector<std::byte>& bytes, FileStamp& result) override {
+        const auto file = openNoLink(root_ / std::filesystem::path(key), GENERIC_READ);
+        Facts facts;
+        if (!factsOf(file, facts) || !facts.regular || facts.size != size)
+            return false;
+        result = stampOf(key, facts);
+        return readBytes(file, bytes, size);
+    }
+
+  private:
+    std::filesystem::path root_;
+};
+
+std::unique_ptr<LooseRoot> openLooseRoot(const std::filesystem::path& configPath) {
+    return std::make_unique<WindowsLooseRoot>(configPath);
+}
+
+#endif
 
 struct Key final {
     OcioConfigLocation location;
@@ -265,31 +588,6 @@ struct KeptConfigs final {
     return value;
 }
 
-// The current stamps of a location's files: the archive, or every candidate of a loose root.
-// Empty with Missing when the location does not name a readable regular file.
-[[nodiscard]] Scan currentStamps(const OcioConfigLocation& location, const std::string& path,
-                                 std::vector<FileStamp>& stamps) {
-    stamps.clear();
-    if (path.empty())
-        return Scan::Missing;
-    struct stat info{};
-    if (::lstat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode))
-        return Scan::Missing;
-    if (location.kind != OcioConfigLocatorKind::ExternalLooseConfig) {
-        stamps.push_back(stamp({}, info));
-        return Scan::Ok;
-    }
-    const auto slash = path.rfind('/');
-    const auto root = slash == 0 ? std::string("/") : path.substr(0, slash);
-    const detail::LutFd directory(::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
-    if (directory.get() < 0)
-        return Scan::Missing;
-    if (const auto scanned = scanLooseRoot(directory.get(), {}, 0, stamps); scanned != Scan::Ok)
-        return scanned;
-    std::ranges::sort(stamps, {}, &FileStamp::key);
-    return Scan::Ok;
-}
-
 [[nodiscard]] OcioBuiltInResolutionResult answer(const Kept& entry,
                                                  const core::Sha256Digest& expectedRevision) {
     if (entry.resolved.expectedRevision() != expectedRevision)
@@ -306,10 +604,10 @@ struct KeptConfigs final {
 resolveFile(const OcioConfigLocation& location, const core::Sha256Digest& expectedRevision,
             const std::string_view working, const std::function<bool()>& cancellation) {
     const auto path = localPath(location.value);
+    const auto text = path.generic_string();
     const bool loose = location.kind == OcioConfigLocatorKind::ExternalLooseConfig;
-    if (path.empty() || !endsWith(path, loose ? kLooseName : kArchiveSuffix) ||
-        (loose && path.size() > kLooseName.size() &&
-         path[path.size() - kLooseName.size() - 1] != '/'))
+    if (path.empty() || !endsWith(text, loose ? kLooseName : kArchiveSuffix) ||
+        (loose && text.size() > kLooseName.size() && text[text.size() - kLooseName.size() - 1] != '/'))
         return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
 
     auto& cache = kept();
@@ -366,31 +664,22 @@ resolveFile(const OcioConfigLocation& location, const core::Sha256Digest& expect
         }
     }
 
-    // Read the files into one sealed shared file: the archive itself, or the loose resource
-    // table. The same sealed bytes are hashed here and parsed in the helper.
-    const detail::LutFd sealed(detail::sharedFile());
-    if (sealed.get() < 0)
-        return helperFailed(OcioHelperError::HelperMemoryLimit);
-    std::uint64_t sealedBytes = 0;
+    // Read the files into one buffer: the archive itself, or the loose resource table. The same
+    // bytes are hashed here and parsed in the helper.
+    std::vector<std::byte> bytes;
     std::vector<detail::ConfigResourceSlice> index;
     if (!loose) {
-        const detail::LutFd file(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
-        struct stat info{};
-        if (file.get() < 0 || ::fstat(file.get(), &info) != 0 || !S_ISREG(info.st_mode))
+        std::uint64_t size = 0;
+        FileStamp archiveStamp;
+        if (readArchive(path, bytes, archiveStamp, size) != ReadResult::Ok)
             return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
-        sealedBytes = static_cast<std::uint64_t>(info.st_size);
-        if (sealedBytes == 0 || sealedBytes > detail::kConfigMaximumArchiveBytes)
-            return invalid(sealedBytes == 0 ? OcioBuiltInInvalidReason::ParseFailed
-                                            : OcioBuiltInInvalidReason::ResourceTableLimitExceeded);
-        stamps = {stamp({}, info)};
-        if (!copyBytes(file.get(), sealed.get(), sealedBytes))
-            return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
+        if (size == 0 || size > detail::kConfigMaximumArchiveBytes)
+            return invalid(size == 0 ? OcioBuiltInInvalidReason::ParseFailed
+                                     : OcioBuiltInInvalidReason::ResourceTableLimitExceeded);
+        stamps = {archiveStamp};
     } else {
-        const auto root = path.size() == kLooseName.size() + 1
-                              ? std::string("/")
-                              : path.substr(0, path.size() - kLooseName.size() - 1);
-        const detail::LutFd directory(::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
-        if (directory.get() < 0)
+        const auto root = openLooseRoot(path);
+        if (!root || !root->valid())
             return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
         std::uint64_t aggregate = 0;
         for (const auto& file : stamps) {
@@ -403,52 +692,41 @@ resolveFile(const OcioConfigLocation& location, const core::Sha256Digest& expect
         detail::ConfigWriter header;
         header.u32(detail::kConfigRecordVersion);
         header.u32(static_cast<std::uint32_t>(stamps.size()));
-        auto bytes = std::move(header).take();
-        if (!detail::writeFd(sealed.get(), bytes))
-            return helperFailed(OcioHelperError::HelperMemoryLimit);
-        sealedBytes = bytes.size();
+        bytes = std::move(header).take();
+        bytes.reserve(static_cast<std::size_t>(aggregate) + bytes.size() + stamps.size() * 96);
         for (auto& file : stamps) {
-            const detail::LutFd source(openBeneath(directory.get(), file.key));
-            struct stat info{};
-            // A file that vanished or changed kind since the scan: the root is changing under
-            // the read, so nothing is published from it.
-            if (source.get() < 0 || ::fstat(source.get(), &info) != 0 || !S_ISREG(info.st_mode) ||
-                static_cast<std::uint64_t>(info.st_size) != file.size)
-                return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
-            file = stamp(file.key, info);
+            if (cancelled(cancellation))
+                return helperFailed(OcioHelperError::HelperCancelled);
             detail::ConfigWriter entry;
             entry.text(file.key);
             entry.u64(file.size);
-            bytes = std::move(entry).take();
-            if (!detail::writeFd(sealed.get(), bytes))
-                return helperFailed(OcioHelperError::HelperMemoryLimit);
-            sealedBytes += bytes.size();
-            index.push_back({file.key, sealedBytes, file.size});
-            if (!copyBytes(source.get(), sealed.get(), file.size))
+            const auto head = std::move(entry).take();
+            bytes.insert(bytes.end(), head.begin(), head.end());
+            const auto offset = bytes.size();
+            FileStamp read;
+            // A file that vanished or changed since the scan: the root is changing under the
+            // read, so nothing is published from it.
+            if (!root->read(file.key, file.size, bytes, read))
                 return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
-            sealedBytes += file.size;
+            file = read;
+            index.push_back({file.key, offset, file.size});
         }
         if (std::ranges::none_of(index, [](const auto& slice) { return slice.key == kLooseName; }))
             return detail::OcioConfigAccess::outcome(OcioBuiltInRegistryOutcome::Missing);
     }
-    if (!detail::sealInput(sealed.get()))
-        return helperFailed(OcioHelperError::HelperMemoryLimit);
-    const ReadOnlyMapping mapping(sealed.get(), static_cast<std::size_t>(sealedBytes));
-    if (!mapping.valid())
-        return helperFailed(OcioHelperError::HelperMemoryLimit);
 
     // An archive's revision covers the whole file, so a changed archive is known before any
     // helper starts.
     std::optional<core::Sha256Digest> revision;
     if (!loose) {
         if (!detail::looksLikeConfigArchive(
-                mapping.bytes().first(std::min<std::size_t>(mapping.bytes().size(), 4))))
+                std::span<const std::byte>(bytes).first(std::min<std::size_t>(bytes.size(), 4))))
             return invalid(OcioBuiltInInvalidReason::ParseFailed);
         const auto computed = computeOcioContentRevisionV1(
             location.kind == OcioConfigLocatorKind::ProjectRelativeArchive
                 ? OcioContentLocatorKind::ProjectRelativeArchive
                 : OcioContentLocatorKind::ExternalArchive,
-            mapping.bytes());
+            bytes);
         if (!computed)
             return invalid(OcioBuiltInInvalidReason::ResourceTableLimitExceeded);
         revision = *computed.revision();
@@ -461,7 +739,7 @@ resolveFile(const OcioConfigLocation& location, const core::Sha256Digest& expect
     parameters.workingColorSpaceId = working;
     for (const auto& variable : location.context)
         parameters.context.push_back({variable.name, variable.value});
-    auto opened = detail::ConfigSession::open(parameters, sealed.get(), sealedBytes, cancellation);
+    auto opened = detail::ConfigSession::open(parameters, bytes, cancellation);
     if (!opened.session || !opened.reply)
         return helperFailed(opened.helperError == OcioHelperError::None
                                 ? OcioHelperError::HelperProtocolViolation
@@ -479,8 +757,9 @@ resolveFile(const OcioConfigLocation& location, const core::Sha256Digest& expect
             sound = found != index.end() && (at == 0 || reply.consumedKeys[at - 1] < name);
             if (sound)
                 consumed.push_back(
-                    {found->key, mapping.bytes().subspan(static_cast<std::size_t>(found->offset),
-                                                         static_cast<std::size_t>(found->size))});
+                    {found->key, std::span<const std::byte>(bytes).subspan(
+                                     static_cast<std::size_t>(found->offset),
+                                     static_cast<std::size_t>(found->size))});
         }
         sound =
             sound && std::ranges::find(reply.consumedKeys, kLooseName) != reply.consumedKeys.end();
@@ -571,7 +850,7 @@ OcioBuiltInResolutionResult resolveOcioConfig(const OcioConfigLocation& location
     if (location.kind == OcioConfigLocatorKind::BloomBuiltIn)
         return resolveOcioBuiltIn(location.kind, location.value, expectedRevision,
                                   workingColorSpaceId);
-#ifdef __linux__
+#ifdef BLOOM_OCIO_HOST_RESOLVES_FILES
     try {
         return resolveFile(location, expectedRevision, workingColorSpaceId, cancellation);
     } catch (const std::bad_alloc&) {
@@ -606,7 +885,7 @@ ocioConfigContentRevision(const OcioConfigLocation& location) noexcept {
 }
 
 void releaseExternalOcioConfigs() noexcept {
-#ifdef __linux__
+#ifdef BLOOM_OCIO_HOST_RESOLVES_FILES
     auto& cache = kept();
     const std::lock_guard lock(cache.mutex);
     cache.entries.clear();

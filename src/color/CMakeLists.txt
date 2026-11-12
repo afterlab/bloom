@@ -324,8 +324,11 @@ add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp ocio_gpu_program_e
     # The config request group: the helper describes an external config with the registry's own
     # rules, so both sides agree on working spaces, displays and synthesized inputs.
     ocio_config_worker.cpp ocio_config_worker.hpp ocio_config_protocol.hpp
+    # An archive is read from memory into the same table a loose config is served from.
+    ocio_config_archive.cpp ocio_config_archive.hpp
     ocio_builtin_registry.cpp ocio_camera_log_inputs.cpp)
-target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_color bloom_platform_process OpenColorIO::OpenColorIO)
+bloom_find_dependency(ZLIB)
+target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_color bloom_platform_process OpenColorIO::OpenColorIO ZLIB::ZLIBSTATIC)
 target_include_directories(bloom-color-worker PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../render/include"
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(bloom-color-worker

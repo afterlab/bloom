@@ -416,14 +416,11 @@ int main() {
             } else if (message[2] >= detail::kConfigCommandBegin &&
                        message[2] <= detail::kConfigCommandLast && nonce >= 2 &&
                        (servesConfig || nonce == 2)) {
-#ifdef _WIN32
-                // Config requests are not served by the Windows helper; the host reports the
-                // typed unavailability and never sends them.
-                error = LutError::HelperUnavailable;
-#else
+                // The same group on every system: the files arrive through the platform's
+                // transport (receiveFiles) and `confine` is the platform's confinement, entered
+                // before the first untrusted byte is read.
                 servesConfig = true;
                 error = configs.handle(message, descriptorSocket.get(), &confine, payload);
-#endif
             } else if (servesConfig) {
                 error = LutError::HelperProtocolViolation;
             } else if (message[2] == detail::kLutCommandBuildCpu && nonce == 2) {

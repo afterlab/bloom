@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace bloom::color::detail {
 
@@ -30,12 +31,13 @@ class ConfigSession final : public RemoteOcioConfig,
         OcioHelperError helperError = OcioHelperError::None;
     };
 
-    // Launches a helper, hands it the parameters and the sealed resource (`resource` is a sealed
-    // shared file of exactly `resourceBytes`: an archive, or a loose config's resource table) and
-    // returns its description of the config. Blocking: 5 s for start and handshake, 30 s for the
-    // parse.
-    [[nodiscard]] static Opened open(const ConfigParameters& parameters, int resource,
-                                     std::uint64_t resourceBytes,
+    // Launches a helper, hands it the parameters and the resource (`resource` is an archive, or a
+    // loose config's resource table; it is copied into a shared file only the helper can read)
+    // and returns its description of the config. Blocking: 5 s for start and handshake, 30 s for
+    // the parse. The same code serves Linux, macOS and Windows: only the shared-file transport
+    // and the helper's confinement differ (lut_worker_ipc.hpp).
+    [[nodiscard]] static Opened open(const ConfigParameters& parameters,
+                                     std::span<const std::byte> resource,
                                      const std::function<bool()>& cancellation = {});
 
     ~ConfigSession() override;
