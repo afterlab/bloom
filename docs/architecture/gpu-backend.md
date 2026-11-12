@@ -1626,6 +1626,12 @@ and read-ahead keep one frame waiting so the run resumes when room returns. Befo
 filling the device made every frame `BudgetRefused`, and the fill ended with nothing cached. The
 explicit CPU fallback remains only for a frame that already had every byte the device could give
 with nothing left to evict, for an unsupported subset and for device loss.
+An export frame boundary reads the same rule (#709): a frame waiting for device room while the
+measured room is below the device ceiling waits, because the memory other programs hold can come
+back, and room that grows during the wait restarts the 30-second stall clock. A live budget query
+the driver does not answer (a device-local heap reporting a budget of zero) is an unavailable
+sample, never zero room, and a device without a usable sample is waited for. Before, a parallel
+test run that filled the GPU stopped an export as too large.
 
 **Idle means small (#539).** When the preview owner has had no preview work for
 `idleTrimDelay` (one second), it gives back retained device memory: the reusable scene cache and
