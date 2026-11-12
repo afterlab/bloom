@@ -194,23 +194,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes clang-22 clang-format-22 clang-tidy-22
 
-      - name: Cache Qt
-        id: cache-qt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/qt
-          key: bloom-qt-6.8.3-linux-gcc-64
-
-      - name: Install Qt 6.8
-        if: steps.cache-qt.outputs.cache-hit != 'true'
-        # Runs from the runner temp directory: aqt writes aqtinstall.log into its working
-        # directory, and a stray log in the workspace fails the repository hygiene check.
-        working-directory: ${{ runner.temp }}
-        run: |
-          python3 -m pip install --user aqtinstall==3.2.1
-          python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
-            --outputdir "${{ runner.temp }}/qt"
-
       - name: Cache ccache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -260,8 +243,8 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             tidy=(-DBLOOM_ENABLE_CLANG_TIDY=OFF)
           fi
+          # Qt is the dependency lock's: the superbuild put its official binaries in the prefix.
           cmake --preset ci-linux-desktop -DBLOOM_BUILD_PYTHON=ON "${tidy[@]}" \
-            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/6.8.3/gcc_64" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -387,16 +370,6 @@ jobs:
       - name: Install build tools
         run: brew install ninja meson
 
-      - name: Install Qt
-        # aqt writes aqtinstall.log into its working directory; run it outside the checkout so the
-        # repository hygiene check never sees it.
-        working-directory: ${{ runner.temp }}
-        run: |
-          python3 -m venv "$RUNNER_TEMP/aqt-venv"
-          "$RUNNER_TEMP/aqt-venv/bin/pip" install --quiet aqtinstall==3.2.1
-          "$RUNNER_TEMP/aqt-venv/bin/aqt" install-qt mac desktop 6.8.3 clang_64 \
-            --outputdir "$RUNNER_TEMP/qt"
-
       - name: Cache dependency archives
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -427,7 +400,6 @@ jobs:
           cmake -S . -B build/macos-desktop -G Ninja \
             -DBLOOM_DEPENDENCY_MODE=qualified \
             -DBLOOM_DEPENDENCY_PREFIX="$GITHUB_WORKSPACE/build/dependency-prefix" \
-            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/qt/6.8.3/macos" \
             -DBLOOM_BUILD_DESKTOP=ON \
             -DBLOOM_BUILD_PYTHON=ON \
             -DBLOOM_WARNINGS_AS_ERRORS=ON \
@@ -453,7 +425,7 @@ jobs:
         run: cmake --build build/macos-desktop --target bloom-deploy-macos
 
   # Windows desktop build with MSVC, in qualified mode: the dependencies are the locked superbuild
-  # prefix (the lock's Windows x86-64 MSVC profile) and Qt comes from its official archive. The
+  # prefix (the lock's Windows x86-64 MSVC profile), which holds the lock's official Qt binaries. The
   # superbuild needs a Visual Studio developer environment, the runner's MSYS2 for the recipes that
   # use make, and Meson. A hosted runner has no usable GPU device: the GPU tests report not run, as
   # skips, and never as passes. Non-required: Linux remains the automated merge gate.
@@ -475,16 +447,8 @@ jobs:
         shell: cmd
         run: |
           python -m venv "%RUNNER_TEMP%\tools-venv"
-          "%RUNNER_TEMP%\tools-venv\Scripts\pip" install --quiet meson==1.12.1 ninja==1.13.2 aqtinstall==3.3.0
+          "%RUNNER_TEMP%\tools-venv\Scripts\pip" install --quiet meson==1.12.1 ninja==1.13.2
           C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make patch pkgconf perl
-
-      - name: Install Qt
-        # aqt writes aqtinstall.log into its working directory; run it outside the checkout so the
-        # repository hygiene check never sees it.
-        working-directory: ${{ runner.temp }}
-        shell: cmd
-        run: |
-          "%RUNNER_TEMP%\tools-venv\Scripts\aqt" install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir "%RUNNER_TEMP%\qt"
 
       - name: Cache dependency archives
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -525,7 +489,7 @@ jobs:
             -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl ^
             -DBLOOM_DEPENDENCY_MODE=qualified ^
             -DBLOOM_DEPENDENCY_PREFIX="%GITHUB_WORKSPACE%\build\dependency-prefix" ^
-            -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\build\dependency-prefix;%RUNNER_TEMP%\qt\6.8.3\msvc2022_64" ^
+            -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\build\dependency-prefix" ^
             -DBLOOM_BUILD_DESKTOP=ON ^
             -DBLOOM_BUILD_PYTHON=ON ^
             -DBLOOM_WARNINGS_AS_ERRORS=ON ^
@@ -545,8 +509,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          set "PATH=%RUNNER_TEMP%\qt\6.8.3\msvc2022_64\bin;%GITHUB_WORKSPACE%\build\dependency-prefix\bin;%PATH%"
-          set "QT_PLUGIN_PATH=%RUNNER_TEMP%\qt\6.8.3\msvc2022_64\plugins"
+          set "PATH=%GITHUB_WORKSPACE%\build\dependency-prefix\qt\bin;%GITHUB_WORKSPACE%\build\dependency-prefix\bin;%PATH%"
+          set "QT_PLUGIN_PATH=%GITHUB_WORKSPACE%\build\dependency-prefix\qt\plugins"
           ctest --test-dir build/windows-desktop --output-on-failure -j 3 --timeout 900
 
   focused-gpu:

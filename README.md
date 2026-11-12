@@ -132,7 +132,8 @@ You need:
 - a C++20 compiler
 - CMake 3.25 or newer
 - Ninja
-- Qt 6.8 or newer with Qt Widgets
+- Qt 6.8 or newer with Qt Widgets (the `dev` preset; a `qualified` build takes the one locked
+  Qt from its dependency prefix instead)
 
 ```sh
 cmake --preset dev

@@ -276,6 +276,36 @@ program or library in the bundle loads something that is neither in the bundle n
 operating system, carries a library search path that leaves the bundle, or was built for a newer
 system than the bundle's `LSMinimumSystemVersion`.
 
+### Locked Qt
+
+Bloom uses one exact Qt version on every platform (issue #679,
+[ADR 0014](../decisions/0014-apache-license-and-qt-distribution.md)). Qt is the lock's `qt`
+component. It is not built: every profile takes the Qt Project's official open-source binaries of
+that version, named archive by archive, with SHA-256 and size, in the profile build's `prebuilt`
+list. The component's `source` is the Qt source archive of the same version, which is the
+corresponding source of those binaries; the lock records its SHA-256 and every package names it.
+
+The superbuild's `bloom_dependency_qt` target (`qt.cmake`) reads the archives from the lock,
+checks each one and unpacks them, unmodified, into `qt/` in the dependency prefix; no version,
+URL or checksum is written anywhere else, and no separate installer is used. With
+`BLOOM_DEPENDENCY_ALLOW_DOWNLOADS=OFF` the archives must already be in the cache when the
+superbuild is configured. The directory records what it holds in `bloom-prebuilt.txt`, and a
+directory that already holds the lock's archives is left untouched.
+
+A `qualified` Bloom build takes Qt from that directory only (`cmake/BloomLockedQt.cmake`). A
+prefix without it, or one that holds another version, stops the configure with the reason; a Qt
+location cached by an earlier configure is dropped rather than kept. A `developer-system` build
+uses the host's Qt 6.8 or later and stays Unqualified.
+
+Bloom links Qt dynamically under LGPL-3.0-only. `dependencies/qt-modules.txt` lists every Qt
+library and plugin Bloom uses, per operating system. The `bloom.quality.qt_modules` test
+(`cmake/BloomQtModuleCheck.cmake`) fails when a CMake file names a Qt part that is not in the
+list, and, in a qualified build, when the locked Qt's own software bill of materials (the
+`sbom/*.spdx` files the official binaries carry) does not offer a listed part under
+LGPL-3.0-only: a module published under the GPL or a commercial license only cannot enter the
+build by being added to the list. `bloom.quality.qt_modules_self_test` proves both refusals on a
+deliberately added GPL-only module.
+
 ### Closed Resource Limits
 
 Limits are checked on encoded bytes before allocation and during parsing with checked arithmetic.

@@ -188,6 +188,27 @@ Platform-specific tests supplement the shared suite; they do not replace it. A p
 temporarily red during development, but a release cannot call a feature complete while its required
 workflow is absent or knowingly broken on another first-class target.
 
+## Qt
+
+Bloom uses one exact Qt version on Linux, macOS and Windows: the dependency lock's `qt`
+component, taken as the Qt Project's official open-source binaries and linked dynamically under
+LGPL-3.0-only ([Dependency intake](dependency-intake.md),
+[ADR 0014](../decisions/0014-apache-license-and-qt-distribution.md)). A `qualified` build uses
+no other Qt. `dependencies/qt-modules.txt` is the list of what Bloom uses, and a check holds the
+build to it:
+
+| | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Libraries | Core, Gui, Widgets, Network, Svg, DBus; OpenGL, the xcb platform library and the Wayland client, which the plugins load | Core, Gui, Widgets, Network, Svg | Core, Gui, Widgets, Network, Svg |
+| Platform plugins | xcb, Wayland, offscreen | Cocoa, offscreen | Windows, offscreen |
+| Window system plugins | xcb GLX and EGL integration; Wayland XDG shell, window decoration and EGL buffers; compose and IBus input contexts; desktop portal theme | | |
+| Style plugin | | macOS style | Windows style |
+| TLS backend | OpenSSL | Secure Transport | Schannel |
+| Image plugins | SVG image format and icon engine | SVG image format and icon engine | SVG image format and icon engine |
+
+Test programs also link Qt Test, which no package carries. Every other Qt module and plugin is
+left out. The Linux binaries bring the ICU libraries they link.
+
 ## Scripting Interpreter
 
 Every package carries the same CPython, built from one locked source archive, with the same
@@ -282,7 +303,8 @@ Dependency provenance remains separate from functional test results. The product
 Linux Clang profile and an Apple silicon macOS profile (Apple clang, deployment target 13.3); a run
 on either consumes its source-built prefix in `qualified` mode. The lock also holds a Windows x86-64
 MSVC profile (minimum Windows 10 version 1903), and a Windows run consumes its source-built prefix
-in `qualified` mode the same way; Qt comes from its official binaries there and is not locked.
+in `qualified` mode the same way. Qt is locked too: every profile takes the same Qt version as
+official binaries that the lock names by checksum (see Qt below).
 No release qualification is fabricated: the `Qualified-pending-manifest` state is preserved rather
 than upgraded by this focused gate.
 
