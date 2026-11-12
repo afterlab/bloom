@@ -397,8 +397,11 @@ function(bloom_package_gpu_shader_tools target)
     get_target_property(_is_bundle ${target} MACOSX_BUNDLE)
     if(APPLE AND _is_bundle)
         set(_install_dir "$<TARGET_BUNDLE_DIR_NAME:${target}>/Contents/MacOS/${_dir}")
-    else()
+    elseif(APPLE)
         set(_install_dir "bin/${_dir}")
+    else()
+        # Beside the installed program (BloomPackageLayout.cmake).
+        set(_install_dir "${BLOOM_PACKAGE_PROGRAM_DIR}/${_dir}")
     endif()
     install(PROGRAMS
         "$<TARGET_FILE_DIR:${target}>/${_dir}/${_glslang_name}"

@@ -38,11 +38,13 @@ if(APPLE)
     )
 endif()
 
+# Where the parts of a package go: cmake/BloomPackageLayout.cmake.
 install(
     TARGETS bloom
     BUNDLE DESTINATION .
-    RUNTIME DESTINATION bin
+    RUNTIME DESTINATION "${BLOOM_PACKAGE_PROGRAM_DIR}"
 )
+bloom_package_search_path(bloom "${BLOOM_PACKAGE_PROGRAM_DIR}")
 
 # Stage the qualified GPU shader tools into the executable-relative private directory (inside the
 # .app bundle on macOS) so desktop colour compilation works out of the box; an unqualified or
@@ -95,7 +97,7 @@ if(BLOOM_APP_BUNDLED_VULKAN_LOADER)
     add_dependencies(bloom bloom-bundled-vulkan-loader)
     install(
         FILES "$<TARGET_FILE:Vulkan::Loader>"
-        DESTINATION "bin/${BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR}"
+        DESTINATION "${BLOOM_PACKAGE_PROGRAM_DIR}/${BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR}"
         RENAME "${BLOOM_BUNDLED_VULKAN_LOADER_NAME}"
     )
     target_compile_definitions(
@@ -149,32 +151,50 @@ if(APPLE)
                 "$<TARGET_FILE_DIR:bloom>/")
         list(APPEND bloom_bundle_worker_targets bloom-color-worker)
     endif()
+    # The command-line programs, beside the application (macos/bundle_tool.cmake): a package
+    # is the bundle, and scripts and agents run the same programs on every platform.
+    foreach(bloom_bundle_tool IN ITEMS bloom-cli bloom-mcp)
+        list(APPEND bloom_bundle_worker_commands
+            COMMAND ${CMAKE_COMMAND} "-DTOOL=$<TARGET_FILE:${bloom_bundle_tool}>"
+                "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/bundle_tool.cmake")
+        list(APPEND bloom_bundle_worker_targets ${bloom_bundle_tool})
+    endforeach()
     if(bloom_bundle_worker_commands)
         add_custom_target(
             bloom-bundle-workers ALL
             ${bloom_bundle_worker_commands}
             DEPENDS ${bloom_bundle_worker_targets}
-            COMMENT "Refreshing the worker processes inside Bloom.app"
+            COMMENT "Refreshing the workers and command-line programs inside Bloom.app"
             VERBATIM
         )
         # The bundle directory exists once the application has linked.
         add_dependencies(bloom-bundle-workers bloom)
     endif()
 
-    # The locked interpreter, its standard library and Bloom's Python package inside the bundle
-    # (macos/bundle_python.cmake), so scripting starts on a Mac without Python (issue #668). The
-    # executable finds the interpreter through the bundle's Frameworks directory.
+    # A qualified build fills the bundle with the same scripts that fill the Linux and Windows
+    # packages (cmake/package, cmake/BloomPackageLayout.cmake), every time it builds, so the
+    # bundle in the build tree is the package: the locked interpreter with its standard library
+    # and Bloom's Python package (issue #668), the locked Qt's frameworks and plugins exactly as
+    # the Qt Project published and signed them (issue #679), and the license texts, notices and
+    # dependency lock. The executable then looks for its libraries only in the bundle's
+    # Frameworks directory.
+    get_filename_component(bloom_package_scripts "${PROJECT_SOURCE_DIR}/cmake/package" ABSOLUTE)
+    set(bloom_bundle_root "$<TARGET_BUNDLE_DIR:bloom>/..")
+    set(bloom_bundle_complete OFF)
     set(bloom_bundle_python OFF)
     if(BLOOM_BUILD_PYTHON AND BLOOM_LOCKED_PYTHON_HOME)
         set(bloom_bundle_python ON)
         set_property(TARGET bloom APPEND PROPERTY BUILD_RPATH "@executable_path/../Frameworks")
         add_custom_target(
             bloom-bundle-python ALL
-            COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+            COMMAND ${CMAKE_COMMAND} "-DROOT=${bloom_bundle_root}"
                 "-DPYTHON_HOME=${BLOOM_LOCKED_PYTHON_HOME}"
-                "-DPACKAGE_DIR=${CMAKE_BINARY_DIR}/python"
-                "-DLICENSES=${PROJECT_SOURCE_DIR}/dependencies/licenses"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/bundle_python.cmake"
+                "-DBLOOM_PYTHON=${CMAKE_BINARY_DIR}/python"
+                "-DPYTHON_DIR=${BLOOM_PACKAGE_PYTHON_DIR}"
+                "-DBLOOM_PYTHON_DIR=${BLOOM_PACKAGE_BLOOM_PYTHON_DIR}"
+                "-DLIBRARY_DIR=${BLOOM_PACKAGE_LIBRARY_DIR}"
+                -P "${bloom_package_scripts}/stage_python.cmake"
             DEPENDS _bloom
             COMMENT "Refreshing the Python interpreter inside Bloom.app"
             VERBATIM
@@ -185,38 +205,90 @@ if(APPLE)
             "developer-system build is for this machine only")
     endif()
 
-    # Self-contained .app: copy the Qt frameworks (and plugins) the desktop needs beside the
-    # executable, give the finished bundle its ad hoc signature (macos/sign_bundle.cmake; no
-    # Developer ID signing, an ad hoc signature is what a local build can carry), then check that
-    # nothing in it needs the build machine (macos/verify_bundle.cmake): every library resolves
-    # inside the bundle or in the operating system, and nothing was built for a newer system than
-    # the bundle declares. macdeployqt reports a library it cannot find and still succeeds, so
-    # the check is what makes the target fail. Optional -- it requires Qt's macdeployqt, which is
-    # present in a normal Qt install but not in a headless CI checkout that only links Qt -- so
-    # the target appears only when found.
-    get_target_property(bloom_qmake Qt6::qmake IMPORTED_LOCATION)
-    if(bloom_qmake)
-        get_filename_component(bloom_qt_bin "${bloom_qmake}" DIRECTORY)
-        find_program(BLOOM_MACDEPLOYQT NAMES macdeployqt HINTS "${bloom_qt_bin}")
-        if(BLOOM_MACDEPLOYQT)
-            add_custom_target(
-                bloom-deploy-macos
-                COMMAND "${BLOOM_MACDEPLOYQT}" "$<TARGET_BUNDLE_DIR:bloom>" -always-overwrite
-                COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
-                    -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/sign_bundle.cmake"
-                COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
-                    "-DREQUIRE_PYTHON=${bloom_bundle_python}"
-                    -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/verify_bundle.cmake"
-                DEPENDS bloom
-                COMMENT "Bundling Qt into Bloom.app, signing it ad hoc and checking it is self-contained"
-                VERBATIM
-            )
-            if(TARGET bloom-bundle-workers)
-                add_dependencies(bloom-deploy-macos bloom-bundle-workers)
-            endif()
-            if(TARGET bloom-bundle-python)
-                add_dependencies(bloom-deploy-macos bloom-bundle-python)
-            endif()
+    set(bloom_bundle_qt OFF)
+    if(DEFINED BLOOM_DEPENDENCY_MODE AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified"
+       AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/qt/bloom-prebuilt.txt")
+        set(bloom_bundle_qt ON)
+        # Only the bundle's own Frameworks directory: the frameworks are there in the build tree
+        # too, and a path into the dependency prefix would be a path outside the package.
+        set_target_properties(bloom PROPERTIES
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "@executable_path/../Frameworks"
+            INSTALL_RPATH_USE_LINK_PATH FALSE)
+        add_custom_target(
+            bloom-bundle-qt ALL
+            COMMAND ${CMAKE_COMMAND} "-DROOT=${bloom_bundle_root}"
+                "-DQT=${BLOOM_DEPENDENCY_PREFIX}/qt"
+                "-DMODULES=${PROJECT_SOURCE_DIR}/dependencies/qt-modules.txt"
+                -DOPERATING_SYSTEM=macos
+                "-DQT_DIR=${BLOOM_PACKAGE_QT_DIR}"
+                "-DLIBRARY_DIR=${BLOOM_PACKAGE_LIBRARY_DIR}"
+                "-DPROGRAM_DIR=${BLOOM_PACKAGE_PROGRAM_DIR}"
+                -P "${bloom_package_scripts}/stage_qt.cmake"
+            COMMENT "Refreshing the locked Qt inside Bloom.app"
+            VERBATIM
+        )
+        add_dependencies(bloom-bundle-qt bloom)
+        add_custom_target(
+            bloom-bundle-records ALL
+            COMMAND ${CMAKE_COMMAND} "-DROOT=${bloom_bundle_root}"
+                "-DSOURCE=${PROJECT_SOURCE_DIR}"
+                -DOPERATING_SYSTEM=macos
+                "-DRECORD_DIR=${BLOOM_PACKAGE_RECORD_DIR}"
+                -P "${bloom_package_scripts}/stage_records.cmake"
+            COMMENT "Refreshing the license texts and the dependency lock inside Bloom.app"
+            VERBATIM
+        )
+        add_dependencies(bloom-bundle-records bloom)
+        if(bloom_bundle_python)
+            set(bloom_bundle_complete ON)
         endif()
+    endif()
+
+    # bloom-deploy-macos finishes the bundle: it gives it its ad hoc signature
+    # (macos/sign_bundle.cmake; no Developer ID signing, an ad hoc signature is what a local
+    # build can carry) and then checks that nothing in it needs the build machine
+    # (cmake/package/check_package.cmake): every library resolves inside the bundle or in the
+    # operating system, and nothing was built for a newer system than the bundle declares.
+    #
+    # A developer build has no locked Qt to stage: there macdeployqt copies the host's Qt into
+    # the bundle first. It reports a library it cannot find and still succeeds, so the check is
+    # what makes the target fail. It is present in a normal Qt install but not in every
+    # checkout that only links Qt, so in such a build the target appears only when it is found.
+    set(bloom_deploy_commands "")
+    set(bloom_deploy_available ON)
+    if(NOT bloom_bundle_qt)
+        get_target_property(bloom_qmake Qt6::qmake IMPORTED_LOCATION)
+        set(BLOOM_MACDEPLOYQT "BLOOM_MACDEPLOYQT-NOTFOUND")
+        if(bloom_qmake)
+            get_filename_component(bloom_qt_bin "${bloom_qmake}" DIRECTORY)
+            find_program(BLOOM_MACDEPLOYQT NAMES macdeployqt HINTS "${bloom_qt_bin}")
+        endif()
+        if(BLOOM_MACDEPLOYQT)
+            set(bloom_deploy_commands
+                COMMAND "${BLOOM_MACDEPLOYQT}" "$<TARGET_BUNDLE_DIR:bloom>" -always-overwrite)
+        else()
+            set(bloom_deploy_available OFF)
+        endif()
+    endif()
+    if(bloom_deploy_available)
+        add_custom_target(
+            bloom-deploy-macos
+            ${bloom_deploy_commands}
+            COMMAND ${CMAKE_COMMAND} "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/sign_bundle.cmake"
+            COMMAND ${CMAKE_COMMAND} "-DPACKAGE=$<TARGET_BUNDLE_DIR:bloom>"
+                "-DCOMPLETE=${bloom_bundle_complete}" "-DONLY=contents;resolution"
+                -P "${bloom_package_scripts}/check_package.cmake"
+            DEPENDS bloom
+            COMMENT "Signing Bloom.app ad hoc and checking it is self-contained"
+            VERBATIM
+        )
+        foreach(bloom_bundle_part IN ITEMS bloom-bundle-workers bloom-bundle-python
+                                           bloom-bundle-qt bloom-bundle-records)
+            if(TARGET ${bloom_bundle_part})
+                add_dependencies(bloom-deploy-macos ${bloom_bundle_part})
+            endif()
+        endforeach()
     endif()
 endif()

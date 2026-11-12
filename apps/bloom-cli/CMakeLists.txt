@@ -3,7 +3,15 @@ add_executable(bloom-cli main.cpp)
 target_link_libraries(bloom-cli PRIVATE bloom_scripting)
 bloom_enable_warnings(bloom-cli)
 
-install(TARGETS bloom-cli RUNTIME DESTINATION bin)
+# A package keeps the tool beside the application (cmake/BloomPackageLayout.cmake). The macOS
+# bundle is filled in the build tree (apps/bloom/CMakeLists.txt); installed alone the tool goes to
+# bin.
+if(APPLE)
+    install(TARGETS bloom-cli RUNTIME DESTINATION bin)
+else()
+    install(TARGETS bloom-cli RUNTIME DESTINATION "${BLOOM_PACKAGE_PROGRAM_DIR}")
+    bloom_package_search_path(bloom-cli "${BLOOM_PACKAGE_PROGRAM_DIR}")
+endif()
 
 if(BLOOM_BUILD_PYTHON)
     target_link_libraries(bloom-cli PRIVATE bloom_python_runtime)

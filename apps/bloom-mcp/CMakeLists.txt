@@ -6,7 +6,15 @@ if(TARGET bloom-media-worker)
     add_dependencies(bloom-mcp bloom-media-worker)
 endif()
 bloom_enable_warnings(bloom-mcp)
-install(TARGETS bloom-mcp RUNTIME DESTINATION bin)
+# A package keeps the tool beside the application (cmake/BloomPackageLayout.cmake). The macOS
+# bundle is filled in the build tree (apps/bloom/CMakeLists.txt); installed alone the tool goes to
+# bin.
+if(APPLE)
+    install(TARGETS bloom-mcp RUNTIME DESTINATION bin)
+else()
+    install(TARGETS bloom-mcp RUNTIME DESTINATION "${BLOOM_PACKAGE_PROGRAM_DIR}")
+    bloom_package_search_path(bloom-mcp "${BLOOM_PACKAGE_PROGRAM_DIR}")
+endif()
 
 # Stage the qualified GPU shader tools beside this executable so MCP-driven export shader
 # compilation works out of the box; an unqualified or CPU-stub build gets a typed definition.

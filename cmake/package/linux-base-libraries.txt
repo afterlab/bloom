@@ -1,0 +1,80 @@
+# The libraries a Linux Bloom package takes from the operating system
+# (docs/architecture/platform-support.md, "Packages"). Everything else a package loads is inside
+# it. cmake/package/check_package.cmake reads this list.
+#
+# One library per line, by the name programs ask for it by. A name ending in `*` stands for
+# every name that begins that way. A library named here may itself load whatever the system it
+# belongs to gives it; a package's own files may load nothing that is not named here.
+
+# The C library.
+ld-linux-x86-64.so.2
+libc.so.6
+libm.so.6
+libdl.so.2
+libpthread.so.0
+librt.so.1
+libutil.so.1
+libresolv.so.2
+libanl.so.1
+# Name-service and character-set modules the C library loads by itself.
+libnss_*
+gconv/*
+
+# The C++ runtime of the system. (A package built against a newer one carries it instead; a
+# carried library always wins over this list.)
+libstdc++.so.6
+libgcc_s.so.1
+
+# Graphics: the vendor-neutral OpenGL and EGL libraries, and buffer and mode setting. The GPU's
+# own drivers, which these load, belong to the system.
+libGL.so.1
+libGLX.so.0
+libOpenGL.so.0
+libEGL.so.1
+libGLdispatch.so.0
+libgbm.so.1
+libdrm.so.2
+
+# X11: Xlib and the X protocol library with the extensions that are part of it.
+libX11.so.6
+libX11-xcb.so.1
+libxcb.so.1
+libxcb-glx.so.0
+libxcb-randr.so.0
+libxcb-render.so.0
+libxcb-shape.so.0
+libxcb-shm.so.0
+libxcb-sync.so.1
+libxcb-xfixes.so.0
+libxcb-xkb.so.1
+libxcb-xinput.so.0
+
+# Wayland.
+libwayland-client.so.0
+libwayland-cursor.so.0
+libwayland-egl.so.1
+
+# Fonts and keyboard layouts, which must agree with the system's own configuration.
+libfontconfig.so.1
+libfreetype.so.6
+libxkbcommon.so.0
+libxkbcommon-x11.so.0
+
+# The session bus.
+libdbus-1.so.3
+
+# The audio servers' client libraries.
+libasound.so.2
+libpulse.so.0
+libjack.so.0
+libpipewire-0.3.so.0
+
+# GLib's main loop, which Qt shares with the desktop's own libraries in the same process, and
+# zlib.
+libglib-2.0.so.0
+libgthread-2.0.so.0
+libz.so.1
+
+# The system's libcurl, when it has one: bloom-cli and bloom-mcp download fonts through it and
+# do without that when it is absent (src/runtime/headless_font_transport_curl.cpp).
+libcurl.so.4

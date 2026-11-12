@@ -335,7 +335,11 @@ bloom_enable_strict_floating_point(bloom-color-worker)
 target_link_libraries(bloom_color_ocio PRIVATE bloom_platform_process)
 target_compile_definitions(bloom_color_ocio PRIVATE BLOOM_COLOR_WORKER="$<TARGET_FILE:bloom-color-worker>")
 add_dependencies(bloom_color_ocio bloom-color-worker)
-install(TARGETS bloom-color-worker RUNTIME DESTINATION libexec/bloom)
+# Where lutWorkerPath() looks (cmake/BloomPackageLayout.cmake). The macOS bundle gets its copy in
+# the build tree (apps/bloom/CMakeLists.txt).
+if(NOT APPLE)
+    install(TARGETS bloom-color-worker RUNTIME DESTINATION "${BLOOM_PACKAGE_COLOR_DIR}")
+endif()
 if(BUILD_TESTING)
     add_executable(bloom_color_ocio_file_transform_test tests/ocio_cpu_file_transform_processor_tests.cpp)
     target_link_libraries(bloom_color_ocio_file_transform_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)

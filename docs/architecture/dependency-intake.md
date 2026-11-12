@@ -268,13 +268,18 @@ host's CPython and says so, and such a build is not what a package is made from.
 static core is built against the same interpreter. The shared lookup in
 `src/scripting/python/interpreter_home.cpp` finds the interpreter inside a package by the
 package's layout on each platform and falls back to the prefix in a build tree.
-`apps/bloom/macos/bundle_python.cmake` copies the interpreter to `Contents/Frameworks`, the
-standard library with the bundled packages to `Contents/Resources/python`, Bloom's package to
-`Contents/Resources/bloom-python` and the license texts to `Contents/Resources/python/licenses`.
-The `bloom-deploy-macos` target ends with `apps/bloom/macos/verify_bundle.cmake`, which fails when a
-program or library in the bundle loads something that is neither in the bundle nor part of the
-operating system, carries a library search path that leaves the bundle, or was built for a newer
-system than the bundle's `LSMinimumSystemVersion`.
+`cmake/package/stage_python.cmake` puts the interpreter into a package on every platform: on
+macOS the library in `Contents/Frameworks`, the standard library with the bundled packages in
+`Contents/Resources/python` and Bloom's package in `Contents/Resources/bloom-python`
+(`cmake/BloomPackageLayout.cmake` has the Linux and Windows places). The license texts travel
+with every other component's, in the package's `licenses` directory
+(`cmake/package/stage_records.cmake`). The carried interpreter never writes into its own home:
+the compiled form of the modules it imports goes to Bloom's per-user cache.
+`cmake/package/check_package.cmake`, which the `bloom-deploy-macos` and `bloom-package` targets
+end with, fails when a program or library in the package loads something that is neither in
+the package nor a declared part of the operating system, carries a library search path that
+leaves the package, or, on macOS, was built for a newer system than the bundle's
+`LSMinimumSystemVersion`.
 
 ### Locked Qt
 

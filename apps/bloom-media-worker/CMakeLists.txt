@@ -75,13 +75,7 @@ else()
 endif()
 # Installed worker generations, relative to the install prefix (media_workers.cpp resolves the
 # same places relative to the running executable).
-if(WIN32)
-    set(bloom_media_install_root "bin/media")
-elseif(APPLE)
-    set(bloom_media_install_root "Bloom.app/Contents/libexec/bloom/media")
-else()
-    set(bloom_media_install_root "libexec/bloom/media")
-endif()
+set(bloom_media_install_root "${BLOOM_PACKAGE_MEDIA_DIR}")
 if(bloom_ffmpeg_worker)
     # The declared-sampling reopen comparison (tolerance profile v2): the encoder's output
     # conversion and the verifier's reference, shared by both provider builds and its unit test.

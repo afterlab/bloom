@@ -199,7 +199,7 @@ build to it:
 
 | | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Libraries | Core, Gui, Widgets, Network, Svg, DBus; OpenGL, the xcb platform library and the Wayland client, which the plugins load | Core, Gui, Widgets, Network, Svg | Core, Gui, Widgets, Network, Svg |
+| Libraries | Core, Gui, Widgets, Network, Svg, DBus; OpenGL, the xcb platform library and the Wayland client, which the plugins load | Core, Gui, Widgets, Network, Svg, DBus (which Qt Gui loads) | Core, Gui, Widgets, Network, Svg |
 | Platform plugins | xcb, Wayland, offscreen | Cocoa, offscreen | Windows, offscreen |
 | Window system plugins | xcb GLX and EGL integration; Wayland XDG shell, window decoration and EGL buffers; compose and IBus input contexts; desktop portal theme | | |
 | Style plugin | | macOS style | Windows style |
@@ -245,6 +245,78 @@ no Python on the computer, and Bloom never uses one that is installed there.
   number, in `math`, `cmath` and numpy. Linux uses glibc's, macOS Apple's and Windows the
   Universal C Runtime's; making them equal would mean replacing the math library. Measured:
   `numpy.abs` of a complex array and `numpy.hypot` differ between Linux and macOS.
+
+## Packages
+
+A package is everything Bloom needs besides the operating system: the application, `bloom-cli`
+and `bloom-mcp`, the media and color workers, the shader tools, the locked Qt, the carried
+interpreter with numpy and Bloom's Python package, and the license texts, notices and
+dependency lock of what it was built from. The three operating systems get the same parts from
+the same code; only where each part sits differs, and that is written once, in
+`cmake/BloomPackageLayout.cmake`:
+
+| Part | Linux | macOS, inside `Bloom.app/Contents` | Windows |
+| --- | --- | --- | --- |
+| Application, `bloom-cli`, `bloom-mcp`, shader tools | `bin` | `MacOS` | the package folder |
+| Carried libraries | `lib` | `Frameworks` | the package folder |
+| Qt libraries and plugins | `lib/qt/lib`, `lib/qt/plugins` | `Frameworks`, `PlugIns` | the package folder, `qt/plugins` |
+| Color worker | `libexec/bloom` | `MacOS` | the package folder |
+| Media workers | `libexec/bloom/media` | `libexec/bloom/media` | `media` |
+| Interpreter home | `share/bloom/python` | `Resources/python` | `python` |
+| Bloom's Python package | `share/bloom/bloom-python` | `Resources/bloom-python` | `bloom-python` |
+| Licenses, notices, dependency lock | `share/bloom` | `Resources` | the package folder |
+
+Only a qualified build with the desktop application and the locked interpreter can be
+packaged; a developer build links the host's Qt and Python, which a package cannot carry.
+
+- On Linux and Windows `cmake --install <build> --prefix <folder>` writes the whole package:
+  the programs through their own install rules, then Qt, the interpreter and the records
+  through the shared scripts in `cmake/package` (`stage_qt.cmake`, `stage_python.cmake`,
+  `stage_records.cmake`). The `bloom-package` target installs into the build tree and checks
+  the result.
+- On macOS the build fills `Bloom.app` in the build tree with the same scripts every time it
+  builds, so that the bundle can be signed once it is complete; `bloom-deploy-macos` signs and
+  checks it.
+
+Qt is copied exactly as the Qt Project published it: nothing is patched, stripped or signed
+again, and only the libraries and plugins `dependencies/qt-modules.txt` lists are taken. The
+license directory holds, for every component the lock builds for the platform, exactly the
+files the lock names, and the license files of the components whose sources are checked in.
+
+The carried interpreter never writes into the package: the compiled form of the modules it
+imports goes to Bloom's per-user cache (`python-bytecode`). A package can be read-only, and a
+signed macOS bundle stops being valid when a file appears in it.
+
+### Package Check
+
+`cmake/package/check_package.cmake` is the one check for all three platforms. It fails when
+
+- the package lacks a part listed above, or a license file is missing or is not the file the
+  lock records;
+- a program or library in the package loads a library that is neither inside the package,
+  where the loader would look for it, nor a declared part of the operating system, or carries
+  a library search path that leads outside the package;
+- a run of the packaged programs loads anything from elsewhere. The package's own `bloom-cli`
+  runs a script in the carried interpreter that uses every carried module and then starts the
+  packaged application without a window; both report every image they loaded.
+
+What counts as the operating system is declared per platform: on Linux the libraries named in
+`cmake/package/linux-base-libraries.txt` (and what those load themselves), on macOS `/usr/lib`
+and `/System`, on Windows the system directory, without the Visual C++ runtime, which is not
+part of Windows. On macOS the check also fails on a file built for a newer system than the
+bundle declares.
+
+The run never reads or changes the settings of the person whose computer it is. The check
+gives the application a settings file, data and cache directories of its own, and the
+application then runs under an organization name of its own as well
+(`src/ui/include/bloom/ui/application_identity.hpp`), so the per-user folders Qt names after
+the organization are the check's; the check removes them afterwards. On Linux the run is
+offered no GPU driver, so that what it loads does not depend on the machine's.
+
+The `bloom.package.check` test runs the check on the package of the build and then on a copy
+broken in each way that matters: the interpreter removed, a license file removed or changed, a
+program made to load a library from outside, and a program given a search path outside the
+package.
 
 ## Capability Reporting And Graceful Degradation
 
@@ -384,7 +456,9 @@ the shader tools beside the executable, and the loader and driver as above. It c
 Python interpreter (see Scripting Interpreter above): the library in `Contents/Frameworks`, the
 standard library and numpy in `Contents/Resources/python` and Bloom's Python package in
 `Contents/Resources/bloom-python` ([Dependency intake](dependency-intake.md)). The
-`bloom-deploy-macos` target adds Qt with `macdeployqt`, signs the result ad hoc, and then checks
+build puts the locked Qt's frameworks and plugins into the bundle exactly as the Qt Project
+published and signed them (a developer build copies the host's Qt with `macdeployqt` instead).
+The `bloom-deploy-macos` target signs the result ad hoc and then checks
 that every program and library in the bundle resolves inside it or in the operating system and
 that none was built for a newer system than the bundle declares; there is no Developer ID
 signature or notarization, so a copy downloaded from the internet is stopped by Gatekeeper until

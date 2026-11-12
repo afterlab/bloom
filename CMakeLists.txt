@@ -56,6 +56,7 @@ include(BloomQuality)
 include(BloomWarnings)
 include(BloomDependencyPrefix)
 include(BloomVulkanRuntime)
+include(BloomPackageLayout)
 
 # Before any target is added, so it reaches all of them.
 bloom_disable_floating_point_contraction()
@@ -197,3 +198,7 @@ if(BLOOM_BUILD_DESKTOP)
         add_subdirectory(tests)
     endif()
 endif()
+
+# The package: what `cmake --install` adds to the programs' own install rules.
+include(BloomPackage)
+bloom_add_package_rules()

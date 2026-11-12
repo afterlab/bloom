@@ -1,0 +1,121 @@
+# Builds a Bloom package from the install rules (docs/architecture/platform-support.md,
+# "Packages").
+#
+# `cmake --install <build> --prefix <directory>` writes the whole package: the programs and
+# workers through the targets' own install rules, and then, through the shared scripts in
+# cmake/package, the locked Qt (stage_qt.cmake), the carried interpreter (stage_python.cmake) and
+# the license texts, notices and dependency lock (stage_records.cmake). The scripts are the same
+# for every operating system; where each part goes is cmake/BloomPackageLayout.cmake's.
+#
+# Only a qualified build with the locked interpreter and the desktop application can be
+# packaged: a developer build links the host's Qt and Python, which a package cannot carry. Such
+# a build installs its programs and nothing else, and says so.
+#
+#   bloom-package         installs the package into <build>/package/<name> and checks it
+#                         (cmake/package/check_package.cmake, with a run of the packaged programs)
+#   bloom.package.check   the same check as a test, with the cases it must reject
+#                         (cmake/package/check_package_test.cmake)
+#
+# macOS: the bundle is filled in the build tree by apps/bloom/CMakeLists.txt with the same
+# scripts, so that it can be signed once it is complete; installing copies it.
+include_guard(GLOBAL)
+include(BloomPackageLayout)
+
+function(bloom_add_package_rules)
+    set(reason "")
+    if(NOT DEFINED BLOOM_DEPENDENCY_MODE OR NOT BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        set(reason "it is not a qualified build")
+    elseif(NOT BLOOM_BUILD_DESKTOP)
+        set(reason "it does not build the desktop application")
+    elseif(NOT BLOOM_BUILD_PYTHON OR NOT BLOOM_LOCKED_PYTHON_HOME)
+        set(reason "it does not embed the locked interpreter")
+    elseif(NOT EXISTS "${BLOOM_DEPENDENCY_PREFIX}/qt/bloom-prebuilt.txt")
+        set(reason "the dependency prefix has no locked Qt")
+    endif()
+    if(reason)
+        message(STATUS "Bloom package: this build cannot be packaged (${reason})")
+        return()
+    endif()
+
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" processor)
+    if(processor MATCHES "^(arm64|aarch64)$")
+        set(processor "arm64")
+    elseif(processor MATCHES "^(x86_64|amd64)$")
+        set(processor "x86_64")
+    endif()
+    set(BLOOM_PACKAGE_NAME
+        "Bloom-${PROJECT_VERSION}-${BLOOM_PACKAGE_OPERATING_SYSTEM}-${processor}"
+        CACHE STRING "The name of the package directory and archives")
+    set(scripts "${PROJECT_SOURCE_DIR}/cmake/package")
+
+    if(NOT APPLE)
+        # After the targets' own rules, so the directories exist. The root is the install
+        # prefix of the moment, DESTDIR included.
+        install(CODE "
+            set(bloom_package_root \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
+            execute_process(
+                COMMAND \"${CMAKE_COMMAND}\" \"-DROOT=\${bloom_package_root}\"
+                    \"-DQT=${BLOOM_DEPENDENCY_PREFIX}/qt\"
+                    \"-DMODULES=${PROJECT_SOURCE_DIR}/dependencies/qt-modules.txt\"
+                    -DOPERATING_SYSTEM=${BLOOM_PACKAGE_OPERATING_SYSTEM}
+                    \"-DQT_DIR=${BLOOM_PACKAGE_QT_DIR}\"
+                    \"-DLIBRARY_DIR=${BLOOM_PACKAGE_LIBRARY_DIR}\"
+                    \"-DPROGRAM_DIR=${BLOOM_PACKAGE_PROGRAM_DIR}\"
+                    -P \"${scripts}/stage_qt.cmake\"
+                COMMAND_ERROR_IS_FATAL ANY)
+            execute_process(
+                COMMAND \"${CMAKE_COMMAND}\" \"-DROOT=\${bloom_package_root}\"
+                    \"-DPYTHON_HOME=${BLOOM_LOCKED_PYTHON_HOME}\"
+                    \"-DBLOOM_PYTHON=${CMAKE_BINARY_DIR}/python\"
+                    \"-DPYTHON_DIR=${BLOOM_PACKAGE_PYTHON_DIR}\"
+                    \"-DBLOOM_PYTHON_DIR=${BLOOM_PACKAGE_BLOOM_PYTHON_DIR}\"
+                    \"-DLIBRARY_DIR=${BLOOM_PACKAGE_LIBRARY_DIR}\"
+                    -P \"${scripts}/stage_python.cmake\"
+                COMMAND_ERROR_IS_FATAL ANY)
+            execute_process(
+                COMMAND \"${CMAKE_COMMAND}\" \"-DROOT=\${bloom_package_root}\"
+                    \"-DSOURCE=${PROJECT_SOURCE_DIR}\"
+                    -DOPERATING_SYSTEM=${BLOOM_PACKAGE_OPERATING_SYSTEM}
+                    \"-DRECORD_DIR=${BLOOM_PACKAGE_RECORD_DIR}\"
+                    -P \"${scripts}/stage_records.cmake\"
+                COMMAND_ERROR_IS_FATAL ANY)
+        ")
+
+        set(programs bloom bloom-cli bloom-mcp bloom-color-worker)
+        if(TARGET bloom-media-worker)
+            list(APPEND programs bloom-media-worker)
+        endif()
+        set(package "${CMAKE_BINARY_DIR}/package/${BLOOM_PACKAGE_NAME}")
+        add_custom_target(
+            bloom-package
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${package}"
+            COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --prefix "${package}"
+            COMMAND ${CMAKE_COMMAND} "-DPACKAGE=${package}" -DCOMPLETE=ON -DRUN=ON
+                "-DWORK=${CMAKE_BINARY_DIR}/package/check"
+                -P "${scripts}/check_package.cmake"
+            DEPENDS ${programs}
+            COMMENT "Installing ${BLOOM_PACKAGE_NAME} and checking it is self-contained"
+            VERBATIM
+        )
+    endif()
+
+    if(BUILD_TESTING)
+        include(BloomTesting)
+        # Checks the package with a run of the packaged programs, and then breaks a copy of it
+        # in each way the check must refuse. The package is installed from the build tree; on
+        # macOS it is the bundle the build filled.
+        if(APPLE)
+            set(source "-DBUNDLE=$<TARGET_BUNDLE_DIR:bloom>")
+        else()
+            find_program(BLOOM_PACKAGE_PATCHELF patchelf)
+            set(source "-DBUILD=${CMAKE_BINARY_DIR}" "-DPATCHELF=${BLOOM_PACKAGE_PATCHELF}")
+        endif()
+        bloom_add_test(
+            NAME bloom.package.check
+            COMMAND ${CMAKE_COMMAND} ${source} "-DWORK=${CMAKE_BINARY_DIR}/package-test"
+                -P "${scripts}/check_package_test.cmake"
+            LABELS package integration
+            TIMEOUT 1200)
+    endif()
+    message(STATUS "Bloom package: ${BLOOM_PACKAGE_NAME}")
+endfunction()
