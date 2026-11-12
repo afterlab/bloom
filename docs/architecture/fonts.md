@@ -142,7 +142,9 @@ only.
 
 ## Platform notes
 
-Installed fonts are listed with fontconfig on Linux, Core Text on macOS, and the font folders under
-the Windows directory and the user's local application data on Windows. Directory scanning reads each
-font's name table directly (TrueType, OpenType and collections). The Windows enumeration has not been
-run on Windows.
+Installed fonts are listed with fontconfig on Linux, Core Text on macOS, and DirectWrite's system
+font collection on Windows, which holds the system fonts and the ones a user installed for
+themselves, without downloadable fonts. On Windows DirectWrite names each face's file, weight,
+width and slant, and the shared reader names the face from the file's name table (TrueType,
+OpenType and collections), so a face has the same family, style and PostScript name on every
+platform. The Windows enumeration runs in `bloom.platform.font-catalog` on Windows.

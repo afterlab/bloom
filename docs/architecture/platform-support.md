@@ -395,8 +395,8 @@ are allowed to start, not where they were tested.
 
 Video and audio on Windows are read and encoded by the bundled FFmpeg worker alone; there is no
 Media Foundation provider ([Media I/O](media-io.md)). AV1 export holds SVT-AV1 to its SSE4.2 code
-([Dependency intake](dependency-intake.md)). Installed fonts are the files in the system font
-folder and the per-user one. There is no installer or package yet: Bloom runs from a build folder
+([Dependency intake](dependency-intake.md)). Installed fonts are the system font collection
+DirectWrite reports, which includes the fonts a user installed for themselves. There is no installer or package yet: Bloom runs from a build folder
 with Qt's and the prefix's libraries on the search path. Continuous integration has a Windows job
 on a hosted runner in qualified mode, which is not a required check; a hosted runner has no usable
 GPU device, and its GPU tests then report not run.

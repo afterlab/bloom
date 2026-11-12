@@ -47,9 +47,12 @@ elseif(APPLE)
     target_sources(bloom_platform PRIVATE font_catalog_macos.cpp staged_artifact_macos.cpp)
     target_link_libraries(bloom_platform PUBLIC "-framework CoreText" "-framework CoreFoundation")
 elseif(WIN32)
-    # Windows reads the system and per-user font folders itself (font_catalog_directory.cpp).
+    # Windows lists the system font collection through DirectWrite and names each file's faces
+    # with the shared reader (font_catalog_directory.cpp).
     # Win32 handles, volume/file-index identities and MoveFileExW publication.
     target_sources(bloom_platform PRIVATE font_catalog_windows.cpp staged_artifact_windows.cpp)
+    # The system font collection comes from DirectWrite.
+    target_link_libraries(bloom_platform PRIVATE dwrite)
 else()
     target_sources(bloom_platform PRIVATE font_catalog_unavailable.cpp staged_artifact_unsupported.cpp)
 endif()

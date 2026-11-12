@@ -1,6 +1,7 @@
 #include <bloom/core/environment.hpp>
 #include <bloom/platform/font_catalog.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -90,7 +91,47 @@ int main() {
                             "DejaVu Sans is the first embedded face");
     }
 
-    // The directory reader (the Windows catalogue) names the Inter fixtures from their sfnt tables.
+#if defined(_WIN32)
+    // A font a user installed for themselves is in the system collection too. The test installs
+    // nothing: where the per-user font folder holds a font, the catalogue must list a face from it.
+    if (const auto* local = std::getenv("LOCALAPPDATA")) { // NOLINT(concurrency-mt-unsafe)
+        const auto lower = [](std::string text) {
+            for (auto& c : text)
+                c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+            return text;
+        };
+        const auto folder = std::filesystem::path(local) / "Microsoft" / "Windows" / "Fonts";
+        std::vector<std::string> installed;
+        std::error_code scanError;
+        for (std::filesystem::directory_iterator entry(folder, scanError), end;
+             !scanError && entry != end; entry.increment(scanError)) {
+            const auto extension = lower(entry->path().extension().string());
+            if (extension == ".ttf" || extension == ".otf" || extension == ".ttc")
+                installed.push_back(lower(entry->path().generic_string()));
+        }
+        if (installed.empty()) {
+            std::puts("SKIP: no per-user font is installed for this account");
+        } else {
+            bool listed = false;
+            for (const auto& face : catalogue.faces)
+                if (face.source == bloom::platform::FontSource::System &&
+                    std::find(installed.begin(), installed.end(),
+                              lower(face.path.generic_string())) != installed.end())
+                    listed = true;
+            expectations.expect(listed, "a font installed for the user alone is listed");
+        }
+    }
+    // Every system face names an existing file and a width in the catalogue's range.
+    bool filesExist = true;
+    for (const auto& face : catalogue.faces)
+        if (face.source == bloom::platform::FontSource::System &&
+            (!std::filesystem::is_regular_file(face.path) || face.width < 50 || face.width > 200))
+            filesExist = false;
+    expectations.expect(filesExist, "every system face names its font file");
+#endif
+
+    // The directory reader names the Inter fixtures from their sfnt tables; the Windows catalogue
+    // uses the same reader on the files DirectWrite lists.
     const std::array<std::filesystem::path, 1> fixtures{
         std::filesystem::path(BLOOM_FONT_FIXTURE_DIRECTORY)};
     const auto direct = bloom::platform::FontCatalogueProvider::enumerateDirectories(fixtures);

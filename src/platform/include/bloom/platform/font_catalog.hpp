@@ -61,8 +61,8 @@ class FontCatalogueProvider final {
                                           bool digests = true) const;
 
     // Faces read directly from the font files below `directories` (sfnt name and OS/2 tables),
-    // without a platform font database. The Windows catalogue is this over the system and per-user
-    // font folders; it is a public function so the same reader is tested on every platform.
+    // without a platform font database. The Windows catalogue names the files DirectWrite lists
+    // with the same reader; it is a public function so that reader is tested on every platform.
     [[nodiscard]] static FontCatalogue
     enumerateDirectories(std::span<const std::filesystem::path> directories,
                          const Cancellation& cancelled = {}, bool digests = true);
