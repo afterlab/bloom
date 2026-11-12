@@ -67,7 +67,7 @@ void objectWithOptionalMembers(const Value& value,
 // non-control Unicode directly as UTF-8 and admits only lowercase \u00xx control escapes, so a raw
 // byte scan before parsing rejects exactly the locks whose decoded strings or keys leave ASCII.
 void requireAsciiStrict(const std::string_view encoded) {
-    const auto* const offending = std::ranges::find_if(
+    const auto offending = std::ranges::find_if(
         encoded, [](const char byte) { return static_cast<unsigned char>(byte) >= 0x80U; });
     if (offending != encoded.end()) {
         fail("ascii-strict", "$",

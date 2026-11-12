@@ -72,6 +72,39 @@
         "source"
       ],
       "conformanceFixtureSets": []
+    },
+    {
+      "profileId": "bloom.windows-x86-64-msvc-release",
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "NB_CREATE_INSTALL_RULES",
+          "value": "OFF"
+        },
+        {
+          "name": "NB_TEST",
+          "value": "OFF"
+        },
+        {
+          "name": "NB_USE_SUBMODULE_DEPS",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.python-bindings"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
     }
   ],
   "securityReview": {

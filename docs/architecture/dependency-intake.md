@@ -168,7 +168,12 @@ production lock check compares the two line for line exactly as it does FFmpeg's
 vector is its configure script's options). Meson and Ninja are build-host requirements for the
 Meson-built codecs; x86 assembly uses the superbuild-private NASM (libvpx receives it through
 `AS`, SVT-AV1 through `CMAKE_ASM_NASM_COMPILER`). On Windows libvpx's configure script generates a
-Visual Studio solution with the static runtime, run from the same MSYS2 shell as FFmpeg's. A
+Visual Studio solution with the static runtime, run from the same MSYS2 shell as FFmpeg's. The
+Windows superbuild runs from a Visual Studio developer environment (`cl`, `link`, `nmake`) with
+`MSYS2_ROOT` naming an MSYS2 installation that provides `make`, `patch`, `pkgconf` and `perl`, and
+with Python (Meson, Ninja) on `PATH`. NASM builds with its own NMAKE file, so it needs no MSYS2
+shell. FFmpeg's MSVC install leaves the import libraries in `bin/`; a post-install step moves them
+to `lib/`. A
 patent grant shipped with a library (the AOM Patent License 1.0 with SVT-AV1, Google's VP8/VP9
 grant with libvpx) is a notice file of its lock component and is reproduced in
 `THIRD_PARTY_NOTICES.md`. `codec-static-install.cmake` appends each archive's runtime libraries to

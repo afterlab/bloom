@@ -219,6 +219,11 @@ function(bloom_find_dependency package)
         # this call (function-scoped: never leaks to the caller) so any transitively pulled ZLIB
         # resolves from the prefix's static archive.
         set(ZLIB_ROOT "${BLOOM_DEPENDENCY_PREFIX}")
+        if(WIN32)
+            # zlib's MSVC build installs the static archive as zs.lib, a name FindZLIB only
+            # searches when static libraries are requested.
+            set(ZLIB_USE_STATIC_LIBS ON)
+        endif()
         set(CMAKE_FIND_PACKAGE_PREFER_CONFIG OFF)
 
         # issue #95 (OpenColorIO intake): OpenColorIOConfig.cmake's own find_dependency(expat/

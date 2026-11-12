@@ -80,8 +80,15 @@ if(WIN32)
         list(APPEND BLOOM_LIBVPX_ENV AS=${BLOOM_NASM_EXECUTABLE})
     endif()
     string(REPLACE "x64" "x86_64" bloom_libvpx_target "${BLOOM_LIBVPX_ARCH}")
+    # libvpx names its solution generator after the Visual Studio release: vs17 targets the v143
+    # toolset (Visual Studio 2022), vs18 the v145 toolset (Visual Studio 2026, compiler 19.50).
+    if(MSVC_VERSION GREATER_EQUAL 1950)
+        set(bloom_libvpx_vs vs18)
+    else()
+        set(bloom_libvpx_vs vs17)
+    endif()
     list(APPEND BLOOM_LIBVPX_PLATFORM_ARGUMENTS
-        --target=${bloom_libvpx_target}-win64-vs17 --enable-static-msvcrt)
+        --target=${bloom_libvpx_target}-win64-${bloom_libvpx_vs} --enable-static-msvcrt)
     set(BLOOM_LIBVPX_PC "${CMAKE_CURRENT_BINARY_DIR}/bloom-libvpx-vpx.pc")
     file(WRITE "${BLOOM_LIBVPX_PC}"
         "prefix=${BLOOM_DEPENDENCY_PREFIX}\nlibdir=\${prefix}/lib\nincludedir=\${prefix}/include\n\n"

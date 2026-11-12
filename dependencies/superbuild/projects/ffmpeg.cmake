@@ -110,6 +110,7 @@ endif()
 # MSVC route), producing avcodec-NN.dll beside import libraries.
 set(BLOOM_FFMPEG_SHELL)
 set(BLOOM_FFMPEG_MAKE make)
+set(BLOOM_FFMPEG_PKG_CONFIG_PATH "${BLOOM_DEPENDENCY_PREFIX}/lib/pkgconfig")
 set(BLOOM_FFMPEG_COMPILER_ARGUMENTS --cc=${CMAKE_C_COMPILER} --cxx=${CMAKE_CXX_COMPILER})
 if(APPLE)
     # Shared libraries carry @rpath install names, so the worker's @loader_path/lib rpath resolves
@@ -126,6 +127,14 @@ elseif(WIN32)
     find_program(BLOOM_FFMPEG_MAKE_PROGRAM NAMES make
         HINTS "$ENV{MSYS2_ROOT}/usr/bin" "C:/msys64/usr/bin" REQUIRED)
     set(BLOOM_FFMPEG_MAKE "${BLOOM_FFMPEG_MAKE_PROGRAM}")
+    # The MSYS2 pkg-config splits PKG_CONFIG_PATH at ':' and reads POSIX paths, so a drive-letter
+    # path ("D:/prefix/lib/pkgconfig") is cut in two. Hand it the MSYS spelling ("/d/prefix/...").
+    string(REGEX REPLACE "^([A-Za-z]):" "/\\1" BLOOM_FFMPEG_PKG_CONFIG_PATH
+        "${BLOOM_FFMPEG_PKG_CONFIG_PATH}")
+    string(REGEX MATCH "^/[A-Za-z]/" bloom_ffmpeg_drive "${BLOOM_FFMPEG_PKG_CONFIG_PATH}")
+    string(TOLOWER "${bloom_ffmpeg_drive}" bloom_ffmpeg_drive_lower)
+    string(REPLACE "${bloom_ffmpeg_drive}" "${bloom_ffmpeg_drive_lower}"
+        BLOOM_FFMPEG_PKG_CONFIG_PATH "${BLOOM_FFMPEG_PKG_CONFIG_PATH}")
     # --toolchain=msvc selects cl/link from the Visual Studio developer environment.
     set(BLOOM_FFMPEG_COMPILER_ARGUMENTS)
     list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --toolchain=msvc --target-os=win64)
@@ -150,7 +159,7 @@ ExternalProject_Add(bloom_dependency_ffmpeg
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         CC=${CMAKE_C_COMPILER}
         CXX=${CMAKE_CXX_COMPILER}
-        PKG_CONFIG_PATH=${BLOOM_CODEC_PREFIX}/lib/pkgconfig
+        PKG_CONFIG_PATH=${BLOOM_FFMPEG_PKG_CONFIG_PATH}
         ${BLOOM_FFMPEG_SHELL}
         <SOURCE_DIR>/configure
         ${BLOOM_FFMPEG_COMPILER_ARGUMENTS}
@@ -175,3 +184,13 @@ ExternalProject_Add_Step(bloom_dependency_ffmpeg bloom_install_cmake_config
         "<INSTALL_DIR>/lib/cmake/FFmpeg/FFmpegConfig.cmake"
     DEPENDEES install
     COMMENT "bloom: installing the FFmpeg qualified-package wrapper")
+
+if(WIN32)
+    # FFmpeg's MSVC install leaves the import libraries in bin/ beside the DLLs; the package wrapper
+    # and Windows consumers expect them in lib/.
+    ExternalProject_Add_Step(bloom_dependency_ffmpeg bloom_relocate_import_libraries
+        COMMAND ${CMAKE_COMMAND} -DFFMPEG_PREFIX=<INSTALL_DIR>
+            -P "${CMAKE_CURRENT_LIST_DIR}/ffmpeg-windows-import-libraries.cmake"
+        DEPENDEES install
+        COMMENT "bloom: moving FFmpeg's import libraries from bin/ to lib/")
+endif()

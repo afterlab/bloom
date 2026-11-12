@@ -1,6 +1,7 @@
 # Post-install normalisation for a static codec archive (codec-common.cmake):
 #   -DCODEC_PREFIX=<install prefix> -DCODEC_LIBRARY=<name> -DCODEC_PKGCONFIG=<pc name>
 #   -DCODEC_PRIVATE_LIBS=<extra Libs.private, space separated> -DCODEC_WINDOWS=<ON|OFF>
+#   [-DCODEC_CFLAGS=<extra Cflags, space separated>]
 # It appends the runtime libraries a static archive needs to the pkg-config record FFmpeg reads,
 # gives MSVC's FFmpeg link the `<name>.lib` spelling it expects (from lib<name>.a or
 # lib<name>.lib), and refuses a shared artifact so the codec stays inside libavcodec.
@@ -39,6 +40,27 @@ if(CODEC_PRIVATE_LIBS)
         list(JOIN codec_private " " codec_private)
         string(APPEND codec_text "Libs.private: ${codec_private}\n")
     endif()
+    file(WRITE "${codec_pc}" "${codec_text}")
+endif()
+
+if(CODEC_CFLAGS)
+    # A static archive's public header may default to dllimport on MSVC (Kvazaar's does unless
+    # KVZ_STATIC_LIB is defined), which leaves FFmpeg's link probe with an unresolved __imp_ symbol.
+    # Idempotent: only the flags still missing are appended.
+    separate_arguments(codec_cflags UNIX_COMMAND "${CODEC_CFLAGS}")
+    file(STRINGS "${codec_pc}" codec_lines)
+    set(codec_text)
+    foreach(line IN LISTS codec_lines)
+        if(line MATCHES "^Cflags:(.*)$")
+            separate_arguments(codec_existing UNIX_COMMAND "${CMAKE_MATCH_1}")
+            foreach(flag IN LISTS codec_cflags)
+                if(NOT flag IN_LIST codec_existing)
+                    string(APPEND line " ${flag}")
+                endif()
+            endforeach()
+        endif()
+        string(APPEND codec_text "${line}\n")
+    endforeach()
     file(WRITE "${codec_pc}" "${codec_text}")
 endif()
 

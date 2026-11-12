@@ -16,6 +16,29 @@ set(BLOOM_NASM_SHA256 1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa
 set(BLOOM_NASM_TOOLS_PREFIX "${CMAKE_BINARY_DIR}/tools")
 
 if(BLOOM_NASM_REQUIRED)
+    if(WIN32)
+        # NASM's configure script and Makefile need a POSIX shell; its own NMAKE file
+        # (Mkfiles/msvc.mak) builds with the Visual Studio toolchain the superbuild already runs
+        # in, so the component needs no MSYS2 shell. The tool is named nasm.exe.
+        find_program(BLOOM_NASM_NMAKE nmake REQUIRED)
+        set(BLOOM_NASM_CONFIGURE_COMMAND ${CMAKE_COMMAND} -E true)
+        set(BLOOM_NASM_BUILD_COMMAND
+            "${BLOOM_NASM_NMAKE}" /nologo /f Mkfiles/msvc.mak nasm.exe)
+        set(BLOOM_NASM_INSTALL_COMMAND
+            ${CMAKE_COMMAND} -E make_directory "${BLOOM_NASM_TOOLS_PREFIX}/bin"
+            COMMAND ${CMAKE_COMMAND} -E copy <SOURCE_DIR>/nasm.exe
+                "${BLOOM_NASM_TOOLS_PREFIX}/bin/nasm.exe")
+        set(BLOOM_NASM_EXECUTABLE "${BLOOM_NASM_TOOLS_PREFIX}/bin/nasm.exe")
+    else()
+        set(BLOOM_NASM_CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
+            CC=${CMAKE_C_COMPILER}
+            <SOURCE_DIR>/configure
+            --prefix=${BLOOM_NASM_TOOLS_PREFIX})
+        set(BLOOM_NASM_BUILD_COMMAND make -j3 nasm)
+        set(BLOOM_NASM_INSTALL_COMMAND make install)
+        set(BLOOM_NASM_EXECUTABLE "${BLOOM_NASM_TOOLS_PREFIX}/bin/nasm")
+    endif()
+
     ExternalProject_Add(bloom_dependency_nasm
         URL "${BLOOM_NASM_URL}"
         URL_HASH SHA256=${BLOOM_NASM_SHA256}
@@ -24,16 +47,12 @@ if(BLOOM_NASM_REQUIRED)
         DOWNLOAD_NO_PROGRESS ON
         DOWNLOAD_EXTRACT_TIMESTAMP ON
         BUILD_IN_SOURCE ON
-        CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
-            CC=${CMAKE_C_COMPILER}
-            <SOURCE_DIR>/configure
-            --prefix=${BLOOM_NASM_TOOLS_PREFIX}
-        BUILD_COMMAND make -j3 nasm
-        INSTALL_COMMAND make install
+        CONFIGURE_COMMAND ${BLOOM_NASM_CONFIGURE_COMMAND}
+        BUILD_COMMAND ${BLOOM_NASM_BUILD_COMMAND}
+        INSTALL_COMMAND ${BLOOM_NASM_INSTALL_COMMAND}
         ${BLOOM_DEPENDENCY_OFFLINE_ARGS}
         BUILD_ALWAYS OFF
         INSTALL_DIR "${BLOOM_NASM_TOOLS_PREFIX}"
         USES_TERMINAL_DOWNLOAD ON
         USES_TERMINAL_BUILD ON)
-    set(BLOOM_NASM_EXECUTABLE "${BLOOM_NASM_TOOLS_PREFIX}/bin/nasm")
 endif()

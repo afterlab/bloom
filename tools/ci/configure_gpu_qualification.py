@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 # The platforms whose toolchain has a profile in the dependency lock build in qualified mode.
-LOCKED_PLATFORM = sys.platform.startswith("linux") or sys.platform == "darwin"
+LOCKED_PLATFORM = sys.platform.startswith("linux") or sys.platform in ("darwin", "win32")
 
 
 def main():
@@ -22,7 +22,11 @@ def main():
     root = Path(__file__).resolve().parents[2]
     prefix = Path(args.prefix).resolve()
     directory = Path(args.build_dir).resolve()
-    generator = ["-G", "Visual Studio 17 2022", "-A", "x64"] if sys.platform == "win32" else ["-G", "Ninja"]
+    # Ninja everywhere. On Windows the caller is a Visual Studio developer environment of the
+    # toolset the lock's profile names, and the compiler is named so no other one on PATH is taken.
+    generator = ["-G", "Ninja"]
+    if sys.platform == "win32":
+        generator += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"]
     common = ["-DCMAKE_BUILD_TYPE=Release", *generator]
     if args.stage == "dependencies":
         if not args.download_dir:
@@ -33,7 +37,7 @@ def main():
                    "-DBLOOM_DEPENDENCY_DOWNLOAD_DIR=" + str(Path(args.download_dir).resolve())]
         subprocess.run(command, check=True)
         # Build exactly the image/core closure. A qualified configure also needs the worker's
-        # FFmpeg package, so the platforms with a locked profile (Linux and macOS) build it; the
+        # FFmpeg package, so the platforms with a locked profile (Linux, macOS and Windows) build it; the
         # others must never execute the make-based recipes.
         targets = ["bloom_dependency_yyjson", "bloom_dependency_libzip",
                    "bloom_dependency_openexr", "bloom_dependency_opencolorio"]

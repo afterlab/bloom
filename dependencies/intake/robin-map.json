@@ -45,6 +45,17 @@
         "license"
       ],
       "conformanceFixtureSets": []
+    },
+    {
+      "profileId": "bloom.windows-x86-64-msvc-release",
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
     }
   ],
   "securityReview": {

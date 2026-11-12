@@ -21,7 +21,10 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/kvazaar.configure-arguments"
     BLOOM_KVAZAAR_CONFIGURE_ARGUMENTS)
 if(WIN32)
     set(BLOOM_KVAZAAR_PRIVATE_LIBS)
+    # kvazaar.h declares its API dllimport unless this is defined; the archive is static.
+    set(BLOOM_KVAZAAR_CFLAGS -DKVZ_STATIC_LIB)
 else()
+    set(BLOOM_KVAZAAR_CFLAGS)
     set(BLOOM_KVAZAAR_PRIVATE_LIBS "-lpthread -lm")
 endif()
 
@@ -48,6 +51,7 @@ ExternalProject_Add(bloom_dependency_kvazaar
         -DCODEC_LIBRARY=kvazaar
         -DCODEC_PKGCONFIG=kvazaar
         "-DCODEC_PRIVATE_LIBS=${BLOOM_KVAZAAR_PRIVATE_LIBS}"
+        "-DCODEC_CFLAGS=${BLOOM_KVAZAAR_CFLAGS}"
         -DCODEC_WINDOWS=${WIN32}
         -P "${BLOOM_CODEC_STATIC_INSTALL_SCRIPT}"
     ${BLOOM_DEPENDENCY_OFFLINE_ARGS}

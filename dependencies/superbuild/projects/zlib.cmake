@@ -7,6 +7,14 @@ set(BLOOM_ZLIB_URL
     "https://github.com/madler/zlib/archive/refs/tags/v${BLOOM_ZLIB_VERSION}.tar.gz")
 set(BLOOM_ZLIB_SHA256 b99a0b86c0ba9360ec7e78c4f1e43b1cbdf1e6936c8fa0f6835c0cd694a495a1)
 
+# zlib's MSVC build names its static archive zs.lib, a name FindZLIB only looks for when asked for
+# static libraries. Consumers that resolve zlib through FindZLIB pass this argument.
+if(WIN32)
+    set(BLOOM_ZLIB_CONSUMER_ARGUMENTS -DZLIB_USE_STATIC_LIBS:BOOL=ON)
+else()
+    set(BLOOM_ZLIB_CONSUMER_ARGUMENTS)
+endif()
+
 ExternalProject_Add(bloom_dependency_zlib
     URL "${BLOOM_ZLIB_URL}"
     URL_HASH SHA256=${BLOOM_ZLIB_SHA256}

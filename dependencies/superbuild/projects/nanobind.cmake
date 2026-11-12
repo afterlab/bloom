@@ -9,6 +9,12 @@ set(BLOOM_NANOBIND_SHA256 f7f0a889c8fb80deaacb95e918d88e05148850a32d2b8eda284462
 if(APPLE)
     set(BLOOM_NANOBIND_PYTHON "${BLOOM_DEPENDENCY_PREFIX}/python/bin/python3.14")
     set(BLOOM_NANOBIND_DEPENDS DEPENDS bloom_dependency_python)
+elseif(WIN32)
+    # Windows has no interpreter at a fixed location: the superbuild's own environment resolves
+    # one, the active virtual environment first.
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    set(BLOOM_NANOBIND_PYTHON "${Python3_EXECUTABLE}")
+    set(BLOOM_NANOBIND_DEPENDS)
 else()
     set(BLOOM_NANOBIND_PYTHON /usr/bin/python3)
     set(BLOOM_NANOBIND_DEPENDS)

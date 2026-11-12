@@ -24,6 +24,7 @@ ExternalProject_Add(bloom_dependency_libzip
         # exactly this sub-build.
         -DCMAKE_FIND_PACKAGE_PREFER_CONFIG:BOOL=OFF
         -DZLIB_ROOT:PATH=${BLOOM_DEPENDENCY_PREFIX}
+        ${BLOOM_ZLIB_CONSUMER_ARGUMENTS}
         -DBUILD_SHARED_LIBS:BOOL=OFF
         -DBUILD_TOOLS:BOOL=OFF
         -DBUILD_REGRESS:BOOL=OFF

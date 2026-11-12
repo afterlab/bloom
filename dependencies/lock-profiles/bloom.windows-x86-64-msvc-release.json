@@ -1,0 +1,1249 @@
+{
+  "profile": {
+    "id": "bloom.windows-x86-64-msvc-release",
+    "target": {
+      "triple": "x86_64-pc-windows-msvc",
+      "operatingSystem": "windows",
+      "architecture": "x86_64",
+      "minimumOsVersion": "10.0.18362"
+    },
+    "buildConfiguration": "release",
+    "consumerAbi": {
+      "cxxStandard": 20,
+      "compilerFamily": "msvc",
+      "compilerAbi": "msvc-19.50-x64",
+      "standardLibrary": "msvc-stl",
+      "standardLibraryAbi": "msvc-stl-vs2026-14.50",
+      "cxxRuntime": "msvc",
+      "cxxRuntimeAbi": "vcruntime140-14.50",
+      "cxxRuntimeLinkage": "dynamic",
+      "platformRuntime": "ucrt",
+      "platformRuntimeAbi": "ucrt-windows-10.0.26100",
+      "exceptions": true,
+      "rtti": true,
+      "libstdcxxCxx11Abi": null,
+      "msvcRuntime": "dynamic-release",
+      "msvcIteratorDebugLevel": 0,
+      "windowsSdk": "windows-sdk",
+      "windowsSdkVersion": "10.0.26100.0",
+      "appleSdk": null,
+      "appleSdkVersion": null,
+      "appleDeploymentTarget": null,
+      "abiFlags": []
+    },
+    "toolchain": {
+      "cmake": {
+        "name": "cmake",
+        "version": "4.2.1",
+        "identity": "windows-superbuild-2026-11-08-unreviewed"
+      },
+      "generator": {
+        "name": "Ninja",
+        "version": "1.13.2",
+        "identity": "cmake-generator-ninja"
+      },
+      "buildTool": {
+        "name": "ninja",
+        "version": "1.13.2",
+        "identity": "windows-superbuild-2026-11-08-unreviewed"
+      },
+      "compiler": {
+        "name": "msvc",
+        "version": "19.50.35720",
+        "identity": "visual-studio-2026-18.1"
+      },
+      "linker": {
+        "name": "msvc-link",
+        "version": "14.50.35720",
+        "identity": "visual-studio-2026-18.1"
+      },
+      "standardLibrary": {
+        "name": "msvc-stl",
+        "version": "14.50.35717",
+        "identity": "visual-studio-2026-18.1"
+      },
+      "sdk": {
+        "name": "windows-sdk",
+        "version": "10.0.26100.0",
+        "identity": "windows-sdk-10.0.26100.0"
+      }
+    },
+    "environment": {
+      "profileId": "bloom.env.superbuild-baseline",
+      "sourceDateEpoch": 0,
+      "variables": [
+        {
+          "name": "LC_ALL",
+          "value": "C"
+        },
+        {
+          "name": "SOURCE_DATE_EPOCH",
+          "value": "0"
+        },
+        {
+          "name": "TZ",
+          "value": "UTC"
+        }
+      ]
+    },
+    "qualificationGates": [
+      {
+        "gateId": "bloom.gate.linux-native-suite",
+        "disposition": "not-applicable",
+        "reason": "The Linux native suite does not apply to a Windows profile; no Windows qualification is claimed"
+      },
+      {
+        "gateId": "bloom.gate.prefix-smoke-consumer",
+        "disposition": "required",
+        "reason": null
+      },
+      {
+        "gateId": "bloom.gate.windows-native-suite",
+        "disposition": "required",
+        "reason": null
+      }
+    ]
+  },
+  "componentBuilds": {
+    "cereal": null,
+    "dav1d": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.dav1d.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive linked into the worker's libavcodec on every platform; x86 assembly uses the superbuild-private NASM"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.dav1d.av1-decode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "expat": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "EXPAT_BUILD_DOCS",
+          "value": "OFF"
+        },
+        {
+          "name": "EXPAT_BUILD_EXAMPLES",
+          "value": "OFF"
+        },
+        {
+          "name": "EXPAT_BUILD_FUZZERS",
+          "value": "OFF"
+        },
+        {
+          "name": "EXPAT_BUILD_PKGCONFIG",
+          "value": "OFF"
+        },
+        {
+          "name": "EXPAT_BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "EXPAT_BUILD_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "EXPAT_ENABLE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "EXPAT_SHARED_LIBS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.xml"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "ffmpeg": {
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.ffmpeg-av1-hwaccel",
+          "state": "enabled",
+          "reason": "FFmpeg's native AV1 decoder, used only with a VA-API or NVDEC hwaccel; software AV1 decode stays dav1d"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-bwdif",
+          "state": "enabled",
+          "reason": "libavfilter bwdif with buffer/buffersink: field-aware deinterlacing of interlaced video in the worker"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-dav1d",
+          "state": "enabled",
+          "reason": "AV1 decode through the libdav1d wrapper; dav1d 1.5.4 is a static archive linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-kvazaar",
+          "state": "enabled",
+          "reason": "HEVC software encode through the libkvazaar (8-bit, HEVC Main) and libkvazaar10 (10-bit, HEVC Main 10) wrappers; Kvazaar 2.3.2 is built as two static archives linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-libvpx",
+          "state": "enabled",
+          "reason": "VP9 software encode (8-bit Profile 0 and 10-bit Profile 2) through the libvpx wrapper; libvpx 1.17.0 is a static archive linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-nvdec",
+          "state": "enabled",
+          "reason": "NVIDIA NVDEC H.264/HEVC/AV1 decode through FFmpeg's CUDA hwaccel and ffnvcodec; the driver is loaded at run time and the build needs no nonfree component (Linux and Windows). Hardware frames are proven byte-identical to the software reference per source (ADR 0027)"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-nvenc",
+          "state": "enabled",
+          "reason": "NVIDIA NVENC H.264/HEVC encode through ffnvcodec; the driver is loaded at run time and the build needs no nonfree component (Linux and Windows)"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-openh264",
+          "state": "enabled",
+          "reason": "H.264 software encode through the libopenh264 wrapper; OpenH264 2.6.0 is built from source as a static archive linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-opus",
+          "state": "enabled",
+          "reason": "Opus audio encode through the libopus wrapper (libopus 1.5.2 is a static archive linked into libavcodec) and FFmpeg's native Opus decoder and parser for the reopen check"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-svt-av1",
+          "state": "enabled",
+          "reason": "AV1 software encode (8-bit and 10-bit) through the libsvtav1 wrapper; SVT-AV1 4.2.0 is a static archive linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-vaapi",
+          "state": "disabled",
+          "reason": "VA-API is a Linux interface; Windows builds never enable it"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-vp9-decode",
+          "state": "enabled",
+          "reason": "FFmpeg's native VP9 decoder and parser for WebM and Matroska sources"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-webm-mux",
+          "state": "enabled",
+          "reason": "FFmpeg's WebM muxer (the Matroska muxer's WebM profile) for VP9 and AV1 with Opus deliveries"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-x86-simd",
+          "state": "enabled",
+          "reason": "x86 SIMD is assembled with the superbuild-private NASM 2.16.03 build tool, passed through --x86asmexe on x86 targets only"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.ffmpeg",
+        "bloom.capability.ffmpeg.av1-decode-dav1d",
+        "bloom.capability.ffmpeg.av1-hwaccel-decode",
+        "bloom.capability.ffmpeg.av1-software-svt-av1",
+        "bloom.capability.ffmpeg.decode",
+        "bloom.capability.ffmpeg.encode",
+        "bloom.capability.ffmpeg.h264-nvenc-encode",
+        "bloom.capability.ffmpeg.h264-software-openh264",
+        "bloom.capability.ffmpeg.hevc-main10-software-kvazaar",
+        "bloom.capability.ffmpeg.hevc-nvenc-encode",
+        "bloom.capability.ffmpeg.hevc-software-kvazaar",
+        "bloom.capability.ffmpeg.nvdec-decode",
+        "bloom.capability.ffmpeg.opus-encode-libopus",
+        "bloom.capability.ffmpeg.prores-preview",
+        "bloom.capability.ffmpeg.vp9-decode",
+        "bloom.capability.ffmpeg.vp9-software-libvpx",
+        "bloom.capability.ffmpeg.webm-mux"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "notice",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "glslang": {
+      "linkage": "executable",
+      "cmakeOptions": [
+        {
+          "name": "ALLOW_EXTERNAL_SPIRV_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_EXTERNAL",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_GLSLANG_BINARIES",
+          "value": "ON"
+        },
+        {
+          "name": "ENABLE_HLSL",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_OPT",
+          "value": "OFF"
+        },
+        {
+          "name": "GLSLANG_ENABLE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "GLSLANG_TESTS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.glslang"
+      ],
+      "shippingRoles": [
+        "executable",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "imath": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_TESTING",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WEBSITE",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "PYBIND11",
+          "value": "OFF"
+        },
+        {
+          "name": "PYTHON",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.half-float-math"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "kvazaar": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.kvazaar.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive linked into the worker's libavcodec on every platform"
+        },
+        {
+          "id": "bloom.feature.kvazaar.bundled-static-10bit",
+          "state": "enabled",
+          "reason": "A second build of the same archive with KVZ_BIT_DEPTH=10 and kvz10_-prefixed external symbols, linked into the worker libavcodec for HEVC Main 10 on every platform"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.kvazaar.hevc-encode",
+        "bloom.capability.kvazaar.hevc-main10-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "libdeflate": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "LIBDEFLATE_BUILD_GZIP",
+          "value": "OFF"
+        },
+        {
+          "name": "LIBDEFLATE_BUILD_SHARED_LIB",
+          "value": "OFF"
+        },
+        {
+          "name": "LIBDEFLATE_BUILD_STATIC_LIB",
+          "value": "ON"
+        },
+        {
+          "name": "LIBDEFLATE_BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "LIBDEFLATE_COMPRESSION_SUPPORT",
+          "value": "ON"
+        },
+        {
+          "name": "LIBDEFLATE_DECOMPRESSION_SUPPORT",
+          "value": "ON"
+        },
+        {
+          "name": "LIBDEFLATE_GZIP_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "LIBDEFLATE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "LIBDEFLATE_ZLIB_SUPPORT",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.exr-deflate"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "libvpx": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.libvpx.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only VP9 encoder archive with the 10-bit path (no VP8, no decoder, tools, WebM I/O or libyuv) linked into the worker's libavcodec on every platform; x86 assembly uses the superbuild-private NASM"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.libvpx.vp9-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "libzip": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_DOC",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_EXAMPLES",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_OSSFUZZ",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_REGRESS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "ENABLE_BZIP2",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_COMMONCRYPTO",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_GNUTLS",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_LZMA",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_MBEDTLS",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_OPENSSL",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_WINDOWS_CRYPTO",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_ZSTD",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.zip-container"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "minizip-ng": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "MZ_BUILD_FUZZ_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_BUILD_UNIT_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_BZIP2",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_CODE_COVERAGE",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_COMPAT",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_COMPRESS_ONLY",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_DECOMPRESS_ONLY",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_FETCH_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_FILE32_API",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_FORCE_FETCH_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_ICONV",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_LZMA",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_OPENSSL",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_PKCRYPT",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_PPMD",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_WZAES",
+          "value": "OFF"
+        },
+        {
+          "name": "MZ_ZLIB",
+          "value": "ON"
+        },
+        {
+          "name": "MZ_ZSTD",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.ocioz-container"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "moltenvk": null,
+    "nanobind": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "NB_CREATE_INSTALL_RULES",
+          "value": "OFF"
+        },
+        {
+          "name": "NB_TEST",
+          "value": "OFF"
+        },
+        {
+          "name": "NB_USE_SUBMODULE_DEPS",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.python-bindings"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "nasm": {
+      "linkage": "executable",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.nasm"
+      ],
+      "shippingRoles": [],
+      "conformanceFixtureSets": []
+    },
+    "nv-codec-headers": {
+      "linkage": "header-only",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.nv-codec-headers.runtime-loaded-driver",
+          "state": "enabled",
+          "reason": "Declarations only: FFmpeg loads the NVIDIA driver's encode library at run time; nothing NVIDIA is linked or shipped"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.nv-codec-headers.nvenc"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "opencolorio": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "OCIO_BUILD_APPS",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_DOCS",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_GPU_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_JAVA",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_NUKE",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_OPENFX",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_PYTHON",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "OCIO_INSTALL_EXT_PACKAGES",
+          "value": "NONE"
+        },
+        {
+          "name": "OCIO_USE_OIIO_FOR_APPS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.color-management"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "openexr": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_TESTING",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WEBSITE",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "OPENEXR_BUILD_EXAMPLES",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_BUILD_OSS_FUZZ",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_BUILD_PYTHON",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_BUILD_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_FORCE_INTERNAL_DEFLATE",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_FORCE_INTERNAL_IMATH",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_FORCE_INTERNAL_OPENJPH",
+          "value": "ON"
+        },
+        {
+          "name": "OPENEXR_INSTALL_DEVELOPER_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_INSTALL_DOCS",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_INSTALL_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "OPENEXR_USE_TBB",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.flat-exr"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "openh264": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.openh264.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static archive linked into the worker's libavcodec on every platform; nothing is fetched at run time"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.openh264.h264-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "openjph": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.htj2k"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "openssl": null,
+    "opus": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.opus.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive (no programs, tests or neural models) linked into the worker's libavcodec on every platform"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.opus.opus-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "pystring": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.string-utility"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "python": null,
+    "robin-map": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [],
+      "capabilities": [],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "spirv-cross": null,
+    "spirv-headers": {
+      "linkage": "header-only",
+      "cmakeOptions": [
+        {
+          "name": "SPIRV_HEADERS_ENABLE_INSTALL",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_HEADERS_ENABLE_TESTS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.spirv-headers"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "spirv-tools": {
+      "linkage": "executable",
+      "cmakeOptions": [
+        {
+          "name": "SPIRV_BUILD_FUZZER",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_SKIP_EXECUTABLES",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_SKIP_TESTS",
+          "value": "ON"
+        },
+        {
+          "name": "SPIRV_WERROR",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.spirv-tools.build-version-description",
+          "state": "enabled",
+          "reason": "FORCED_BUILD_VERSION_DESCRIPTION is pinned to the component source commit b707790a898e44038547df54580022fc1cf89c3d for the build and install generation steps so spirv-val --version reports the dependency identity, not the ambient Bloom git HEAD"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.spirv-tools"
+      ],
+      "shippingRoles": [
+        "executable",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "sse2neon": null,
+    "svt-av1": {
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.svt-av1.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive (no apps, tests or LTO) linked into the worker's libavcodec on every platform; x86 assembly uses the superbuild-private NASM"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.svt-av1.av1-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "vulkan-headers": {
+      "linkage": "header-only",
+      "cmakeOptions": [
+        {
+          "name": "VULKAN_HEADERS_ENABLE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "VULKAN_HEADERS_ENABLE_MODULE",
+          "value": "OFF"
+        },
+        {
+          "name": "VULKAN_HEADERS_ENABLE_TESTS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.vulkan-headers"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "data",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "vulkan-loader": {
+      "linkage": "shared",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_DIRECTFB_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_WAYLAND_SUPPORT",
+          "value": "ON"
+        },
+        {
+          "name": "BUILD_WSI_XCB_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_XLIB_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_XLIB_XRANDR_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "LOADER_CODEGEN",
+          "value": "OFF"
+        },
+        {
+          "name": "UPDATE_DEPS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.vulkan-loader"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "data",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "vulkan-memory-allocator": {
+      "linkage": "header-only",
+      "cmakeOptions": [
+        {
+          "name": "VMA_BUILD_DOCUMENTATION",
+          "value": "OFF"
+        },
+        {
+          "name": "VMA_BUILD_SAMPLES",
+          "value": "OFF"
+        },
+        {
+          "name": "VMA_ENABLE_INSTALL",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.vulkan-memory-allocator"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "data",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "xz": null,
+    "yaml-cpp": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_TESTING",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "YAML_BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "YAML_CPP_BUILD_CONTRIB",
+          "value": "OFF"
+        },
+        {
+          "name": "YAML_CPP_BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "YAML_CPP_BUILD_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "YAML_CPP_FORMAT_SOURCE",
+          "value": "OFF"
+        },
+        {
+          "name": "YAML_CPP_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "YAML_ENABLE_PIC",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.yaml"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "yyjson": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_SHARED_LIBS",
+          "value": "OFF"
+        },
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "YYJSON_BUILD_DOC",
+          "value": "OFF"
+        },
+        {
+          "name": "YYJSON_BUILD_FUZZER",
+          "value": "OFF"
+        },
+        {
+          "name": "YYJSON_BUILD_MISC",
+          "value": "OFF"
+        },
+        {
+          "name": "YYJSON_BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "YYJSON_ENABLE_COVERAGE",
+          "value": "OFF"
+        },
+        {
+          "name": "YYJSON_ENABLE_SANITIZE",
+          "value": "OFF"
+        },
+        {
+          "name": "YYJSON_ENABLE_VALGRIND",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.strict-json"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "zlib": {
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "ZLIB_BUILD_MINIZIP",
+          "value": "OFF"
+        },
+        {
+          "name": "ZLIB_BUILD_SHARED",
+          "value": "OFF"
+        },
+        {
+          "name": "ZLIB_BUILD_STATIC",
+          "value": "ON"
+        },
+        {
+          "name": "ZLIB_BUILD_TESTING",
+          "value": "OFF"
+        },
+        {
+          "name": "ZLIB_INSTALL",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.deflate"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    },
+    "zstd": null
+  }
+}
