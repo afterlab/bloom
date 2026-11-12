@@ -175,6 +175,8 @@ void testGeneratorGoldenBytes(Expectations& expectations) {
     expectations.expect(CanonicalManifestV1{}.generator == current && current.name == "Bloom" &&
                             !current.version.empty(),
                         "a default manifest carries this build's generator");
+    expectations.expect(current.version == BLOOM_EXPECTED_PACKAGE_VERSION,
+                        "the generator version is the package version (BLOOM_PACKAGE_VERSION)");
 
     for (const auto& [name, version] : {std::pair<std::string_view, std::string_view>{"", "1"},
                                         {"Bloom", ""},

@@ -266,7 +266,9 @@ The canonical manifest has members in this exact order:
 must equal the manifest declaration; disagreement is corruption.
 
 `generator` records which application wrote the file: `name` is the application (`Bloom`) and
-`version` the build's project version. Every save writes it, last. It is informational only:
+`version` the version the build is released under, the same string as its package files'
+(`BLOOM_PACKAGE_VERSION`: the project version, or a pre-release's own such as `0.1.0-alpha.1`).
+Every save writes it, last. It is informational only:
 reading accepts a manifest without it, and nothing decides how to read, render or save a project
 from it. A present generator holds exactly `name` then `version`, each a non-empty string of at most
 256 UTF-8 bytes; anything else is a malformed manifest. Save Copy republishes the opened bytes, so a

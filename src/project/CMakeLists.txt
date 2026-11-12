@@ -74,8 +74,10 @@ target_sources(
 )
 
 target_compile_features(bloom_project PUBLIC cxx_std_20)
-# The manifest's generator records this build's project version.
-target_compile_definitions(bloom_project PRIVATE BLOOM_VERSION="${PROJECT_VERSION}")
+# The manifest's generator records the version this build is released under: the package version
+# (BLOOM_PACKAGE_VERSION, the project version unless a pre-release names its own), so a project
+# saved by an alpha build says 0.1.0-alpha.1 like the package it came from.
+target_compile_definitions(bloom_project PRIVATE BLOOM_VERSION="${BLOOM_PACKAGE_VERSION}")
 # bloom_platform is PUBLIC (not PRIVATE, despite the allowed dependency edge being unqualified):
 # include/bloom/project/staged_save.hpp declares stageSaveArchive() taking a
 # platform::StagedArtifactLease& in its public signature, so anything that includes that header
@@ -111,6 +113,8 @@ if(BUILD_TESTING)
 
     add_executable(bloom_project_canonical_manifest_test tests/canonical_manifest_tests.cpp)
     target_link_libraries(bloom_project_canonical_manifest_test PRIVATE bloom_project)
+    target_compile_definitions(bloom_project_canonical_manifest_test
+                               PRIVATE BLOOM_EXPECTED_PACKAGE_VERSION="${BLOOM_PACKAGE_VERSION}")
     bloom_enable_warnings(bloom_project_canonical_manifest_test)
     bloom_add_test(
         NAME bloom.project.canonical_manifest
