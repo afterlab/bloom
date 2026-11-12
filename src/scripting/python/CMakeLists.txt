@@ -38,14 +38,21 @@ file(GLOB_RECURSE bloom_python_files CONFIGURE_DEPENDS
 foreach(bloom_python_file IN LISTS bloom_python_files)
     configure_file("${bloom_python_file}" "${CMAKE_BINARY_DIR}/python/${bloom_python_file}" COPYONLY)
 endforeach()
-install(TARGETS _bloom LIBRARY DESTINATION lib/bloom/python RUNTIME DESTINATION lib/bloom/python)
+# The extension module is for an interpreter outside Bloom (`cmake --install <build> --component
+# python-module`). A package does not carry it: Bloom's programs have the same code built in, and
+# cmake/package/stage_python.cmake puts the `bloom` package beside the carried interpreter.
+install(TARGETS _bloom
+        LIBRARY DESTINATION lib/bloom/python COMPONENT python-module EXCLUDE_FROM_ALL
+        RUNTIME DESTINATION lib/bloom/python COMPONENT python-module EXCLUDE_FROM_ALL)
 configure_file(_bloom.pyi "${CMAKE_BINARY_DIR}/python/_bloom.pyi" COPYONLY)
-install(FILES _bloom.pyi DESTINATION lib/bloom/python)
-install(DIRECTORY bloom DESTINATION lib/bloom/python PATTERN "__pycache__" EXCLUDE)
+install(FILES _bloom.pyi DESTINATION lib/bloom/python COMPONENT python-module EXCLUDE_FROM_ALL)
+install(DIRECTORY bloom DESTINATION lib/bloom/python COMPONENT python-module EXCLUDE_FROM_ALL
+        PATTERN "__pycache__" EXCLUDE)
 
 add_library(bloom_python_runtime STATIC runtime.cpp interpreter_home.cpp
     $<TARGET_OBJECTS:bloom_python_binding>)
-target_link_libraries(bloom_python_runtime PUBLIC bloom_scripting PRIVATE nanobind::core Python3::Python)
+target_link_libraries(bloom_python_runtime PUBLIC bloom_scripting
+    PRIVATE bloom_platform nanobind::core Python3::Python)
 target_include_directories(bloom_python_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(bloom_python_runtime PRIVATE
     BLOOM_PYTHON_PACKAGE_PATH="${CMAKE_BINARY_DIR}/python")
@@ -152,6 +159,16 @@ if(BUILD_TESTING)
             ENVIRONMENT
                 "BLOOM_PYTHON_SAME_RESULT=${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_same_result.txt"
             LABELS scripting python integration TIMEOUT 120)
+        # The carried interpreter writes its compiled modules to the per-user cache, never into
+        # its own home. Both variables are set: each platform reads its own.
+        bloom_add_test(NAME bloom.scripting.python-bytecode-cache
+            COMMAND bloom-cli run
+                "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_bytecode_cache.py"
+            ENVIRONMENT
+                "BLOOM_PYTHON_CACHE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/bytecode-cache"
+                "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/bytecode-cache"
+                "LOCALAPPDATA=${CMAKE_CURRENT_BINARY_DIR}/bytecode-cache"
+            LABELS scripting python integration)
     endif()
     # #343: import an SVG, move and key one point of a compound shape, read it back, undo.
     bloom_add_test(NAME bloom.scripting.python-svg-import

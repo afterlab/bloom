@@ -2,6 +2,7 @@
 #include "interpreter_home.hpp"
 #include "native.hpp"
 
+#include <bloom/platform/cache_directory.hpp>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 
@@ -70,6 +71,16 @@ EmbeddedPython::EmbeddedPython(const std::filesystem::path& executable,
         if (!carried.home.empty()) {
             checkStatus(PyConfig_SetString(&config, &config.home, carried.home.wstring().c_str()));
             trustSystemCertificates();
+            // The carried interpreter never writes into its own home: a package is not the
+            // user's to write to (it can be read-only, and a signed macOS bundle stops being
+            // valid when a file appears in it). The compiled form of the modules it imports
+            // goes to Bloom's per-user cache instead, and nowhere when there is none.
+            if (const auto cache = platform::userCacheDirectory("bloom")) {
+                checkStatus(PyConfig_SetString(&config, &config.pycache_prefix,
+                                               (*cache / "python-bytecode").wstring().c_str()));
+            } else {
+                config.write_bytecode = 0;
+            }
         }
         checkStatus(Py_InitializeFromConfig(&config));
     } catch (...) {
